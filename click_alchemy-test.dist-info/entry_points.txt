@@ -1,0 +1,5 @@
+[sqlalchemy.dialects]
+clickhouse_inc = click_alchemy.dialect:ClickHouseDialect
+
+[superset.db_engine_specs]
+clickhouse_inc = click_alchemy.superset:ClickHouseBetaEngineSpec
