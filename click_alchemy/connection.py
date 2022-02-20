@@ -4,7 +4,7 @@ from click_alchemy.cursor import Cursor
 
 import httpx
 
-from click_alchemy.driver.parser import parse_response
+from click_alchemy.driver.rbparser import parse_response
 
 
 def format_query(query):

@@ -1,13 +1,16 @@
 import logging
 from datetime import datetime
 
-from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING, Tuple
 
-from superset.db_engine_specs.base import BaseEngineSpec
+from sqlalchemy.sql.type_api import TypeEngine
+from superset.db_engine_specs.base import BaseEngineSpec, ColumnTypeMapping
 from superset.db_engine_specs.exceptions import SupersetDBAPIDatabaseError
 from superset.utils import core as utils
+from superset.utils.core import GenericDataType
 
 from click_alchemy import driver_name
+from click_alchemy.types import registry
 
 if TYPE_CHECKING:
     from superset.models.core import Database
@@ -78,3 +81,11 @@ class ClickHouseBetaEngineSpec(BaseEngineSpec):
         except Exception as ex:  # pylint: disable=broad-except
             logger.error('Error retrieving system.functions', str(ex), exc_info=True)
             return []
+
+    @classmethod
+    def get_sqla_column_type(cls, column_type: Optional[str], *args, **kwargs) -> Optional[Tuple[TypeEngine, GenericDataType]]:
+        if column_type is None:
+            return None
+        ch_type = registry.get(column_type)
+        return ch_type.sqla_type, ch_type.gen_type
+
