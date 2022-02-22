@@ -10,6 +10,6 @@ def parse_leb128(source: bytes, loc: int):
     return length, loc + ix
 
 
-def leb128_string(source: bytes, loc: int, encoding: str = 'utf8'):
+def string_leb128(source: bytes, loc: int, encoding: str = 'utf8'):
     length, loc = parse_leb128(source, loc)
     return source[loc:loc + length].decode(encoding), loc + length

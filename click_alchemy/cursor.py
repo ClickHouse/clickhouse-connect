@@ -5,7 +5,7 @@ class Cursor:
 
     def _reset(self):
         self.arraysize = 1
-        self._data = None
+        self._data= None
         self._names = None
         self._types = None
         self._index = 0
@@ -35,9 +35,8 @@ class Cursor:
 
     def fetchall(self):
         self._check_valid()
-        last = len()
         ret = self._data[self._index:self._rowcount]
-        self._index = _self.max
+        self._index = self._rowcount
         return ret
 
     def fetchone(self):
@@ -61,8 +60,3 @@ class Cursor:
 
     def callproc(self, *args, **kwargs):
         raise NotImplementedError
-
-
-
-
-

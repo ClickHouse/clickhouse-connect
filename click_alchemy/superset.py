@@ -10,7 +10,7 @@ from superset.utils import core as utils
 from superset.utils.core import GenericDataType
 
 from click_alchemy import driver_name
-from click_alchemy.types import registry
+from click_alchemy.chtypes import registry
 
 if TYPE_CHECKING:
     from superset.models.core import Database
@@ -87,5 +87,5 @@ class ClickHouseBetaEngineSpec(BaseEngineSpec):
         if column_type is None:
             return None
         ch_type = registry.get(column_type)
-        return ch_type.sqla_type, ch_type.gen_type
+        return ch_type.sqla_type(), ch_type.gen_type
 

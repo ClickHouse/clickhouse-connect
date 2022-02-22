@@ -1,10 +1,7 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from click_alchemy import driver_name, connector
-
-
-# noinspection PyAbstractClass
-from click_alchemy.types import registry
+from click_alchemy.chtypes import registry
 
 
 class ClickHouseDialect(DefaultDialect):

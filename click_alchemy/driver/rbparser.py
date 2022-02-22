@@ -2,8 +2,8 @@ import logging
 
 from typing import List, Callable, Any
 
-from click_alchemy.types import registry
-from click_alchemy.driver.rowbinary import parse_leb128, leb128_string
+from click_alchemy.chtypes import registry
+from click_alchemy.driver.rowbinary import parse_leb128, string_leb128
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +24,18 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[Any]):
     logger.debug("Processing response, num columns = %d", num_columns)
     names = []
     for _ in range(num_columns):
-        name, loc = leb128_string(source, loc)
+        name, loc = string_leb128(source, loc)
         names.append(name)
     logger.debug("Processing response, column names = %s", ','.join(names))
     col_types = []
     for _ in range(num_columns):
-        col_type, loc = leb128_string(source, loc)
+        col_type, loc = string_leb128(source, loc)
         try:
             col_types.append(registry.get(col_type))
         except KeyError as ke:
             logger.error("Unknown type returned", ke)
             raise
-    logger.debug("Processing response, column types = %s", ','.join([t.name for t in col_types]))
+    logger.debug("Processing response, column chtypes = %s", ','.join([t.name for t in col_types]))
     convs = [t.from_row_binary for t in col_types]
     result = []
     while loc < response_size:
