@@ -11,7 +11,7 @@ class ClickHouseDialect(DefaultDialect):
     default_schema_name = 'default'
     description_encoding = None
     max_identifier_length = 127
-    ischema_names = {k: v.sqla_type for k, v in registry.type_map.items()}
+    ischema_names = {k: v.sqla_type_cls for k, v in registry.type_map.items()}
 
     @classmethod
     def dbapi(cls):
@@ -35,7 +35,7 @@ class ClickHouseDialect(DefaultDialect):
         else:
             table = '.'.join((schema, table_name))
         rows = connection.execute('DESCRIBE TABLE {}'.format(table))
-        return [{'name': row.name, 'type': registry.get(row.type).sqla_type} for row in rows]
+        return [{'name': row.name, 'type': registry.get(row.type).get_sqla_type()} for row in rows]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kwargs):
         return []

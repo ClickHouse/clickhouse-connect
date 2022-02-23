@@ -28,9 +28,9 @@ class ClickHouseBetaEngineSpec(BaseEngineSpec):
     _time_grain_expressions = {
         None: "{col}",
         "PT1M": "toStartOfMinute(toDateTime({col}))",
-        "PT5M": "toStartOfFiveMinutes(intDiv(toUInt32(toDateTime({col})), 300)*300)",
-        "PT10M": "toStartOfTenMinutes(intDiv(toUInt32(toDateTime({col})), 600)*600)",
-        "PT15M": "toStartOfFifteenMinutes(intDiv(toUInt32(toDateTime({col})), 900)*900)",
+        "PT5M": "toStartOfFiveMinutes(toDateTime({col}))",
+        "PT10M": "toStartOfTenMinutes(toDateTime({col}))",
+        "PT15M": "toStartOfFifteenMinutes(toDateTime({col}))",
         "PT30M": "toDateTime(intDiv(toUInt32(toDateTime({col})), 1800)*1800)",
         "PT1H": "toStartOfHour(toDateTime({col}))",
         "P1D": "toStartOfDay(toDateTime({col}))",
@@ -87,5 +87,9 @@ class ClickHouseBetaEngineSpec(BaseEngineSpec):
         if column_type is None:
             return None
         ch_type = registry.get(column_type)
-        return ch_type.sqla_type(), ch_type.gen_type
+        return ch_type.get_sqla_type(), ch_type.gen_type
+
+    @classmethod
+    def column_datatype_to_string(cls, sqla_column_type: TypeEngine, *args):
+        return sqla_column_type.compile()
 

@@ -15,7 +15,12 @@ def format_query(query):
 
 class Connection:
     def __init__(self, *args, **kwargs):
-        self.url = 'http://{}:{}'.format(kwargs.get('host'), kwargs.get('port', 8123))
+        https = kwargs.get('secure', 'false').lower() == 'true'
+        port = kwargs.get('port')
+        if not port:
+            port = 8443 if https else 8123
+        scheme = 'https' if https else 'http'
+        self.url = '{}://{}:{}'.format(scheme, kwargs.get('host'), port)
         self.username = kwargs.get('username', 'default')
         self.password = kwargs.get('password', '')
         self.client = httpx.Client(http2=True)
