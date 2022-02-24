@@ -31,7 +31,7 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[Any]):
     for _ in range(num_columns):
         col_type, loc = string_leb128(source, loc)
         try:
-            col_types.append(registry.get(col_type))
+            col_types.append(registry.get_from_name(col_type))
         except KeyError as ke:
             logger.error("Unknown type returned", ke)
             raise

@@ -86,7 +86,7 @@ class ClickHouseBetaEngineSpec(BaseEngineSpec):
     def get_sqla_column_type(cls, column_type: Optional[str], *args, **kwargs) -> Optional[Tuple[TypeEngine, GenericDataType]]:
         if column_type is None:
             return None
-        ch_type = registry.get(column_type)
+        ch_type = registry.get_from_name(column_type)
         return ch_type.get_sqla_type(), ch_type.gen_type
 
     @classmethod

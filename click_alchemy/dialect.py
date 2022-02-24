@@ -35,7 +35,7 @@ class ClickHouseDialect(DefaultDialect):
         else:
             table = '.'.join((schema, table_name))
         rows = connection.execute('DESCRIBE TABLE {}'.format(table))
-        return [{'name': row.name, 'type': registry.get(row.type).get_sqla_type()} for row in rows]
+        return [{'name': row.name, 'type': registry.get_from_name(row.type).get_sqla_type()} for row in rows]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kwargs):
         return []

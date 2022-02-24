@@ -1,6 +1,6 @@
 import logging
 
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from sqlalchemy.sql.type_api import TypeEngine
 from superset.utils.core import GenericDataType
@@ -12,13 +12,13 @@ def compile(self, *args, **kwargs):
     return self.ch_type.label(*args, **kwargs)
 
 
-def get_sqla_type(self, *args, **kwargs):
+def get_sqla_type(self):
     sqla_type = self.sqla_type_cls()
     sqla_type.ch_type = self
     return sqla_type
 
 
-def ch_type(sqla_type: TypeEngine, gen_type: GenericDataType):
+def ch_type(sqla_type: TypeEngine, gen_type: Optional[GenericDataType]):
 
     def inner(cls):
         if not hasattr(cls, 'name'):
@@ -32,16 +32,6 @@ def ch_type(sqla_type: TypeEngine, gen_type: GenericDataType):
     return inner
 
 
-def get(name):
-    type_def = _parse_name(name)
-    try:
-        type_cls = type_map[type_def.base]
-    except KeyError:
-        logging.error('Unrecognized ClickHouse type %s, base: %s', name, type_def.base)
-        raise
-    return type_cls.build(type_def)
-
-
 class TypeDef(NamedTuple):
     base: str
     size: int
@@ -51,8 +41,21 @@ class TypeDef(NamedTuple):
     values: tuple
 
 
+def get_from_name(name:str):
+    return get_from_def(_parse_name(name))
+
+
+def get_from_def(type_def:TypeDef):
+    try:
+        type_cls = type_map[type_def.base]
+    except KeyError:
+        logging.error('Unrecognized ClickHouse type %s, base: %s', name, type_def.base)
+        raise
+    return type_cls.build(type_def)
+
+
 def _parse_name(name:str) -> TypeDef:
-    working = '<init_wrapped>'
+    working = None
     base = name
     wrappers = []
     nested = []
@@ -71,8 +74,12 @@ def _parse_name(name:str) -> TypeDef:
             wrappers.append('LowCardinality')
             base = base[15:-1]
     if base.startswith('Enum'):
-        keys, values = _parse_enum(name[-len(base):])
+        keys, values = _parse_enum(base)
         base = base[:base.find('(')]
+    elif base.startswith('Array'):
+        nt = base[base.find('(') + 1:-1]
+        nested.append(_parse_name(nt))
+        base = 'Array'
     return TypeDef(base, size, tuple(wrappers), tuple(nested), keys, values)
 
 
@@ -81,14 +88,13 @@ def _parse_enum(name):
     values = []
     pos = name.find('(')
     escaped = False
-    inKey = False
-    char = name[pos]
+    in_key = False
     key = ''
     value = ''
     while True:
         pos += 1
         char = name[pos]
-        if inKey:
+        if in_key:
             if escaped:
                 key += char
                 escaped = False
@@ -96,7 +102,7 @@ def _parse_enum(name):
                 if char == "'":
                     keys.append(key)
                     key = ''
-                    inKey = False
+                    in_key = False
                 elif char == '\\':
                     escaped = True
                 else:
@@ -109,7 +115,7 @@ def _parse_enum(name):
                 values.append(int(value))
                 break
             elif char == "'":
-                inKey = True
+                in_key = True
             else:
                 value += char
     return tuple(keys), tuple(values)
