@@ -2,8 +2,8 @@ import logging
 
 from typing import List, Callable, Any
 
-from click_alchemy.chtypes import registry
-from click_alchemy.driver.rowbinary import parse_leb128, string_leb128
+from clickhouse_connect.chtypes import registry
+from clickhouse_connect.driver.rowbinary import parse_leb128, string_leb128
 
 logger = logging.getLogger(__name__)
 

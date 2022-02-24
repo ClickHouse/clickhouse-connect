@@ -1,5 +1,5 @@
 from unittest import TestCase
-from click_alchemy.chtypes.registry import get_from_name, _parse_name as pn
+from clickhouse_connect.chtypes.registry import get_from_name, _parse_name as pn
 
 
 class ClickHouseTypeTest(TestCase):
@@ -20,10 +20,4 @@ class ClickHouseTypeTest(TestCase):
         array2 = pn('UInt32')
         assert (array1 != array2)
 
-    def test_sqla(self):
-        int16 = get_from_name('Int16')
-        sqla_type = int16.get_sqla_type()
-        assert(sqla_type.compile() == 'Int16')
-        enum = get_from_name("Enum8('value1' = 7, 'value2'=5)")
-        sqla_type = enum.get_sqla_type()
-        assert(sqla_type.compile() == "Enum8('value1' = 7, 'value2' = 5)")
+

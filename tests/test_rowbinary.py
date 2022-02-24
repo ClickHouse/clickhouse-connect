@@ -1,6 +1,6 @@
 from unittest import TestCase
 
-from click_alchemy.chtypes.registry import get_from_name
+from clickhouse_connect.chtypes.registry import get_from_name
 
 
 def to_bytes(hex_str):

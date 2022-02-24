@@ -1,4 +1,4 @@
-from click_alchemy.connection import Connection
+from clickhouse_connect.dbapi.connection import Connection
 
 
 apilevel = '2.0' # PEP 249  DB API level

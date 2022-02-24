@@ -1,10 +1,9 @@
 from sqlalchemy.exc import DBAPIError
 
-from click_alchemy.cursor import Cursor
-
 import httpx
 
-from click_alchemy.driver.rbparser import parse_response
+from clickhouse_connect.dbapi.cursor import Cursor
+from clickhouse_connect.driver.rbparser import parse_response
 
 
 def format_query(query):

@@ -1,7 +1,9 @@
 from sqlalchemy.engine.default import DefaultDialect
 
-from click_alchemy import driver_name, connector
-from click_alchemy.chtypes import registry
+from clickhouse_connect import driver_name
+from clickhouse_connect.dbapi import connector
+from clickhouse_connect.chtypes import registry
+from clickhouse_connect.sqlalchemy import map_schema_types
 
 
 class ClickHouseDialect(DefaultDialect):
@@ -11,7 +13,7 @@ class ClickHouseDialect(DefaultDialect):
     default_schema_name = 'default'
     description_encoding = None
     max_identifier_length = 127
-    ischema_names = {k: v.sqla_type_cls for k, v in registry.type_map.items()}
+    ischema_names = map_schema_types()
 
     @classmethod
     def dbapi(cls):

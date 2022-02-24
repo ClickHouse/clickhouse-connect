@@ -1,35 +1,15 @@
 import logging
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
-from sqlalchemy.sql.type_api import TypeEngine
-from superset.utils.core import GenericDataType
 
 type_map = {}
 
 
-def compile(self, *args, **kwargs):
-    return self.ch_type.label(*args, **kwargs)
-
-
-def get_sqla_type(self):
-    sqla_type = self.sqla_type_cls()
-    sqla_type.ch_type = self
-    return sqla_type
-
-
-def ch_type(sqla_type: TypeEngine, gen_type: Optional[GenericDataType]):
-
-    def inner(cls):
-        if not hasattr(cls, 'name'):
-            cls.name = cls.__name__
-        sqla_type_cls = type(cls.name, (sqla_type,), {})
-        sqla_type_cls.compile = compile
-        cls.sqla_type_cls = sqla_type_cls
-        cls.gen_type = gen_type
-        cls.get_sqla_type = get_sqla_type
-        type_map[cls.name] = cls
-    return inner
+def ch_type(cls):
+    if not cls.name:
+        cls.name = cls.__name__
+    type_map[cls.name] = cls
 
 
 class TypeDef(NamedTuple):
@@ -49,7 +29,7 @@ def get_from_def(type_def:TypeDef):
     try:
         type_cls = type_map[type_def.base]
     except KeyError:
-        logging.error('Unrecognized ClickHouse type %s, base: %s', name, type_def.base)
+        logging.error('Unrecognized ClickHouse type %s', type_def.base)
         raise
     return type_cls.build(type_def)
 

@@ -1,2 +1,0 @@
-import click_alchemy.chtypes.registry
-import click_alchemy.chtypes.typelist
