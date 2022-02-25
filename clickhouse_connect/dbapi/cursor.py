@@ -18,7 +18,7 @@ class Cursor:
 
     @property
     def description(self):
-        return [(n, t.name, None, None, None, None, True) for n, t in zip(self._names, self._types)]
+        return [(n, t.base, None, None, None, None, True) for n, t in zip(self._names, self._types)]
     
     @property
     def rowcount(self):

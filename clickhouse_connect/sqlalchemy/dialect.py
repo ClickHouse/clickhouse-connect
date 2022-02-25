@@ -4,9 +4,6 @@ from clickhouse_connect import driver_name
 from clickhouse_connect.dbapi import connector
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.sqlalchemy.datatypes import map_schema_types
-from clickhouse_connect.superset.datatypes import map_generic_types
-
-map_generic_types()
 
 
 class ClickHouseDialect(DefaultDialect):
@@ -26,13 +23,13 @@ class ClickHouseDialect(DefaultDialect):
         pass
 
     def get_schema_names(self, connection, **kwargs):
-        return [row.name for row in connection.execute('SHOW DATABASES')]
+        return [row.base for row in connection.execute('SHOW DATABASES')]
 
     def get_table_names(self, connection, schema=None, **kw):
         st = 'SHOW TABLES'
         if schema:
             st += ' FROM ' + schema
-        return [row.name for row in connection.execute(st)]
+        return [row.base for row in connection.execute(st)]
 
     def get_columns(self, connection, table_name, schema=None, **kwargs):
         if table_name.startswith('(') or '.' in table_name or not schema:
@@ -40,7 +37,7 @@ class ClickHouseDialect(DefaultDialect):
         else:
             table = '.'.join((schema, table_name))
         rows = connection.execute('DESCRIBE TABLE {}'.format(table))
-        return [{'name': row.name, 'type': registry.get_from_name(row.type).get_sqla_type()} for row in rows]
+        return [{'name': row.base, 'type': registry.get_from_name(row.type).get_sqla_type()} for row in rows]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kwargs):
         return []

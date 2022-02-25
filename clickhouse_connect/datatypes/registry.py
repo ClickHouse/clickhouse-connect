@@ -1,16 +1,17 @@
+import re
 import logging
+from decimal import Decimal
 
-from typing import Tuple, NamedTuple, Type, Dict, TYPE_CHECKING
+from typing import Tuple, NamedTuple, Any, Type, Dict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from clickhouse_connect.datatypes.datatypes import ClickHouseType
 
 
 class TypeDef(NamedTuple):
-    base: str
+    name: str
     size: int
     wrappers: tuple
-    nested: tuple
     keys: tuple
     values: tuple
 
@@ -18,65 +19,66 @@ class TypeDef(NamedTuple):
 type_map: Dict[str, Type['ClickHouseType']] = {}
 
 
-def ch_type(cls):
-    if not cls.name:
-        cls.name = cls.__name__
-    type_map[cls.name] = cls
+def register_bases(*args):
+    for cls in args:
+        type_map[cls.__name__.upper()] = cls
+
+
+size_pattern = re.compile(r'([A-Z]+)(\d+)')
 
 
 def get_from_name(name:str) -> 'ClickHouseType':
-    return get_from_def(parse_name(name))
-
-
-def get_from_def(type_def:TypeDef) -> 'ClickHouseType':
-    try:
-        type_cls = type_map[type_def.base]
-    except KeyError:
-        logging.error('Unrecognized ClickHouse type %s', type_def.base)
-        raise
-    return type_cls.build(type_def)
-
-
-def parse_name(name:str) -> TypeDef:
     working = None
     base = name
-    wrappers = []
-    nested = []
-    keys = tuple()
-    values = tuple()
     size = 0
+    wrappers = []
+    keys = tuple()
+    values = []
+    arg_str = ''
     while base != working:
         working = base
         if base.startswith('Nullable'):
             wrappers.append('Nullable')
             base = base[9:-1]
-        if base.startswith('Nullable'):
-            size = int(base[12:-1])
-            base = 'FixedString'
         if base.startswith('LowCardinality'):
             wrappers.append('LowCardinality')
             base = base[15:-1]
     if base.startswith('Enum'):
         keys, values = _parse_enum(base)
         base = base[:base.find('(')]
-    elif base.startswith('Array'):
-        nt = base[base.find('(') + 1:-1]
-        nested.append(parse_name(nt))
-        base = 'Array'
-    return TypeDef(base, size, tuple(wrappers), tuple(nested), keys, values)
+    paren = base.find('(')
+    if paren != -1:
+        arg_str = base[paren + 1: -1]
+        base = base[:paren]
+    if base.startswith('Array'):
+        values = [get_from_name(arg_str)]
+    elif arg_str:
+        values = _parse_args(arg_str)
+    base = base.upper()
+    match = size_pattern.match(base)
+    if match:
+        base = match.group(1)
+        size = int(match.group(2)) // 8
+    try:
+        type_cls = type_map[base]
+    except KeyError:
+        err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
+        logging.error(err_str)
+        raise Exception(err_str)
+    return type_cls(TypeDef(name, size, tuple(wrappers),  keys, tuple(values)))
 
 
 def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
     keys = []
     values = []
-    pos = name.find('(')
+    pos = name.find('(') + 1
     escaped = False
     in_key = False
     key = ''
     value = ''
     while True:
-        pos += 1
         char = name[pos]
+        pos += 1
         if in_key:
             if escaped:
                 key += char
@@ -102,3 +104,37 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
             else:
                 value += char
     return tuple(keys), tuple(values)
+
+
+def _parse_args(name) -> [Any]:
+    values = []
+    value = ''
+    in_str = False
+    escaped = False
+    pos = 0
+    while pos < len(name):
+        char = name[pos]
+        pos += 1
+        if in_str:
+            if escaped:
+                value += char
+                escaped = False
+            else:
+                if char == "'":
+                    values.append(value)
+                    value = ''
+                    in_str = False
+                elif char == '\\':
+                    escaped = True
+                else:
+                    value += char
+        elif char != ' ':
+            if char == ',':
+                if '.' in value:
+                    values.append(Decimal(value))
+                else:
+                    values.append(int(value))
+    return values
+
+
+

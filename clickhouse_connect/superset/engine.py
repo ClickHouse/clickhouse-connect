@@ -11,11 +11,14 @@ from superset.utils.core import GenericDataType
 
 from clickhouse_connect import driver_name
 from clickhouse_connect.datatypes import registry
+from clickhouse_connect.superset.datatypes import map_generic_types
 
 if TYPE_CHECKING:
     from superset.models.core import Database
 
 logger = logging.getLogger(__name__)
+
+map_generic_types()
 
 
 class ClickHouseEngineSpec(BaseEngineSpec):

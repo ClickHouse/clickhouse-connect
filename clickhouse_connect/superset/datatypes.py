@@ -5,14 +5,14 @@ from clickhouse_connect.datatypes.registry import type_map
 
 
 type_mapping = (
-    (r'^(float|decimal|int|uint)', GenericDataType.NUMERIC),
-    (r'^date', GenericDataType.TEMPORAL),
-    (r'^bool', GenericDataType.BOOLEAN)
+    (r'^(FLOAT|DECIMAL|INT|UINT)', GenericDataType.NUMERIC),
+    (r'^DATE', GenericDataType.TEMPORAL),
+    (r'^BOOL', GenericDataType.BOOLEAN)
 )
 
 
 def map_generic_types():
-    compiled = [(re.compile(pattern, re.IGNORECASE), gen_type) for pattern, gen_type in type_mapping]
+    compiled = [(re.compile(pattern), gen_type) for pattern, gen_type in type_mapping]
     for name, ch_type_cls in type_map.items():
         for pattern, gen_type in compiled:
             match = pattern.match(name)
