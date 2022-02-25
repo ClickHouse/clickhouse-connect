@@ -1,15 +1,9 @@
 import logging
 
-from typing import NamedTuple
+from typing import Tuple, NamedTuple, Type, Dict, TYPE_CHECKING
 
-
-type_map = {}
-
-
-def ch_type(cls):
-    if not cls.name:
-        cls.name = cls.__name__
-    type_map[cls.name] = cls
+if TYPE_CHECKING:
+    from clickhouse_connect.datatypes.datatypes import ClickHouseType
 
 
 class TypeDef(NamedTuple):
@@ -21,11 +15,20 @@ class TypeDef(NamedTuple):
     values: tuple
 
 
-def get_from_name(name:str):
-    return get_from_def(_parse_name(name))
+type_map: Dict[str, Type['ClickHouseType']] = {}
 
 
-def get_from_def(type_def:TypeDef):
+def ch_type(cls):
+    if not cls.name:
+        cls.name = cls.__name__
+    type_map[cls.name] = cls
+
+
+def get_from_name(name:str) -> 'ClickHouseType':
+    return get_from_def(parse_name(name))
+
+
+def get_from_def(type_def:TypeDef) -> 'ClickHouseType':
     try:
         type_cls = type_map[type_def.base]
     except KeyError:
@@ -34,7 +37,7 @@ def get_from_def(type_def:TypeDef):
     return type_cls.build(type_def)
 
 
-def _parse_name(name:str) -> TypeDef:
+def parse_name(name:str) -> TypeDef:
     working = None
     base = name
     wrappers = []
@@ -58,12 +61,12 @@ def _parse_name(name:str) -> TypeDef:
         base = base[:base.find('(')]
     elif base.startswith('Array'):
         nt = base[base.find('(') + 1:-1]
-        nested.append(_parse_name(nt))
+        nested.append(parse_name(nt))
         base = 'Array'
     return TypeDef(base, size, tuple(wrappers), tuple(nested), keys, values)
 
 
-def _parse_enum(name):
+def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
     keys = []
     values = []
     pos = name.find('(')

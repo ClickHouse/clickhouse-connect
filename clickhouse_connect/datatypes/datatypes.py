@@ -1,8 +1,9 @@
 import struct
+from abc import ABC
 from datetime import datetime, timezone
 
 from clickhouse_connect.driver.rowbinary import string_leb128, parse_leb128
-from clickhouse_connect.chtypes.registry import ch_type, get_from_def, TypeDef
+from clickhouse_connect.datatypes.registry import ch_type, get_from_def, TypeDef
 
 
 class ClickHouseType:
@@ -111,7 +112,7 @@ class Date(ClickHouseType):
         return datetime.fromtimestamp(epoch_days * 86400, timezone.utc).date(), loc + 2
 
 
-class Enum(ClickHouseType):
+class Enum(ClickHouseType, ABC):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
@@ -147,7 +148,6 @@ class String(ClickHouseType):
 
 @ch_type
 class Array(ClickHouseType):
-
     def __init__(self, type_def):
         super().__init__(type_def)
         self.nested = get_from_def(type_def.nested[0])

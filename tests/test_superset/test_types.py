@@ -2,7 +2,7 @@ from unittest import TestCase
 
 from sqlalchemy import String
 
-from clickhouse_connect.superset.engine_spec import ClickHouseEngineSpec
+from clickhouse_connect.superset.engine import ClickHouseEngineSpec
 
 
 class TestSupersetTypes(TestCase):

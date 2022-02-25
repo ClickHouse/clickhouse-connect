@@ -1,5 +1,4 @@
 import logging
-import re
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING, Tuple
@@ -11,17 +10,12 @@ from superset.utils import core as utils
 from superset.utils.core import GenericDataType
 
 from clickhouse_connect import driver_name
-from clickhouse_connect.chtypes import registry
+from clickhouse_connect.datatypes import registry
 
 if TYPE_CHECKING:
     from superset.models.core import Database
 
 logger = logging.getLogger(__name__)
-
-
-def _get_sqla_type(column_type):
-    ch_type = registry.get_from_name(column_type)
-    return ch_type.get_sqla_type()
 
 
 class ClickHouseEngineSpec(BaseEngineSpec):
@@ -30,7 +24,7 @@ class ClickHouseEngineSpec(BaseEngineSpec):
 
     time_secondary_columns = True
     time_groupby_inline = True
-    _function_names = None
+    _function_names = []
 
     _time_grain_expressions = {
         None: "{col}",
@@ -46,17 +40,6 @@ class ClickHouseEngineSpec(BaseEngineSpec):
         "P3M": "toStartOfQuarter(toDateTime({col}))",
         "P1Y": "toStartOfYear(toDateTime({col}))",
     }
-
-    column_type_mappings: Tuple[ColumnTypeMapping, ...] = (
-        (re.compile(r'^(lowcardinality\()?(nullable\()?[u]?(float|int)[\d]*(\)|$)', re.IGNORECASE),
-         _get_sqla_type, GenericDataType.NUMERIC),
-        (re.compile(r'^(lowcardinality\()?(nullable\()?[fixed]string(\)|$)', re.IGNORECASE),
-         _get_sqla_type, GenericDataType.STRING),
-        (re.compile(r'^(lowcardinality\()?(nullable\()?date(time)?(\)|$)', re.IGNORECASE),
-         _get_sqla_type, GenericDataType.TEMPORAL),
-        (re.compile(r'^(lowcardinality\()?(nullable\()?(enum|array)'), re.IGNORECASE,
-         _get_sqla_type, GenericDataType.STRING),
-    )
 
     @classmethod
     def epoch_to_dttm(cls) -> str:
@@ -98,12 +81,12 @@ class ClickHouseEngineSpec(BaseEngineSpec):
             return []
 
     @classmethod
-    def old_get_sqla_column_type(cls, column_type: Optional[str], *args, **kwargs)\
+    def get_sqla_column_type(cls, column_type: Optional[str], *args, **kwargs)\
             -> Optional[Tuple[TypeEngine, GenericDataType]]:
         if column_type is None:
             return None
         ch_type = registry.get_from_name(column_type)
-        return ch_type.get_sqla_type(), ch_type.gen_type
+        return ch_type.get_sqla_type(), ch_type.generic_type
 
     @classmethod
     def column_datatype_to_string(cls, sqla_column_type: TypeEngine, *args):

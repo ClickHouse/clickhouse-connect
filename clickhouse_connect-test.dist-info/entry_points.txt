@@ -2,4 +2,4 @@
 clickhouse_connect = clickhouse_connect.sqlalchemy.dialect:ClickHouseDialect
 
 [superset.db_engine_specs]
-clickhouse_connect = clickhouse_connnect.superset:ClickHouseBetaEngineSpec
+clickhouse_connect = clickhouse_connect.superset.engine:ClickHouseEngineSpec

@@ -1,8 +1,7 @@
-from sqlalchemy.exc import DBAPIError
-
 import httpx
 
 from clickhouse_connect.dbapi.cursor import Cursor
+from clickhouse_connect.dbapi.exceptions import OperationalError
 from clickhouse_connect.driver.rbparser import parse_response
 
 
@@ -44,6 +43,6 @@ class Connection:
                                        params=params)
             if response.status_code == 200:
                 return parse_response(response.content)
-            raise DBAPIError(query, params, Exception("Bad status code: {}".format( response.status_code)))
-        except Exception as ex:
-            raise DBAPIError(query, params, ex)
+            raise OperationalError("Bad status code: {}".format( response.status_code))
+        except Exception:
+            raise OperationalError("Error executing HTTP request {}".format(self.url))

@@ -2,8 +2,11 @@ from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import driver_name
 from clickhouse_connect.dbapi import connector
-from clickhouse_connect.chtypes import registry
-from clickhouse_connect.sqlalchemy import map_schema_types
+from clickhouse_connect.datatypes import registry
+from clickhouse_connect.sqlalchemy.datatypes import map_schema_types
+from clickhouse_connect.superset.datatypes import map_generic_types
+
+map_generic_types()
 
 
 class ClickHouseDialect(DefaultDialect):
@@ -78,7 +81,7 @@ class ClickHouseDialect(DefaultDialect):
         return rows.next().result == 1
 
     def has_sequence(self, connection, sequence_name, schema=None):
-        pass
+        return False
 
     def do_begin_twophase(self, connection, xid):
         raise NotImplementedError
