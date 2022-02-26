@@ -1,6 +1,6 @@
 import struct
 
-from typing import Dict, Type, TYPE_CHECKING
+from typing import Dict, Type
 from abc import ABCMeta, abstractmethod
 from datetime import datetime, timezone
 
@@ -9,28 +9,28 @@ from clickhouse_connect.datatypes.registry import TypeDef, register_bases
 
 
 class ClickHouseType(metaclass=ABCMeta):
-    base = None
-    _instance_cache: Dict['TypeDef', 'ClickHouseType'] = {}
+    __slots__ = 'wrappers', 'from_row_binary', 'name_suffix'
 
-    __slots__ = 'size', 'name', 'from_row_binary'
+    _instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
 
     @classmethod
-    def build(cls: Type['ClickHouseType'], type_def: 'TypeDef'):
+    def build(cls: Type['ClickHouseType'], type_def: TypeDef):
         return cls._instance_cache.setdefault(type_def, cls(type_def))
 
     def __init__(self, type_def: TypeDef):
-        self.size = type_def.size
-        name = type_def.name
-        for wrapper in type_def.wrappers:
-            name = f'{wrapper}({name})'
-        self.name = name
-        if 'Nullable' in type_def.wrappers:
+        self.name_suffix = ''
+        self.wrappers = type_def.wrappers
+        if 'Nullable' in self.wrappers:
             self.from_row_binary = self._nullable_from_row_binary
         else:
             self.from_row_binary = self._from_row_binary
 
-    def label(self):
-        return self.name
+    @property
+    def name(self):
+        name = f'{self.__class__.__name__}{self.name_suffix}'
+        for wrapper in self.wrappers:
+            name = f'{wrapper}({name})'
+        return name
 
     @abstractmethod
     def _from_row_binary(self, source, loc):
@@ -43,24 +43,33 @@ class ClickHouseType(metaclass=ABCMeta):
 
 
 class Int(ClickHouseType):
-    def _from_row_binary(self, source, loc):
-        return int.from_bytes(source[loc:loc + self.size], 'little', signed=True), loc + self.size
-
-
-class UInt(ClickHouseType):
-    def _from_row_binary(self, source, loc):
-        return int.from_bytes(source[loc: loc + self.size], 'little'), loc + self.size
-
-
-class Float(ClickHouseType):
-    __slots__ = 'float_type',
+    __slots__ = 'size',
+    signed = True
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.float_type = 'd' if self.size == 8 else 'f'
+        self.name_suffix = type_def.size
+        self.size = type_def.size // 8
 
     def _from_row_binary(self, source, loc):
-        return struct.unpack(self.float_type, source[loc:loc + self.size])[0], loc + self.size
+        return int.from_bytes(source[loc:loc + self.size], 'little', signed=self.signed), loc + self.size
+
+
+class UInt(Int):
+    signed = False
+
+
+class Float(ClickHouseType):
+    __slots__ = 'size', 'pack'
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.name_suffix = type_def.size
+        self.size = type_def.size // 8
+        self.pack = 'd' if self.size == 8 else 'f'
+
+    def _from_row_binary(self, source, loc):
+        return struct.unpack(self.pack, source[loc:loc + self.size])[0], loc + self.size
 
 
 class DateTime(ClickHouseType):
@@ -84,7 +93,7 @@ class Enum(Int):
         self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
         self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
-        self.name = f'{self.name}({val_str})'
+        self.name_suffix = f'{type_def.size * 8}({val_str})'
 
     def _from_row_binary(self, source, loc):
         value, loc = super().from_row_binary
@@ -101,6 +110,7 @@ class Array(ClickHouseType):
     def __init__(self, type_def: 'TypeDef'):
         super().__init__(type_def)
         self.nested = type_def.values[0]
+        self.name_suffix = f'({self.nested.name()})'
 
     def _from_row_binary(self, source, loc):
         size, loc = parse_leb128(source, loc)

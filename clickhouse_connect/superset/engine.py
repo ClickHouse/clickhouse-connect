@@ -80,7 +80,7 @@ class ClickHouseEngineSpec(BaseEngineSpec):
             cls._function_names = names
             return names
         except Exception as ex:  # pylint: disable=broad-except
-            logger.error('Error retrieving system.functions', str(ex), exc_info=True)
+            logger.exception('Error retrieving system.functions')
             return []
 
     @classmethod

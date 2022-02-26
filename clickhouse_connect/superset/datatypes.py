@@ -12,6 +12,7 @@ type_mapping = (
 
 
 def map_generic_types():
+    import clickhouse_connect.sqlalchemy # Hack to ensure sqlachemy type information as
     compiled = [(re.compile(pattern), gen_type) for pattern, gen_type in type_mapping]
     for name, ch_type_cls in type_map.items():
         for pattern, gen_type in compiled:

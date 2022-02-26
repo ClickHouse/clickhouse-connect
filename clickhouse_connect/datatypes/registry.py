@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 
 class TypeDef(NamedTuple):
-    name: str
     size: int
     wrappers: tuple
     keys: tuple
@@ -37,20 +36,20 @@ def get_from_name(name:str) -> 'ClickHouseType':
     arg_str = ''
     while base != working:
         working = base
-        if base.startswith('Nullable'):
+        if base.upper().startswith('NULLABLE'):
             wrappers.append('Nullable')
             base = base[9:-1]
-        if base.startswith('LowCardinality'):
+        if base.upper().startswith('LOWCARDINALITY'):
             wrappers.append('LowCardinality')
             base = base[15:-1]
-    if base.startswith('Enum'):
+    if base.upper().startswith('ENUM'):
         keys, values = _parse_enum(base)
         base = base[:base.find('(')]
     paren = base.find('(')
     if paren != -1:
         arg_str = base[paren + 1: -1]
         base = base[:paren]
-    if base.startswith('Array'):
+    if base.upper().startswith('ARRAY'):
         values = [get_from_name(arg_str)]
     elif arg_str:
         values = _parse_args(arg_str)
@@ -58,14 +57,14 @@ def get_from_name(name:str) -> 'ClickHouseType':
     match = size_pattern.match(base)
     if match:
         base = match.group(1)
-        size = int(match.group(2)) // 8
+        size = int(match.group(2))
     try:
         type_cls = type_map[base]
     except KeyError:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
         logging.error(err_str)
         raise Exception(err_str)
-    return type_cls(TypeDef(name, size, tuple(wrappers),  keys, tuple(values)))
+    return type_cls(TypeDef(size, tuple(wrappers),  keys, tuple(values)))
 
 
 def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:

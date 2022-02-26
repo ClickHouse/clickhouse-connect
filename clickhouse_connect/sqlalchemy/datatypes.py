@@ -10,7 +10,7 @@ from clickhouse_connect.datatypes.registry import type_map
 
 
 def sqla_compile(self, *args, **kwargs):
-    return self.ch_type.label()
+    return self.ch_type.name
 
 
 def get_sqla_type(self):

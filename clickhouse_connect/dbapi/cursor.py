@@ -1,6 +1,6 @@
 class Cursor:
-    def __init__(self, connection):
-        self.conn = connection
+    def __init__(self, driver):
+        self.driver = driver
         self._reset()
 
     def _reset(self):
@@ -18,7 +18,7 @@ class Cursor:
 
     @property
     def description(self):
-        return [(n, t.base, None, None, None, None, True) for n, t in zip(self._names, self._types)]
+        return [(n, t.name, None, None, None, None, True) for n, t in zip(self._names, self._types)]
     
     @property
     def rowcount(self):
@@ -30,7 +30,7 @@ class Cursor:
     def execute(self, operation, parameters=None, context=None):
         self._reset()
         self._operation = operation
-        self._data, self._names, self._types = self.conn.query(operation)
+        self._data, self._names, self._types = self.driver.query(operation)
         self._rowcount = len(self._data)
 
     def fetchall(self):
