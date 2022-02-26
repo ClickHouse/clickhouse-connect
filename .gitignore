@@ -1,4 +1,3 @@
 *.idea
 .pytest_cache
 superset_config.py
-superset_db

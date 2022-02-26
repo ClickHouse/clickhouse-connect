@@ -1,4 +1,5 @@
 import struct
+import uuid
 
 from typing import Dict, Type
 from abc import ABCMeta, abstractmethod
@@ -116,6 +117,11 @@ class FixedString(ClickHouseType):
         return source[loc:loc + self.size], loc + self.size
 
 
+class UUID(ClickHouseType):
+    def _from_row_binary(self, source, loc):
+        return uuid.UUID(bytes_le=bytes(source[loc: loc+16])), loc + 16
+
+
 class Array(ClickHouseType):
     __slots__ = 'nested',
 
@@ -133,4 +139,4 @@ class Array(ClickHouseType):
         return values, loc
 
 
-register_bases(Int, UInt, Enum, Float, String, FixedString, Date, DateTime, Array)
+register_bases(Int, UInt, Enum, Float, String, FixedString, Date, DateTime, UUID, Array)

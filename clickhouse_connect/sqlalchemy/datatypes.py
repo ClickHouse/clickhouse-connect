@@ -32,6 +32,7 @@ type_mapping = (
     (r'^FLOAT\d*$', Float),
     (r'^ENUM', String),
     (r'^FIXEDSTRING', LargeBinary),
+    (r'^UUID', LargeBinary),
     (r'^STRING', String),
     (r'^ARRAY', TypeEngine),
     (r'^DATETIME$', DateTime),

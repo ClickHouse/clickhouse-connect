@@ -1,7 +1,6 @@
 """
 This module creates the exception classes required by th DB API 2.0 specification.  Because they are
-specific to this DB API implementation, they aren't actually very useful, but they are
-used for completeness
+specific to this DB API implementation, they aren't actually very useful, but they included for completeness
 """
 
 

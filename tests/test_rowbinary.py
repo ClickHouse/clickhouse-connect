@@ -27,3 +27,9 @@ class TestRowBinary(TestCase):
         value, loc = str_array.from_row_binary(source, 0)
         assert (value == ['string1', 'string2', None, 'st4'])
 
+    def test_uuid(self):
+        uuid = get_from_name('UUID')
+        source = to_bytes('6c 4a 9b 63 ad 80 a6 c4  97 e7 d6 75 33 71 5a ad')
+        value, loc = uuid.from_row_binary(source, 0)
+        assert (value, 'c4a680ad-639b-4a6c-ad5a-713375d6e797')
+

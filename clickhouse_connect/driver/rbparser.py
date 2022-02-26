@@ -3,6 +3,7 @@ import logging
 from typing import List, Callable, Any
 
 from clickhouse_connect.datatypes import registry
+from clickhouse_connect.driver.exceptions import DriverError
 from clickhouse_connect.driver.rowbinary import parse_leb128, string_leb128
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,7 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[Any]):
         try:
             col_types.append(registry.get_from_name(col_type))
         except KeyError as ke:
-            logger.error("Unknown type returned", ke)
-            raise
+            raise DriverError(f"Unknown ClickHouse type returned for type {col_type}")
     logger.debug("Processing response, column chtypes = %s", ','.join([t.name for t in col_types]))
     convs = [t.from_row_binary for t in col_types]
     result = []

@@ -1,7 +1,7 @@
-class ServerException(Exception):
+class ServerError(Exception):
     pass
 
 
-class DriverException(Exception):
+class DriverError(Exception):
     pass
 

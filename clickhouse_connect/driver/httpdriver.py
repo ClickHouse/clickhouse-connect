@@ -1,7 +1,7 @@
 import logging
 import httpx
 
-from clickhouse_connect.driver.exceptions import ServerException, DriverException
+from clickhouse_connect.driver.exceptions import ServerError, DriverError
 from clickhouse_connect.driver.rbparser import parse_response
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class HttpDriver:
             logger.error(err_str)
             if response.content:
                 logger.error(str(response.content))
-            raise ServerException(err_str)
+            raise ServerError(err_str)
         except Exception:
             logger.exception("Unexpected Http Driver Exception")
-            raise DriverException(f"Error executing HTTP request {self.url}")
+            raise DriverError(f"Error executing HTTP request {self.url}")
