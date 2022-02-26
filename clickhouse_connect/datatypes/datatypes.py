@@ -87,7 +87,7 @@ class Date(ClickHouseType):
 class Enum(Int):
     __slots__ = '_name_map', '_int_map'
 
-    def __init__(self, type_def: 'TypeDef'):
+    def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
         self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
@@ -96,12 +96,24 @@ class Enum(Int):
         self.name_suffix = f'{type_def.size}({val_str})'
 
     def _from_row_binary(self, source, loc):
-        value, loc = super().from_row_binary
+        value, loc = super()._from_row_binary(source, loc)
         return self._int_map[value], loc
 
 
 class String(ClickHouseType):
     _from_row_binary = staticmethod(string_leb128)
+
+
+class FixedString(ClickHouseType):
+    __slots__ = 'size',
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.size = type_def.values[0]
+        self.name_suffix = f'({self.size})'
+
+    def _from_row_binary(self, source, loc):
+        return source[loc:loc + self.size], loc + self.size
 
 
 class Array(ClickHouseType):
@@ -121,4 +133,4 @@ class Array(ClickHouseType):
         return values, loc
 
 
-register_bases(Int, UInt, Enum, Float, String, Date, DateTime, Array)
+register_bases(Int, UInt, Enum, Float, String, FixedString, Date, DateTime, Array)

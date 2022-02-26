@@ -108,10 +108,18 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
 def _parse_args(name) -> [Any]:
     values = []
     value = ''
+    l = len(name)
     in_str = False
     escaped = False
     pos = 0
-    while pos < len(name):
+
+    def add_num():
+        if '.' in value:
+            values.append(Decimal(value))
+        else:
+            values.append(int(value))
+
+    while pos < l:
         char = name[pos]
         pos += 1
         if in_str:
@@ -127,12 +135,19 @@ def _parse_args(name) -> [Any]:
                     escaped = True
                 else:
                     value += char
-        elif char != ' ':
+        else:
+            while char == ' ':
+                char = name[pos]
+                pos += 1
+                if pos == l:
+                    break
             if char == ',':
-                if '.' in value:
-                    values.append(Decimal(value))
-                else:
-                    values.append(int(value))
+                add_num()
+                value = ''
+            else:
+                value += char
+    if value != '':
+        add_num()
     return values
 
 
