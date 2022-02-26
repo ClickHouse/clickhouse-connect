@@ -6,6 +6,7 @@ class ClickHouseTypeTest(TestCase):
 
     def test_enum_parse(self):
         enum_type = gfn("Enum8('value1' = 7, 'value2'=5)")
+        assert(enum_type.name, "Enum8(")
         assert(7 in enum_type._int_map)
         assert(5 in enum_type._int_map)
         enum_type = gfn(r"Enum16('beta&&' = -3, '' = 0, 'alpha\'' = 3822)")

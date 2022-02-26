@@ -93,7 +93,7 @@ class Enum(Int):
         self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
         self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
-        self.name_suffix = f'{type_def.size * 8}({val_str})'
+        self.name_suffix = f'{type_def.size}({val_str})'
 
     def _from_row_binary(self, source, loc):
         value, loc = super().from_row_binary
@@ -110,7 +110,7 @@ class Array(ClickHouseType):
     def __init__(self, type_def: 'TypeDef'):
         super().__init__(type_def)
         self.nested = type_def.values[0]
-        self.name_suffix = f'({self.nested.name()})'
+        self.name_suffix = f'({self.nested.name})'
 
     def _from_row_binary(self, source, loc):
         size, loc = parse_leb128(source, loc)
