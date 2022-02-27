@@ -52,7 +52,9 @@ class ClickHouseType(metaclass=ABCMeta):
 
 
 type_map: Dict[str, Type[ClickHouseType]] = {}
-size_pattern = re.compile(r'([A-Z]+)(\d+)')
+size_pattern = re.compile(r'^([A-Z]+)(\d+)')
+int_pattern = re.compile(r'^\d+$')
+decimal_pattern = re.compile(r'^\d+\.\d+$')
 
 
 def get_from_name(name: str) -> ClickHouseType:
@@ -75,9 +77,6 @@ def get_from_name(name: str) -> ClickHouseType:
     if paren != -1:
         arg_str = base[paren + 1:-1]
         base = base[:paren]
-    if base.upper().startswith('ARRAY'):
-        values = get_from_name(arg_str),
-    elif arg_str:
         values = _parse_args(arg_str)
     base = base.upper()
     match = size_pattern.match(base)
@@ -142,10 +141,12 @@ def _parse_args(name) -> [Any]:
     def add_value():
         if value == 'NULL':
             values.append(None)
-        elif '.' in value:
+        elif int_pattern.match(value):
+            values.append(int(value))
+        elif decimal_pattern.match(value):
             values.append(Decimal(value))
         else:
-            values.append(int(value))
+            values.append(value)
 
     while pos < l:
         char = name[pos]

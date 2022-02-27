@@ -2,9 +2,10 @@ import struct
 import uuid
 
 from datetime import datetime, timezone
+from typing import List
 
 from clickhouse_connect.driver.rowbinary import string_leb128, parse_leb128
-from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, get_from_name
 
 
 class Int(ClickHouseType):
@@ -91,12 +92,21 @@ class UUID(ClickHouseType):
         return uuid.UUID(bytes=byte_value), loc + 16
 
 
+class Boolean(ClickHouseType):
+    def _from_row_binary(self, source:bytearray, loc:int):
+        return source[loc] > 0, loc + 1
+
+
+class Bool(Boolean):
+    pass
+
+
 class Array(ClickHouseType):
     __slots__ = 'nested',
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.nested= type_def.values[0]
+        self.nested = get_from_name(type_def.values[0])
         self.name_suffix = f'({self.nested.name})'
 
     def _from_row_binary(self, source:bytearray, loc:int):
@@ -106,3 +116,20 @@ class Array(ClickHouseType):
             value, loc = self.nested.from_row_binary(source, loc)
             values.append(value)
         return values, loc
+
+
+class Tuple(ClickHouseType):
+    _slots = 'nested',
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.nested: List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
+        self.name_suffix = f"({','.join([t.name for t in self.nested])})"
+
+    def _from_row_binary(self, source: bytearray, loc: int):
+        values = []
+        for t in self.nested:
+            value, loc = t.from_row_binary(source, loc)
+            values.append(value)
+        return tuple(values), loc
+

@@ -1,7 +1,7 @@
 import re
 from typing import Type
 
-from sqlalchemy import Integer, Float, String, DateTime, Date, LargeBinary
+from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean, LargeBinary
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.type_api import TypeEngine
 
@@ -34,8 +34,10 @@ type_mapping = (
     (r'(FIXED)?STRING', String),
     (r'^UUID', LargeBinary),
     (r'^ARRAY', TypeEngine),
+    (r'^TUPLE', TypeEngine),
     (r'^DATETIME$', DateTime),
-    (r'^DATE$', Date)
+    (r'^DATE$', Date),
+    (r'^BOOL', Boolean),
 )
 
 

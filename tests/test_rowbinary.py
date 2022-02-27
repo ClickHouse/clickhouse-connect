@@ -33,3 +33,8 @@ class TestRowBinary(TestCase):
         value, loc = uuid.from_row_binary(source, 0)
         assert str(value) == 'c4a680ad-639b-4a6c-ad5a-713375d6e797'
 
+    def test_tuple(self):
+        ch_tuple = get_from_name('Tuple(Boolean, String, Bool, Int16)')
+        source = to_bytes('01 0f 41 20 6c 6f 76 65 6c  79 20 73 74 72 69 6e 67 00 77 23')
+        value, loc = ch_tuple.from_row_binary(source, 0)
+        assert value == (True, 'A lovely string', False, 9079)
