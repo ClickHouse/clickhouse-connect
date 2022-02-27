@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING, Tuple
 
 from sqlalchemy.sql.type_api import TypeEngine
-from superset.db_engine_specs.base import BaseEngineSpec, ColumnTypeMapping
+from superset.db_engine_specs.base import BaseEngineSpec
 from superset.db_engine_specs.exceptions import SupersetDBAPIDatabaseError
 from superset.utils import core as utils
 from superset.utils.core import GenericDataType

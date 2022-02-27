@@ -1,3 +1,8 @@
-*.idea
-.pytest_cache
 superset_config.py
+
+.pytest_cache
+
+*.idea
+/dist
+*.egg-info/
+
