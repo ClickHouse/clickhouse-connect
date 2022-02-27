@@ -31,9 +31,8 @@ type_mapping = (
     (r'^U?INT(\d)*$', Integer),
     (r'^FLOAT\d*$', Float),
     (r'^ENUM', String),
-    (r'^FIXEDSTRING', LargeBinary),
+    (r'(FIXED)?STRING', String),
     (r'^UUID', LargeBinary),
-    (r'^STRING', String),
     (r'^ARRAY', TypeEngine),
     (r'^DATETIME$', DateTime),
     (r'^DATE$', Date)
