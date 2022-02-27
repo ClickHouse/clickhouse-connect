@@ -2,6 +2,7 @@ import struct
 import uuid
 
 from datetime import datetime, timezone
+from ipaddress import IPv4Address, IPv6Address
 from typing import List
 
 from clickhouse_connect.driver.rowbinary import string_leb128, parse_leb128
@@ -17,7 +18,7 @@ class Int(ClickHouseType):
         self.name_suffix = type_def.size
         self.size = type_def.size // 8
 
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         return int.from_bytes(source[loc:loc + self.size], 'little', signed=self.signed), loc + self.size
 
 
@@ -34,18 +35,18 @@ class Float(ClickHouseType):
         self.size = type_def.size // 8
         self.pack = 'd' if self.size == 8 else 'f'
 
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         return struct.unpack(self.pack, source[loc:loc + self.size])[0], loc + self.size
 
 
 class DateTime(ClickHouseType):
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         epoch = int.from_bytes(source[loc:loc + 4], 'little', signed=False)
         return datetime.fromtimestamp(epoch, timezone.utc), loc + 4
 
 
 class Date(ClickHouseType):
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         epoch_days = int.from_bytes(source[loc:loc + 2], 'little', signed=False)
         return datetime.fromtimestamp(epoch_days * 86400, timezone.utc).date(), loc + 2
 
@@ -61,7 +62,7 @@ class Enum(Int):
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self.name_suffix = f'{type_def.size}({val_str})'
 
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         value, loc = super()._from_row_binary(source, loc)
         return self._int_map[value], loc
 
@@ -80,12 +81,12 @@ class FixedString(ClickHouseType):
 
     # TODO:  Pick a configuration mechanism to control whether we return a str, bytes, or bytearray for FixedString
     #        value(s) in a query response.  For now make it a str
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         return source[loc:loc + self.size].decode(), loc + self.size
 
 
 class UUID(ClickHouseType):
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         int_high = int.from_bytes(source[loc:loc + 8], 'little')
         int_low = int.from_bytes(source[loc + 8:loc + 16], 'little')
         byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
@@ -93,12 +94,26 @@ class UUID(ClickHouseType):
 
 
 class Boolean(ClickHouseType):
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
 
 
 class Bool(Boolean):
     pass
+
+
+class IPv4(ClickHouseType):
+    def _from_row_binary(self, source: bytearray, loc: int):
+        return str(IPv4Address(int.from_bytes(source[loc:loc + 4], 'little'))), loc + 4
+
+
+class IPv6(ClickHouseType):
+    def _from_row_binary(self, source: bytearray, loc: int):
+        end = loc + 16
+        int_value = int.from_bytes(source[loc:end], 'big')
+        if int_value & 0xFFFF00000000 == 0xFFFF00000000:
+            return str(IPv4Address(int_value & 0xFFFFFFFF)), end
+        return str(IPv6Address(int.from_bytes(source[loc:end], 'big'))), end
 
 
 class Array(ClickHouseType):
@@ -109,7 +124,7 @@ class Array(ClickHouseType):
         self.nested = get_from_name(type_def.values[0])
         self.name_suffix = f'({self.nested.name})'
 
-    def _from_row_binary(self, source:bytearray, loc:int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         size, loc = parse_leb128(source, loc)
         values = []
         for x in range(size):
@@ -132,4 +147,3 @@ class Tuple(ClickHouseType):
             value, loc = t.from_row_binary(source, loc)
             values.append(value)
         return tuple(values), loc
-

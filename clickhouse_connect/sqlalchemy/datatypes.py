@@ -1,9 +1,9 @@
 import re
 from typing import Type
 
-from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean, LargeBinary
+from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.sql.type_api import TypeEngine
+from sqlalchemy.sql.type_api import TypeEngine, UserDefinedType
 
 from clickhouse_connect.datatypes.datatypes import ClickHouseType
 from clickhouse_connect.datatypes.registry import type_map
@@ -32,12 +32,13 @@ type_mapping = (
     (r'^FLOAT\d*$', Float),
     (r'^ENUM', String),
     (r'(FIXED)?STRING', String),
-    (r'^UUID', LargeBinary),
-    (r'^ARRAY', TypeEngine),
-    (r'^TUPLE', TypeEngine),
+    (r'^UUID', UserDefinedType),
+    (r'^ARRAY', UserDefinedType),
+    (r'^TUPLE', UserDefinedType),
     (r'^DATETIME$', DateTime),
     (r'^DATE$', Date),
     (r'^BOOL', Boolean),
+    (r'^IP', UserDefinedType)
 )
 
 

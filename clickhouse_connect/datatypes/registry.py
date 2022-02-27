@@ -27,8 +27,8 @@ class ClickHouseType(metaclass=ABCMeta):
         return cls._instance_cache.setdefault(type_def, cls(type_def))
 
     def __init__(self, type_def: TypeDef):
-        self.name_suffix = ''
-        self.wrappers = type_def.wrappers
+        self.name_suffix:str = ''
+        self.wrappers: Tuple[str] = type_def.wrappers
         if 'Nullable' in self.wrappers:
             self.from_row_binary = self._nullable_from_row_binary
         else:
@@ -63,7 +63,6 @@ def get_from_name(name: str) -> ClickHouseType:
     wrappers = []
     keys = tuple()
     values = tuple()
-    arg_str = ''
     if base.upper().startswith('NULLABLE'):
         wrappers.append('Nullable')
         base = base[9:-1]
@@ -79,10 +78,11 @@ def get_from_name(name: str) -> ClickHouseType:
         base = base[:paren]
         values = _parse_args(arg_str)
     base = base.upper()
-    match = size_pattern.match(base)
-    if match:
-        base = match.group(1)
-        size = int(match.group(2))
+    if not base.startswith('IP'):
+        match = size_pattern.match(base)
+        if match:
+            base = match.group(1)
+            size = int(match.group(2))
     try:
         type_cls = type_map[base]
     except KeyError:

@@ -38,3 +38,12 @@ class TestRowBinary(TestCase):
         source = to_bytes('01 0f 41 20 6c 6f 76 65 6c  79 20 73 74 72 69 6e 67 00 77 23')
         value, loc = ch_tuple.from_row_binary(source, 0)
         assert value == (True, 'A lovely string', False, 9079)
+
+    def test_ip(self):
+        ipv6 = get_from_name('IPv6')
+        source = to_bytes('00 00 00 00 00 00 00 00 00 00 ff ff 58 34 00 01')
+        value, loc = ipv6.from_row_binary(source, 0)
+        assert value == '88.52.0.1'
+        source = to_bytes('fd 78 dd 5e 6f ce 73 92  04 4a 87 53 a9 07 26 b2')
+        value, loc = ipv6.from_row_binary(source, 0)
+        assert value == 'fd78:dd5e:6fce:7392:44a:8753:a907:26b2'
