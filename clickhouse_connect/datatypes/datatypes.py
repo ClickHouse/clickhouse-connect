@@ -116,34 +116,58 @@ class IPv6(ClickHouseType):
         return str(IPv6Address(int.from_bytes(source[loc:end], 'big'))), end
 
 
+class Nothing(ClickHouseType):
+    def _from_row_binary(self, source: bytearray, loc: int):
+        return None, loc
+
+
 class Array(ClickHouseType):
-    __slots__ = 'nested',
+    __slots__ = 'element_type',
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.nested = get_from_name(type_def.values[0])
-        self.name_suffix = f'({self.nested.name})'
+        self.element_type: ClickHouseType = get_from_name(type_def.values[0])
+        self.name_suffix = f'({self.element_type.name})'
 
     def _from_row_binary(self, source: bytearray, loc: int):
         size, loc = parse_leb128(source, loc)
         values = []
         for x in range(size):
-            value, loc = self.nested.from_row_binary(source, loc)
+            value, loc = self.element_type.from_row_binary(source, loc)
             values.append(value)
         return values, loc
 
 
 class Tuple(ClickHouseType):
-    _slots = 'nested',
+    _slots = 'member_types',
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.nested: List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
-        self.name_suffix = f"({','.join([t.name for t in self.nested])})"
+        self.member_types: List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
+        self.name_suffix = f"({','.join([t.name for t in self.member_types])})"
 
     def _from_row_binary(self, source: bytearray, loc: int):
         values = []
-        for t in self.nested:
+        for t in self.member_types:
             value, loc = t.from_row_binary(source, loc)
             values.append(value)
         return tuple(values), loc
+
+
+class Map(ClickHouseType):
+    _slots = 'key_type', 'value_type'
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.key_type: ClickHouseType = get_from_name(type_def.values[0])
+        self.value_type: ClickHouseType = get_from_name(type_def.values[1])
+        self.name_suffix = f"({self.key_type.name}, {self.value_type.name})"
+
+    def _from_row_binary(self, source, loc):
+        size, loc = parse_leb128(source, loc)
+        values = {}
+        for x in range(size):
+            key, loc = self.key_type.from_row_binary(source, loc)
+            value, loc = self.value_type.from_row_binary(source, loc)
+            values[key] = value
+        return values, loc
