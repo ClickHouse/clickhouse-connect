@@ -26,7 +26,7 @@ class HttpDriver:
         self.username = kwargs.get('username', 'default')
         self.password = kwargs.get('password', '')
         timeout = httpx.Timeout(connect=30.0, read=120.0, pool=10, write=120.0)
-        self.client = httpx.Client(http2=True, timeout=timeout)
+        self.client = httpx.Client(timeout=timeout)
 
     def close(self):
         self.client.close()

@@ -8,7 +8,7 @@ setup(
     packages=find_packages(exclude=['tests*']),
     python_requires="~=3.7",
     install_requires=[
-        'httpx[http2]',
+        'httpx',
         'pytz'
     ],
     entry_points={
