@@ -33,8 +33,8 @@ type_mapping = (
     (r'^ENUM', String),
     (r'(FIXED)?STRING', String),
     (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL)', UserDefinedType),
-    (r'^DATETIME$', DateTime),
-    (r'^DATE$', Date),
+    (r'^DATETIME', DateTime),
+    (r'^DATE', Date),
     (r'^BOOL', Boolean),
 )
 

@@ -13,6 +13,10 @@ class TypeDef(NamedTuple):
     keys: tuple
     values: tuple
 
+    @property
+    def arg_str(self):
+        return f"({', '.join(str(v) for v in self.values)})"
+
 
 class ClickHouseType(metaclass=ABCMeta):
     __slots__ = 'wrappers', 'from_row_binary', 'name_suffix'
@@ -78,7 +82,7 @@ def get_from_name(name: str) -> ClickHouseType:
         base = base[:paren]
         values = _parse_args(arg_str)
     base = base.upper()
-    if not base.startswith('IP'):
+    if base not in type_map:
         match = size_pattern.match(base)
         if match:
             base = match.group(1)
@@ -123,7 +127,7 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
             elif char == ')':
                 values.append(int(value))
                 break
-            elif char == "'":
+            elif char == "'" and not value:
                 in_key = True
             else:
                 value += char
@@ -173,6 +177,8 @@ def _parse_args(name) -> [Any]:
             if char == ',':
                 add_value()
                 value = ''
+            elif char == "'" and not value:
+                in_str = True
             else:
                 value += char
     if value != '':

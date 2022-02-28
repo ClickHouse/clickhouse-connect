@@ -14,5 +14,9 @@ class ClickHouseTypeTest(TestCase):
         assert r"alpha'" == enum_type._int_map[3822]
         assert -3 == enum_type._name_map['beta&&']
 
+    def test_names(self):
+        array_type = gfn('Array(Nullable(FixedString(50)))')
+        assert array_type.name == 'Array(Nullable(FixedString(50)))'
+
 
 
