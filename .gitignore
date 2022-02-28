@@ -4,5 +4,6 @@ superset_config.py
 
 *.idea
 /dist
+/build
 *.egg-info/
 
