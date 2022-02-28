@@ -1,5 +1,6 @@
 import struct
 import uuid
+import decimal
 
 from datetime import datetime, timezone
 from ipaddress import IPv4Address, IPv6Address
@@ -100,6 +101,41 @@ class Boolean(ClickHouseType):
 
 class Bool(Boolean):
     pass
+
+
+class Decimal(ClickHouseType):
+    __slots__ = 'size', 'prec'
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        size = type_def.size
+        if size == 0:
+            self.name_suffix = f'({type_def.values[0]}, {type_def.values[1]})'
+            prec = type_def.values[0]
+            self.prec = type_def.values[1]
+            if prec < 1 or prec > 79:
+                raise ArithmeticError("Invalid precision {prec} for ClickHouse Decimal type")
+            if prec < 10:
+                size = 32
+            elif prec < 19:
+                size = 64
+            elif prec < 39:
+                size = 128
+            else:
+                size = 256
+        else:
+            self.prec = type_def.values[0]
+            self.name_suffix = f'{type_def.size}({self.prec})'
+        self.size = size // 8
+
+    def _from_row_binary(self, source, loc):
+        neg = ''
+        unscaled = int.from_bytes(source[loc:loc + self.size], 'little')
+        if unscaled <= 0:
+            neg = '-'
+            unscaled = -unscaled
+        digits = str(unscaled)
+        return decimal.Decimal(f'{neg}{digits[:-self.prec]}.{digits[-self.prec:]}'), loc + self.size
 
 
 class IPv4(ClickHouseType):

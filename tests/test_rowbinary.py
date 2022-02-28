@@ -1,4 +1,5 @@
 from unittest import TestCase
+import decimal
 
 from clickhouse_connect.datatypes.registry import get_from_name
 
@@ -47,3 +48,9 @@ class TestRowBinary(TestCase):
         source = to_bytes('fd 78 dd 5e 6f ce 73 92  04 4a 87 53 a9 07 26 b2')
         value, loc = ipv6.from_row_binary(source, 0)
         assert value == 'fd78:dd5e:6fce:7392:44a:8753:a907:26b2'
+
+    def test_decimal(self):
+        dec_type = get_from_name('Decimal128(5)')
+        source = to_bytes('b8 6a 05 00 00 00 00 00  00 00 00 00 00 00 00 00')
+        value, loc = dec_type.from_row_binary(source, 0)
+        assert value == decimal.Decimal('3.55000')

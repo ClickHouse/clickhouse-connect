@@ -1,7 +1,7 @@
 import re
 from typing import Type
 
-from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean
+from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean, DECIMAL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.type_api import TypeEngine, UserDefinedType
 
@@ -32,7 +32,7 @@ type_mapping = (
     (r'^FLOAT\d*$', Float),
     (r'^ENUM', String),
     (r'(FIXED)?STRING', String),
-    (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP)', UserDefinedType),
+    (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL)', UserDefinedType),
     (r'^DATETIME$', DateTime),
     (r'^DATE$', Date),
     (r'^BOOL', Boolean),
