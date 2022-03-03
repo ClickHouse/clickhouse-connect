@@ -8,9 +8,10 @@ from clickhouse_connect.sqlalchemy import ischema_names
 
 class ClickHouseDialect(DefaultDialect):
     name = driver_name
+    driver = 'connect'
 
-    returns_unicode_strings = True
     default_schema_name = 'default'
+    returns_unicode_strings = True
     description_encoding = None
     max_identifier_length = 127
     ischema_names = ischema_names

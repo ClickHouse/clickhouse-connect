@@ -1,5 +1,5 @@
 [sqlalchemy.dialects]
-clickhouse_connect = clickhouse_connect.sqlalchemy.dialect:ClickHouseDialect
+clickhousedb.connect = clickhouse_connect.sqlalchemy.dialect:ClickHouseDialect
 
 [superset.db_engine_specs]
-clickhouse_connect = clickhouse_connect.superset.engine:ClickHouseEngineSpec
+clickhousedb = clickhouse_connect.superset.engine:ClickHouseEngineSpec

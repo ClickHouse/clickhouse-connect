@@ -2,7 +2,6 @@ import re
 import logging
 
 from abc import ABCMeta, abstractmethod
-from decimal import Decimal
 
 from typing import Tuple, NamedTuple, Any, Type, Dict, List
 
@@ -57,8 +56,7 @@ class ClickHouseType(metaclass=ABCMeta):
 
 type_map: Dict[str, Type[ClickHouseType]] = {}
 size_pattern = re.compile(r'^([A-Z]+)(\d+)')
-int_pattern = re.compile(r'^\d+$')
-decimal_pattern = re.compile(r'^\d+\.\d+$')
+int_pattern = re.compile(r'^-?\d+$')
 
 
 def get_from_name(name: str) -> ClickHouseType:
@@ -143,12 +141,8 @@ def _parse_args(name) -> [Any]:
     pos = 0
 
     def add_value():
-        if value == 'NULL':
-            values.append(None)
-        elif int_pattern.match(value):
+        if int_pattern.match(value):
             values.append(int(value))
-        elif decimal_pattern.match(value):
-            values.append(Decimal(value))
         else:
             values.append(value)
 
@@ -156,18 +150,14 @@ def _parse_args(name) -> [Any]:
         char = name[pos]
         pos += 1
         if in_str:
+            value += char
             if escaped:
-                value += char
                 escaped = False
             else:
                 if char == "'":
-                    values.append(value)
-                    value = ''
                     in_str = False
                 elif char == '\\':
                     escaped = True
-                else:
-                    value += char
         else:
             while char == ' ':
                 char = name[pos]
@@ -177,9 +167,9 @@ def _parse_args(name) -> [Any]:
             if char == ',':
                 add_value()
                 value = ''
-            elif char == "'" and not value:
-                in_str = True
             else:
+                if char == "'" and not value:
+                    in_str = True
                 value += char
     if value != '':
         add_value()

@@ -66,12 +66,12 @@ class DateTime64(ClickHouseType):
         self.name_suffix = type_def.arg_str
         self.prec = 10 ** type_def.values[0]
         if len(type_def.values) > 1:
-            self.tzinfo = pytz.timezone(type_def.values[1])
+            self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
 
     def _from_row_binary(self, source, loc):
         ticks = int.from_bytes(source[loc:loc + 8], 'little', signed=True)
         seconds = ticks // self.prec
-        dt_sec =  datetime.fromtimestamp(seconds, self.tzinfo)
+        dt_sec = datetime.fromtimestamp(seconds, self.tzinfo)
         microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
         return dt_sec + timedelta(microseconds=microseconds), loc + 8
 
@@ -138,7 +138,7 @@ class Decimal(ClickHouseType):
             prec = type_def.values[0]
             self.prec = type_def.values[1]
             if prec < 1 or prec > 79:
-                raise ArithmeticError("Invalid precision {prec} for ClickHouse Decimal type")
+                raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
             if prec < 10:
                 size = 32
             elif prec < 19:

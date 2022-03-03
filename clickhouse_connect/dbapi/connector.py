@@ -11,4 +11,4 @@ class Error(Exception):
 
 
 def connect(*args, **kwargs):
-    return Connection(args, **kwargs)
+    return Connection(**kwargs)

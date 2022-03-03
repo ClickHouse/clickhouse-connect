@@ -1,1 +1,1 @@
-driver_name='clickhouse_connect'
+driver_name = 'clickhousedb'
