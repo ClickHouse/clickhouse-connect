@@ -3,8 +3,6 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING, Tuple
 
-from apispec import APISpec
-from apispec.ext.marshmallow import MarshmallowPlugin
 from flask_babel import gettext as __
 from marshmallow import Schema, fields
 from marshmallow.validate import Range
@@ -16,9 +14,11 @@ from superset.db_engine_specs.exceptions import SupersetDBAPIDatabaseError
 from superset.errors import SupersetError, SupersetErrorType, ErrorLevel
 from superset.utils import core as utils
 from superset.utils.core import GenericDataType
+from superset.utils.network import is_hostname_valid, is_port_open
 
 from clickhouse_connect import driver_name
 from clickhouse_connect.datatypes import registry
+from clickhouse_connect.driver import default_port
 from clickhouse_connect.superset.datatypes import map_generic_types
 from superset.models.core import Database
 
@@ -128,15 +128,36 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
 
     @classmethod
     def validate_parameters(cls, parameters: BasicParametersType) -> List[SupersetError]:
-        errors: List[SupersetError] = []
         host = parameters.get("host", None)
         if not host:
-            errors.append(SupersetError(
-                message='Hostname is required',
-                error_type=SupersetErrorType.CONNECTION_MISSING_PARAMETERS_ERROR,
-                level=ErrorLevel.WARNING,
-                extra={"missing": ['host']},
-            ))
-            return errors
-        return errors
-
+            return [SupersetError(
+                "Hostname is required",
+                SupersetErrorType.CONNECTION_MISSING_PARAMETERS_ERROR,
+                ErrorLevel.WARNING,
+                {'missing': ['host']},
+            )]
+        if not is_hostname_valid(host):
+            return [SupersetError(
+                "The hostname provided can't be resolved.",
+                SupersetErrorType.CONNECTION_INVALID_HOSTNAME_ERROR,
+                ErrorLevel.ERROR,
+                {'invalid': ['host']},
+            )]
+        port = parameters.get('port', default_port('http', parameters.get('encryption', False)))
+        try:
+            port = int(port)
+        except (ValueError, TypeError):
+            port = -1
+        if port <= 0 or port >= 65535:
+            return [SupersetError(
+                "Port must be a valid integer between 0 and 65535 (inclusive).",
+                SupersetErrorType.CONNECTION_INVALID_PORT_ERROR,
+                ErrorLevel.ERROR,
+                {"invalid": ["port"]})]
+        if not is_port_open(host, port):
+            return [SupersetError(
+                "The port is closed.",
+                SupersetErrorType.CONNECTION_PORT_CLOSED_ERROR,
+                ErrorLevel.ERROR,
+                {"invalid": ["port"]})]
+        return []
