@@ -5,7 +5,7 @@ from clickhouse_connect.driver.httpdriver import HttpDriver
 
 
 def create_driver(host:str, interface: Optional[str] = None, port:int = 0, secure:Union[bool, str] = False,
-                  username:str = '', password:str = '', **kwargs) -> BaseDriver:
+                  username:str = '', password:str = '', database:str = '__default__', **kwargs) -> BaseDriver:
     use_tls = str(secure).lower() == 'true'
     if not interface:
         interface = 'https' if use_tls else 'http'
@@ -13,7 +13,7 @@ def create_driver(host:str, interface: Optional[str] = None, port:int = 0, secur
     if password and not username:
         username = 'default'
     if interface.startswith('http'):
-        return HttpDriver(interface, host, port, username, password, **kwargs)
+        return HttpDriver(interface, host, port, username, password, database, **kwargs)
 
 
 def default_port(interface:str, secure:bool):

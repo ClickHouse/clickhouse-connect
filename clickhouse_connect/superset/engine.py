@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING, Tuple
 from flask_babel import gettext as __
 from marshmallow import Schema, fields
 from marshmallow.validate import Range
-from sqlalchemy.engine.url import URL
+from sqlalchemy.engine.url import URL, make_url
 from sqlalchemy.sql.type_api import TypeEngine
 from superset.db_engine_specs.base import BaseEngineSpec, BasicParametersType, BasicParametersSchema, \
     BasicParametersMixin
@@ -61,7 +61,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         "P1Y": "toStartOfYear(toDateTime({col}))",
     }
 
-    sqlalchemy_uri_placeholder = "clickhousedb+connect://user:password@host:port/dbname[?secure=value&=value...]"
+    sqlalchemy_uri_placeholder = "clickhousedb+connect://user:password@host[:port][/dbname][?secure=value&=value...]"
     parameters_schema = ClickHouseParametersSchema()
     encryption_parameters = {'secure': 'true'}
 
@@ -120,11 +120,32 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
     @classmethod
     def build_sqlalchemy_uri(cls, parameters: BasicParametersType, encrypted_extra: Optional[Dict[str, str]] = None):
         url_params = parameters.copy()
-        if 'encryption' in parameters:
+        if url_params.get('encryption'):
             query = parameters.get("query", {}).copy()
             query.update(cls.encryption_parameters)
+            url_params['query'] = query
             del url_params['encryption']
+        if not url_params.get('database'):
+            url_params['database'] = '__default__'
         return str(URL(f'{cls.engine}+{cls.default_driver}', **url_params))
+
+    @classmethod
+    def get_parameters_from_uri(cls, uri: str, **kwargs) -> BasicParametersType:
+        url = make_url(uri)
+        query = url.query
+        if 'secure' in query:
+            encryption = url.query.get('secure') == 'true'
+            del query['secure']
+        else:
+            encryption = False
+        return BasicParametersType(
+            username=url.username,
+            password=url.password,
+            host=url.host,
+            port=url.port,
+            database=None if url.database == '__default__' else url.database,
+            query=query,
+            encryption=encryption)
 
     @classmethod
     def validate_parameters(cls, parameters: BasicParametersType) -> List[SupersetError]:

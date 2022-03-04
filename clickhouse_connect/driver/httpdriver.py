@@ -17,10 +17,10 @@ def format_query(query:str) -> str:
 
 
 class HttpDriver(BaseDriver):
-    def __init__(self, scheme: str, host:str, port: int, username:str, password: str, **kwargs):
+    def __init__(self, scheme: str, host:str, port: int, username:str, password: str, database: str, **kwargs):
         self.params = {}
         self.url = '{}://{}:{}'.format(scheme, host, port)
-        if 'database' in kwargs:
+        if database != '__default__':
             self.params['database'] = kwargs['database']
         self.auth = (username, password) if username else None
 
