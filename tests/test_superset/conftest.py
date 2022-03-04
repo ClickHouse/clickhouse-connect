@@ -1,4 +1,5 @@
 import os
+import pathlib
 
 from typing import Iterator
 
@@ -14,7 +15,7 @@ from superset.initialization import SupersetAppInitializer
 
 @fixture(scope='session', autouse=True)
 def mock_settings_env_vars() -> Iterator[None]:
-    path = os.path.realpath('./ss_test_config.py')
+    path = str(pathlib.Path(__file__).parent.resolve().joinpath('ss_test_config.py'))
     with mock.patch.dict(os.environ, {'SUPERSET_CONFIG_PATH': path}):
         yield
 
