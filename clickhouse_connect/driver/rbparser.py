@@ -43,3 +43,4 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHous
         row, loc = parse_row(source, loc, convs)
         result.append(row)
     return result, names, col_types
+

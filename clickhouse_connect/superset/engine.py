@@ -19,12 +19,12 @@ from superset.utils.network import is_hostname_valid, is_port_open
 from clickhouse_connect import driver_name
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver import default_port
-from clickhouse_connect.superset.datatypes import map_generic_types
+from clickhouse_connect.superset.datatypes import configure_types
 from superset.models.core import Database
 
 logger = logging.getLogger(__name__)
 
-map_generic_types()
+configure_types()
 
 
 class ClickHouseParametersSchema(Schema):
@@ -124,7 +124,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
             query = parameters.get("query", {}).copy()
             query.update(cls.encryption_parameters)
             url_params['query'] = query
-            del url_params['encryption']
+            url_params.pop('encryption')
         if not url_params.get('database'):
             url_params['database'] = '__default__'
         return str(URL(f'{cls.engine}+{cls.default_driver}', **url_params))
@@ -135,7 +135,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         query = url.query
         if 'secure' in query:
             encryption = url.query.get('secure') == 'true'
-            del query['secure']
+            query.pop('secure')
         else:
             encryption = False
         return BasicParametersType(

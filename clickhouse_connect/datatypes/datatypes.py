@@ -6,9 +6,10 @@ import pytz
 from typing import List
 from datetime import date, datetime, timezone, timedelta
 from ipaddress import IPv4Address, IPv6Address
+from binascii import hexlify
 
 from clickhouse_connect.driver.rowbinary import string_leb128, parse_leb128
-from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, get_from_name
+from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, get_from_name, type_map
 
 
 class Int(ClickHouseType):
@@ -26,6 +27,13 @@ class Int(ClickHouseType):
 
 class UInt(Int):
     signed = False
+
+
+class UInt64(ClickHouseType):
+    signed = False
+
+    def _from_row_binary(self, source: bytearray, loc: int):
+        return int.from_bytes(source[loc:loc + 8], 'little', signed=self.signed), loc + 8
 
 
 class Float32(ClickHouseType):
@@ -96,18 +104,51 @@ class String(ClickHouseType):
     _from_row_binary = staticmethod(string_leb128)
 
 
+def _fixed_string_raw(value: bytearray):
+    return value
+
+
+def _fixed_string_decode(cls, value: bytearray):
+    try:
+        return value.decode(cls._encoding)
+    except UnicodeDecodeError:
+        return cls._encode_error(value)
+
+def _hex_string(cls, value: bytearray):
+    return hexlify(value).decode('utf8')
+
+
 class FixedString(ClickHouseType):
     __slots__ = 'size',
+    _encoding = 'utf8'
+    _transform = staticmethod(_fixed_string_raw)
+    _encode_error = staticmethod(_fixed_string_raw)
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.size = type_def.values[0]
         self.name_suffix = f'({self.size})'
 
-    # TODO:  Pick a configuration mechanism to control whether we return a str, bytes, or bytearray for FixedString
-    #        value(s) in a query response.  For now make it a str
     def _from_row_binary(self, source: bytearray, loc: int):
-        return source[loc:loc + self.size].decode(), loc + self.size
+        return self._transform(source[loc:loc + self.size]), loc + self.size
+
+
+def fixed_string_handling(method: str, encoding:str = 'utf8', encoding_error:str = 'hex'):
+    if method == 'raw':
+        FixedString._transform = staticmethod(_fixed_string_raw)
+    elif method == 'decode':
+        FixedString._encoding = encoding
+        FixedString._transform = classmethod(_fixed_string_decode)
+        if encoding_error == 'hex':
+            FixedString._encode_error = classmethod(_hex_string)
+        else:
+            FixedString._encode_error = classmethod(lambda cls: '<binary data>')
+    elif method == 'hex':
+        FixedString._transform = staticmethod(_hex_string)
+
+
+def uint64_handling(method: str):
+    UInt64.signed = method.lower() == 'signed'
 
 
 class UUID(ClickHouseType):
