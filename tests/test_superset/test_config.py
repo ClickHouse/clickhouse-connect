@@ -10,7 +10,7 @@ def test_build_uri(superset_app: SupersetApp):
         'host': 'localhost'
     }
     url = spec.build_sqlalchemy_uri(parameters)
-    assert url == 'clickhousedb+connect://ClickHouse:password@localhost/default'
+    assert url == 'clickhousedb+connect://ClickHouse:password@localhost'
 
 
 def test_json_schema(superset_app: SupersetApp):
