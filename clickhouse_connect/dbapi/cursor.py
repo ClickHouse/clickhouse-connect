@@ -1,8 +1,10 @@
 from clickhouse_connect.dbapi.exceptions import ProgrammingError
+from clickhouse_connect.driver import BaseDriver
+from clickhouse_connect.driver.query import QueryResult
 
 
 class Cursor:
-    def __init__(self, driver):
+    def __init__(self, driver: BaseDriver):
         self.driver = driver
         self.arraysize = 1
         self.data= None
@@ -26,7 +28,10 @@ class Cursor:
         self.data = None
 
     def execute(self, operation, parameters=None, context=None):
-        self.data, self.names, self.types = self.driver.query(operation)
+        qr = self.driver.query(operation)
+        self.data = qr.result_set
+        self.names = qr.column_names
+        self.types = qr.column_types
         self._rowcount = len(self.data)
 
     def fetchall(self):

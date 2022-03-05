@@ -12,13 +12,14 @@ setup(
         'requests',
         'pytz'
     ],
-    test_requires=[
+    tests_require=[
         'sqlalchemy>1.3.21, <1.4'
         'apache_superset>=1.4.1'
     ],
-    extras_requires={
+    extras_require={
         'sqlalchemy': ['sqlalchemy>1.3.21, <1.4'],
-        'superset': ['apache_superset>=1.4.1', 'sqlalchemy>1.3.21, <1.4']
+        'superset': ['apache_superset>=1.4.1', 'sqlalchemy>1.3.21, <1.4'],
+        'brotli': ['brotli>=1.09']
     },
     entry_points={
         'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.sqlalchemy.dialect:ClickHouseDialect'],

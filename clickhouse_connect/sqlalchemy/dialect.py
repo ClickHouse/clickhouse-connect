@@ -1,7 +1,6 @@
 from sqlalchemy.engine.default import DefaultDialect
 
-from clickhouse_connect import driver_name
-from clickhouse_connect.dbapi import connector
+from clickhouse_connect import driver_name, dbapi
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.sqlalchemy import ischema_names
 
@@ -18,7 +17,7 @@ class ClickHouseDialect(DefaultDialect):
 
     @classmethod
     def dbapi(cls):
-        return connector
+        return dbapi
 
     def initialize(self, connection):
         pass
