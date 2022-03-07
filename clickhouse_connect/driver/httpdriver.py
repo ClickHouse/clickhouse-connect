@@ -29,7 +29,7 @@ class HttpDriver(BaseDriver):
             self.headers['Accept-Encoding'] = 'br, gzip'
         self.url = '{}://{}:{}'.format(scheme, host, port)
         if database != '__default__':
-            self.params['database'] = kwargs['database']
+            self.params['database'] = database
         self.auth = (username, password) if username else None
 
     def query(self, query:str) -> QueryResult:
@@ -60,7 +60,7 @@ class HttpDriver(BaseDriver):
                                      params=self.params)
             if 200 <= response.status_code < 300:
                 return response
-            err_str = f"HTTPDriver returned response code {response.status_code})"
+            err_str = f"HTTPDriver url {self.url} returned response code {response.status_code})"
             logger.error(err_str)
             if response.content:
                 logger.error(str(response.content))

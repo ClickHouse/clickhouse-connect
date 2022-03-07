@@ -2,7 +2,7 @@ import re
 
 from superset.utils.core import GenericDataType
 from clickhouse_connect.datatypes.registry import type_map
-from clickhouse_connect.datatypes.datatypes import fixed_string_handling, uint64_handling
+from clickhouse_connect.datatypes.standard import fixed_string_handling, uint64_handling
 
 type_mapping = (
     (r'^(FLOAT|DECIMAL|INT|UINT)', GenericDataType.NUMERIC),

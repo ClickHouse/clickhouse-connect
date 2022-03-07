@@ -5,7 +5,7 @@ from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean, DECIMAL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.type_api import TypeEngine, UserDefinedType
 
-from clickhouse_connect.datatypes.datatypes import ClickHouseType
+from clickhouse_connect.datatypes.standard import ClickHouseType
 from clickhouse_connect.datatypes.registry import type_map
 
 
@@ -14,16 +14,19 @@ def sqla_compile(self, *args, **kwargs):
 
 
 def get_sqla_type(self):
-    sqla_type = self.sqla_type_cls()
-    sqla_type.ch_type = self
+    sqla_type = self.extra.get('sqla_type')
+    if not sqla_type:
+        sqla_type = self.sqla_type_cls()
+        sqla_type.ch_type = self
+        self.extra['sqla_type'] = sqla_type
     return sqla_type
 
 
-def ch_to_sqla_type(ch_type_cls: Type[ClickHouseType], sqla_type: TypeEngine):
-    sqla_type_cls = type(ch_type_cls.__name__.upper(), (sqla_type,), {})
+def ch_to_sqla_type(ch_type_cls: Type[ClickHouseType], sqla_type_engine: TypeEngine):
+    sqla_type_cls = type(ch_type_cls.__name__.upper(), (sqla_type_engine,), {})
     sqla_type_cls.compile = sqla_compile
     ch_type_cls.sqla_type_cls = sqla_type_cls
-    ch_type_cls.get_sqla_type = get_sqla_type
+    ch_type_cls.sqla_type = property(get_sqla_type)
     return sqla_type_cls
 
 
@@ -33,6 +36,7 @@ type_mapping = (
     (r'^ENUM', String),
     (r'(FIXED)?STRING', String),
     (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL)', UserDefinedType),
+    (r'(SIMPLE)?AGGREGATEFUNCTION$', UserDefinedType),
     (r'^DATETIME', DateTime),
     (r'^DATE', Date),
     (r'^BOOL', Boolean),

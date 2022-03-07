@@ -36,8 +36,11 @@ class ClickHouseDialect(DefaultDialect):
             table = table_name
         else:
             table = '.'.join((schema, table_name))
-        rows = connection.execute('DESCRIBE TABLE {}'.format(table))
-        return [{'name': row.name, 'type': registry.get_from_name(row.type).get_sqla_type()} for row in rows]
+        rows = [(row.name, registry.get_from_name(row.type)) for row in connection.execute(f'DESCRIBE TABLE {table}')]
+        return [{'name': name,
+                 'type': ch_type.sqla_type,
+                 'nullable': ch_type.nullable,
+                 'autoincrement': False} for name, ch_type in rows]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kwargs):
         return []
@@ -100,4 +103,3 @@ class ClickHouseDialect(DefaultDialect):
 
     def get_isolation_level(self, dbapi_conn):
         return None
-

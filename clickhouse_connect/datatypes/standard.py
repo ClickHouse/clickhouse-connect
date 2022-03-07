@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone, timedelta
 from ipaddress import IPv4Address, IPv6Address
 from binascii import hexlify
 
-from clickhouse_connect.driver.rowbinary import string_leb128, parse_leb128
+from clickhouse_connect.driver.rowbinary import string_leb128, read_leb128
 from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, get_from_name, type_map
 
 
@@ -23,6 +23,9 @@ class Int(ClickHouseType):
 
     def _from_row_binary(self, source: bytearray, loc: int):
         return int.from_bytes(source[loc:loc + self.size], 'little', signed=self.signed), loc + self.size
+
+    def _to_row_binary(self, value: int, dest: bytearray):
+        dest += value.to_bytes(self.size, 'little', signed=self.signed)
 
 
 class UInt(Int):
@@ -40,16 +43,31 @@ class Float32(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
         return struct.unpack('f', source[loc:loc + 4])[0], loc + 4
 
+    def _to_row_binary(self, dest: bytearray, value: float):
+        dest += struct.pack('f', (value,))
+
 
 class Float64(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
         return struct.unpack('d', source[loc:loc + 8])[0], loc + 8
 
+    def _to_row_binary(self, dest: bytearray, value: float):
+        dest += struct.pack('d', (value,))
+
 
 class DateTime(ClickHouseType):
+    __slots__ = 'tzinfo',
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        if type_def.values:
+            self.tzinfo = pytz.timezone(type_def.values[0][1:-1])
+        else:
+            self.tzinfo = timezone.utc
+
     def _from_row_binary(self, source: bytearray, loc: int):
         epoch = int.from_bytes(source[loc:loc + 4], 'little')
-        return datetime.fromtimestamp(epoch, timezone.utc), loc + 4
+        return datetime.fromtimestamp(epoch, self.tzinfo), loc + 4
 
 
 class Date(ClickHouseType):
@@ -75,6 +93,8 @@ class DateTime64(ClickHouseType):
         self.prec = 10 ** type_def.values[0]
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
+        else:
+            self.tzinfo = timezone.utc
 
     def _from_row_binary(self, source, loc):
         ticks = int.from_bytes(source[loc:loc + 8], 'little', signed=True)
@@ -82,22 +102,6 @@ class DateTime64(ClickHouseType):
         dt_sec = datetime.fromtimestamp(seconds, self.tzinfo)
         microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
         return dt_sec + timedelta(microseconds=microseconds), loc + 8
-
-
-class Enum(Int):
-    __slots__ = '_name_map', '_int_map'
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
-        self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
-        self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
-        val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
-        self.name_suffix = f'{type_def.size}({val_str})'
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        value, loc = super()._from_row_binary(source, loc)
-        return self._int_map[value], loc
 
 
 class String(ClickHouseType):
@@ -217,58 +221,4 @@ class IPv6(ClickHouseType):
         return str(IPv6Address(int.from_bytes(source[loc:end], 'big'))), end
 
 
-class Nothing(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return None, loc
 
-
-class Array(ClickHouseType):
-    __slots__ = 'element_type',
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        self.element_type: ClickHouseType = get_from_name(type_def.values[0])
-        self.name_suffix = type_def.arg_str
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        size, loc = parse_leb128(source, loc)
-        values = []
-        for x in range(size):
-            value, loc = self.element_type.from_row_binary(source, loc)
-            values.append(value)
-        return values, loc
-
-
-class Tuple(ClickHouseType):
-    _slots = 'member_types',
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        self.member_types: List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
-        self.name_suffix = type_def.arg_str
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        values = []
-        for t in self.member_types:
-            value, loc = t.from_row_binary(source, loc)
-            values.append(value)
-        return tuple(values), loc
-
-
-class Map(ClickHouseType):
-    _slots = 'key_type', 'value_type'
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        self.key_type: ClickHouseType = get_from_name(type_def.values[0])
-        self.value_type: ClickHouseType = get_from_name(type_def.values[1])
-        self.name_suffix = type_def.arg_str
-
-    def _from_row_binary(self, source, loc):
-        size, loc = parse_leb128(source, loc)
-        values = {}
-        for x in range(size):
-            key, loc = self.key_type.from_row_binary(source, loc)
-            value, loc = self.value_type.from_row_binary(source, loc)
-            values[key] = value
-        return values, loc

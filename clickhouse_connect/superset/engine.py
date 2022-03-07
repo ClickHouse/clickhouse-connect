@@ -111,7 +111,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         if column_type is None:
             return None
         ch_type = registry.get_from_name(column_type)
-        return ch_type.get_sqla_type(), ch_type.generic_type
+        return ch_type.sqla_type, ch_type.generic_type
 
     @classmethod
     def column_datatype_to_string(cls, sqla_column_type: TypeEngine, *args):

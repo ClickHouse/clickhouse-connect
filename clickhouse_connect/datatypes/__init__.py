@@ -1,2 +1,3 @@
 import clickhouse_connect.datatypes.registry
-import clickhouse_connect.datatypes.datatypes
+import clickhouse_connect.datatypes.standard
+import clickhouse_connect.datatypes.special

@@ -5,7 +5,7 @@ from typing import List, Callable, Any
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.registry import ClickHouseType
 from clickhouse_connect.driver.exceptions import DriverError
-from clickhouse_connect.driver.rowbinary import parse_leb128, string_leb128
+from clickhouse_connect.driver.rowbinary import read_leb128, string_leb128
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def parse_row(source: bytes, start: int, conversions: List[Callable]):
 def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHouseType]):
     response_size = len(source)
     loc = 0
-    num_columns, loc = parse_leb128(source, loc)
+    num_columns, loc = read_leb128(source, loc)
     logger.debug("Processing response, num columns = %d", num_columns)
     names = []
     for _ in range(num_columns):

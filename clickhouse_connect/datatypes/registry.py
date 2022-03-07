@@ -18,7 +18,7 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType(metaclass=ABCMeta):
-    __slots__ = 'wrappers', 'from_row_binary', 'name_suffix'
+    __slots__ = 'wrappers', 'from_row_binary', 'name_suffix', 'nullable', 'extra'
     _instance_cache = None
 
     def __init_subclass__(cls, **kwargs):
@@ -30,12 +30,15 @@ class ClickHouseType(metaclass=ABCMeta):
         return cls._instance_cache.setdefault(type_def, cls(type_def))
 
     def __init__(self, type_def: TypeDef):
+        self.extra = {}
         self.name_suffix:str = ''
         self.wrappers: Tuple[str] = type_def.wrappers
         if 'Nullable' in self.wrappers:
             self.from_row_binary = self._nullable_from_row_binary
+            self.nullable = True
         else:
             self.from_row_binary = self._from_row_binary
+            self.nullable = False
 
     @property
     def name(self):
