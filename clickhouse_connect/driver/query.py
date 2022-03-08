@@ -11,4 +11,15 @@ class QueryResult(NamedTuple):
     summary:Dict[str, Any] = {}
 
 
+class DataInsert(NamedTuple):
+    table: str
+    data = List[List[Any]]
+    column_names: List[str] = None
+    column_types: List[str] = None
+    database: str = None
+
+
+
+
+
 

@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from typing import  Any
 
-from clickhouse_connect.driver.query import QueryResult
+from clickhouse_connect.driver.query import QueryResult, DataInsert
 
 
 class BaseDriver(metaclass=ABCMeta):
@@ -17,7 +17,19 @@ class BaseDriver(metaclass=ABCMeta):
         pass
 
     @abstractmethod
+    def insert(self, insert:DataInsert) -> None:
+        pass
+
+    @abstractmethod
     def raw_request(self, data=None, **kwargs) -> Any:
+        pass
+
+    @abstractmethod
+    def command(self, cmd:str) -> str:
+        pass
+
+    @abstractmethod
+    def ping(self):
         pass
 
     def close(self):

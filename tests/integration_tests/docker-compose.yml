@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  ch_server:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "10123:8123"
+      - "10443:8443"
+      - "10900:9000"
+    volumes:
+      - /var/lib/clickhouse
+

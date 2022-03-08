@@ -44,3 +44,14 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHous
         result.append(row)
     return result, names, col_types
 
+
+def build_insert(data: List[List[Any]], *, column_type_names: List[str] = None,
+                 column_ch_types: List[ClickHouseType] = None):
+    if not column_ch_types:
+        column_ch_types = [registry.get_from_name(name) for name in column_type_names]
+    convs = [t.to_row_binary for t in column_ch_types]
+    output = bytearray()
+    for row in data:
+        for (value, conv) in zip(row, convs):
+            conv(value, output)
+    return output

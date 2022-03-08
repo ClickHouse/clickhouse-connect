@@ -18,7 +18,7 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType(metaclass=ABCMeta):
-    __slots__ = 'wrappers', 'from_row_binary', 'name_suffix', 'nullable', 'extra'
+    __slots__ = 'wrappers', 'from_row_binary', 'to_row_binary', 'name_suffix', 'nullable', 'extra'
     _instance_cache = None
 
     def __init_subclass__(cls, **kwargs):
@@ -35,8 +35,10 @@ class ClickHouseType(metaclass=ABCMeta):
         self.wrappers: Tuple[str] = type_def.wrappers
         if 'Nullable' in self.wrappers:
             self.from_row_binary = self._nullable_from_row_binary
+            self.to_row_binary = self._nullable_to_row_binary
             self.nullable = True
         else:
+            self.to_row_binary = self._to_row_binary
             self.from_row_binary = self._from_row_binary
             self.nullable = False
 
@@ -48,13 +50,23 @@ class ClickHouseType(metaclass=ABCMeta):
         return name
 
     @abstractmethod
-    def _from_row_binary(self, source, loc):
+    def _from_row_binary(self, source: bytearray, loc: int):
         pass
 
-    def _nullable_from_row_binary(self, source, loc):
+    def _nullable_from_row_binary(self, source, loc) -> (Any, int):
         if source[loc] == 0:
             return self._from_row_binary(source, loc + 1)
         return None, loc + 1
+
+    def _to_row_binary(self, value: Any, dest: bytearray) -> None:
+        pass
+
+    def _nullable_to_row_binary(self, value, dest: bytearray) -> None:
+        if value is None:
+            dest += 1
+        else:
+            dest += 0
+            self._to_row_binary(value, dest)
 
 
 type_map: Dict[str, Type[ClickHouseType]] = {}
