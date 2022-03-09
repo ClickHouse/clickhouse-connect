@@ -50,7 +50,7 @@ def test_ip():
     assert value == '88.52.0.1'
     source = to_bytes('fd 78 dd 5e 6f ce 73 92  04 4a 87 53 a9 07 26 b2')
     value, loc = ipv6.from_row_binary(source, 0)
-    assert value == 'fd78:dd5e:6fce:7392:44a:8753:a907:26b2'
+    assert value == 'fd78:dd5e:6fce:7392:044a:8753:a907:26b2'
 
 
 def test_decimal():

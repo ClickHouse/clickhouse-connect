@@ -1,13 +1,13 @@
 import logging
 import json
-from typing import Optional, Dict
+from typing import Iterable, Optional, Dict, Any
 
-import requests.exceptions
-from requests import Response, request
+import requests
 
+from clickhouse_connect.datatypes.registry import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
-from clickhouse_connect.driver.query import QueryResult, DataInsert
+from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.rbparser import parse_response, build_insert
 
 logger = logging.getLogger(__name__)
@@ -26,19 +26,17 @@ class HttpDriver(BaseDriver):
                  compress: bool = True, **kwargs):
         self.params = {}
         self.headers = {}
-        self.database = database
         self.compress = compress
         self.url = '{}://{}:{}'.format(scheme, host, port)
         self.auth = (username, password) if username else None
+        super().__init__(database, **kwargs)
 
     def query(self, query:str) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
-        params = {}
+        params = {'database': self.database}
         if self.compress:
             params['enable_http_compression'] = '1'
             headers['Accept-Encoding'] = 'br, gzip'
-        if self.database != '__default__':
-            params['database'] = self.database
         response = self.raw_request(format_query(query), params=params, headers=headers)
         result_set, column_names, column_types = parse_response(response.content)
         summary = {}
@@ -53,30 +51,25 @@ class HttpDriver(BaseDriver):
                            response.headers.get('X-ClickHouse-Query-Id'),
                            summary)
 
-    def insert(self, insert: DataInsert):
+    def data_insert(self, table:str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
+                    column_types: Iterable[ClickHouseType]):
         params = {}
         headers = {'Content-Type': 'application/octet-stream'}
-        table = insert.table
-        if '.' not in table:
-            if insert.database:
-                table = f'{insert.database}.{table}'
-            elif self.database:
-                table = f'{self.database}.{table}'
-        params['query'] = f"INSERT INTO {table} ({', '.join(insert.column_names)}) FORMAT RowBinary"
-        insert_block = build_insert(insert.data, column_type_names=insert.column_names)
+        params['query'] = f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT RowBinary"
+        insert_block = build_insert(data, column_types=column_types)
         response = self.raw_request(insert_block, params=params, headers=headers)
         logger.debug(f'Insert response code: {response.status_code}, content: {str(response.content)}')
 
     def command(self, cmd:str):
         headers = {'Content-Type': 'text/plain'}
-        return self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')
+        return self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1]
 
     def raw_request(self, data=None, method='post', params: Optional[Dict] = None, headers: Optional[Dict] = None):
         try:
             req_headers = self.headers
             if headers:
                 req_headers.update(headers)
-            response:Response = request(method, self.url,
+            response:requests.Response = requests.request(method, self.url,
                                      auth=self.auth,
                                      headers=req_headers,
                                      timeout=(10, 60),
@@ -95,7 +88,7 @@ class HttpDriver(BaseDriver):
 
     def ping(self) -> bool:
         try:
-            response = request('get', self.url + '/ping')
+            response = requests.request('get', self.url + '/ping')
             return 200 <= response.status_code < 300
         except requests.exceptions.RequestException:
             return False

@@ -3,12 +3,13 @@ import uuid
 import decimal
 import pytz
 
+from typing import Union
 from datetime import date, datetime, timezone, timedelta
 from ipaddress import IPv4Address, IPv6Address
 from binascii import hexlify
 
-from clickhouse_connect.driver.rowbinary import string_leb128
-from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, get_from_name, type_map
+from clickhouse_connect.driver.rowbinary import read_leb128_str, write_leb128_str
+from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef
 
 
 class Int(ClickHouseType):
@@ -84,15 +85,16 @@ class Date(ClickHouseType):
         dest += (int(value.timestamp()) // 86400).to_bytes(2, 'little', signed=True)
 
 
-class Date32(ClickHouseType):
-    start_date = date(1970, 1, 1)
+epoch_start_date = date(1970, 1, 1)
 
+
+class Date32(ClickHouseType):
     def _from_row_binary(self, source, loc):
         days = int.from_bytes(source[loc:loc + 4], 'little', signed=True)
-        return self.start_date + timedelta(days), loc + 4
+        return epoch_start_date + timedelta(days), loc + 4
 
     def _to_row_binary(self, value: date, dest: bytearray):
-        dest += value - start
+        dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
 
 
 class DateTime64(ClickHouseType):
@@ -114,9 +116,15 @@ class DateTime64(ClickHouseType):
         microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
         return dt_sec + timedelta(microseconds=microseconds), loc + 8
 
+    def _to_row_binary(self, value: datetime, dest: bytearray) -> None:
+        microseconds = value.replace(tzinfo=None).timestamp() * 1000000 + value.microsecond
+        ticks = int(microseconds * 1000000 // self.prec)
+        dest += ticks.to_bytes(8, 'little', signed=True)
+
 
 class String(ClickHouseType):
-    _from_row_binary = staticmethod(string_leb128)
+    _from_row_binary = staticmethod(read_leb128_str)
+    _to_row_binary = staticmethod(write_leb128_str)
 
 
 def _fixed_string_raw(value: bytearray):
@@ -148,6 +156,9 @@ class FixedString(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
         return self._transform(source[loc:loc + self.size]), loc + self.size
 
+    def _to_row_binary(self, value: Union [bytes, bytearray], dest: bytearray) -> None:
+        dest += value
+
 
 def fixed_string_handling(method: str, encoding: str = 'utf8', encoding_error: str = 'hex'):
     if method == 'raw':
@@ -174,10 +185,20 @@ class UUID(ClickHouseType):
         byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
         return uuid.UUID(bytes=byte_value), loc + 16
 
+    def _to_row_binary(self, value: uuid.UUID, dest: bytearray) -> None:
+        source = value.bytes
+        bytes_high, bytes_low = bytearray(source[:8]), bytearray(source[8:])
+        bytes_high.reverse()
+        bytes_low.reverse()
+        dest += bytes_high + bytes_low
+
 
 class Boolean(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
+
+    def _to_row_binary(self, value: bool, dest: bytearray) -> None:
+        dest.append(1 if value else 0)
 
 
 class Bool(Boolean):
@@ -218,10 +239,18 @@ class Decimal(ClickHouseType):
         digits = str(unscaled)
         return decimal.Decimal(f'{neg}{digits[:-self.prec]}.{digits[-self.prec:]}'), loc + self.size
 
+    def _to_row_binary(self, value: decimal.Decimal, dest: bytearray) -> None:
+        pass  #TODO Implement soon
+
 
 class IPv4(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
-        return str(IPv4Address(int.from_bytes(source[loc:loc + 4], 'little'))), loc + 4
+        return IPv4Address(int.from_bytes(source[loc:loc + 4], 'little')).exploded, loc + 4
+
+    def _to_row_binary(self, value: Union [str, IPv4Address], dest: bytearray) -> None:
+        if isinstance(value, str):
+            value = IPv4Address(value)
+        dest += value.packed
 
 
 class IPv6(ClickHouseType):
@@ -229,5 +258,8 @@ class IPv6(ClickHouseType):
         end = loc + 16
         int_value = int.from_bytes(source[loc:end], 'big')
         if int_value & 0xFFFF00000000 == 0xFFFF00000000:
-            return str(IPv4Address(int_value & 0xFFFFFFFF)), end
-        return str(IPv6Address(int.from_bytes(source[loc:end], 'big'))), end
+            return IPv4Address(int_value & 0xFFFFFFFF).exploded, end
+        return IPv6Address(int.from_bytes(source[loc:end], 'big')).exploded, end
+
+    def _to_row_binary(self, value: Union[str, IPv4Address, IPv6Address], dest: bytearray) -> None:
+        pass  #TODO Implement soon

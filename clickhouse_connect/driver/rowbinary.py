@@ -10,12 +10,12 @@ def read_leb128(source: bytes, loc: int):
     return length, loc + ix
 
 
-def string_leb128(source: bytes, loc: int, encoding: str = 'utf8'):
+def read_leb128_str(source: bytes, loc: int, encoding: str = 'utf8'):
     length, loc = read_leb128(source, loc)
     return source[loc:loc + length].decode(encoding), loc + length
 
 
-def write_leb128(dest: bytearray, value: int):  #Unsigned only
+def write_leb128(value: int, dest: bytearray):  #Unsigned only
     while True:
         b = value & 0x7f
         value = value >> 7
@@ -25,7 +25,7 @@ def write_leb128(dest: bytearray, value: int):  #Unsigned only
         dest.append(0x80 | b)
 
 
-def write_string(dest: bytearray, value: str):
-    write_leb128(dest, len(value))
-    dest += bytes(value)
+def write_leb128_str(value: str, dest: bytearray):
+    write_leb128(len(value), dest)
+    dest += bytes(value, 'utf8')
 

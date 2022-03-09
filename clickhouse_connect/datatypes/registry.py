@@ -58,14 +58,15 @@ class ClickHouseType(metaclass=ABCMeta):
             return self._from_row_binary(source, loc + 1)
         return None, loc + 1
 
+    @abstractmethod
     def _to_row_binary(self, value: Any, dest: bytearray) -> None:
         pass
 
     def _nullable_to_row_binary(self, value, dest: bytearray) -> None:
         if value is None:
-            dest += 1
+            dest.append(1)
         else:
-            dest += 0
+            dest.append(0)
             self._to_row_binary(value, dest)
 
 

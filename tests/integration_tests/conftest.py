@@ -22,7 +22,7 @@ def test_driver() -> Iterator[BaseDriver]:
 
 
 @fixture(scope='module', autouse=True)
-def start_clickhouse_container(test_driver: BaseDriver) -> Iterator[None]:
+def clickhouse_container(test_driver: BaseDriver) -> Iterator[None]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
     run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
     print('Starting docker compose')
