@@ -3,7 +3,7 @@ import logging
 
 from abc import ABCMeta, abstractmethod
 
-from typing import Tuple, NamedTuple, Any, Type, Dict, List
+from typing import Tuple, NamedTuple, Any, Type, Dict, List, Union
 
 
 class TypeDef(NamedTuple):
@@ -59,15 +59,13 @@ class ClickHouseType(metaclass=ABCMeta):
         return None, loc + 1
 
     @abstractmethod
-    def _to_row_binary(self, value: Any, dest: bytearray) -> None:
+    def _to_row_binary(self, value: Any) -> Union [bytes, bytearray]:
         pass
 
-    def _nullable_to_row_binary(self, value, dest: bytearray) -> None:
+    def _nullable_to_row_binary(self, value) -> Union [bytes, bytearray]:
         if value is None:
-            dest.append(1)
-        else:
-            dest.append(0)
-            self._to_row_binary(value, dest)
+            return b'\x01'
+        return b'\x00' + self._to_row_binary(value)
 
 
 type_map: Dict[str, Type[ClickHouseType]] = {}

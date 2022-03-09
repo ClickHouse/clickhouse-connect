@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from subprocess import Popen, PIPE
 from typing import Iterator
@@ -25,7 +26,7 @@ def test_driver() -> Iterator[BaseDriver]:
 def clickhouse_container(test_driver: BaseDriver) -> Iterator[None]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
     run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
-    print('Starting docker compose')
+    sys.stderr.write('Starting docker compose')
     up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
     if up_result[0]:
         raise Exception(f'Failed to start docker: {up_result[2]}')
@@ -39,8 +40,8 @@ def clickhouse_container(test_driver: BaseDriver) -> Iterator[None]:
     yield
     down_result = run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
     if down_result[0]:
-        print(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')
+        sys.stderr.write(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')
     else:
-        print('Successfully stopped docker compose')
+        sys.stderr.write('Successfully stopped docker compose')
 
 

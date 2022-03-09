@@ -1,6 +1,6 @@
 from typing import Optional, Union
 
-from clickhouse_connect.driver.base import BaseDriver
+from clickhouse_connect.driver.basedriver import BaseDriver
 from clickhouse_connect.driver.httpdriver import HttpDriver
 
 

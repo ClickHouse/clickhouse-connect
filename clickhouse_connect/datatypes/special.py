@@ -1,9 +1,10 @@
 from typing import Union, Any, Collection, Dict
+from binascii import hexlify
 
 from clickhouse_connect.datatypes.registry import ClickHouseType, get_from_name, TypeDef
 from clickhouse_connect.datatypes.standard import Int
 from clickhouse_connect.driver.exceptions import NotSupportedError
-from clickhouse_connect.driver.rowbinary import read_leb128, write_leb128
+from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
 
 
 class Enum(Int):
@@ -21,18 +22,65 @@ class Enum(Int):
         value, loc = super()._from_row_binary(source, loc)
         return self._int_map[value], loc
 
-    def _to_row_binary(self, value: Union [str, int], dest: bytearray):
+    def _to_row_binary(self, value: Union[str, int]) -> bytes:
         if isinstance(value, str):
             value = self._name_map[value]
-        return super().to_row_binary(value, dest)
+        return super().to_row_binary(value)
+
+
+def _fixed_string_binary(value: bytearray):
+    return value
+
+
+def _fixed_string_decode(cls, value: bytearray):
+    try:
+        return value.decode(cls._encoding)
+    except UnicodeDecodeError:
+        return cls._encode_error(value)
+
+
+def _hex_string(cls, value: bytearray):
+    return hexlify(value).decode('utf8')
+
+
+class FixedString(ClickHouseType):
+    __slots__ = 'size',
+    _encoding = 'utf8'
+    _transform = staticmethod(_fixed_string_binary)
+    _encode_error = staticmethod(_fixed_string_binary)
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.size = type_def.values[0]
+        self.name_suffix = f'({self.size})'
+
+    def _from_row_binary(self, source: bytearray, loc: int):
+        return self._transform(source[loc:loc + self.size]), loc + self.size
+
+    def _to_row_binary(self, value: Union[bytes, bytearray]) -> bytes:
+        return value
+
+
+def fixed_string_format(method: str, encoding: str, encoding_error: str):
+    if method == 'binary':
+        FixedString._transform = staticmethod(_fixed_string_binary)
+    elif method == 'decode':
+        FixedString._encoding = encoding
+        FixedString._transform = classmethod(_fixed_string_decode)
+        if encoding_error == 'hex':
+            FixedString._encode_error = classmethod(_hex_string)
+        else:
+            FixedString._encode_error = classmethod(lambda cls: '<binary data>')
+    elif method == 'hex':
+        FixedString._transform = staticmethod(_hex_string)
 
 
 class Nothing(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
         return None, loc
 
-    def _to_row_binary(self, value: Any, dest: bytearray) -> None:
-        pass
+    def _to_row_binary(self, value: Any) -> bytes:
+        return b''
 
 
 class Array(ClickHouseType):
@@ -51,11 +99,12 @@ class Array(ClickHouseType):
             values.append(value)
         return values, loc
 
-    def _to_row_binary(self, values: Collection[Any], dest: bytearray) -> None:
-        write_leb128(len(values), dest)
+    def _to_row_binary(self, values: Collection[Any]) -> bytearray:
+        ret = to_leb128(len(values))
         conv = self.element_type.to_row_binary
         for value in values:
-            conv(value, dest)
+            ret.extend(conv(value))
+        return ret
 
 
 class Tuple(ClickHouseType):
@@ -74,9 +123,11 @@ class Tuple(ClickHouseType):
             values.append(value)
         return tuple(values), loc
 
-    def _to_row_binary(self, values: Collection, dest: bytearray) -> None:
+    def _to_row_binary(self, values: Collection) -> bytearray:
+        ret = bytearray()
         for value, conv in zip(values, self.to_rb_funcs):
-            dest += conv(value)
+            ret.extend(conv(value))
+        return ret
 
 
 class Map(ClickHouseType):
@@ -101,12 +152,14 @@ class Map(ClickHouseType):
             values[key] = value
         return values, loc
 
-    def _to_row_binary(self, values: Dict, dest: bytearray) -> None:
+    def _to_row_binary(self, values: Dict) -> bytearray:
         key_to = self.key_to_rb
         value_to = self.value_to_rb
+        ret = bytearray()
         for key, value in values.items():
-            key_to(key, dest)
-            value_to(value, dest)
+            ret.extend(key_to(key))
+            ret.extend(value_to(key))
+        return ret
 
 
 class AggregateFunction(ClickHouseType):
@@ -115,16 +168,16 @@ class AggregateFunction(ClickHouseType):
         self.name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source, loc):
-        raise NotSupportedError("Aggregate function serialization not supported")
+        raise NotSupportedError("Aggregate function deserialization not supported")
 
-    def _to_row_binary(self, source, loc):
+    def _to_row_binary(self, value: Any) -> bytes:
         raise NotSupportedError("Aggregate function serialization not supported")
 
 
 class SimpleAggregateFunction(ClickHouseType):
     _slots = 'element_type',
 
-    def __init__(self, type_def:TypeDef):
+    def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self.name_suffix = type_def.arg_str
@@ -132,6 +185,5 @@ class SimpleAggregateFunction(ClickHouseType):
     def _from_row_binary(self, source, loc):
         return self.element_type.from_row_binary(source, loc)
 
-    def _to_row_binary(self, value: Any, dest: bytearray) -> None:
-        self.element_type.to_row_binary(value, dest)
-
+    def _to_row_binary(self, value: Any) -> bytes:
+        return self.element_type.to_row_binary(value)

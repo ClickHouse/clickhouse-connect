@@ -8,7 +8,7 @@ from clickhouse_connect.datatypes.registry import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
 from clickhouse_connect.driver.query import QueryResult
-from clickhouse_connect.driver.rbparser import parse_response, build_insert
+from clickhouse_connect.driver.rowbinary import parse_response, build_insert
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +24,12 @@ def format_query(query:str) -> str:
 class HttpDriver(BaseDriver):
     def __init__(self, scheme: str, host:str, port: int, username:str, password: str, database: str,
                  compress: bool = True, **kwargs):
+        super().__init__(database, **kwargs)
         self.params = {}
         self.headers = {}
         self.compress = compress
         self.url = '{}://{}:{}'.format(scheme, host, port)
         self.auth = (username, password) if username else None
-        super().__init__(database, **kwargs)
 
     def query(self, query:str) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
@@ -53,9 +53,8 @@ class HttpDriver(BaseDriver):
 
     def data_insert(self, table:str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
                     column_types: Iterable[ClickHouseType]):
-        params = {}
         headers = {'Content-Type': 'application/octet-stream'}
-        params['query'] = f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT RowBinary"
+        params = {'query':  f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT RowBinary"}
         insert_block = build_insert(data, column_types=column_types)
         response = self.raw_request(insert_block, params=params, headers=headers)
         logger.debug(f'Insert response code: {response.status_code}, content: {str(response.content)}')
