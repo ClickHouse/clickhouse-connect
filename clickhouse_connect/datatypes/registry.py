@@ -20,6 +20,8 @@ class TypeDef(NamedTuple):
 class ClickHouseType(metaclass=ABCMeta):
     __slots__ = 'wrappers', 'from_row_binary', 'to_row_binary', 'name_suffix', 'nullable', 'extra'
     _instance_cache = None
+    _from_row_binary = None
+    _to_row_binary = None
 
     def __init_subclass__(cls, **kwargs):
         cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
@@ -49,18 +51,11 @@ class ClickHouseType(metaclass=ABCMeta):
             name = f'{wrapper}({name})'
         return name
 
-    @abstractmethod
-    def _from_row_binary(self, source: bytearray, loc: int):
-        pass
 
     def _nullable_from_row_binary(self, source, loc) -> (Any, int):
         if source[loc] == 0:
             return self._from_row_binary(source, loc + 1)
         return None, loc + 1
-
-    @abstractmethod
-    def _to_row_binary(self, value: Any) -> Union [bytes, bytearray]:
-        pass
 
     def _nullable_to_row_binary(self, value) -> Union [bytes, bytearray]:
         if value is None:

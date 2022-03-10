@@ -10,6 +10,9 @@ from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
 from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef
 
 
+from_ts = datetime.utcfromtimestamp
+
+
 class Int(ClickHouseType):
     __slots__ = 'size',
     signed = True
@@ -19,11 +22,31 @@ class Int(ClickHouseType):
         self.name_suffix = type_def.size
         self.size = type_def.size // 8
 
-    def _from_row_binary(self, source: bytearray, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         return int.from_bytes(source[loc:loc + self.size], 'little', signed=self.signed), loc + self.size
 
     def _to_row_binary(self, value: int) -> bytes:
         return value.to_bytes(self.size, 'little', signed=self.signed)
+
+
+class Int16(ClickHouseType):
+    _from_row_binary = staticmethod(lambda source, loc: (int.from_bytes(source[loc: loc + 2], 'little', signed=True), loc + 2))
+    _to_row_binary = staticmethod(lambda value: value.to_bytes(2, 'little', signed=True))
+
+
+class UInt8(ClickHouseType):
+    _from_row_binary = staticmethod(lambda source, loc: (source[loc], loc + 1))
+    _to_row_binary = staticmethod(lambda value: [value])
+
+
+class UInt16(ClickHouseType):
+    _from_row_binary = staticmethod(lambda source, loc: (int.from_bytes(source[loc: loc + 2], 'little'), loc + 2))
+    _to_row_binary = staticmethod(lambda value: value.to_bytes(2, 'little'))
+
+
+class UInt32(ClickHouseType):
+    _from_row_binary = staticmethod(lambda source, loc: (int.from_bytes(source[loc: loc + 4], 'little'), loc + 4))
+    _to_row_binary = staticmethod(lambda value: value.to_bytes(4, 'little'))
 
 
 class UInt(Int):
@@ -42,7 +65,7 @@ class UInt64(ClickHouseType):
 
 class Float32(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
-        return struct.unpack('f', source[loc:loc + 4])[0], loc + 4
+        return struct.unpack_from('f', source, loc)[0], loc + 4
 
     def _to_row_binary(self, value: float) -> bytes:
         return struct.pack('f', (value,))
@@ -50,25 +73,27 @@ class Float32(ClickHouseType):
 
 class Float64(ClickHouseType):
     def _from_row_binary(self, source: bytearray, loc: int):
-        return struct.unpack('d', source[loc:loc + 8])[0], loc + 8
+        return struct.unpack_from('d', source, loc)[0], loc + 8
 
     def _to_row_binary(self, value: float) -> bytes:
         return struct.pack('d', (value,))
 
 
 class DateTime(ClickHouseType):
-    __slots__ = 'tzinfo',
+    __slots__ = 'tzinfo', '_from_row_binary'
 
     def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
         if type_def.values:
             self.tzinfo = pytz.timezone(type_def.values[0][1:-1])
         else:
-            self.tzinfo = timezone.utc
+            self.tzinfo = None
+            self._from_row_binary = lambda source, loc: (from_ts(struct.unpack_from('<I', source, loc)[0]), loc + 4)
+        super().__init__(type_def)
 
-    def _from_row_binary(self, source: bytearray, loc: int):
-        epoch = int.from_bytes(source[loc:loc + 4], 'little')
-        return datetime.fromtimestamp(epoch, self.tzinfo), loc + 4
+    #def _from_row_binary(self, source: bytearray, loc: int):
+        #epoch, = struct.unpack_from('<I', source, loc)
+        #epoch = int.from_bytes(source[loc:loc + 4], 'little')
+        #return datetime.fromtimestamp(epoch), loc + 4
 
     def _to_row_binary(self, value: datetime) -> bytes:
         return int(value.timestamp()).to_bytes(4, 'little', signed=True)

@@ -10,6 +10,13 @@ def to_bytes(hex_str):
     return bytearray.fromhex(hex_str)
 
 
+def test_ints():
+    uint8 = gfn('UInt8')
+    source = to_bytes('50 22 86')
+    value, loc = uint8.from_row_binary(source, 1)
+    assert (value, loc) == (0x22, 2)
+
+
 def test_string():
     str_type = gfn('String')
     source = to_bytes('1F 41 20 6c 6f 76 65 6c 79 20 73 74 72 69 6e 67 20 77 69 74 68 20 66 72 75 69 74 20 f0 9f a5 9d')
