@@ -1,4 +1,5 @@
 import logging
+from collections import deque
 
 from typing import Iterable, List, Any
 
@@ -28,13 +29,14 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHous
             raise DriverError(f"Unknown ClickHouse type returned for type {col_type}")
     logger.debug("Processing response, column ch_types = %s", ','.join([t.name for t in col_types]))
     convs = tuple([t.from_row_binary for t in col_types])
-    result = []
+    result = deque()
+    row = deque()
     while loc < response_size:
-        row = []
+        row.clear()
         for conv in convs:
             v, loc = conv(source, loc)
             row.append(v)
-        result.append(row)
+        result.append(tuple(row))
     return result, names, col_types
 
 
