@@ -1,13 +1,22 @@
 import decimal
 from datetime import date
 from ipaddress import IPv4Address, IPv6Address
+from typing import Union, Any
 
 from clickhouse_connect.datatypes import ip_format
-from clickhouse_connect.datatypes.registry import get_from_name as gfn
+from clickhouse_connect.datatypes.registry import get_from_name as gfn, ClickHouseType
 
 
 def to_bytes(hex_str):
-    return bytearray.fromhex(hex_str)
+    return bytes.fromhex(hex_str)
+
+
+def assert_trb(ch_type:ClickHouseType, value: Any, expected: Union[bytes, str]):
+    dest = bytearray()
+    ch_type.to_row_binary(value, dest)
+    if isinstance(expected, str):
+        expected = to_bytes(expected)
+    assert dest == expected
 
 
 def test_ints():
@@ -22,7 +31,7 @@ def test_string():
     source = to_bytes('1F 41 20 6c 6f 76 65 6c 79 20 73 74 72 69 6e 67 20 77 69 74 68 20 66 72 75 69 74 20 f0 9f a5 9d')
     value, loc = str_type.from_row_binary(source, 0)
     assert value == 'A lovely string with fruit 🥝'
-    assert str_type.to_row_binary(value)
+    assert_trb(str_type, value, source)
 
 
 def test_array():
@@ -37,7 +46,7 @@ def test_nullable():
     source = to_bytes('04 00 07 73 74 72 69 6e 67 31 00 07 73 74 72 69 6e 67 32 01 00 03 73 74 34')
     value, loc = str_array.from_row_binary(source, 0)
     assert value == ['string1', 'string2', None, 'st4']
-    assert str_array.to_row_binary(value) == source
+    assert_trb(str_array, value, source)
 
 
 def test_uuid():
@@ -45,7 +54,7 @@ def test_uuid():
     source = to_bytes('6c 4a 9b 63 ad 80 a6 c4  97 e7 d6 75 33 71 5a ad')
     value, loc = uuid.from_row_binary(source, 0)
     assert str(value) == 'c4a680ad-639b-4a6c-ad5a-713375d6e797'
-    assert uuid.to_row_binary(value) == source
+    assert_trb(uuid, value, source)
 
 
 def test_tuple():
@@ -53,7 +62,7 @@ def test_tuple():
     source = to_bytes('01 0f 41 20 6c 6f 76 65 6c  79 20 73 74 72 69 6e 67 00 77 23')
     value, loc = ch_tuple.from_row_binary(source, 0)
     assert value == (True, 'A lovely string', False, 9079)
-    assert ch_tuple.to_row_binary(value) == source
+    assert_trb(ch_tuple, value, source)
 
 
 def test_ip():

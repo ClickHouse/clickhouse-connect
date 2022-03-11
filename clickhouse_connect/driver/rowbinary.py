@@ -48,7 +48,7 @@ def build_insert(data: Iterable[Iterable[Any]], *, column_type_names: Iterable[s
     output = bytearray()
     for row in data:
         for (value, conv) in zip(row, convs):
-            output.extend(conv(value))
+            conv(value, output)
     return output
 
 
@@ -79,3 +79,4 @@ def to_leb128(value: int) -> bytearray:  #Unsigned only
             break
         result.append(0x80 | b)
     return result
+

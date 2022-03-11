@@ -6,4 +6,5 @@
 /dist
 /build
 *.egg-info/
+dev_*
 

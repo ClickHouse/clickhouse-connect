@@ -1,102 +1,137 @@
-import struct
 import uuid
 import decimal
 import pytz
 
-from typing import Any
+from typing import Any, Union
 from datetime import date, datetime, timezone, timedelta
+from struct import unpack_from as suf, pack as sp
 
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
 from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef
 
 
-from_ts = datetime.utcfromtimestamp
+class Int8(ClickHouseType):
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        x = source[loc]
+        return x if x < 128 else x - 128, loc + 1
 
-
-class Int(ClickHouseType):
-    __slots__ = 'size',
-    signed = True
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        self.name_suffix = type_def.size
-        self.size = type_def.size // 8
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        return int.from_bytes(source[loc:loc + self.size], 'little', signed=self.signed), loc + self.size
-
-    def _to_row_binary(self, value: int) -> bytes:
-        return value.to_bytes(self.size, 'little', signed=self.signed)
-
-
-class Int16(ClickHouseType):
-    _from_row_binary = staticmethod(lambda source, loc: (int.from_bytes(source[loc: loc + 2], 'little', signed=True), loc + 2))
-    _to_row_binary = staticmethod(lambda value: value.to_bytes(2, 'little', signed=True))
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        if value < 128:
+            dest.append(value)
+        else:
+            dest.append(value - 128)
 
 
 class UInt8(ClickHouseType):
-    _from_row_binary = staticmethod(lambda source, loc: (source[loc], loc + 1))
-    _to_row_binary = staticmethod(lambda value: [value])
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return source[loc], loc + 1
+
+    @staticmethod
+    def _to_row_binary(value:int, dest: bytearray):
+        dest.append(value)
+
+
+class Int16(ClickHouseType):
+    @staticmethod
+    def _from_row_binary(source: bytes, loc:int):
+        return suf('<h', source, loc)[0], loc + 2
+
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        dest += sp('<h', value,)
 
 
 class UInt16(ClickHouseType):
-    _from_row_binary = staticmethod(lambda source, loc: (int.from_bytes(source[loc: loc + 2], 'little'), loc + 2))
-    _to_row_binary = staticmethod(lambda value: value.to_bytes(2, 'little'))
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return suf('<H', source, loc)[0], loc + 2
+
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        dest += sp('<H', value,)
+
+
+class Int32(ClickHouseType):
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return suf('<l', source, loc)[0], loc + 4
+
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        dest += sp('<l', value,)
 
 
 class UInt32(ClickHouseType):
-    _from_row_binary = staticmethod(lambda source, loc: (int.from_bytes(source[loc: loc + 4], 'little'), loc + 4))
-    _to_row_binary = staticmethod(lambda value: value.to_bytes(4, 'little'))
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return suf('<L', source, loc)[0], loc + 4
+
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        dest += sp('<L', value,)
 
 
-class UInt(Int):
-    signed = False
+class Int64(ClickHouseType):
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return suf('<q', source, loc)[0], loc + 8
+
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        dest += sp('<q', value,)
 
 
 class UInt64(ClickHouseType):
-    signed = False
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return suf('<Q', source, loc)[0], loc + 8
 
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return int.from_bytes(source[loc:loc + 8], 'little', signed=self.signed), loc + 8
-
-    def _to_row_binary(self, value: int) -> bytes:
-        return value.to_bytes(8, 'little', signed=self.signed)
+    @staticmethod
+    def _to_row_binary(value: int, dest: bytearray):
+        dest += sp('<Q', value,)
 
 
 class Float32(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return struct.unpack_from('f', source, loc)[0], loc + 4
+    @staticmethod
+    def _from_row_binary(source: bytearray, loc: int):
+        return suf('f', source, loc)[0], loc + 4
 
-    def _to_row_binary(self, value: float) -> bytes:
-        return struct.pack('f', (value,))
+    @staticmethod
+    def _to_row_binary(value: float, dest: bytearray):
+        dest += sp('f', (value,))
 
 
 class Float64(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return struct.unpack_from('d', source, loc)[0], loc + 8
+    @staticmethod
+    def _from_row_binary(source: bytearray, loc: int):
+        return suf('d', source, loc)[0], loc + 8
 
-    def _to_row_binary(self, value: float) -> bytes:
-        return struct.pack('d', (value,))
+    @staticmethod
+    def _to_row_binary(value: float, dest: bytearray):
+        dest += sp('d', (value,))
+
+
+from_ts_naive = datetime.utcfromtimestamp
+from_ts_tz = datetime.fromtimestamp
 
 
 class DateTime(ClickHouseType):
-    __slots__ = 'tzinfo', '_from_row_binary'
+    __slots__ = '_from_row_binary',
 
     def __init__(self, type_def: TypeDef):
         if type_def.values:
-            self.tzinfo = pytz.timezone(type_def.values[0][1:-1])
+            tzinfo = pytz.timezone(type_def.values[0][1:-1])
+            self._from_row_binary = lambda source, loc: (from_ts_tz(suf('<L', source, loc)[0], tzinfo), loc + 4)
         else:
-            self.tzinfo = None
-            self._from_row_binary = lambda source, loc: (from_ts(struct.unpack_from('<I', source, loc)[0]), loc + 4)
+            self._from_row_binary = lambda source, loc: (from_ts_naive(suf('<L', source, loc)[0]), loc + 4)
         super().__init__(type_def)
 
-    #def _from_row_binary(self, source: bytearray, loc: int):
-        #epoch, = struct.unpack_from('<I', source, loc)
-        #epoch = int.from_bytes(source[loc:loc + 4], 'little')
-        #return datetime.fromtimestamp(epoch), loc + 4
-
-    def _to_row_binary(self, value: datetime) -> bytes:
-        return int(value.timestamp()).to_bytes(4, 'little', signed=True)
+    @staticmethod
+    def _to_row_binary(value: datetime, dest: bytearray):
+        dest += sp('<L', int(value.timestamp()),)
 
 
 class Date(ClickHouseType):
@@ -151,36 +186,75 @@ class String(ClickHouseType):
         length, loc = read_leb128(source, loc)
         return source[loc:loc + length].decode(self._encoding), loc + length
 
-    def _to_row_binary(self, value: str) -> bytes:
+    def _to_row_binary(self, value: str, dest: bytearray):
         value = bytes(value, self._encoding)
-        return to_leb128(len(value)) + value
+        dest += to_leb128(len(value)) + value
 
 
 class UUID(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
+    @staticmethod
+    def _from_row_binary(source: bytearray, loc: int):
         int_high = int.from_bytes(source[loc:loc + 8], 'little')
         int_low = int.from_bytes(source[loc + 8:loc + 16], 'little')
         byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
         return uuid.UUID(bytes=byte_value), loc + 16
 
-    def _to_row_binary(self, value: uuid.UUID) -> bytes:
+    @staticmethod
+    def _to_row_binary(value: uuid.UUID, dest: bytearray):
         source = value.bytes
         bytes_high, bytes_low = bytearray(source[:8]), bytearray(source[8:])
         bytes_high.reverse()
         bytes_low.reverse()
-        return bytes_high + bytes_low
+        dest += bytes_high + bytes_low
 
 
 class Boolean(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
+    @staticmethod
+    def _from_row_binary(source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
 
-    def _to_row_binary(self, value: bool) -> bytes:
-        return b'\x01' if value else b'\x00'
+    @staticmethod
+    def _to_row_binary(value: bool, dest: bytearray):
+        dest += b'\x01' if value else b'\x00'
 
 
 class Bool(Boolean):
     pass
+
+
+class Enum8(ClickHouseType):
+    __slots__ = '_name_map', '_int_map'
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
+        self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
+        self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
+        val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
+        self.name_suffix = f'({val_str})'
+
+    def _from_row_binary(self, source: bytes, loc: int):
+        value = source[loc]
+        return self._int_map[value if value < 128 else value - 128], loc + 1
+
+    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
+        try:
+            value = self._name_map[value]
+        except KeyError:
+            pass
+        dest += value if value < 128 else value - 128
+
+
+class Enum16(Enum8):
+    def _from_row_binary(self, source: bytes, loc: int):
+        return self._int_map[suf('<h', source, loc)[0]]
+
+    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
+        try:
+            value = self._name_map[value]
+        except KeyError:
+            pass
+        dest += sp()
 
 
 class Decimal(ClickHouseType):

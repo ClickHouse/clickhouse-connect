@@ -2,30 +2,8 @@ from typing import Union, Any, Collection, Dict
 from binascii import hexlify
 
 from clickhouse_connect.datatypes.registry import ClickHouseType, get_from_name, TypeDef
-from clickhouse_connect.datatypes.standard import Int
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
-
-
-class Enum(Int):
-    __slots__ = '_name_map', '_int_map'
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
-        self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
-        self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
-        val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
-        self.name_suffix = f'{type_def.size}({val_str})'
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        value, loc = super()._from_row_binary(source, loc)
-        return self._int_map[value], loc
-
-    def _to_row_binary(self, value: Union[str, int]) -> bytes:
-        if isinstance(value, str):
-            value = self._name_map[value]
-        return super().to_row_binary(value)
 
 
 def _fixed_string_binary(value: bytearray):
@@ -76,11 +54,12 @@ def fixed_string_format(method: str, encoding: str, encoding_error: str):
 
 
 class Nothing(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
+    @staticmethod
+    def _from_row_binary(self, source: bytes, loc: int):
         return None, loc
 
-    def _to_row_binary(self, value: Any) -> bytes:
-        return b''
+    def _to_row_binary(self, value: Any, dest: bytearray):
+        pass
 
 
 class Array(ClickHouseType):
@@ -99,12 +78,11 @@ class Array(ClickHouseType):
             values.append(value)
         return values, loc
 
-    def _to_row_binary(self, values: Collection[Any]) -> bytearray:
-        ret = to_leb128(len(values))
+    def _to_row_binary(self, values: Collection[Any], dest: bytearray):
+        dest += to_leb128(len(values))
         conv = self.element_type.to_row_binary
         for value in values:
-            ret.extend(conv(value))
-        return ret
+            conv(value, dest)
 
 
 class Tuple(ClickHouseType):
@@ -116,18 +94,16 @@ class Tuple(ClickHouseType):
         self.to_rb_funcs = tuple([get_from_name(name).to_row_binary for name in type_def.values])
         self.name_suffix = type_def.arg_str
 
-    def _from_row_binary(self, source: bytearray, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         values = []
         for conv in self.from_rb_funcs:
             value, loc = conv(source, loc)
             values.append(value)
         return tuple(values), loc
 
-    def _to_row_binary(self, values: Collection) -> bytearray:
-        ret = bytearray()
+    def _to_row_binary(self, values: Collection, dest: bytearray):
         for value, conv in zip(values, self.to_rb_funcs):
-            ret.extend(conv(value))
-        return ret
+            conv(value, dest)
 
 
 class Map(ClickHouseType):

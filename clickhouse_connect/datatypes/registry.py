@@ -51,16 +51,17 @@ class ClickHouseType(metaclass=ABCMeta):
             name = f'{wrapper}({name})'
         return name
 
-
     def _nullable_from_row_binary(self, source, loc) -> (Any, int):
         if source[loc] == 0:
             return self._from_row_binary(source, loc + 1)
         return None, loc + 1
 
-    def _nullable_to_row_binary(self, value) -> Union [bytes, bytearray]:
+    def _nullable_to_row_binary(self, value, dest: bytearray):
         if value is None:
-            return b'\x01'
-        return b'\x00' + self._to_row_binary(value)
+            dest += b'\x01'
+        else:
+            dest += b'\x00'
+            self._to_row_binary(value, dest)
 
 
 type_map: Dict[str, Type[ClickHouseType]] = {}

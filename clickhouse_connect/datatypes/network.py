@@ -1,3 +1,4 @@
+from struct import unpack_from as suf
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union
 
@@ -20,12 +21,14 @@ class IPv4(ClickHouseType):
     _from_output = staticmethod(_ipv4_ip_output)
 
     def _from_row_binary(self, source: bytearray, loc: int):
-        return self._from_output(int.from_bytes(source[loc:loc + 4], 'little')), loc + 4
+        return self._from_output(suf('<L', source, loc)[0]), loc + 4
 
-    def _to_row_binary(self, value: Union[str, bytes, IPv4Address]) -> bytes:
+    @staticmethod
+    def _to_row_binary(value: Union[str, bytes, IPv4Address], dest: bytearray):
         if isinstance(value, str) or isinstance(value, bytes):
-            return IPv4Address(value).packed
-        return value.packed
+            dest += IPv4Address(value).packed
+        else:
+            dest += value.packed
 
 
 def _ipv6_str_output(n: int):
@@ -82,5 +85,3 @@ def ip_format(fmt: str):
         IPv4._from_output = staticmethod(_ipv4_str_output)
         IPv6._from_v4_output = staticmethod(_ipv4_str_output)
         IPv6._from_v6_output = staticmethod(_ipv6_str_output)
-
-

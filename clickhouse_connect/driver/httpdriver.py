@@ -36,7 +36,7 @@ class HttpDriver(BaseDriver):
         params = {'database': self.database}
         if self.compress:
             params['enable_http_compression'] = '1'
-            headers['Accept-Encoding'] = 'br, gzip'
+            headers['Accept-Encoding'] = 'gzip, br'
         response = self.raw_request(format_query(query), params=params, headers=headers)
         result_set, column_names, column_types = parse_response(response.content)
         summary = {}

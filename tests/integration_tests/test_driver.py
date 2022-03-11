@@ -13,5 +13,5 @@ def test_command(test_driver: BaseDriver):
 
 def test_insert(test_driver: BaseDriver):
     test_driver.command('CREATE TABLE test_system_insert AS system.tables Engine MergeTree() ORDER BY name')
-    tables_result = test_driver.query('SELECT * from system.tables')
+    tables_result = test_driver.query("SELECT * from system.tables where name = 'test_system_insert'")
     test_driver.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
