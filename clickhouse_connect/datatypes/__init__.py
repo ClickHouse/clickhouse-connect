@@ -11,7 +11,8 @@ def fixed_string_format(method: str, encoding: str = 'utf8', encoding_error:str 
 
 
 def uint64_format(method: str):
-    UInt64.signed = method.lower() == 'signed'
+    if method.lower() == 'signed':
+        pass
 
 
 def string_encoding(encoding: str):

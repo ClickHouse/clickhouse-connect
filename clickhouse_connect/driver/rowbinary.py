@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHouseType]):
+    source = memoryview(source)
     response_size = len(source)
     loc = 0
     num_columns, loc = read_leb128(source, loc)
@@ -66,7 +67,7 @@ def read_leb128(source: bytes, loc: int):
 
 def read_leb128_str(source: bytes, loc: int, encoding: str = 'utf8'):
     length, loc = read_leb128(source, loc)
-    return source[loc:loc + length].decode(encoding), loc + length
+    return str(source[loc:loc + length], encoding), loc + length
 
 
 def to_leb128(value: int) -> bytearray:  #Unsigned only

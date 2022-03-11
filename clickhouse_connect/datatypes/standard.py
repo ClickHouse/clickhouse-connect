@@ -21,7 +21,7 @@ class Int8(ClickHouseType):
         if value < 128:
             dest.append(value)
         else:
-            dest.append(value - 128)
+            dest.append(value + 128)
 
 
 class UInt8(ClickHouseType):
@@ -135,11 +135,13 @@ class DateTime(ClickHouseType):
 
 
 class Date(ClickHouseType):
-    def _from_row_binary(self, source: bytearray, loc: int):
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
         epoch_days = int.from_bytes(source[loc:loc + 2], 'little')
         return datetime.fromtimestamp(epoch_days * 86400, timezone.utc).date(), loc + 2
 
-    def _to_row_binary(self, value: datetime) -> bytes:
+    @staticmethod
+    def _to_row_binary(value: datetime, dest: bytearray):
         return (int(value.timestamp()) // 86400).to_bytes(2, 'little', signed=True)
 
 
@@ -174,9 +176,9 @@ class DateTime64(ClickHouseType):
         microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
         return dt_sec + timedelta(microseconds=microseconds), loc + 8
 
-    def _to_row_binary(self, value: datetime) -> bytes:
+    def _to_row_binary(self, value: datetime, dest: bytearray):
         microseconds = int(value.timestamp()) * 1000000 + value.microsecond
-        return (int(microseconds * 1000000) // self.prec).to_bytes(8, 'little', signed=True)
+        dest += (int(microseconds * 1000000) // self.prec).to_bytes(8, 'little', signed=True)
 
 
 class String(ClickHouseType):
@@ -184,7 +186,7 @@ class String(ClickHouseType):
 
     def _from_row_binary(self, source, loc):
         length, loc = read_leb128(source, loc)
-        return source[loc:loc + length].decode(self._encoding), loc + length
+        return str(source[loc:loc + length], self._encoding), loc + length
 
     def _to_row_binary(self, value: str, dest: bytearray):
         value = bytes(value, self._encoding)
