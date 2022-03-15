@@ -146,7 +146,6 @@ epoch_start_date = date(1970, 1, 1)
 class Date(ClickHouseType):
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
-        epoch_days = int.from_bytes(source[loc:loc + 2], 'little')
         return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
 
     @staticmethod
@@ -157,8 +156,7 @@ class Date(ClickHouseType):
 class Date32(ClickHouseType):
     @staticmethod
     def _from_row_binary(source, loc):
-        days = int.from_bytes(source[loc:loc + 4], 'little', signed=True)
-        return epoch_start_date + timedelta(days), loc + 4
+        return epoch_start_date + timedelta(suf('<L', source, loc)[0]), loc + 4
 
     @staticmethod
     def _to_row_binary(self, value: date) -> bytes:

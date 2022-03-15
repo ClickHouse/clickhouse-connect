@@ -16,7 +16,7 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType():
-    __slots__ = 'wrappers', 'from_row_binary', 'to_row_binary', 'name_suffix', 'nullable', 'extra'
+    __slots__ = 'wrappers', 'from_row_binary', 'to_row_binary', 'name_suffix', 'nullable', 'output', 'extra'
     _instance_cache = None
     _from_row_binary = None
     _to_row_binary = None
