@@ -1,3 +1,5 @@
+from collections import deque
+
 from clickhouse_connect.dbapi.exceptions import ProgrammingError
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.query import QueryResult
@@ -7,7 +9,7 @@ class Cursor:
     def __init__(self, driver: BaseDriver):
         self.driver = driver
         self.arraysize = 1
-        self.data= None
+        self.data:deque = None
         self.names = []
         self.types = []
         self._rowcount = -1
@@ -19,7 +21,7 @@ class Cursor:
     @property
     def description(self):
         return [(n, t.name, None, None, None, None, True) for n, t in zip(self.names, self.types)]
-    
+
     @property
     def rowcount(self):
         return self._rowcount
@@ -44,9 +46,9 @@ class Cursor:
         self.check_valid()
         if not self.data:
             return None
-        return self.data.pop(0)
+        return self.data.popleft()
 
-    def fetchmany(self, size:int = -1):
+    def fetchmany(self, size: int = -1):
         self.check_valid()
         sz = max(size, self.arraysize)
         ret = self.data[:sz]

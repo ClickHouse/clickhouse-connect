@@ -7,7 +7,7 @@ from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
 
 
 def _fixed_string_binary(value: bytearray):
-    return value
+    return bytes(value)
 
 
 def _fixed_string_decode(cls, value: bytearray):
@@ -32,11 +32,15 @@ class FixedString(ClickHouseType):
         self.size = type_def.values[0]
         self.name_suffix = f'({self.size})'
 
+    @staticmethod
     def _from_row_binary(self, source: bytearray, loc: int):
         return self._transform(source[loc:loc + self.size]), loc + self.size
 
-    def _to_row_binary(self, value: Union[bytes, bytearray]) -> bytes:
-        return value
+    @staticmethod
+    def _to_row_binary(self, value: Union[str, bytes, bytearray], dest: bytearray):
+        if isinstance(value, str):
+            value = value.encode(self._encoding)
+        dest += value
 
 
 def fixed_string_format(method: str, encoding: str, encoding_error: str):

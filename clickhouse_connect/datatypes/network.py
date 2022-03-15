@@ -57,7 +57,8 @@ class IPv6(ClickHouseType):
             return self._from_v4_output((int_value & 0xFFFFFFFF).to_bytes(4, 'big')), end
         return self._from_v6_output(int_value), end
 
-    def _to_row_binary(self, value: Union[str, IPv4Address, IPv6Address, bytes, bytearray]) -> bytes:
+    @staticmethod
+    def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray]) -> bytes:
         if isinstance(value, str):
             if '.' in value:
                 return ipv4_v6_mask + IPv4Address(value).packed

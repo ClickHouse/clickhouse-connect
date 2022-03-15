@@ -124,9 +124,9 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
             query = parameters.get("query", {}).copy()
             query.update(cls.encryption_parameters)
             url_params['query'] = query
-            url_params.pop('encryption')
         if not url_params.get('database'):
             url_params['database'] = '__default__'
+        url_params.pop('encryption', None)
         return str(URL(f'{cls.engine}+{cls.default_driver}', **url_params))
 
     @classmethod

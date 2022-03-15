@@ -1,8 +1,6 @@
 import re
 import logging
 
-from abc import ABCMeta, abstractmethod
-
 from typing import Tuple, NamedTuple, Any, Type, Dict, List, Union
 
 
@@ -17,7 +15,7 @@ class TypeDef(NamedTuple):
         return f"({', '.join(str(v) for v in self.values)})"
 
 
-class ClickHouseType(metaclass=ABCMeta):
+class ClickHouseType():
     __slots__ = 'wrappers', 'from_row_binary', 'to_row_binary', 'name_suffix', 'nullable', 'extra'
     _instance_cache = None
     _from_row_binary = None

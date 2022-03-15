@@ -84,10 +84,16 @@ class Int64(ClickHouseType):
         dest += sp('<q', value,)
 
 
+def int64_signed(source: bytes, loc: int):
+    return suf('<q', source, loc)[0], loc + 8
+
+
+def int64_unsigned(source: bytes, loc: int):
+    return suf('<Q', source, loc)[0], loc + 8
+
+
 class UInt64(ClickHouseType):
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
-        return suf('<Q', source, loc)[0], loc + 8
+    _from_row_binary = staticmethod(int64_unsigned)
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
@@ -101,7 +107,7 @@ class Float32(ClickHouseType):
 
     @staticmethod
     def _to_row_binary(value: float, dest: bytearray):
-        dest += sp('f', (value,))
+        dest += sp('f', value,)
 
 
 class Float64(ClickHouseType):
@@ -134,25 +140,27 @@ class DateTime(ClickHouseType):
         dest += sp('<L', int(value.timestamp()),)
 
 
+epoch_start_date = date(1970, 1, 1)
+
+
 class Date(ClickHouseType):
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
         epoch_days = int.from_bytes(source[loc:loc + 2], 'little')
-        return datetime.fromtimestamp(epoch_days * 86400, timezone.utc).date(), loc + 2
+        return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
 
     @staticmethod
-    def _to_row_binary(value: datetime, dest: bytearray):
-        return (int(value.timestamp()) // 86400).to_bytes(2, 'little', signed=True)
-
-
-epoch_start_date = date(1970, 1, 1)
+    def _to_row_binary(value: date, dest: bytearray):
+        dest += sp('<H', (value - epoch_start_date).days,)
 
 
 class Date32(ClickHouseType):
-    def _from_row_binary(self, source, loc):
+    @staticmethod
+    def _from_row_binary(source, loc):
         days = int.from_bytes(source[loc:loc + 4], 'little', signed=True)
         return epoch_start_date + timedelta(days), loc + 4
 
+    @staticmethod
     def _to_row_binary(self, value: date) -> bytes:
         return (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
 
@@ -249,14 +257,14 @@ class Enum8(ClickHouseType):
 
 class Enum16(Enum8):
     def _from_row_binary(self, source: bytes, loc: int):
-        return self._int_map[suf('<h', source, loc)[0]]
+        return self._int_map[suf('<h', source, loc)[0]], loc + 2
 
     def _to_row_binary(self, value: Union[str, int], dest: bytearray):
         try:
             value = self._name_map[value]
         except KeyError:
             pass
-        dest += sp()
+        dest += sp('<h', value)
 
 
 class Decimal(ClickHouseType):
