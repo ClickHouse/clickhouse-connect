@@ -1,4 +1,6 @@
 import array
+from uuid import UUID as PyUUID, SafeUUID
+from struct import unpack_from as suf, pack as sp
 
 from typing import Union, Any, Collection, Dict
 from binascii import hexlify
@@ -6,6 +8,39 @@ from binascii import hexlify
 from clickhouse_connect.datatypes.registry import ClickHouseType, get_from_name, TypeDef
 from clickhouse_connect.driver.exceptions import NotSupportedError, DriverError
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
+
+
+class UUID(ClickHouseType):
+    @staticmethod
+    def _from_row_binary(source: bytearray, loc: int):
+        int_high = int.from_bytes(source[loc:loc + 8], 'little')
+        int_low = int.from_bytes(source[loc + 8:loc + 16], 'little')
+        byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
+        return PyUUID(bytes=byte_value), loc + 16
+
+    @staticmethod
+    def _to_row_binary(value: PyUUID, dest: bytearray):
+        source = value.bytes
+        bytes_high, bytes_low = bytearray(source[:8]), bytearray(source[8:])
+        bytes_high.reverse()
+        bytes_low.reverse()
+        dest += bytes_high + bytes_low
+
+    @staticmethod
+    def from_native(source, loc, num_rows, must_swap):
+        new_uuid = PyUUID.__new__
+        unsafe_uuid = SafeUUID.unsafe
+        oset = object.__setattr__
+        v = suf(f'<{num_rows * 2}Q', source, loc)
+        column = []
+        app = column.append
+        for ix in range(num_rows):
+            s = ix << 1
+            fast_uuid = new_uuid(PyUUID)
+            oset(fast_uuid, 'int', v[s] << 64 | v[s + 1])
+            oset(fast_uuid, 'is_safe', unsafe_uuid)
+            app(fast_uuid)
+        return column, loc + num_rows * 16
 
 
 def _fixed_string_binary(value: bytearray):
@@ -44,7 +79,7 @@ class FixedString(ClickHouseType):
 
     def from_native(self, source, loc, num_rows, must_swap):
         sz = self.size
-        column = tuple((bytes(source[loc + ix * sz:loc + ix * sz  + sz]) for ix in range(num_rows)))
+        column = tuple((bytes(source[loc + ix * sz:loc + ix * sz + sz]) for ix in range(num_rows)))
         return column, loc + sz * num_rows
 
 
@@ -100,6 +135,7 @@ class Array(ClickHouseType):
         if must_swap:
             offsets.byteswap()
         column = []
+        app = column.append
         last = 0
         for offset in offsets:
             cnt = offset - last
@@ -107,7 +143,7 @@ class Array(ClickHouseType):
             val_list, loc = conv(source, loc, cnt, must_swap)
             if conv_py:
                 val_list = conv_py(val_list)
-            column.append(val_list)
+            app(val_list)
         return column, loc
 
     def _to_row_binary(self, values: Collection[Any], dest: bytearray):

@@ -4,7 +4,6 @@ from typing import Union, List, Any, Iterable
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.registry import ClickHouseType
-from clickhouse_connect.driver import DriverError
 from clickhouse_connect.driver.rowbinary import read_leb128, read_leb128_str
 
 must_swap = sys.byteorder == 'big'

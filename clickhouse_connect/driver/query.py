@@ -1,10 +1,10 @@
-from typing import NamedTuple, Any, Iterable, Tuple, Dict
+from typing import NamedTuple, Any, Tuple, Dict, Collection
 
 from clickhouse_connect.datatypes.registry import ClickHouseType
 
 
 class QueryResult(NamedTuple):
-    result_set: Iterable[Iterable[Any]] = []
+    result_set: Collection[Collection[Any]] = []
     column_names: Tuple[str] = []
     column_types: Tuple[ClickHouseType] = []
     query_id:str = None

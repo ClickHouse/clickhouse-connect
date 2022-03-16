@@ -1,13 +1,38 @@
-from struct import unpack_from as suf
 from ipaddress import IPv4Address, IPv6Address
-from typing import Union
+from typing import Collection, Union
 
 from clickhouse_connect.datatypes.registry import ClickHouseType
 from clickhouse_connect.datatypes.standard import UInt32
 
 
 class IPv4(UInt32):
-    pass
+    _array_type = 'I'
+
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        ipv4 = IPv4Address.__new__(IPv4Address)
+        ipv4._ip = int.from_bytes(source[loc: loc + 4], 'little')
+        return ipv4, loc + 4
+
+    @staticmethod
+    def _to_row_binary(value: [int, IPv4Address, str], dest: bytearray):
+        if isinstance(value, IPv4Address):
+            dest += value.packed
+        elif isinstance(value, str):
+            dest += bytes(reversed([int(b) for b in value.split('.')]))
+        else:
+            dest += int.to_bytes(4, value, 'little')
+
+    @staticmethod
+    def to_python(column: Collection):
+        fast_ip_v4 = IPv4Address.__new__
+        new_col = []
+        app = new_col.append
+        for x in column:
+            ipv4 = fast_ip_v4(IPv4Address)
+            ipv4._ip = x
+            app(ipv4)
+        return new_col
 
 
 ipv4_v6_mask = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])

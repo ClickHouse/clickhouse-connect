@@ -1,4 +1,3 @@
-import uuid
 import decimal
 import pytz
 
@@ -229,43 +228,21 @@ class String(ClickHouseType):
 
     def from_native(self, source, loc, num_rows, must_swap):
         encoding = self._encoding
-        column = deque()
+        column = []
+        app = column.append
         for _ in range(num_rows):
             length = 0
             shift = 0
             while True:
                 b = source[loc]
-                length = length + ((b & 0x7f) << shift)
+                length += ((b & 0x7f) << shift)
                 loc += 1
                 if (b & 0x80) == 0:
                     break
                 shift += 7
-            column.append(str(source[loc: loc + length], encoding))
+            app(str(source[loc: loc + length], encoding))
             loc += length
         return column, loc
-
-
-class UUID(ClickHouseType):
-    @staticmethod
-    def _from_row_binary(source: bytearray, loc: int):
-        int_high = int.from_bytes(source[loc:loc + 8], 'little')
-        int_low = int.from_bytes(source[loc + 8:loc + 16], 'little')
-        byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
-        return uuid.UUID(bytes=byte_value), loc + 16
-
-    @staticmethod
-    def _to_row_binary(value: uuid.UUID, dest: bytearray):
-        source = value.bytes
-        bytes_high, bytes_low = bytearray(source[:8]), bytearray(source[8:])
-        bytes_high.reverse()
-        bytes_low.reverse()
-        dest += bytes_high + bytes_low
-
-    @staticmethod
-    def from_native(source, loc, num_rows, must_swap):
-        buf = suf(f'<{num_rows * 2}Q', source, loc)
-        column = tuple((uuid.UUID(int=((buf[ix * 2] << 64) + buf[ix * 2 + 1])) for ix in range(num_rows)))
-        return column, loc + num_rows * 16
 
 
 class Boolean(FixedType):
@@ -278,6 +255,10 @@ class Boolean(FixedType):
     @staticmethod
     def _to_row_binary(value: bool, dest: bytearray):
         dest += b'\x01' if value else b'\x00'
+
+    @staticmethod
+    def to_python(column: Iterable):
+        return [b > 0 for b in column]
 
 
 class Bool(Boolean):
@@ -306,6 +287,11 @@ class Enum8(FixedType):
         except KeyError:
             pass
         dest += value if value < 128 else value - 128
+
+    def from_native(self, source: Union[bytes, bytearray, memoryview], loc: int, num_rows: int, must_swap: bool):
+        column, loc = super().from_native(source, loc, num_rows, must_swap)
+        lookup = self._int_map
+        return [lookup[x] for x in column], loc
 
 
 class Enum16(Enum8):
