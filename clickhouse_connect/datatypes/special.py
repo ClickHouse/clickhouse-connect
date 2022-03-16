@@ -1,8 +1,10 @@
+import array
+
 from typing import Union, Any, Collection, Dict
 from binascii import hexlify
 
 from clickhouse_connect.datatypes.registry import ClickHouseType, get_from_name, TypeDef
-from clickhouse_connect.driver.exceptions import NotSupportedError
+from clickhouse_connect.driver.exceptions import NotSupportedError, DriverError
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
 
 
@@ -32,15 +34,18 @@ class FixedString(ClickHouseType):
         self.size = type_def.values[0]
         self.name_suffix = f'({self.size})'
 
-    @staticmethod
     def _from_row_binary(self, source: bytearray, loc: int):
         return self._transform(source[loc:loc + self.size]), loc + self.size
 
-    @staticmethod
     def _to_row_binary(self, value: Union[str, bytes, bytearray], dest: bytearray):
         if isinstance(value, str):
             value = value.encode(self._encoding)
         dest += value
+
+    def from_native(self, source, loc, num_rows, must_swap):
+        sz = self.size
+        column = tuple((bytes(source[loc + ix * sz:loc + ix * sz  + sz]) for ix in range(num_rows)))
+        return column, loc + sz * num_rows
 
 
 def fixed_string_format(method: str, encoding: str, encoding_error: str):
@@ -72,6 +77,8 @@ class Array(ClickHouseType):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[0])
+        if isinstance(self.element_type, Array):
+            raise DriverError("Nested arrays not supported")
         self.name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytearray, loc: int):
@@ -81,6 +88,27 @@ class Array(ClickHouseType):
             value, loc = self.element_type.from_row_binary(source, loc)
             values.append(value)
         return values, loc
+
+    def from_native(self, source: bytearray, loc: int, num_rows: int, must_swap: bool):
+        conv = self.element_type.from_native
+        conv_py = self.element_type.to_python
+        nullable = self.element_type.nullable
+        offsets = array.array('Q')
+        sz = num_rows * 8
+        offsets.frombytes(source[loc: loc + sz])
+        loc += sz
+        if must_swap:
+            offsets.byteswap()
+        column = []
+        last = 0
+        for offset in offsets:
+            cnt = offset - last
+            last = offset
+            val_list, loc = conv(source, loc, cnt, must_swap)
+            if conv_py:
+                val_list = conv_py(val_list)
+            column.append(val_list)
+        return column, loc
 
     def _to_row_binary(self, values: Collection[Any], dest: bytearray):
         dest += to_leb128(len(values))

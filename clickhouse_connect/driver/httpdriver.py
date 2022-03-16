@@ -8,11 +8,12 @@ from clickhouse_connect.datatypes.registry import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
 from clickhouse_connect.driver.query import QueryResult
-from clickhouse_connect.driver.rowbinary import parse_response, build_insert
+from clickhouse_connect.driver.rowbinary import build_insert
+from clickhouse_connect.driver.native import parse_response
 
 logger = logging.getLogger(__name__)
 
-format_str = ' FORMAT RowBinaryWithNamesAndTypes'
+format_str = ' FORMAT Native'
 
 
 def format_query(query:str) -> str:

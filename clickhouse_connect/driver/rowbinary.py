@@ -1,7 +1,6 @@
 import logging
-from collections import deque
 
-from typing import Iterable, List, Any
+from typing import Union, Iterable, List, Any
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.registry import ClickHouseType
@@ -52,7 +51,7 @@ def build_insert(data: Iterable[Iterable[Any]], *, column_type_names: Iterable[s
     return output
 
 
-def read_leb128(source: bytes, loc: int):
+def read_leb128(source: Union[bytes, memoryview, bytearray], loc: int):
     length = 0
     ix = 0
     while True:
@@ -64,7 +63,7 @@ def read_leb128(source: bytes, loc: int):
     return length, loc + ix
 
 
-def read_leb128_str(source: bytes, loc: int, encoding: str = 'utf8'):
+def read_leb128_str(source: Union[memoryview, bytes, bytearray], loc: int, encoding: str = 'utf8'):
     length, loc = read_leb128(source, loc)
     return str(source[loc:loc + length], encoding), loc + length
 

@@ -7,10 +7,7 @@ from typing import Union, Any
 
 from clickhouse_connect.datatypes import ip_format
 from clickhouse_connect.datatypes.registry import get_from_name as gfn, ClickHouseType
-
-
-def to_bytes(hex_str):
-    return memoryview(bytes.fromhex(hex_str))
+from tests.helpers import to_bytes
 
 
 def assert_frb(ch_type: Union[str, ClickHouseType], source: Union[memoryview, bytes, str],

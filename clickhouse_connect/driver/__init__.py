@@ -1,7 +1,7 @@
 from typing import Optional, Union
 
-from clickhouse_connect.driver.basedriver import BaseDriver
 from clickhouse_connect.driver.exceptions import DriverError
+from clickhouse_connect.driver.basedriver import BaseDriver
 from clickhouse_connect.driver.httpdriver import HttpDriver
 
 

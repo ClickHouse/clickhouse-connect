@@ -14,5 +14,6 @@ class QueryResult(NamedTuple):
 def transform_result(qr: QueryResult):
     for ix, t in enumerate(qr.column_types):
         if t.format:
+            pass
 
 

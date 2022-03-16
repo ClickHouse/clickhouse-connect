@@ -1,7 +1,10 @@
+import array
 import re
 import logging
 
 from typing import Tuple, NamedTuple, Any, Type, Dict, List, Union
+
+from clickhouse_connect.driver import DriverError
 
 
 class TypeDef(NamedTuple):
@@ -21,7 +24,10 @@ class ClickHouseType():
     _from_row_binary = None
     _to_row_binary = None
 
-    def __init_subclass__(cls, **kwargs):
+    from_native = None
+    to_python = None
+
+    def __init_subclass__(cls):
         cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
         type_map[cls.__name__.upper()] = cls
 
@@ -66,6 +72,27 @@ type_map: Dict[str, Type[ClickHouseType]] = {}
 size_pattern = re.compile(r'^([A-Z]+)(\d+)')
 int_pattern = re.compile(r'^-?\d+$')
 
+int_size = array.array('i').itemsize
+
+
+class FixedType(ClickHouseType):
+    _array_type:str = ''
+
+    def __init_subclass__(cls):
+        super().__init_subclass__()
+        if int_size == 2 and cls._array_type in ('i', 'I'):
+            cls._array_type = 'L' if cls._array_type.isupper() else 'l'
+
+    @classmethod
+    def from_native(cls, source: Union[bytes, bytearray, memoryview], loc: int, num_rows: int, must_swap: bool):
+        column = array.array(cls._array_type)
+        sz = column.itemsize * num_rows
+        column.frombytes(source[loc: loc + sz])
+        loc += sz
+        if must_swap:
+            column.byteswap()
+        return column, loc
+
 
 def get_from_name(name: str) -> ClickHouseType:
     base = name
@@ -98,7 +125,7 @@ def get_from_name(name: str) -> ClickHouseType:
     except KeyError:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
         logging.error(err_str)
-        raise Exception(err_str)
+        raise DriverError(err_str)
     return type_cls.build(TypeDef(size, tuple(wrappers), keys, values))
 
 

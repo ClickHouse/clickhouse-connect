@@ -2,15 +2,18 @@ import uuid
 import decimal
 import pytz
 
-from typing import Any, Union
+from typing import Any, Union, Iterable
 from datetime import date, datetime, timezone, timedelta
 from struct import unpack_from as suf, pack as sp
+from collections import deque
 
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
-from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, FixedType
 
 
-class Int8(ClickHouseType):
+class Int8(FixedType):
+    _array_type = 'b'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
         x = source[loc]
@@ -24,7 +27,9 @@ class Int8(ClickHouseType):
             dest.append(value + 128)
 
 
-class UInt8(ClickHouseType):
+class UInt8(FixedType):
+    _array_type = 'B'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
         return source[loc], loc + 1
@@ -34,7 +39,9 @@ class UInt8(ClickHouseType):
         dest.append(value)
 
 
-class Int16(ClickHouseType):
+class Int16(FixedType):
+    _array_type = 'h'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc:int):
         return suf('<h', source, loc)[0], loc + 2
@@ -44,7 +51,9 @@ class Int16(ClickHouseType):
         dest += sp('<h', value,)
 
 
-class UInt16(ClickHouseType):
+class UInt16(FixedType):
+    _array_type = 'H'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
         return suf('<H', source, loc)[0], loc + 2
@@ -54,27 +63,33 @@ class UInt16(ClickHouseType):
         dest += sp('<H', value,)
 
 
-class Int32(ClickHouseType):
+class Int32(FixedType):
+    _array_type = 'i'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
-        return suf('<l', source, loc)[0], loc + 4
+        return suf('<i', source, loc)[0], loc + 4
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<l', value,)
+        dest += sp('<i', value,)
 
 
-class UInt32(ClickHouseType):
+class UInt32(FixedType):
+    _array_type = 'I'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
-        return suf('<L', source, loc)[0], loc + 4
+        return suf('<I', source, loc)[0], loc + 4
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<L', value,)
+        dest += sp('<I', value,)
 
 
-class Int64(ClickHouseType):
+class Int64(FixedType):
+    _array_type = 'q'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
         return suf('<q', source, loc)[0], loc + 8
@@ -84,23 +99,21 @@ class Int64(ClickHouseType):
         dest += sp('<q', value,)
 
 
-def int64_signed(source: bytes, loc: int):
-    return suf('<q', source, loc)[0], loc + 8
+class UInt64(FixedType):
+    _array_type = 'Q'
 
-
-def int64_unsigned(source: bytes, loc: int):
-    return suf('<Q', source, loc)[0], loc + 8
-
-
-class UInt64(ClickHouseType):
-    _from_row_binary = staticmethod(int64_unsigned)
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return suf('<q', source, loc)[0], loc + 8
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
         dest += sp('<Q', value,)
 
 
-class Float32(ClickHouseType):
+class Float32(FixedType):
+    _array_type = 'f'
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         return suf('f', source, loc)[0], loc + 4
@@ -110,7 +123,9 @@ class Float32(ClickHouseType):
         dest += sp('f', value,)
 
 
-class Float64(ClickHouseType):
+class Float64(FixedType):
+    _array_type = 'd'
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         return suf('d', source, loc)[0], loc + 8
@@ -124,8 +139,9 @@ from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
 
 
-class DateTime(ClickHouseType):
+class DateTime(FixedType):
     __slots__ = '_from_row_binary',
+    _array_type = 'I'
 
     def __init__(self, type_def: TypeDef):
         if type_def.values:
@@ -137,13 +153,19 @@ class DateTime(ClickHouseType):
 
     @staticmethod
     def _to_row_binary(value: datetime, dest: bytearray):
-        dest += sp('<L', int(value.timestamp()),)
+        dest += sp('<I', int(value.timestamp()),)
+
+    @staticmethod
+    def to_python(column: Iterable):
+        return tuple((from_ts_naive(ts) for ts in column))
 
 
 epoch_start_date = date(1970, 1, 1)
 
 
-class Date(ClickHouseType):
+class Date(FixedType):
+    _array_type = 'H'
+
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
         return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
@@ -152,11 +174,17 @@ class Date(ClickHouseType):
     def _to_row_binary(value: date, dest: bytearray):
         dest += sp('<H', (value - epoch_start_date).days,)
 
+    @staticmethod
+    def to_python(column: Iterable):
+        return tuple((epoch_start_date + timedelta(days) for days in column))
 
-class Date32(ClickHouseType):
+
+class Date32(FixedType):
+    _array_type = 'I'
+
     @staticmethod
     def _from_row_binary(source, loc):
-        return epoch_start_date + timedelta(suf('<L', source, loc)[0]), loc + 4
+        return epoch_start_date + timedelta(suf('<I', source, loc)[0]), loc + 4
 
     @staticmethod
     def _to_row_binary(self, value: date) -> bytes:
@@ -165,6 +193,7 @@ class Date32(ClickHouseType):
 
 class DateTime64(ClickHouseType):
     __slots__ = 'prec', 'tzinfo'
+    _array_type = 'Q'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -198,6 +227,23 @@ class String(ClickHouseType):
         value = bytes(value, self._encoding)
         dest += to_leb128(len(value)) + value
 
+    def from_native(self, source, loc, num_rows, must_swap):
+        encoding = self._encoding
+        column = deque()
+        for _ in range(num_rows):
+            length = 0
+            shift = 0
+            while True:
+                b = source[loc]
+                length = length + ((b & 0x7f) << shift)
+                loc += 1
+                if (b & 0x80) == 0:
+                    break
+                shift += 7
+            column.append(str(source[loc: loc + length], encoding))
+            loc += length
+        return column, loc
+
 
 class UUID(ClickHouseType):
     @staticmethod
@@ -215,8 +261,16 @@ class UUID(ClickHouseType):
         bytes_low.reverse()
         dest += bytes_high + bytes_low
 
+    @staticmethod
+    def from_native(source, loc, num_rows, must_swap):
+        buf = suf(f'<{num_rows * 2}Q', source, loc)
+        column = tuple((uuid.UUID(int=((buf[ix * 2] << 64) + buf[ix * 2 + 1])) for ix in range(num_rows)))
+        return column, loc + num_rows * 16
 
-class Boolean(ClickHouseType):
+
+class Boolean(FixedType):
+    _array_type = 'B'
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
@@ -230,8 +284,9 @@ class Bool(Boolean):
     pass
 
 
-class Enum8(ClickHouseType):
+class Enum8(FixedType):
     __slots__ = '_name_map', '_int_map'
+    _array_type = 'b'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -254,6 +309,8 @@ class Enum8(ClickHouseType):
 
 
 class Enum16(Enum8):
+    _array_type = 'h'
+
     def _from_row_binary(self, source: bytes, loc: int):
         return self._int_map[suf('<h', source, loc)[0]], loc + 2
 
