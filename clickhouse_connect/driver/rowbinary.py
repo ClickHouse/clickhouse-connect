@@ -1,9 +1,10 @@
 import logging
 
-from typing import Union, Iterable, List, Any
+from typing import Iterable, List, Any
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str
 from clickhouse_connect.driver.exceptions import DriverError
 
 logger = logging.getLogger(__name__)
@@ -49,33 +50,3 @@ def build_insert(data: Iterable[Iterable[Any]], *, column_type_names: Iterable[s
         for (value, conv) in zip(row, convs):
             conv(value, output)
     return output
-
-
-def read_leb128(source: Union[bytes, memoryview, bytearray], loc: int):
-    length = 0
-    ix = 0
-    while True:
-        b = source[loc + ix]
-        length = length + ((b & 0x7f) << (ix * 7))
-        ix += 1
-        if (b & 0x80) == 0:
-            break
-    return length, loc + ix
-
-
-def read_leb128_str(source: Union[memoryview, bytes, bytearray], loc: int, encoding: str = 'utf8'):
-    length, loc = read_leb128(source, loc)
-    return str(source[loc:loc + length], encoding), loc + length
-
-
-def to_leb128(value: int) -> bytearray:  #Unsigned only
-    result = bytearray()
-    while True:
-        b = value & 0x7f
-        value = value >> 7
-        if value == 0:
-            result.append(b)
-            break
-        result.append(0x80 | b)
-    return result
-

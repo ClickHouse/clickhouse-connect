@@ -1,9 +1,7 @@
-import array
 import re
 import logging
 
 from typing import Tuple, Any, List
-
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
 from clickhouse_connect.driver import DriverError
 

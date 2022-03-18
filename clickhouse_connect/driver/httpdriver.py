@@ -65,26 +65,28 @@ class HttpDriver(BaseDriver):
         return self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1]
 
     def raw_request(self, data=None, method='post', params: Optional[Dict] = None, headers: Optional[Dict] = None):
+
+        req_headers = self.headers
+        if headers:
+            req_headers.update(headers)
         try:
-            req_headers = self.headers
-            if headers:
-                req_headers.update(headers)
             response:requests.Response = requests.request(method, self.url,
                                      auth=self.auth,
                                      headers=req_headers,
                                      timeout=(10, 60),
                                      data=data,
                                      params=params)
-            if 200 <= response.status_code < 300:
-                return response
-            err_str = f"HTTPDriver url {self.url} returned response code {response.status_code})"
-            logger.error(err_str)
-            if response.content:
-                logger.error(str(response.content))
-            raise ServerError(err_str)
         except Exception:
             logger.exception("Unexpected Http Driver Exception")
             raise DriverError(f"Error executing HTTP request {self.url}")
+        if 200 <= response.status_code < 300:
+            return response
+        err_str = f"HTTPDriver url {self.url} returned response code {response.status_code})"
+        logger.error(err_str)
+        if response.content:
+            logger.error(str(response.content, encoding='utf8'))
+        raise ServerError(err_str)
+
 
     def ping(self) -> bool:
         try:

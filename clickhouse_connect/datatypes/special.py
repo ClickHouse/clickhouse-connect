@@ -7,9 +7,8 @@ from typing import Union, Any, Collection, Dict
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
-from clickhouse_connect.driver.common import must_swap
+from clickhouse_connect.driver.common import must_swap, read_leb128, to_leb128
 from clickhouse_connect.driver.exceptions import NotSupportedError, DriverError
-from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
 
 empty_uuid = PyUUID(int = 0, is_safe=SafeUUID.unknown)
 
@@ -45,19 +44,20 @@ class UUID(ClickHouseType):
                 app(empty_uuid)
             else:
                 fast_uuid = new_uuid(PyUUID)
-                oset(fast_uuid, 'int', v[s] << 64 | v[s + 1])
+                oset(fast_uuid, 'int', int_value)
                 oset(fast_uuid, 'is_safe', unsafe_uuid)
                 app(fast_uuid)
         return column, loc + num_rows * 16
 
 
 class FixedString(ClickHouseType):
-    __slots__ = 'size', 'encoding'
+    __slots__ = 'size', 'encoding', '_to_python'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.size = type_def.values[0]
         self.name_suffix = f'({self.size})'
+        self._to_python = None
 
     def _from_row_binary(self, source: bytearray, loc: int):
         return bytes(source[loc:loc + self.size]), loc + self.size
@@ -65,11 +65,6 @@ class FixedString(ClickHouseType):
     @staticmethod
     def _to_row_binary(value: Union[str, bytes, bytearray], dest: bytearray):
         dest += value
-
-    def _from_native(self, source: Sequence, loc: int, num_rows: int):
-        sz = self.size
-        end = loc + sz * num_rows
-        return [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)], end
 
 
 class Nothing(FixedType):
@@ -106,6 +101,12 @@ class Array(ClickHouseType):
             values.append(value)
         return values, loc
 
+    def _to_row_binary(self, values: Collection[Any], dest: bytearray):
+        dest += to_leb128(len(values))
+        conv = self.element_type.to_row_binary
+        for value in values:
+            conv(value, dest)
+
     def _from_native(self, source: Sequence, loc: int, num_rows: int):
         conv = self.element_type.from_native
         offsets = array.array('Q')
@@ -124,20 +125,16 @@ class Array(ClickHouseType):
             app(val_list)
         return column, loc
 
-    def _to_row_binary(self, values: Collection[Any], dest: bytearray):
-        dest += to_leb128(len(values))
-        conv = self.element_type.to_row_binary
-        for value in values:
-            conv(value, dest)
-
 
 class Tuple(ClickHouseType):
-    _slots = 'from_rb_funcs', 'to_rb_funcs',
+    _slots = 'from_rb_funcs', 'to_rb_funcs', 'from_native_funcs'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.from_rb_funcs = tuple([get_from_name(name).from_row_binary for name in type_def.values])
-        self.to_rb_funcs = tuple([get_from_name(name).to_row_binary for name in type_def.values])
+        element_types = [get_from_name(name) for name in type_def.values]
+        self.from_rb_funcs = tuple((t.from_row_binary for t in element_types))
+        self.to_rb_funcs = tuple((t.to_row_binary for t in element_types))
+        self.from_native_funcs = tuple((t.from_native for t in element_types))
         self.name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytes, loc: int):
@@ -151,8 +148,12 @@ class Tuple(ClickHouseType):
         for value, conv in zip(values, self.to_rb_funcs):
             conv(value, dest)
 
-    def from_native(self, source, loc, num_rows):
-        pass
+    def _from_native(self, source, loc, num_rows):
+        columns = []
+        for conv in self.from_native_funcs:
+            column, loc = conv(source, loc, num_rows)
+            columns.append(column)
+        return list(zip(*columns)), loc
 
 
 class Map(ClickHouseType):

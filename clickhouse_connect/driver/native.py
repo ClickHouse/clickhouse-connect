@@ -3,7 +3,7 @@ from typing import Union, List, Any, Iterable, Collection
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.rowbinary import read_leb128, read_leb128_str
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str
 
 
 def parse_response(source: Union[memoryview, bytes, bytearray]) -> (Collection[Collection[Any]], List[str], List[ClickHouseType]):

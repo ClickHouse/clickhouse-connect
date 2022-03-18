@@ -1,7 +1,6 @@
 from collections.abc import Sequence
 from datetime import date, timedelta, datetime, timezone
 from struct import unpack_from as suf, pack as sp
-from typing import Iterable
 
 import pytz
 
@@ -37,6 +36,10 @@ class Date32(FixedType):
     def _to_row_binary(value: date, dest: bytearray):
          dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
 
+    @staticmethod
+    def _to_python(column: Sequence):
+        return [epoch_start_date + timedelta(days) for days in column]
+
 
 from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
@@ -59,11 +62,11 @@ class DateTime(FixedType):
         dest += sp('<I', int(value.timestamp()),)
 
     @staticmethod
-    def _to_python(column: Iterable):
+    def _to_python(column: Sequence):
         return [from_ts_naive(ts) for ts in column]
 
 
-class DateTime64(ClickHouseType):
+class DateTime64(FixedType):
     __slots__ = 'prec', 'tzinfo'
     _array_type = 'Q'
 
@@ -73,8 +76,10 @@ class DateTime64(ClickHouseType):
         self.prec = 10 ** type_def.values[0]
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
+            self._to_python = self._to_python_tz
         else:
-            self.tzinfo = timezone.utc
+            self._to_python = self._to_python_naive
+            self.tzinfo = None
 
     def _from_row_binary(self, source, loc):
         ticks = int.from_bytes(source[loc:loc + 8], 'little', signed=True)
@@ -86,3 +91,26 @@ class DateTime64(ClickHouseType):
     def _to_row_binary(self, value: datetime, dest: bytearray):
         microseconds = int(value.timestamp()) * 1000000 + value.microsecond
         dest += (int(microseconds * 1000000) // self.prec).to_bytes(8, 'little', signed=True)
+
+    def _to_python_tz(self, column:Sequence):
+        new_col = []
+        app = new_col.append
+        df = datetime.fromtimestamp
+        prec = self.prec
+        tz = self.tzinfo
+        for ticks in column:
+            seconds = ticks // prec
+            dt_sec = df(seconds, tz)
+            app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
+        return new_col
+
+    def _to_python_naive(self, column:Sequence):
+        new_col = []
+        app = new_col.append
+        df = datetime.utcfromtimestamp
+        prec = self.prec
+        for ticks in column:
+            seconds = ticks // prec
+            dt_sec = df(seconds)
+            app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
+        return new_col

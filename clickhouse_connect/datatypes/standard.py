@@ -1,9 +1,10 @@
 import decimal
+from collections.abc import Sequence
 
 from typing import Any, Union, Iterable
 from struct import unpack_from as suf, pack as sp
 
-from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
+from clickhouse_connect.driver.common import array_type, read_leb128, to_leb128
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
 
 
@@ -107,6 +108,74 @@ class UInt64(FixedType):
         dest += sp('<Q', value,)
 
 
+class Int128(FixedType):
+    _byte_size = 16
+    _signed = True
+
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return int.from_bytes(source[loc: loc + 16], 'little', signed=True), loc + 16
+
+    @staticmethod
+    def _to_row_binary(value:int, dest: bytearray):
+        dest += value.to_bytes(16, 'little')
+
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+        end = loc + 16 * num_rows
+        return [int.from_bytes(source[ix:ix + 16], 'little', signed=True) for ix in range(loc, end, 16)], end
+
+
+class UInt128(FixedType):
+    _byte_size = 16
+    _signed = False
+
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return int.from_bytes(source[loc: loc + 16], 'little', signed=False), loc + 16
+
+    @staticmethod
+    def _to_row_binary(value:int, dest: bytearray):
+        dest += value.to_bytes(16, 'little')
+
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+        end = loc + 16 * num_rows
+        return [int.from_bytes(source[ix:ix + 16], 'little', signed=False) for ix in range(loc, end, 16)], end
+
+
+class Int256(FixedType):
+    _byte_size = 32
+    _signed = True
+
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return int.from_bytes(source[loc: loc + 32], 'little', signed=True), loc + 32
+
+    @staticmethod
+    def _to_row_binary(value:int, dest: bytearray):
+        dest += value.to_bytes(32, 'little')
+
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+        end = loc + 32 * num_rows
+        return [int.from_bytes(source[ix:ix + 32], 'little', signed=True) for ix in range(loc, end, 32)], end
+
+
+class UInt256(FixedType):
+    _byte_size = 32
+    _signed = False
+
+    @staticmethod
+    def _from_row_binary(source: bytes, loc: int):
+        return int.from_bytes(source[loc: loc + 32], 'little', signed=False), loc + 32
+
+    @staticmethod
+    def _to_row_binary(value:int, dest: bytearray):
+        dest += value.to_bytes(32, 'little')
+
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+        end = loc + 32 * num_rows
+        return [int.from_bytes(source[ix:ix + 32], 'little', signed=False) for ix in range(loc, end, 32)], end
+
+
 class Float32(FixedType):
     _array_type = 'f'
 
@@ -173,7 +242,7 @@ class Boolean(FixedType):
         dest += b'\x01' if value else b'\x00'
 
     @staticmethod
-    def to_python(column: Iterable):
+    def _to_python(column: Iterable):
         return [b > 0 for b in column]
 
 
@@ -204,10 +273,9 @@ class Enum8(FixedType):
             pass
         dest += value if value < 128 else value - 128
 
-    def from_native(self, source: Union[bytes, bytearray, memoryview], loc: int, num_rows: int, must_swap: bool):
-        column, loc = super().from_native(source, loc, num_rows, must_swap)
+    def _to_python(self, column: Sequence):
         lookup = self._int_map
-        return [lookup[x] for x in column], loc
+        return [lookup[x] for x in column]
 
 
 class Enum16(Enum8):
@@ -224,16 +292,15 @@ class Enum16(Enum8):
         dest += sp('<h', value)
 
 
-class Decimal(ClickHouseType):
-    __slots__ = 'size', 'prec', 'zeros', 'mult'
+class Decimal(FixedType):
+    __slots__ = 'scale', 'mult', 'zeros'
 
     def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
         size = type_def.size
         if size == 0:
             self.name_suffix = type_def.arg_str
             prec = type_def.values[0]
-            self.prec = type_def.values[1]
+            self.scale = type_def.values[1]
             if prec < 1 or prec > 79:
                 raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
             if prec < 10:
@@ -245,23 +312,50 @@ class Decimal(ClickHouseType):
             else:
                 size = 256
         else:
-            self.prec = type_def.values[0]
-            self.name_suffix = f'{type_def.size}({self.prec})'
-        self.size = size // 8
-        self.mult = 10 ** self.prec
-        self.zeros = bytes([0] * self.size)
+            self.scale = type_def.values[0]
+            self.name_suffix = f'{type_def.size}({self.scale})'
+        self._byte_size = size // 8
+        self.zeros = bytes([0] * self._byte_size)
+        self._array_type = array_type(self._byte_size)
+        self.mult = 10 ** self.scale
+        super().__init__(type_def)
+        if self._array_type:
+            self._to_python = self._to_python_int
+        else:
+            self._to_python = self._to_python_bytes
 
     def _from_row_binary(self, source, loc):
-        neg = ''
-        unscaled = int.from_bytes(source[loc:loc + self.size], 'little')
-        if unscaled <= 0:
-            neg = '-'
-            unscaled = -unscaled
-        digits = str(unscaled)
-        return decimal.Decimal(f'{neg}{digits[:-self.prec]}.{digits[-self.prec:]}'), loc + self.size
+        x = int.from_bytes(source[loc:loc + self._byte_size], 'little')
+        scale = self.scale
+        if x >= 0:
+            digits = str(x)
+            return decimal.Decimal(f'{digits[:scale]}.{digits[:-scale]}')
+        digits = str(-x)
+        return decimal.Decimal(f'-{digits[:scale]}.{digits[:-scale]}')
 
-    def _to_row_binary(self, value: Any) -> bytes:
+    def _to_row_binary(self, value: Any, dest: bytearray):
         if isinstance(value, int) or isinstance(value, float) or (
                 isinstance(value, decimal.Decimal) and value.is_finite()):
-            return int(value * self.mult).to_bytes(self.size, 'little')
-        return self.zeros
+            dest += int(value * self.mult).to_bytes(self._byte_size, 'little')
+        else:
+            dest += self.zeros
+
+    def _to_python_int(self, column: Sequence[int]):
+        dec = decimal.Decimal
+        scale = self.scale
+        new_col = []
+        app = new_col.append
+        for x in column:
+            if x >= 0:
+                digits = str(x)
+                app(dec(f'{digits[:-scale]}.{digits[-scale:]}'))
+            else:
+                digits = str(-x)
+                app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
+        return new_col
+
+    def _to_python_bytes(self, column: Sequence):
+        ifb = int.from_bytes
+        ints = [ifb(x, 'little') for x in column]
+        return self._to_python_int(ints)
+

@@ -1,7 +1,7 @@
 import array
 from typing import NamedTuple, Callable, Dict, Type, Tuple, Any, Sequence
 
-from clickhouse_connect.driver.common import must_swap, int_size
+from clickhouse_connect.driver.common import must_swap, array_type, int_size
 
 
 class TypeDef(NamedTuple):
@@ -16,14 +16,13 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType():
-    __slots__ = ('from_row_binary', 'to_row_binary', 'from_native', 'to_native', 'nullable', 'low_card',
-                 'name_suffix', '__dict__')
+    __slots__ = ('name_suffix', 'from_row_binary', 'to_row_binary', 'nullable', 'low_card', 'from_native',
+                 'to_python', '__dict__')
     _instance_cache = None
     _from_row_binary = None
     _to_row_binary = None
-
-    _to_python: Callable = None
     _to_native = None
+    _to_python = None
     _from_native = None
 
     def __init_subclass__(cls, register: bool = True):
@@ -87,14 +86,31 @@ class ClickHouseType():
 
 
 class FixedType(ClickHouseType, register=False):
-    _array_type: str = ''
+    _signed = True
+    _byte_size = 0
+    _array_type = None
 
     def __init_subclass__(cls, *args, **kwargs):
         super().__init_subclass__(*args, **kwargs)
-        if int_size == 2 and cls._array_type in ('i', 'I'):
+        if not cls._array_type and cls._byte_size:
+            cls._array_type = array_type(cls._byte_size, cls._signed)
+        elif cls._array_type in ('i', 'I') and int_size == 2:
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int):
+    def __init__(self, type_def: TypeDef):
+        if self._array_type:
+            self._from_native = self._from_array
+        elif self._byte_size:
+            self._from_native = self._from_bytes
+        super().__init__(type_def)
+
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+        sz = self._byte_size
+        end = loc + sz * num_rows
+        raw = [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)]
+        return self._to_python(raw) if self._to_python else raw, end
+
+    def _from_array(self, source: Sequence, loc: int, num_rows: int):
         column = array.array(self._array_type)
         sz = column.itemsize * num_rows
         column.frombytes(source[loc: loc + sz])

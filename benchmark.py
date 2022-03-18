@@ -14,7 +14,7 @@ columns = {
     'float32': ('Float32', 3.14),
     'str': ('String', 'hello'),
     'fstr': ('FixedString(16)', b"world world \nman"),
-    'date': ('Date', datetime.date.today()),
+    'date': ('Date', datetime.date(2022, 3, 18)),
     'datetime': ('DateTime', datetime.datetime.utcnow()),
     'nullable': ('Nullable(Int8)', None),
     'enum': ("Enum16('hello' = 1, 'world' = 2)", 'hello'),
@@ -22,7 +22,13 @@ columns = {
     'uuid': ('UUID', uuid.UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9')),
     'bool': ('Bool', True),
     'ipv4': ('IPv4', '107.34.202.7'),
-    'ipv6': ('IPv6', '6afd:7491:9dac:7f5b:a550:462a:da3b:f2d0')
+    'ipv6': ('IPv6', '6afd:7491:9dac:7f5b:a550:462a:da3b:f2d0'),
+    'tuple': ('Tuple(Nullable(String), UInt64)', ('tuple_string', 7502888)),
+    'dec': ('Decimal64(5)', 25774.233),
+    'bdec': ('Decimal128(10)', 2503.48877233),
+    'uint256': ('UInt256', 1057834823498238884432566),
+    'dt64': ('DateTime64(9)', datetime.datetime.now()),
+    'dt64d': ("DateTime64(6, 'America/Denver')", datetime.datetime.now())
 }
 
 standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'nullable', 'enum', 'array', 'uuid']
