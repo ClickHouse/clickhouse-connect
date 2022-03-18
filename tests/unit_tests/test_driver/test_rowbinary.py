@@ -4,9 +4,8 @@ from datetime import date
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union, Any
 
-
-from clickhouse_connect.datatypes import ip_format
-from clickhouse_connect.datatypes.registry import get_from_name as gfn, ClickHouseType
+from clickhouse_connect.datatypes.registry import get_from_name as gfn
+from clickhouse_connect.datatypes.base import ClickHouseType
 from tests.helpers import to_bytes
 
 
@@ -81,20 +80,10 @@ def test_tuple():
 
 
 def test_ip():
-    ipv6 = gfn('IPv6')
-    source = to_bytes('00 00 00 00 00 00 00 00 00 00 ff ff 58 34 00 01')
-    value, _ = ipv6.from_row_binary(source, 0)
-    assert value == IPv4Address('88.52.0.1')
-    ip_format('string')
-    value, _ = ipv6.from_row_binary(source, 0)
-    assert value == '88.52.0.1'
-    source = to_bytes('fd 78 dd 5e 6f ce 73 92  04 4a 87 53 a9 07 26 b2')
-    value, _ = ipv6.from_row_binary(source, 0)
-    assert value == 'fd78:dd5e:6fce:7392:44a:8753:a907:26b2'
-    assert ipv6.to_row_binary(value) == source
-    ip_format('ip')
-    value = IPv6Address(value)
-    assert ipv6.to_row_binary(value) == source
+    round_trip('IPv4', '16 05 04 cf', IPv4Address('207.4.5.22'))
+    round_trip('IPv6', '00 00 00 00 00 00 00 00  00 00 ff ff 58 34 fe 01', IPv4Address('88.52.254.1'))
+    round_trip('IPv6', 'fd 78 dd 5e 6f ce 73 92  04 4a 87 53 a9 07 26 b2',
+               IPv6Address('fd78:dd5e:6fce:7392:44a:8753:a907:26b2'))
 
 
 def test_decimal():
@@ -108,15 +97,9 @@ def test_decimal():
 
 
 def test_date():
-    dt = gfn('Date32')
-    source = to_bytes('fd f9 ff ff')
-    value, loc = dt.from_row_binary(source, 0)
-    assert value == date(1965, 10, 15)
-    source = to_bytes('7a b9 00 00 ')
-    value, loc = dt.from_row_binary(source, 0)
-    assert value == date(2100, 1, 1)
-    assert dt.to_row_binary(value) == source
-    assert dt.to_row_binary(date(2065, 10, 15)) == to_bytes('aa 88 00 00')
+    round_trip('Date32', 'fd f9 ff ff', date(1965, 10, 15))
+    round_trip('Date32', '7a b9 00 00', date(2100, 1, 1))
+    round_trip('Date32', 'aa 88 00 00', date(2065, 10, 15))
 
 
 def test_datetime64():

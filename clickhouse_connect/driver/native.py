@@ -1,24 +1,12 @@
-import array
 import sys
-from typing import Union, List, Any, Iterable
+from typing import Union, List, Any, Iterable, Collection
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.datatypes.registry import ClickHouseType
+from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.rowbinary import read_leb128, read_leb128_str
 
-must_swap = sys.byteorder == 'big'
 
-
-def parse_response(source: Union[memoryview, bytes, bytearray]):
-    result, names, types = parse_raw(source)
-    for ix, type in enumerate(types):
-        if type.to_python:
-            result[ix] = type.to_python(result[ix])
-    result = tuple(zip(*result))
-    return result, names, types
-
-
-def parse_raw(source: Union[memoryview, bytes, bytearray]) -> (Iterable[Iterable[Any]], List[str], List[ClickHouseType]):
+def parse_response(source: Union[memoryview, bytes, bytearray]) -> (Collection[Collection[Any]], List[str], List[ClickHouseType]):
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0
@@ -33,15 +21,20 @@ def parse_raw(source: Union[memoryview, bytes, bytearray]) -> (Iterable[Iterable
         type_name, loc = read_leb128_str(source, loc)
         col_type = registry.get_from_name(type_name)
         col_types.append(col_type)
-        if col_type.nullable:
-            null_map = memoryview(source[loc: loc + num_rows])
-            loc += num_rows
-        else:
-            null_map = None
-        column, loc = col_type.from_native(source, loc, num_rows, must_swap)
-        if null_map:
-            column = tuple((None if null_map[ix] else column[ix] for ix in range(num_rows)))
+        column, loc = col_type.from_native(source, loc, num_rows)
         result.append(column)
+    result = tuple(zip(*result))
     return result, names, col_types
+
+
+def build_insert(data: Collection[Collection[Any]], *, column_type_names: Collection[str] = None,
+                 column_types: Collection[ClickHouseType] = None):
+    if not column_types:
+        column_types = [registry.get_from_name(name) for name in column_type_names]
+    output = bytearray()
+    for row in data:
+        for (value, conv) in zip(row, convs):
+            conv(value, output)
+    return output
 
 

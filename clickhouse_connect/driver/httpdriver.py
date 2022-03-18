@@ -4,7 +4,7 @@ from typing import Iterable, Optional, Dict, Any
 
 import requests
 
-from clickhouse_connect.datatypes.registry import ClickHouseType
+from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
 from clickhouse_connect.driver.query import QueryResult

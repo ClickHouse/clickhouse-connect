@@ -1,7 +1,8 @@
 from abc import ABCMeta, abstractmethod
 from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple
 
-from clickhouse_connect.datatypes.registry import ClickHouseType, get_from_name
+from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ServerError
 from clickhouse_connect.driver.query import QueryResult
 

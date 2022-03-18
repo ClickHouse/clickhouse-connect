@@ -5,8 +5,7 @@ from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean, DECIMAL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.type_api import TypeEngine, UserDefinedType
 
-from clickhouse_connect.datatypes.standard import ClickHouseType
-from clickhouse_connect.datatypes.registry import type_map
+from clickhouse_connect.datatypes.base import ClickHouseType, type_map
 
 
 def sqla_compile(self, *args, **kwargs):

@@ -3,7 +3,7 @@ import logging
 from typing import Union, Iterable, List, Any
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.datatypes.registry import ClickHouseType
+from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import DriverError
 
 logger = logging.getLogger(__name__)

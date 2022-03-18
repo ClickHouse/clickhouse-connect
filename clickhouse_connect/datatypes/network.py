@@ -1,11 +1,11 @@
 from ipaddress import IPv4Address, IPv6Address
-from typing import Collection, Union
+from collections.abc import Sequence
+from typing import Collection, Union, MutableSequence, Tuple
 
-from clickhouse_connect.datatypes.registry import ClickHouseType
-from clickhouse_connect.datatypes.standard import UInt32
+from clickhouse_connect.datatypes.base import ClickHouseType, FixedType
 
 
-class IPv4(UInt32):
+class IPv4(FixedType):
     _array_type = 'I'
 
     @staticmethod
@@ -17,14 +17,14 @@ class IPv4(UInt32):
     @staticmethod
     def _to_row_binary(value: [int, IPv4Address, str], dest: bytearray):
         if isinstance(value, IPv4Address):
-            dest += value.packed
+            dest += value._ip.to_bytes(4, 'little')
         elif isinstance(value, str):
             dest += bytes(reversed([int(b) for b in value.split('.')]))
         else:
-            dest += int.to_bytes(4, value, 'little')
+            dest += value.to_bytes(4, 'little')
 
     @staticmethod
-    def to_python(column: Collection):
+    def _to_python(column: Collection) -> MutableSequence:
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
         app = new_col.append
@@ -40,26 +40,53 @@ ipv4_v6_mask = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
 
 class IPv6(ClickHouseType):
     @staticmethod
-    def _from_row_binary(self, source: bytearray, loc: int):
+    def _from_row_binary(source: bytearray, loc: int):
         end = loc + 16
         int_value = int.from_bytes(source[loc:end], 'big')
         if int_value & 0xFFFF00000000 == 0xFFFF00000000:
-            return self._from_v4_output((int_value & 0xFFFFFFFF).to_bytes(4, 'big')), end
-        return self._from_v6_output(int_value), end
+            ipv4 = IPv4Address.__new__(IPv4Address)
+            ipv4._ip = int_value & 0xFFFFFFFF
+            return ipv4, end
+        return IPv6Address(int_value), end
 
     @staticmethod
-    def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray]) -> bytes:
+    def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
         if isinstance(value, str):
             if '.' in value:
-                return ipv4_v6_mask + IPv4Address(value).packed
-            return IPv6Address(value).packed
-        if isinstance(value, IPv4Address):
-            return ipv4_v6_mask + value.packed
-        if isinstance(value, IPv6Address):
-            return value.packed
-        if len(value) == 4:
-            return ipv4_v6_mask + value
-        assert len(value) == 16
-        return value
+                dest += ipv4_v6_mask + bytes(reversed([int(b) for b in value.split('.')]))
+            else:
+                dest += IPv6Address(value).packed
+        elif isinstance(value, IPv4Address):
+            dest += ipv4_v6_mask + value._ip.to_bytes(4, 'big')
+        elif isinstance(value, IPv6Address):
+            dest += value.packed
+        elif len(value) == 4:
+            dest += ipv4_v6_mask + value
+        else:
+            assert len(value) == 16
+            dest += value
 
+    def _from_native(self, source: Sequence, loc: int, num_rows: int) -> Tuple[MutableSequence, int]:
+        loc += num_rows
+        end = loc + num_rows * 16
+        raw = [bytes(source[ix:ix + 16]) for ix in range(loc, end, 16)]
+        column = self._to_python(raw)
+        return column, end
 
+    @staticmethod
+    def _to_python(column: Collection[bytes]):
+        fast_ip_v6 = IPv6Address.__new__
+        fast_ip_v4 = IPv4Address.__new__
+        new_col = []
+        for x in column:
+            int_value = int.from_bytes(x, 'big')
+            if int_value & 0xFFFF00000000 == 0xFFFF00000000:
+                ipv4 = fast_ip_v4(IPv4Address)
+                ipv4._ip = int_value & 0xFFFFFFFF
+                new_col.append(ipv4)
+            else:
+                ipv6 = fast_ip_v6(IPv6Address)
+                ipv6._ip = int_value
+                ipv6._scope_id = None
+                new_col.append(ipv6)
+        return new_col

@@ -1,13 +1,10 @@
 import decimal
-import pytz
 
 from typing import Any, Union, Iterable
-from datetime import date, datetime, timezone, timedelta
 from struct import unpack_from as suf, pack as sp
-from collections import deque
 
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
-from clickhouse_connect.datatypes.registry import ClickHouseType, TypeDef, FixedType
+from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
 
 
 class Int8(FixedType):
@@ -134,87 +131,6 @@ class Float64(FixedType):
         dest += sp('d', (value,))
 
 
-from_ts_naive = datetime.utcfromtimestamp
-from_ts_tz = datetime.fromtimestamp
-
-
-class DateTime(FixedType):
-    __slots__ = '_from_row_binary',
-    _array_type = 'I'
-
-    def __init__(self, type_def: TypeDef):
-        if type_def.values:
-            tzinfo = pytz.timezone(type_def.values[0][1:-1])
-            self._from_row_binary = lambda source, loc: (from_ts_tz(suf('<L', source, loc)[0], tzinfo), loc + 4)
-        else:
-            self._from_row_binary = lambda source, loc: (from_ts_naive(suf('<L', source, loc)[0]), loc + 4)
-        super().__init__(type_def)
-
-    @staticmethod
-    def _to_row_binary(value: datetime, dest: bytearray):
-        dest += sp('<I', int(value.timestamp()),)
-
-    @staticmethod
-    def to_python(column: Iterable):
-        return tuple((from_ts_naive(ts) for ts in column))
-
-
-epoch_start_date = date(1970, 1, 1)
-
-
-class Date(FixedType):
-    _array_type = 'H'
-
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
-        return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
-
-    @staticmethod
-    def _to_row_binary(value: date, dest: bytearray):
-        dest += sp('<H', (value - epoch_start_date).days,)
-
-    @staticmethod
-    def to_python(column: Iterable):
-        return tuple((epoch_start_date + timedelta(days) for days in column))
-
-
-class Date32(FixedType):
-    _array_type = 'I'
-
-    @staticmethod
-    def _from_row_binary(source, loc):
-        return epoch_start_date + timedelta(suf('<I', source, loc)[0]), loc + 4
-
-    @staticmethod
-    def _to_row_binary(self, value: date) -> bytes:
-        return (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
-
-
-class DateTime64(ClickHouseType):
-    __slots__ = 'prec', 'tzinfo'
-    _array_type = 'Q'
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        self.name_suffix = type_def.arg_str
-        self.prec = 10 ** type_def.values[0]
-        if len(type_def.values) > 1:
-            self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
-        else:
-            self.tzinfo = timezone.utc
-
-    def _from_row_binary(self, source, loc):
-        ticks = int.from_bytes(source[loc:loc + 8], 'little', signed=True)
-        seconds = ticks // self.prec
-        dt_sec = datetime.fromtimestamp(seconds, self.tzinfo)
-        microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
-        return dt_sec + timedelta(microseconds=microseconds), loc + 8
-
-    def _to_row_binary(self, value: datetime, dest: bytearray):
-        microseconds = int(value.timestamp()) * 1000000 + value.microsecond
-        dest += (int(microseconds * 1000000) // self.prec).to_bytes(8, 'little', signed=True)
-
-
 class String(ClickHouseType):
     _encoding = 'utf8'
 
@@ -226,7 +142,7 @@ class String(ClickHouseType):
         value = bytes(value, self._encoding)
         dest += to_leb128(len(value)) + value
 
-    def from_native(self, source, loc, num_rows, must_swap):
+    def _from_native(self, source, loc, num_rows):
         encoding = self._encoding
         column = []
         app = column.append

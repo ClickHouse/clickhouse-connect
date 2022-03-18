@@ -1,13 +1,17 @@
 import array
+from collections.abc import Sequence
 from uuid import UUID as PyUUID, SafeUUID
 from struct import unpack_from as suf, pack as sp
 
 from typing import Union, Any, Collection, Dict
-from binascii import hexlify
 
-from clickhouse_connect.datatypes.registry import ClickHouseType, get_from_name, TypeDef
+from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
+from clickhouse_connect.driver.common import must_swap
 from clickhouse_connect.driver.exceptions import NotSupportedError, DriverError
 from clickhouse_connect.driver.rowbinary import read_leb128, to_leb128
+
+empty_uuid = PyUUID(int = 0, is_safe=SafeUUID.unknown)
 
 
 class UUID(ClickHouseType):
@@ -27,7 +31,7 @@ class UUID(ClickHouseType):
         dest += bytes_high + bytes_low
 
     @staticmethod
-    def from_native(source, loc, num_rows, must_swap):
+    def _from_native(source: Sequence, loc: int, num_rows: int):
         new_uuid = PyUUID.__new__
         unsafe_uuid = SafeUUID.unsafe
         oset = object.__setattr__
@@ -36,33 +40,19 @@ class UUID(ClickHouseType):
         app = column.append
         for ix in range(num_rows):
             s = ix << 1
-            fast_uuid = new_uuid(PyUUID)
-            oset(fast_uuid, 'int', v[s] << 64 | v[s + 1])
-            oset(fast_uuid, 'is_safe', unsafe_uuid)
-            app(fast_uuid)
+            int_value = v[s] << 64 | v[s + 1]
+            if int_value == 0:
+                app(empty_uuid)
+            else:
+                fast_uuid = new_uuid(PyUUID)
+                oset(fast_uuid, 'int', v[s] << 64 | v[s + 1])
+                oset(fast_uuid, 'is_safe', unsafe_uuid)
+                app(fast_uuid)
         return column, loc + num_rows * 16
 
 
-def _fixed_string_binary(value: bytearray):
-    return bytes(value)
-
-
-def _fixed_string_decode(cls, value: bytearray):
-    try:
-        return value.decode(cls._encoding)
-    except UnicodeDecodeError:
-        return cls._encode_error(value)
-
-
-def _hex_string(cls, value: bytearray):
-    return hexlify(value).decode('utf8')
-
-
 class FixedString(ClickHouseType):
-    __slots__ = 'size',
-    _encoding = 'utf8'
-    _transform = staticmethod(_fixed_string_binary)
-    _encode_error = staticmethod(_fixed_string_binary)
+    __slots__ = 'size', 'encoding'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -70,40 +60,32 @@ class FixedString(ClickHouseType):
         self.name_suffix = f'({self.size})'
 
     def _from_row_binary(self, source: bytearray, loc: int):
-        return self._transform(source[loc:loc + self.size]), loc + self.size
+        return bytes(source[loc:loc + self.size]), loc + self.size
 
-    def _to_row_binary(self, value: Union[str, bytes, bytearray], dest: bytearray):
-        if isinstance(value, str):
-            value = value.encode(self._encoding)
+    @staticmethod
+    def _to_row_binary(value: Union[str, bytes, bytearray], dest: bytearray):
         dest += value
 
-    def from_native(self, source, loc, num_rows, must_swap):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int):
         sz = self.size
-        column = tuple((bytes(source[loc + ix * sz:loc + ix * sz + sz]) for ix in range(num_rows)))
-        return column, loc + sz * num_rows
+        end = loc + sz * num_rows
+        return [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)], end
 
 
-def fixed_string_format(method: str, encoding: str, encoding_error: str):
-    if method == 'binary':
-        FixedString._transform = staticmethod(_fixed_string_binary)
-    elif method == 'decode':
-        FixedString._encoding = encoding
-        FixedString._transform = classmethod(_fixed_string_decode)
-        if encoding_error == 'hex':
-            FixedString._encode_error = classmethod(_hex_string)
-        else:
-            FixedString._encode_error = classmethod(lambda cls: '<binary data>')
-    elif method == 'hex':
-        FixedString._transform = staticmethod(_hex_string)
+class Nothing(FixedType):
+    _array_type = 'b'
 
+    def __init(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.nullable = True
 
-class Nothing(ClickHouseType):
     @staticmethod
-    def _from_row_binary(self, source: bytes, loc: int):
-        return None, loc
+    def _from_row_binary(source: bytes, loc: int):
+        return None, loc + 1
 
-    def _to_row_binary(self, value: Any, dest: bytearray):
-        pass
+    @staticmethod
+    def _to_row_binary(value: Any, dest: bytearray):
+        dest += b'\x30'
 
 
 class Array(ClickHouseType):
@@ -117,17 +99,15 @@ class Array(ClickHouseType):
         self.name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytearray, loc: int):
-        size, loc = read_leb128(source, loc)
+        sz, loc = read_leb128(source, loc)
         values = []
-        for x in range(size):
+        for x in range(sz):
             value, loc = self.element_type.from_row_binary(source, loc)
             values.append(value)
         return values, loc
 
-    def from_native(self, source: bytearray, loc: int, num_rows: int, must_swap: bool):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int):
         conv = self.element_type.from_native
-        conv_py = self.element_type.to_python
-        nullable = self.element_type.nullable
         offsets = array.array('Q')
         sz = num_rows * 8
         offsets.frombytes(source[loc: loc + sz])
@@ -140,9 +120,7 @@ class Array(ClickHouseType):
         for offset in offsets:
             cnt = offset - last
             last = offset
-            val_list, loc = conv(source, loc, cnt, must_swap)
-            if conv_py:
-                val_list = conv_py(val_list)
+            val_list, loc = conv(source, loc, cnt)
             app(val_list)
         return column, loc
 
@@ -154,7 +132,7 @@ class Array(ClickHouseType):
 
 
 class Tuple(ClickHouseType):
-    _slots = 'from_rb_funcs', 'to_rb_funcs'
+    _slots = 'from_rb_funcs', 'to_rb_funcs',
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -172,6 +150,9 @@ class Tuple(ClickHouseType):
     def _to_row_binary(self, values: Collection, dest: bytearray):
         for value, conv in zip(values, self.to_rb_funcs):
             conv(value, dest)
+
+    def from_native(self, source, loc, num_rows):
+        pass
 
 
 class Map(ClickHouseType):

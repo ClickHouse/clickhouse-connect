@@ -1,6 +1,6 @@
 from typing import NamedTuple, Any, Tuple, Dict, Collection
 
-from clickhouse_connect.datatypes.registry import ClickHouseType
+from clickhouse_connect.datatypes.base import ClickHouseType
 
 
 class QueryResult(NamedTuple):

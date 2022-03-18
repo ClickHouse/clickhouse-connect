@@ -1,7 +1,7 @@
 import re
 
 from superset.utils.core import GenericDataType
-from clickhouse_connect.datatypes.registry import type_map
+from clickhouse_connect.datatypes.base import type_map
 from clickhouse_connect.datatypes import fixed_string_format, uint64_format, ip_format
 
 type_mapping = (

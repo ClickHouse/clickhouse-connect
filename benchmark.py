@@ -21,7 +21,8 @@ columns = {
     'array': ('Array(String)', ['q', 'w', 'e', 'r']),
     'uuid': ('UUID', uuid.UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9')),
     'bool': ('Bool', True),
-    'ipv4': ('IPv4', '107.34.202.7')
+    'ipv4': ('IPv4', '107.34.202.7'),
+    'ipv6': ('IPv6', '6afd:7491:9dac:7f5b:a550:462a:da3b:f2d0')
 }
 
 standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'nullable', 'enum', 'array', 'uuid']
