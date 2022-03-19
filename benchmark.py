@@ -5,7 +5,9 @@ import argparse
 from typing import List
 
 import clickhouse_connect
+import clickhouse_connect.datatypes as datatypes
 from clickhouse_connect.driver import BaseDriver
+
 
 
 columns = {
@@ -69,13 +71,17 @@ def main():
     tries = args.tries
     col_names = args.columns
     if col_names:
-        invalid = set(col_names).difference(set(columns.keys()))
-        if invalid:
-            print(' ,'.join(invalid) + ' columns not found')
-            quit()
+        if 'all' in col_names:
+            col_names = list(columns.keys())
+        else:
+            invalid = set(col_names).difference(set(columns.keys()))
+            if invalid:
+                print(' ,'.join(invalid) + ' columns not found')
+                quit()
     else:
         col_names = standard_cols
     client = clickhouse_connect.client(compress=False)
+    datatypes.uuid_format('string')
     create_table(client, col_names, rows )
     check_reads(client, tries, rows)
 

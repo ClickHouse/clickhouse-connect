@@ -1,8 +1,7 @@
 from ipaddress import IPv4Address, IPv6Address
-from collections.abc import Sequence
-from typing import Collection, Union, MutableSequence, Tuple
+from typing import Collection, Union, MutableSequence, Sequence
 
-from clickhouse_connect.datatypes.base import ClickHouseType, FixedType
+from clickhouse_connect.datatypes.base import FixedType
 
 
 class IPv4(FixedType):
@@ -24,7 +23,7 @@ class IPv4(FixedType):
             dest += value.to_bytes(4, 'little')
 
     @staticmethod
-    def _to_python(column: Collection) -> MutableSequence:
+    def _to_python(column: Sequence) -> MutableSequence:
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
         app = new_col.append
@@ -38,7 +37,9 @@ class IPv4(FixedType):
 ipv4_v6_mask = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
 
 
-class IPv6(ClickHouseType):
+class IPv6(FixedType):
+    _byte_size = 16
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         end = loc + 16
@@ -66,13 +67,6 @@ class IPv6(ClickHouseType):
             assert len(value) == 16
             dest += value
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int) -> Tuple[MutableSequence, int]:
-        loc += num_rows
-        end = loc + num_rows * 16
-        raw = [bytes(source[ix:ix + 16]) for ix in range(loc, end, 16)]
-        column = self._to_python(raw)
-        return column, end
-
     @staticmethod
     def _to_python(column: Collection[bytes]):
         fast_ip_v6 = IPv6Address.__new__
@@ -90,3 +84,7 @@ class IPv6(ClickHouseType):
                 ipv6._scope_id = None
                 new_col.append(ipv6)
         return new_col
+
+
+def ip_format(fmt):
+    pass

@@ -14,7 +14,7 @@ type_mapping = (
 def configure_types():
     # Hack to ensure sqlachemy type information is always imported
     import clickhouse_connect.sqlalchemy
-    fixed_string_format(method='decode', encoding='utf8', encoding_error='hex')
+    fixed_string_format(fmt='str', encoding='utf8')
     uint64_format('signed')
     ip_format('string')
     compiled = [(re.compile(pattern), gen_type) for pattern, gen_type in type_mapping]

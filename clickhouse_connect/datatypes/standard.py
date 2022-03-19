@@ -107,8 +107,35 @@ class UInt64(FixedType):
     def _to_row_binary(value: int, dest: bytearray):
         dest += sp('<Q', value,)
 
+    @classmethod
+    def format(cls, fmt:str):
+        fmt = fmt.lower()
+        if fmt == 'unsigned':
+            cls._array_type = 'q'
+        elif fmt == 'signed':
+            cls._array_type = 'Q'
+        else:
+            raise ValueError("Unrecognized UInt64 Output Format")
 
-class Int128(FixedType):
+
+class BigInt(FixedType, registered=False):
+    @staticmethod
+    def _to_python_str(column: Sequence):
+        return [str(x, 'utf8') for x in column]
+
+    @classmethod
+    def format(cls, fmt: str, encoding: str = 'utf8'):
+        fmt = fmt.lower()
+        if fmt.lower().startswith('str'):
+            cls._to_python = cls._to_python_str
+            cls._encoding = encoding
+        elif fmt.startswith('raw') or fmt.startswith('int') or fmt.startswith('num'):
+            cls._to_python = None
+        else:
+            raise ValueError("Unrecognized BigInt output format")
+
+
+class Int128(BigInt):
     _byte_size = 16
     _signed = True
 
@@ -125,7 +152,7 @@ class Int128(FixedType):
         return [int.from_bytes(source[ix:ix + 16], 'little', signed=True) for ix in range(loc, end, 16)], end
 
 
-class UInt128(FixedType):
+class UInt128(BigInt):
     _byte_size = 16
     _signed = False
 
@@ -142,7 +169,7 @@ class UInt128(FixedType):
         return [int.from_bytes(source[ix:ix + 16], 'little', signed=False) for ix in range(loc, end, 16)], end
 
 
-class Int256(FixedType):
+class Int256(BigInt):
     _byte_size = 32
     _signed = True
 
@@ -159,7 +186,7 @@ class Int256(FixedType):
         return [int.from_bytes(source[ix:ix + 32], 'little', signed=True) for ix in range(loc, end, 32)], end
 
 
-class UInt256(FixedType):
+class UInt256(BigInt):
     _byte_size = 32
     _signed = False
 
@@ -325,13 +352,14 @@ class Decimal(FixedType):
             self._to_python = self._to_python_bytes
 
     def _from_row_binary(self, source, loc):
-        x = int.from_bytes(source[loc:loc + self._byte_size], 'little')
+        end = loc + self._byte_size
+        x = int.from_bytes(source[loc:end], 'little')
         scale = self.scale
         if x >= 0:
             digits = str(x)
-            return decimal.Decimal(f'{digits[:scale]}.{digits[:-scale]}')
+            return decimal.Decimal(f'{digits[:-scale]}.{digits[-scale:]}'), end
         digits = str(-x)
-        return decimal.Decimal(f'-{digits[:scale]}.{digits[:-scale]}')
+        return decimal.Decimal(f'-{digits[:-scale]}.{digits[-scale:]}'), end
 
     def _to_row_binary(self, value: Any, dest: bytearray):
         if isinstance(value, int) or isinstance(value, float) or (

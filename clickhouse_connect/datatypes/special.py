@@ -1,7 +1,7 @@
 import array
 from collections.abc import Sequence
-from uuid import UUID as PyUUID, SafeUUID
-from struct import unpack_from as suf, pack as sp
+from uuid import UUID, SafeUUID
+from struct import unpack_from as suf
 
 from typing import Union, Any, Collection, Dict
 
@@ -10,61 +10,95 @@ from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
 from clickhouse_connect.driver.common import must_swap, read_leb128, to_leb128
 from clickhouse_connect.driver.exceptions import NotSupportedError, DriverError
 
-empty_uuid = PyUUID(int = 0, is_safe=SafeUUID.unknown)
+empty_uuid = UUID(int=0)
 
 
-class UUID(ClickHouseType):
+class ChUUID(ClickHouseType, registry_name='UUID'):
+    _output = 'uuid'
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         int_high = int.from_bytes(source[loc:loc + 8], 'little')
         int_low = int.from_bytes(source[loc + 8:loc + 16], 'little')
         byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
-        return PyUUID(bytes=byte_value), loc + 16
+        return UUID(bytes=byte_value), loc + 16
 
     @staticmethod
-    def _to_row_binary(value: PyUUID, dest: bytearray):
+    def _to_row_binary(value: UUID, dest: bytearray):
         source = value.bytes
         bytes_high, bytes_low = bytearray(source[:8]), bytearray(source[8:])
         bytes_high.reverse()
         bytes_low.reverse()
         dest += bytes_high + bytes_low
 
-    @staticmethod
-    def _from_native(source: Sequence, loc: int, num_rows: int):
-        new_uuid = PyUUID.__new__
+    @classmethod
+    def _from_native(cls, source: Sequence, loc: int, num_rows: int):
+        v = suf(f'<{num_rows * 2}Q', source, loc)
+        new_uuid = UUID.__new__
         unsafe_uuid = SafeUUID.unsafe
         oset = object.__setattr__
-        v = suf(f'<{num_rows * 2}Q', source, loc)
         column = []
         app = column.append
+        as_str = cls._output == 'string'
         for ix in range(num_rows):
             s = ix << 1
             int_value = v[s] << 64 | v[s + 1]
             if int_value == 0:
                 app(empty_uuid)
             else:
-                fast_uuid = new_uuid(PyUUID)
+                fast_uuid = new_uuid(UUID)
                 oset(fast_uuid, 'int', int_value)
                 oset(fast_uuid, 'is_safe', unsafe_uuid)
-                app(fast_uuid)
+                app(str(fast_uuid) if as_str else fast_uuid)
         return column, loc + num_rows * 16
 
+    @classmethod
+    def format(cls, fmt:str):
+        fmt = fmt.lower()
+        if fmt.startswith('uuid'):
+            cls._output = 'uuid'
+        elif fmt.startswith('str'):
+            cls._output = 'string'
+        else:
+            raise ValueError('Unrecognized Output Format for UUID')
 
-class FixedString(ClickHouseType):
-    __slots__ = 'size', 'encoding', '_to_python'
+
+class FixedString(FixedType):
+    _encoding = 'utf8'
 
     def __init__(self, type_def: TypeDef):
+        self._byte_size = type_def.values[0]
+        self.name_suffix = f'({self._byte_size})'
         super().__init__(type_def)
-        self.size = type_def.values[0]
-        self.name_suffix = f'({self.size})'
-        self._to_python = None
 
     def _from_row_binary(self, source: bytearray, loc: int):
-        return bytes(source[loc:loc + self.size]), loc + self.size
+        return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
 
     @staticmethod
     def _to_row_binary(value: Union[str, bytes, bytearray], dest: bytearray):
         dest += value
+
+    def _to_python_str(self, column: Sequence):
+        encoding = self._encoding
+        new_col = []
+        app = new_col.append
+        for x in column:
+            try:
+                app(str(x, encoding))
+            except UnicodeDecodeError:
+                app(x.hex())
+        return new_col
+
+    @classmethod
+    def format(cls, fmt: str, encoding: str = 'utf8'):
+        fmt = fmt.lower()
+        if fmt.lower().startswith('str'):
+            cls._to_python = cls._to_python_str
+            cls._encoding = encoding
+        elif fmt.startswith('raw') or fmt.startswith('byte'):
+            cls._to_python = None
+        else:
+            raise ValueError("Unrecognized FixedString output format")
 
 
 class Nothing(FixedType):

@@ -87,13 +87,9 @@ def test_ip():
 
 
 def test_decimal():
-    dec_type = gfn('Decimal128(5)')
-    source = to_bytes('b8 6a 05 00 00 00 00 00  00 00 00 00 00 00 00 00')
-    value, loc = dec_type.from_row_binary(source, 0)
-    assert value == decimal.Decimal('3.55000')
-    assert dec_type.to_row_binary(value) == source
-    dec_type = gfn('Decimal64(8)')
-    assert dec_type.to_row_binary(float(3.55)) == to_bytes('c0 de 28 15 00 00 00 00')
+    round_trip('Decimal128(5)', 'b8 6a 05 00 00 00 00 00 00 00 00 00 00 00 00 00', decimal.Decimal('3.5500'))
+    #dec_type = gfn('Decimal64(8)')
+    #assert dec_type.to_row_binary(float(3.55)) == to_bytes('c0 de 28 15 00 00 00 00')
 
 
 def test_date():

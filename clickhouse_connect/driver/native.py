@@ -10,19 +10,30 @@ def parse_response(source: Union[memoryview, bytes, bytearray]) -> (Collection[C
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0
-    num_cols, loc = read_leb128(source, loc)
-    num_rows, loc = read_leb128(source, loc)
     names = []
-    col_types: List[ClickHouseType] = []
+    col_types =  []
     result = []
-    for _ in range(num_cols):
-        name, loc = read_leb128_str(source, loc)
-        names.append(name)
-        type_name, loc = read_leb128_str(source, loc)
-        col_type = registry.get_from_name(type_name)
-        col_types.append(col_type)
-        column, loc = col_type.from_native(source, loc, num_rows)
-        result.append(column)
+    total_size = len(source)
+    block = 0
+    while loc < total_size:
+        num_cols, loc = read_leb128(source, loc)
+        num_rows, loc = read_leb128(source, loc)
+        for col_num in range(num_cols):
+            name, loc = read_leb128_str(source, loc)
+            if block == 0:
+                names.append(name)
+            type_name, loc = read_leb128_str(source, loc)
+            if block == 0:
+                col_type = registry.get_from_name(type_name)
+                col_types.append(col_type)
+            else:
+                col_type = col_types[col_num]
+            column, loc = col_type.from_native(source, loc, num_rows)
+            if block == 0:
+                result.append(column)
+            else:
+                result[col_num] += column
+        block += 1
     result = tuple(zip(*result))
     return result, names, col_types
 

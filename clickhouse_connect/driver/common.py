@@ -1,6 +1,7 @@
 import array
 import decimal
 import sys
+from collections.abc import Sequence
 from typing import Union
 
 must_swap = sys.byteorder == 'big'
@@ -21,7 +22,10 @@ def array_type(size: int, signed:bool = True):
     return at if signed else at.upper()
 
 
-def read_leb128(source: Union[bytes, memoryview, bytearray], loc: int):
+def read_int(byte_size: int, source: Sequence, loc: int):
+    return int.from_bytes()
+
+def read_leb128(source: Sequence, loc: int):
     length = 0
     ix = 0
     while True:
@@ -33,7 +37,7 @@ def read_leb128(source: Union[bytes, memoryview, bytearray], loc: int):
     return length, loc + ix
 
 
-def read_leb128_str(source: Union[memoryview, bytes, bytearray], loc: int, encoding: str = 'utf8'):
+def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8'):
     length, loc = read_leb128(source, loc)
     return str(source[loc:loc + length], encoding), loc + length
 

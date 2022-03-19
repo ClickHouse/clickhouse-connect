@@ -25,10 +25,10 @@ class ClickHouseType():
     _to_python = None
     _from_native = None
 
-    def __init_subclass__(cls, register: bool = True):
-        if register:
+    def __init_subclass__(cls, registry_name: str = None, registered: bool = True):
+        if registered:
             cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
-            type_map[cls.__name__.upper()] = cls
+            type_map[(registry_name or cls.__name__).upper()] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -82,16 +82,32 @@ class ClickHouseType():
         return column, loc
 
     def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int):
-        return self._from_native()
+        loc += 8  # Skip dictionary version
+        key_size = 2 ** source[loc]
+        loc += 8  # Skip remaining key information
+        index_cnt = int.from_bytes(source[loc: loc + 8], 'little', signed=False)
+        loc += 8
+        values, loc = self._from_native(source, loc, index_cnt)
+        if self.nullable:
+            try:
+                values[0] = None
+            except TypeError:
+                values = (None,) + values[1:]
+        loc += 8  # key size should match row count
+        keys_sz = key_size * num_rows
+        end = loc + keys_sz
+        keys = array.array(array_type(key_size, False))
+        keys.frombytes(source[loc: end])
+        return tuple(values[key] for key in keys), end
 
 
-class FixedType(ClickHouseType, register=False):
+class FixedType(ClickHouseType, registered=False):
     _signed = True
     _byte_size = 0
     _array_type = None
 
-    def __init_subclass__(cls, *args, **kwargs):
-        super().__init_subclass__(*args, **kwargs)
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
         if not cls._array_type and cls._byte_size:
             cls._array_type = array_type(cls._byte_size, cls._signed)
         elif cls._array_type in ('i', 'I') and int_size == 2:
