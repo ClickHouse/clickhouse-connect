@@ -5,8 +5,8 @@ from functools import partial
 from typing import Any, Union, Iterable
 from struct import unpack_from as suf, pack as sp
 
-from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
-from clickhouse_connect.datatypes.tools import array_type, read_leb128, to_leb128
+from clickhouse_connect.datatypes.base import TypeDef, FixedType
+from clickhouse_connect.datatypes.tools import array_type
 
 
 class Int8(FixedType):
@@ -148,7 +148,7 @@ class Int128(BigInt):
     def _to_row_binary(value:int, dest: bytearray):
         dest += value.to_bytes(16, 'little')
 
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
         end = loc + 16 * num_rows
         return [int.from_bytes(source[ix:ix + 16], 'little', signed=True) for ix in range(loc, end, 16)], end
 
@@ -165,7 +165,7 @@ class UInt128(BigInt):
     def _to_row_binary(value:int, dest: bytearray):
         dest += value.to_bytes(16, 'little')
 
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
         end = loc + 16 * num_rows
         return [int.from_bytes(source[ix:ix + 16], 'little', signed=False) for ix in range(loc, end, 16)], end
 
@@ -182,7 +182,7 @@ class Int256(BigInt):
     def _to_row_binary(value:int, dest: bytearray):
         dest += value.to_bytes(32, 'little')
 
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
         end = loc + 32 * num_rows
         return [int.from_bytes(source[ix:ix + 32], 'little', signed=True) for ix in range(loc, end, 32)], end
 
@@ -199,7 +199,7 @@ class UInt256(BigInt):
     def _to_row_binary(value:int, dest: bytearray):
         dest += value.to_bytes(32, 'little')
 
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
         end = loc + 32 * num_rows
         return [int.from_bytes(source[ix:ix + 32], 'little', signed=False) for ix in range(loc, end, 32)], end
 
@@ -258,7 +258,7 @@ class Enum8(FixedType):
         self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
         self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
-        self.name_suffix = f'({val_str})'
+        self._name_suffix = f'({val_str})'
 
     def _from_row_binary(self, source: bytes, loc: int):
         value = source[loc]
@@ -296,7 +296,7 @@ class Decimal(FixedType):
     def __init__(self, type_def: TypeDef):
         size = type_def.size
         if size == 0:
-            self.name_suffix = type_def.arg_str
+            self._name_suffix = type_def.arg_str
             prec = type_def.values[0]
             self.scale = type_def.values[1]
             if prec < 1 or prec > 79:
@@ -311,7 +311,7 @@ class Decimal(FixedType):
                 size = 256
         else:
             self.scale = type_def.values[0]
-            self.name_suffix = f'{type_def.size}({self.scale})'
+            self._name_suffix = f'{type_def.size}({self.scale})'
         self._byte_size = size // 8
         self.zeros = bytes([0] * self._byte_size)
         self._array_type = array_type(self._byte_size, True)
@@ -357,4 +357,3 @@ class Decimal(FixedType):
         ifb = partial(int.from_bytes, byteorder='little')
         ints = [ifb(x) for x in column]
         return self._to_python_int(ints)
-

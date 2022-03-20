@@ -24,7 +24,7 @@ class ClickHouseType():
     _to_native = None
     _to_python = None
     _from_native = None
-    name_suffix = ''
+    _name_suffix = ''
 
     def __init_subclass__(cls, registered: bool = True):
         if registered:
@@ -36,7 +36,6 @@ class ClickHouseType():
         return cls._instance_cache.setdefault(type_def, cls(type_def))
 
     def __init__(self, type_def: TypeDef):
-        self.extra = {}
         self.wrappers: Tuple[str] = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
         self.nullable = 'Nullable' in self.wrappers
@@ -55,7 +54,7 @@ class ClickHouseType():
 
     @property
     def name(self):
-        name = f'{self.__class__.__name__}{self.name_suffix}'
+        name = f'{self.__class__.__name__}{self._name_suffix}'
         for wrapper in self.wrappers:
             name = f'{wrapper}({name})'
         return name
@@ -131,9 +130,7 @@ class FixedType(ClickHouseType, registered=False):
 
     def _from_array(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
-        if self._to_python:
-            column = self._to_python(column)
-        return column, loc
+        return self._to_python(column) if self._to_python else column, loc
 
     def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
@@ -145,7 +142,7 @@ class FixedType(ClickHouseType, registered=False):
 class UnsupportedType(ClickHouseType, registered=False):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.name_suffix = type_def.arg_str
+        self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, *_):
         raise NotSupportedError(f'{self.name} deserialization not supported')

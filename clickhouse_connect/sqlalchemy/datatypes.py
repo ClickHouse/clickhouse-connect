@@ -8,17 +8,18 @@ from sqlalchemy.sql.type_api import TypeEngine, UserDefinedType
 from clickhouse_connect.datatypes.base import ClickHouseType, type_map
 
 
-def sqla_compile(self, *args, **kwargs):
+def sqla_compile(self, **_):
     return self.ch_type.name
 
 
 def get_sqla_type(self):
-    sqla_type = self.extra.get('sqla_type')
-    if not sqla_type:
+    try:
+        return getattr(self, '_sqla_type')
+    except AttributeError:
         sqla_type = self.sqla_type_cls()
         sqla_type.ch_type = self
-        self.extra['sqla_type'] = sqla_type
-    return sqla_type
+        setattr(self, '_sqla_type', sqla_type)
+        return sqla_type
 
 
 def ch_to_sqla_type(ch_type_cls: Type[ClickHouseType], sqla_type_engine: TypeEngine):
@@ -46,14 +47,12 @@ def map_schema_types():
     compiled = [(re.compile(pattern), sqla_base) for pattern, sqla_base in type_mapping]
     schema_types = {}
     for name, ch_type_cls in type_map.items():
-        found = False
         for pattern, sqla_base in compiled:
             match = pattern.match(name)
             if match:
                 schema_types[name] = ch_to_sqla_type(ch_type_cls, sqla_base)
-                found = True
                 break
-        if not found:
+        else:
             raise SQLAlchemyError(f"Unmapped ClickHouse type {name}")
     return schema_types
 

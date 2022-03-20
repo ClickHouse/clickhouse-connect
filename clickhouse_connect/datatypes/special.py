@@ -85,7 +85,7 @@ class Array(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[0])
         if isinstance(self.element_type, Array):
             raise DriverError("Nested arrays not supported")
-        self.name_suffix = type_def.arg_str
+        self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytearray, loc: int):
         sz, loc = read_leb128(source, loc)
@@ -127,7 +127,7 @@ class Tuple(ClickHouseType):
         self.from_rb_funcs = tuple((t.from_row_binary for t in element_types))
         self.to_rb_funcs = tuple((t.to_row_binary for t in element_types))
         self.from_native_funcs = tuple((t.from_native for t in element_types))
-        self.name_suffix = type_def.arg_str
+        self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytes, loc: int):
         values = []
@@ -157,7 +157,7 @@ class Map(ClickHouseType):
         self.key_from_rb, self.key_to_rb = self.key_type.from_row_binary, self.key_type.to_row_binary
         self.value_type = get_from_name(type_def.values[1])
         self.value_from_rb, self.value_to_rb = self.value_type.from_row_binary, self.value_type.to_row_binary
-        self.name_suffix = type_def.arg_str
+        self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: Sequence, loc: int):
         size, loc = read_leb128(source, loc)
@@ -205,7 +205,7 @@ class SimpleAggregateFunction(ClickHouseType):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
-        self.name_suffix = type_def.arg_str
+        self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source, loc):
         return self.element_type.from_row_binary(source, loc)

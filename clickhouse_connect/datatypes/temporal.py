@@ -1,10 +1,10 @@
 from collections.abc import Sequence
-from datetime import date, timedelta, datetime, timezone
+from datetime import date, timedelta, datetime
 from struct import unpack_from as suf, pack as sp
 
 import pytz
 
-from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
+from clickhouse_connect.datatypes.base import TypeDef, FixedType
 from clickhouse_connect.datatypes.tools import read_uint64
 
 epoch_start_date = date(1970, 1, 1)
@@ -73,7 +73,7 @@ class DateTime64(FixedType):
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.name_suffix = type_def.arg_str
+        self._name_suffix = type_def.arg_str
         self.prec = 10 ** type_def.values[0]
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
