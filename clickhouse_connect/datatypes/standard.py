@@ -4,8 +4,8 @@ from collections.abc import Sequence
 from typing import Any, Union, Iterable
 from struct import unpack_from as suf, pack as sp
 
-from clickhouse_connect.driver.common import array_type, read_leb128, to_leb128
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
+from clickhouse_connect.datatypes.tools import array_type, read_leb128, to_leb128
 
 
 class Int8(FixedType):
@@ -238,7 +238,7 @@ class String(ClickHouseType):
         value = bytes(value, self._encoding)
         dest += to_leb128(len(value)) + value
 
-    def _from_native(self, source, loc, num_rows):
+    def _from_native(self, source, loc, num_rows, **_):
         encoding = self._encoding
         column = []
         app = column.append
@@ -343,7 +343,7 @@ class Decimal(FixedType):
             self.name_suffix = f'{type_def.size}({self.scale})'
         self._byte_size = size // 8
         self.zeros = bytes([0] * self._byte_size)
-        self._array_type = array_type(self._byte_size)
+        self._array_type = array_type(self._byte_size, True)
         self.mult = 10 ** self.scale
         super().__init__(type_def)
         if self._array_type:

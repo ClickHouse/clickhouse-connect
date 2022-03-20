@@ -1,18 +1,19 @@
-from collections import deque
+from collections.abc import Sequence
+from typing import Optional
 
 from clickhouse_connect.dbapi.exceptions import ProgrammingError
 from clickhouse_connect.driver import BaseDriver
-from clickhouse_connect.driver.query import QueryResult
 
 
 class Cursor:
     def __init__(self, driver: BaseDriver):
         self.driver = driver
         self.arraysize = 1
-        self.data:deque = None
+        self.data: Optional[Sequence] = None
         self.names = []
         self.types = []
-        self._rowcount = -1
+        self._rowcount = 0
+        self._ix = 0
 
     def check_valid(self):
         if self.data is None:
@@ -39,20 +40,22 @@ class Cursor:
     def fetchall(self):
         self.check_valid()
         ret = self.data
-        self.data = []
+        self._ix = self._rowcount
         return ret
 
     def fetchone(self):
         self.check_valid()
-        if not self.data:
+        if self._ix >= self._rowcount:
             return None
-        return self.data.popleft()
+        val = self.data[self._ix]
+        self._ix += 1
+        return val
 
     def fetchmany(self, size: int = -1):
         self.check_valid()
-        sz = max(size, self.arraysize)
-        ret = self.data[:sz]
-        self.data = self.data[sz:]
+        end = self._ix + max(size, self._rowcount - self._ix)
+        ret = self.data[self._ix: end]
+        self._ix = end
         return ret
 
     def nextset(self):

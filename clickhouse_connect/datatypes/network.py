@@ -1,5 +1,7 @@
+import socket
+from functools import partial
 from ipaddress import IPv4Address, IPv6Address
-from typing import Collection, Union, MutableSequence, Sequence
+from typing import Union, MutableSequence, Sequence
 
 from clickhouse_connect.datatypes.base import FixedType
 
@@ -23,7 +25,7 @@ class IPv4(FixedType):
             dest += value.to_bytes(4, 'little')
 
     @staticmethod
-    def _to_python(column: Sequence) -> MutableSequence:
+    def _to_python_ip(column: Sequence) -> MutableSequence:
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
         app = new_col.append
@@ -33,15 +35,25 @@ class IPv4(FixedType):
             app(ipv4)
         return new_col
 
+    @staticmethod
+    def _to_python_str(column: Sequence) -> MutableSequence:
+        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
 
-ipv4_v6_mask = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
+    _to_python = _to_python_ip
+
+    @classmethod
+    def format(cls, fmt: str):
+        if fmt == 'string':
+            cls._to_python = staticmethod(cls._to_python_str)
+        else:
+            cls._to_python = staticmethod(cls._to_python_ip)
 
 
 class IPv6(FixedType):
     _byte_size = 16
 
     @staticmethod
-    def _from_row_binary(source: bytearray, loc: int):
+    def _from_row_binary(source: Sequence, loc: int):
         end = loc + 16
         int_value = int.from_bytes(source[loc:end], 'big')
         if int_value & 0xFFFF00000000 == 0xFFFF00000000:
@@ -52,11 +64,12 @@ class IPv6(FixedType):
 
     @staticmethod
     def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
+        ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
         if isinstance(value, str):
             if '.' in value:
-                dest += ipv4_v6_mask + bytes(reversed([int(b) for b in value.split('.')]))
+                dest += ipv4_v6_mask + bytes(int(b) for b in value.split('.'))
             else:
-                dest += IPv6Address(value).packed
+                dest += socket.inet_pton(socket.AF_INET6, value)
         elif isinstance(value, IPv4Address):
             dest += ipv4_v6_mask + value._ip.to_bytes(4, 'big')
         elif isinstance(value, IPv6Address):
@@ -64,11 +77,10 @@ class IPv6(FixedType):
         elif len(value) == 4:
             dest += ipv4_v6_mask + value
         else:
-            assert len(value) == 16
             dest += value
 
     @staticmethod
-    def _to_python(column: Collection[bytes]):
+    def _to_python_ip(column: Sequence) -> MutableSequence:
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
@@ -85,6 +97,25 @@ class IPv6(FixedType):
                 new_col.append(ipv6)
         return new_col
 
+    @staticmethod
+    def _to_python_str(column: Sequence) -> MutableSequence:
+        ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
+        tov4 = socket.inet_ntoa
+        tov6 = partial(socket.inet_ntop, af = socket.AF_INET6)
+        new_col = []
+        app = new_col.append
+        for x in column:
+            if x[:12] == ipv4_v6_mask:
+                app(tov4(x[12:]))
+            else:
+                app(tov6(x))
+        return new_col
 
-def ip_format(fmt):
-    pass
+    _to_python = _to_python_ip
+
+    @classmethod
+    def format(cls, fmt: str):
+        if fmt == 'string':
+            cls._to_python = staticmethod(cls._to_python_str)
+        else:
+            cls._to_python = staticmethod(cls._to_python_ip)

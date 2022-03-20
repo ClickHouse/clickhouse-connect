@@ -1,7 +1,7 @@
-import array
-from typing import NamedTuple, Callable, Dict, Type, Tuple, Any, Sequence
+from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence
 
-from clickhouse_connect.driver.common import must_swap, array_type, int_size
+from clickhouse_connect.datatypes.tools import array_column, array_type, int_size
+from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
 class TypeDef(NamedTuple):
@@ -12,11 +12,11 @@ class TypeDef(NamedTuple):
 
     @property
     def arg_str(self):
-        return f"({', '.join(str(v) for v in self.values)})"
+        return f"({', '.join(str(v) for v in self.values)})" if self.values else ''
 
 
 class ClickHouseType():
-    __slots__ = ('name_suffix', 'from_row_binary', 'to_row_binary', 'nullable', 'low_card', 'from_native',
+    __slots__ = ('from_row_binary', 'to_row_binary', 'nullable', 'low_card', 'from_native',
                  'to_python', '__dict__')
     _instance_cache = None
     _from_row_binary = None
@@ -24,11 +24,12 @@ class ClickHouseType():
     _to_native = None
     _to_python = None
     _from_native = None
+    name_suffix = ''
 
-    def __init_subclass__(cls, registry_name: str = None, registered: bool = True):
+    def __init_subclass__(cls, registered: bool = True):
         if registered:
             cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
-            type_map[(registry_name or cls.__name__).upper()] = cls
+            type_map[cls.__name__.upper()] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -36,7 +37,6 @@ class ClickHouseType():
 
     def __init__(self, type_def: TypeDef):
         self.extra = {}
-        self.name_suffix: str = ''
         self.wrappers: Tuple[str] = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
         self.nullable = 'Nullable' in self.wrappers
@@ -72,33 +72,37 @@ class ClickHouseType():
             dest += b'\x00'
             self._to_row_binary(value, dest)
 
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int):
+    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
         loc += num_rows
-        column, loc = self._from_native(source, loc, num_rows)
+        column, loc = self._from_native(source, loc, num_rows, **kwargs)
         for ix in range(num_rows):
             if null_map[ix]:
                 column[ix] = None
         return column, loc
 
-    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int):
-        loc += 8  # Skip dictionary version
+    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, read_version=True, **kwargs):
+        kwargs.pop('read_version', None)
+        if num_rows == 0:
+            return tuple(), loc
+        if read_version:
+            loc += 8  # Skip dictionary version
         key_size = 2 ** source[loc]
         loc += 8  # Skip remaining key information
         index_cnt = int.from_bytes(source[loc: loc + 8], 'little', signed=False)
         loc += 8
-        values, loc = self._from_native(source, loc, index_cnt)
+        values, loc = self._from_native(source, loc, index_cnt, **kwargs)
         if self.nullable:
             try:
                 values[0] = None
             except TypeError:
                 values = (None,) + values[1:]
         loc += 8  # key size should match row count
-        keys_sz = key_size * num_rows
-        end = loc + keys_sz
-        keys = array.array(array_type(key_size, False))
-        keys.frombytes(source[loc: end])
+        keys, end = array_column(array_type(key_size, False), source, loc, num_rows)
         return tuple(values[key] for key in keys), end
+
+
+type_map: Dict[str, Type[ClickHouseType]] = {}
 
 
 class FixedType(ClickHouseType, registered=False):
@@ -127,21 +131,28 @@ class FixedType(ClickHouseType, registered=False):
         return self._to_python(raw) if self._to_python else raw, end
 
     def _from_array(self, source: Sequence, loc: int, num_rows: int):
-        column = array.array(self._array_type)
-        sz = column.itemsize * num_rows
-        column.frombytes(source[loc: loc + sz])
-        loc += sz
-        if must_swap:
-            column.byteswap()
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         if self._to_python:
             column = self._to_python(column)
         return column, loc
 
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int):
+    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
         loc += num_rows
-        column, loc = self._from_native(source, loc, num_rows)
+        column, loc = self._from_native(source, loc, num_rows, **kwargs)
         return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
 
 
-type_map: Dict[str, Type[ClickHouseType]] = {}
+class UnsupportedType(ClickHouseType, registered=False):
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.name_suffix = type_def.arg_str
+
+    def _from_row_binary(self, *_):
+        raise NotSupportedError(f'{self.name} deserialization not supported')
+
+    def _to_row_binary(self, *_):
+        raise NotSupportedError('{self.name} serialization not supported')
+
+    def _from_native(self, *_):
+        raise NotSupportedError('{self.name} }deserialization not supported')

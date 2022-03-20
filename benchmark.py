@@ -2,6 +2,7 @@ import datetime
 import time
 import uuid
 import argparse
+from ipaddress import IPv6Address
 from typing import List
 
 import clickhouse_connect
@@ -24,7 +25,7 @@ columns = {
     'uuid': ('UUID', uuid.UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9')),
     'bool': ('Bool', True),
     'ipv4': ('IPv4', '107.34.202.7'),
-    'ipv6': ('IPv6', '6afd:7491:9dac:7f5b:a550:462a:da3b:f2d0'),
+    'ipv6': ('IPv6', IPv6Address('fe80::f4d4:88ff:fe88:4a64')),
     'tuple': ('Tuple(Nullable(String), UInt64)', ('tuple_string', 7502888)),
     'dec': ('Decimal64(5)', 25774.233),
     'bdec': ('Decimal128(10)', 2503.48877233),
@@ -81,7 +82,7 @@ def main():
     else:
         col_names = standard_cols
     client = clickhouse_connect.client(compress=False)
-    datatypes.uuid_format('string')
+    datatypes.ip_format('string')
     create_table(client, col_names, rows )
     check_reads(client, tries, rows)
 

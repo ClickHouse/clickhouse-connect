@@ -18,8 +18,9 @@ def uint64_format(fmt: str):
 
 
 def uuid_format(fmt: str):
-    clickhouse_connect.datatypes.special.ChUUID.format(fmt)
+    clickhouse_connect.datatypes.special.UUID.format(fmt)
 
 
 def ip_format(fmt: str):
-    clickhouse_connect.datatypes.network.ip_format(fmt)
+    clickhouse_connect.datatypes.network.IPv4.format(fmt)
+    clickhouse_connect.datatypes.network.IPv6.format(fmt)
