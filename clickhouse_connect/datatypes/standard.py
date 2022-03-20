@@ -1,5 +1,6 @@
 import decimal
 from collections.abc import Sequence
+from functools import partial
 
 from typing import Any, Union, Iterable
 from struct import unpack_from as suf, pack as sp
@@ -227,36 +228,6 @@ class Float64(FixedType):
         dest += sp('d', (value,))
 
 
-class String(ClickHouseType):
-    _encoding = 'utf8'
-
-    def _from_row_binary(self, source, loc):
-        length, loc = read_leb128(source, loc)
-        return str(source[loc:loc + length], self._encoding), loc + length
-
-    def _to_row_binary(self, value: str, dest: bytearray):
-        value = bytes(value, self._encoding)
-        dest += to_leb128(len(value)) + value
-
-    def _from_native(self, source, loc, num_rows, **_):
-        encoding = self._encoding
-        column = []
-        app = column.append
-        for _ in range(num_rows):
-            length = 0
-            shift = 0
-            while True:
-                b = source[loc]
-                length += ((b & 0x7f) << shift)
-                loc += 1
-                if (b & 0x80) == 0:
-                    break
-                shift += 7
-            app(str(source[loc: loc + length], encoding))
-            loc += length
-        return column, loc
-
-
 class Boolean(FixedType):
     _array_type = 'B'
 
@@ -383,7 +354,7 @@ class Decimal(FixedType):
         return new_col
 
     def _to_python_bytes(self, column: Sequence):
-        ifb = int.from_bytes
-        ints = [ifb(x, 'little') for x in column]
+        ifb = partial(int.from_bytes, byteorder='little')
+        ints = [ifb(x) for x in column]
         return self._to_python_int(ints)
 

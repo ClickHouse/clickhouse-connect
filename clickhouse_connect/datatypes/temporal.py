@@ -5,6 +5,7 @@ from struct import unpack_from as suf, pack as sp
 import pytz
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType
+from clickhouse_connect.datatypes.tools import read_uint64
 
 epoch_start_date = date(1970, 1, 1)
 
@@ -82,7 +83,7 @@ class DateTime64(FixedType):
             self.tzinfo = None
 
     def _from_row_binary(self, source, loc):
-        ticks = int.from_bytes(source[loc:loc + 8], 'little', signed=True)
+        ticks, loc = read_uint64(source, loc)
         seconds = ticks // self.prec
         dt_sec = datetime.fromtimestamp(seconds, self.tzinfo)
         microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec

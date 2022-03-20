@@ -65,7 +65,6 @@ class HttpDriver(BaseDriver):
         return self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1]
 
     def raw_request(self, data=None, method='post', params: Optional[Dict] = None, headers: Optional[Dict] = None):
-
         req_headers = self.headers
         if headers:
             req_headers.update(headers)
@@ -86,7 +85,6 @@ class HttpDriver(BaseDriver):
         if response.content:
             logger.error(str(response.content, encoding='utf8'))
         raise ServerError(err_str)
-
 
     def ping(self) -> bool:
         try:

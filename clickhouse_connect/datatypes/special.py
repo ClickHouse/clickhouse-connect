@@ -2,14 +2,12 @@ from collections.abc import Sequence
 from uuid import UUID as PyUUID, SafeUUID
 from struct import unpack_from as suf
 
-from typing import Union, Any, Collection, Dict
+from typing import Any, Collection, Dict
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType, UnsupportedType
-from clickhouse_connect.datatypes.tools import array_column, read_leb128, to_leb128
+from clickhouse_connect.datatypes.tools import array_column, read_leb128, to_leb128, read_uint64
 from clickhouse_connect.driver import DriverError
-
-empty_uuid = PyUUID(int=0)
 
 
 class UUID(ClickHouseType):
@@ -17,10 +15,10 @@ class UUID(ClickHouseType):
 
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
-        int_high = int.from_bytes(source[loc:loc + 8], 'little')
-        int_low = int.from_bytes(source[loc + 8:loc + 16], 'little')
+        int_high, loc = read_uint64(source, loc)
+        int_low, loc = read_uint64(source, loc)
         byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
-        return PyUUID(bytes=byte_value), loc + 16
+        return PyUUID(bytes=byte_value), loc
 
     @staticmethod
     def _to_row_binary(value: PyUUID, dest: bytearray):
@@ -33,6 +31,7 @@ class UUID(ClickHouseType):
     @classmethod
     def _from_native(cls, source: Sequence, loc: int, num_rows: int, **_):
         v = suf(f'<{num_rows * 2}Q', source, loc)
+        empty_uuid = PyUUID(int=0)
         new_uuid = PyUUID.__new__
         unsafe_uuid = SafeUUID.unsafe
         oset = object.__setattr__
@@ -43,7 +42,7 @@ class UUID(ClickHouseType):
             s = ix << 1
             int_value = v[s] << 64 | v[s + 1]
             if int_value == 0:
-                app(empty_uuid)
+                app('::' if as_str else empty_uuid)
             else:
                 fast_uuid = new_uuid(PyUUID)
                 oset(fast_uuid, 'int', int_value)
@@ -60,44 +59,6 @@ class UUID(ClickHouseType):
             cls._output = 'string'
         else:
             raise ValueError('Unrecognized Output Format for UUID')
-
-
-class FixedString(FixedType):
-    _encoding = 'utf8'
-
-    def __init__(self, type_def: TypeDef):
-        self._byte_size = type_def.values[0]
-        self.name_suffix = f'({self._byte_size})'
-        super().__init__(type_def)
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
-
-    @staticmethod
-    def _to_row_binary(value: Union[str, bytes, bytearray], dest: bytearray):
-        dest += value
-
-    def _to_python_str(self, column: Sequence):
-        encoding = self._encoding
-        new_col = []
-        app = new_col.append
-        for x in column:
-            try:
-                app(str(x, encoding).rstrip('\x00'))
-            except UnicodeDecodeError:
-                app(x.hex())
-        return new_col
-
-    @classmethod
-    def format(cls, fmt: str, encoding: str = 'utf8'):
-        fmt = fmt.lower()
-        if fmt.lower().startswith('str'):
-            cls._to_python = cls._to_python_str
-            cls._encoding = encoding
-        elif fmt.startswith('raw') or fmt.startswith('byte'):
-            cls._to_python = None
-        else:
-            raise ValueError("Unrecognized FixedString output format")
 
 
 class Nothing(FixedType):
@@ -141,10 +102,10 @@ class Array(ClickHouseType):
             conv(value, dest)
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        kwargs.pop('read_version', None)
+        lc_version = kwargs.pop('lc_version', None)
         conv = self.element_type.from_native
         if self.element_type.low_card:
-            loc += 8  # Skip nested element low cardinality version
+            lc_version, loc = read_uint64(source, loc)
         offsets, loc = array_column('Q', source, loc, num_rows)
         column = []
         app = column.append
@@ -152,7 +113,7 @@ class Array(ClickHouseType):
         for offset in offsets:
             cnt = offset - last
             last = offset
-            val_list, loc = conv(source, loc, cnt, read_version=False, **kwargs)
+            val_list, loc = conv(source, loc, cnt, lc_version=lc_version, **kwargs)
             app(val_list)
         return column, loc
 
@@ -217,15 +178,17 @@ class Map(ClickHouseType):
             dest += value_to(key)
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        kwargs.pop('read_version', None)
+        kwargs.pop('lc_version', None)
+        key_version = None
+        value_version = None
         if self.key_type.low_card:
-            loc += 8
+            key_version, loc = read_uint64(source, loc)
         if self.value_type.low_card:
-            loc += 8
+            value_version = read_uint64(source, loc)
         offsets, loc = array_column('Q', source, loc, num_rows)
         total_rows = offsets[-1]
-        keys, loc = self.key_type.from_native(source, loc, total_rows, read_version=False, **kwargs)
-        values, loc = self.value_type.from_native(source, loc, total_rows, read_version=False, **kwargs)
+        keys, loc = self.key_type.from_native(source, loc, total_rows, lc_version=key_version, **kwargs)
+        values, loc = self.value_type.from_native(source, loc, total_rows, lc_version=value_version, **kwargs)
         all_pairs = tuple(zip(keys, values))
         column = []
         app = column.append

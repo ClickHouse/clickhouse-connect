@@ -1,6 +1,6 @@
 from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence
 
-from clickhouse_connect.datatypes.tools import array_column, array_type, int_size
+from clickhouse_connect.datatypes.tools import array_column, array_type, int_size, read_uint64
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
@@ -81,16 +81,15 @@ class ClickHouseType():
                 column[ix] = None
         return column, loc
 
-    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, read_version=True, **kwargs):
-        kwargs.pop('read_version', None)
+    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+        lc_version = kwargs.pop('lc_version', None)
         if num_rows == 0:
             return tuple(), loc
-        if read_version:
-            loc += 8  # Skip dictionary version
+        if lc_version is None:
+            loc += 8  # Skip dictionary version for now
         key_size = 2 ** source[loc]
         loc += 8  # Skip remaining key information
-        index_cnt = int.from_bytes(source[loc: loc + 8], 'little', signed=False)
-        loc += 8
+        index_cnt, loc = read_uint64(source, loc)
         values, loc = self._from_native(source, loc, index_cnt, **kwargs)
         if self.nullable:
             try:
@@ -124,13 +123,13 @@ class FixedType(ClickHouseType, registered=False):
             self._from_native = self._from_bytes
         super().__init__(type_def)
 
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int):
+    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
         sz = self._byte_size
         end = loc + sz * num_rows
         raw = [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)]
         return self._to_python(raw) if self._to_python else raw, end
 
-    def _from_array(self, source: Sequence, loc: int, num_rows: int):
+    def _from_array(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         if self._to_python:
             column = self._to_python(column)

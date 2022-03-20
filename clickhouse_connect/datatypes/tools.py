@@ -29,6 +29,10 @@ def array_column(at: str, source: Sequence, loc: int, num_rows: int):
     return column, end
 
 
+def read_uint64(source: Sequence, loc: int):
+    return int.from_bytes(source[loc: loc + 8], 'little', signed=False), loc + 8
+
+
 def read_leb128(source: Sequence, loc: int):
     length = 0
     ix = 0
