@@ -114,7 +114,7 @@ class Array(ClickHouseType):
             cnt = offset - last
             last = offset
             val_list, loc = conv(source, loc, cnt, lc_version=lc_version, **kwargs)
-            app(val_list)
+            app(tuple(val_list))
         return column, loc
 
 
@@ -144,7 +144,7 @@ class Tuple(ClickHouseType):
         columns = []
         for conv in self.from_native_funcs:
             column, loc = conv(source, loc, num_rows, **kwargs)
-            columns.append(column)
+            columns.append(tuple(column))
         return list(zip(*columns)), loc
 
 
