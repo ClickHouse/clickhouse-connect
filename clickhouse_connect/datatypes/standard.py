@@ -112,9 +112,9 @@ class UInt64(FixedType):
     def format(cls, fmt:str):
         fmt = fmt.lower()
         if fmt == 'unsigned':
-            cls._array_type = 'q'
-        elif fmt == 'signed':
             cls._array_type = 'Q'
+        elif fmt == 'signed':
+            cls._array_type = 'q'
         else:
             raise ValueError("Unrecognized UInt64 Output Format")
 
