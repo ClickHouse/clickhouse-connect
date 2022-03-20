@@ -19,7 +19,7 @@ class Date(FixedType):
 
     @staticmethod
     def _to_row_binary(value: date, dest: bytearray):
-        dest += sp('<H', (value - epoch_start_date).days,)
+        dest += sp('<H', (value - epoch_start_date).days, )
 
     @staticmethod
     def _to_python(column: Sequence):
@@ -35,7 +35,7 @@ class Date32(FixedType):
 
     @staticmethod
     def _to_row_binary(value: date, dest: bytearray):
-         dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
+        dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
 
     @staticmethod
     def _to_python(column: Sequence):
@@ -60,7 +60,7 @@ class DateTime(FixedType):
 
     @staticmethod
     def _to_row_binary(value: datetime, dest: bytearray):
-        dest += sp('<I', int(value.timestamp()),)
+        dest += sp('<I', int(value.timestamp()), )
 
     @staticmethod
     def _to_python(column: Sequence):
@@ -93,7 +93,7 @@ class DateTime64(FixedType):
         microseconds = int(value.timestamp()) * 1000000 + value.microsecond
         dest += (int(microseconds * 1000000) // self.prec).to_bytes(8, 'little', signed=True)
 
-    def _to_python_tz(self, column:Sequence):
+    def _to_python_tz(self, column: Sequence):
         new_col = []
         app = new_col.append
         df = datetime.fromtimestamp
@@ -105,7 +105,7 @@ class DateTime64(FixedType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _to_python_naive(self, column:Sequence):
+    def _to_python_naive(self, column: Sequence):
         new_col = []
         app = new_col.append
         df = datetime.utcfromtimestamp

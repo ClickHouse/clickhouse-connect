@@ -39,7 +39,7 @@ class FixedString(FixedType):
 
     def __init__(self, type_def: TypeDef):
         self._byte_size = type_def.values[0]
-        self.name_suffix = f'({self._byte_size})'
+        self._name_suffix = f'({self._byte_size})'
         super().__init__(type_def)
 
     def _from_row_binary(self, source: bytearray, loc: int):

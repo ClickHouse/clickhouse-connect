@@ -125,12 +125,16 @@ class FixedType(ClickHouseType, registered=False):
     def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
         sz = self._byte_size
         end = loc + sz * num_rows
-        raw = [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)]
-        return self._to_python(raw) if self._to_python else raw, end
+        column = [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)]
+        if self._to_python:
+            column = self._to_python(column)
+        return column, end
 
     def _from_array(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
-        return self._to_python(column) if self._to_python else column, loc
+        if self._to_python:
+            column = self._to_python(column)
+        return column, loc
 
     def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
