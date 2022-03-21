@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Sequence, MutableSequence
 from uuid import UUID as PyUUID, SafeUUID
 from struct import unpack_from as suf
 
@@ -51,6 +51,19 @@ class UUID(ClickHouseType):
         return column, loc + num_rows * 16
 
     @classmethod
+    def _to_native(cls, column: Sequence, dest:MutableSequence):
+        if not column:
+            return
+        if isinstance(column[0], str):
+            cls._to_native_str(column, dest)
+        elif isinstance(column[0], int):
+            cls._to_native_int(column, dest)
+
+    @classmethod
+    def _to_native_str(cls, column: Sequence, dest: MutableSequence):
+        pass
+
+    @classmethod
     def format(cls, fmt: str):
         fmt = fmt.lower()
         if fmt.startswith('uuid'):
@@ -74,7 +87,11 @@ class Nothing(FixedType):
 
     @staticmethod
     def _to_row_binary(value: Any, dest: bytearray):
-        dest += b'\x30'
+        dest.append(0x30)
+
+    @staticmethod
+    def _to_native(column:Sequence, dest: MutableSequence):
+        dest += bytes(0x30 for _ in range(len(column)))
 
 
 class Array(ClickHouseType):

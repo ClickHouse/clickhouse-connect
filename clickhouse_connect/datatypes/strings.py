@@ -1,4 +1,4 @@
-from typing import Union, Sequence
+from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType, FixedType, TypeDef
 from clickhouse_connect.datatypes.tools import read_leb128, to_leb128
@@ -32,6 +32,19 @@ class String(ClickHouseType):
             app(str(source[loc: loc + length], encoding))
             loc += length
         return column, loc
+
+    def _to_native(self, column:Sequence, dest: MutableSequence):
+        encoding = self._encoding
+        for x in column:
+            l = len(x)
+            while True:
+                b = l & 0x7f
+                l = l >> 7
+                if l == 0:
+                    dest.append(b)
+                    break
+                dest.append(0x80 | b)
+            dest += x.encode(encoding)
 
 
 class FixedString(FixedType):

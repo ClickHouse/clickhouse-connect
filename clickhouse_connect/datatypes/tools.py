@@ -1,6 +1,6 @@
 import array
 import sys
-from collections.abc import Sequence
+from collections.abc import Sequence, MutableSequence
 
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize
@@ -29,6 +29,13 @@ def array_column(at: str, source: Sequence, loc: int, num_rows: int):
     return column, end
 
 
+def array_bytes(at: str, column: Sequence, dest: MutableSequence):
+    buff = array.array(at)
+    buff.extend(column)
+    if must_swap:
+        buff.byteswap()
+    dest += buff.tobytes()
+
 def read_uint64(source: Sequence, loc: int):
     return int.from_bytes(source[loc: loc + 8], 'little', signed=False), loc + 8
 
@@ -48,6 +55,16 @@ def read_leb128(source: Sequence, loc: int):
 def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8'):
     length, loc = read_leb128(source, loc)
     return str(source[loc:loc + length], encoding), loc + length
+
+
+def write_leb128(value: int, dest: MutableSequence):
+    while True:
+        b = value & 0x7f
+        value = value >> 7
+        if value == 0:
+            dest.append(b)
+            return
+        dest.append(0x80 | b)
 
 
 def to_leb128(value: int) -> bytearray:  #Unsigned only

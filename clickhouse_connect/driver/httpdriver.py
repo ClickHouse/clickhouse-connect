@@ -1,6 +1,6 @@
 import logging
 import json
-from typing import Iterable, Optional, Dict, Any
+from typing import Iterable, Optional, Dict, Any, Sequence, Collection
 
 import requests
 
@@ -8,8 +8,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
 from clickhouse_connect.driver.query import QueryResult
-from clickhouse_connect.driver.rowbinary import build_insert
-from clickhouse_connect.driver.native import parse_response
+from clickhouse_connect.driver.native import build_insert, parse_response
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +29,11 @@ class HttpDriver(BaseDriver):
         self.headers = {}
         self.compress = compress
         self.url = '{}://{}:{}'.format(scheme, host, port)
-        self.auth = (username, password) if username else None
+        self.auth = (username, password if password else '') if username else None
 
     def query(self, query:str) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
-        if self.compress:
-            params['enable_http_compression'] = '1'
-            headers['Accept-Encoding'] = 'gzip, br'
         response = self.raw_request(format_query(query), params=params, headers=headers)
         result_set, column_names, column_types = parse_response(response.content)
         summary = {}
@@ -52,11 +48,11 @@ class HttpDriver(BaseDriver):
                            response.headers.get('X-ClickHouse-Query-Id'),
                            summary)
 
-    def data_insert(self, table:str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
-                    column_types: Iterable[ClickHouseType]):
+    def data_insert(self, table:str, column_names: Sequence[str], data: Collection[Collection[Any]],
+                    column_types: Sequence[ClickHouseType]):
         headers = {'Content-Type': 'application/octet-stream'}
-        params = {'query':  f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT RowBinary"}
-        insert_block = build_insert(data, column_types=column_types)
+        params = {'query':  f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT Native"}
+        insert_block = build_insert(data, column_types=column_types, column_names=column_names)
         response = self.raw_request(insert_block, params=params, headers=headers)
         logger.debug(f'Insert response code: {response.status_code}, content: {str(response.content)}')
 

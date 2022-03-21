@@ -1,6 +1,6 @@
 import logging
 
-from typing import Iterable, List, Any
+from typing import List, Any, Sequence, Collection
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -40,8 +40,8 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHous
     return result, names, col_types
 
 
-def build_insert(data: Iterable[Iterable[Any]], *, column_type_names: Iterable[str] = None,
-                 column_types: Iterable[ClickHouseType] = None):
+def build_insert(data: Collection[Collection[Any]], *, column_type_names: Sequence[str] = None,
+                 column_types: Sequence[ClickHouseType] = None, **_):
     if not column_types:
         column_types = [registry.get_from_name(name) for name in column_type_names]
     convs = tuple([t.to_row_binary for t in column_types])

@@ -3,15 +3,16 @@ from typing import Union, List, Any, Iterable, Collection
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.tools import read_leb128, read_leb128_str
+from clickhouse_connect.datatypes.tools import read_leb128, read_leb128_str, write_leb128
 
 
-def parse_response(source: Union[memoryview, bytes, bytearray]) -> (Collection[Collection[Any]], List[str], List[ClickHouseType]):
+def parse_response(source: Union[memoryview, bytes, bytearray]) -> (
+Collection[Collection[Any]], List[str], List[ClickHouseType]):
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0
     names = []
-    col_types =  []
+    col_types = []
     result = []
     total_size = len(source)
     block = 0
@@ -38,14 +39,18 @@ def parse_response(source: Union[memoryview, bytes, bytearray]) -> (Collection[C
     return result, names, col_types
 
 
-def build_insert(data: Collection[Collection[Any]], *, column_type_names: Collection[str] = None,
-                 column_types: Collection[ClickHouseType] = None):
+def build_insert(data: Collection[Collection[Any]], *, column_names: Collection[str],
+                 column_type_names: Collection[str] = None, column_types: Collection[ClickHouseType] = None):
     if not column_types:
         column_types = [registry.get_from_name(name) for name in column_type_names]
     output = bytearray()
-    for row in data:
-        for (value, conv) in zip(row, convs):
-            conv(value, output)
+    columns = tuple(zip(*data))
+    write_leb128(len(columns), output)
+    write_leb128(len(data), output)
+    for col_name, col_type, column in zip(column_names, column_types, columns):
+        write_leb128(len(col_name), output)
+        output += col_name.encode()
+        write_leb128(len(col_type.name), output)
+        output += col_type.name.encode()
+        col_type.to_native(column, output)
     return output
-
-
