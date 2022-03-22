@@ -275,6 +275,13 @@ class Enum8(FixedType):
         lookup = self._int_map
         return [lookup[x] for x in column]
 
+    def _from_python(self, column: Sequence):
+        first = self._first_value(column)
+        if first is None or isinstance(first, int):
+            return column
+        lookup = self._name_map.get
+        return [lookup(x) for x in column]
+
 
 class Enum16(Enum8):
     _array_type = 'h'

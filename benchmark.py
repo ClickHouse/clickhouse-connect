@@ -10,13 +10,12 @@ import clickhouse_connect.datatypes as datatypes
 from clickhouse_connect.driver import BaseDriver
 
 
-
 columns = {
     'uint16': ('UInt16', 1),
     'int16': ('Int16', -2),
     'float32': ('Float32', 3.14),
     'str': ('String', 'hello'),
-    'fstr': ('FixedString(16)', b"world world \nman"),
+    'fstr': ('FixedString(16)', b'world numkn \nman'),
     'date': ('Date', datetime.date(2022, 3, 18)),
     'datetime': ('DateTime', datetime.datetime.utcnow()),
     'nullable': ('Nullable(Int8)', None),
@@ -34,7 +33,7 @@ columns = {
     'dt64d': ("DateTime64(6, 'America/Denver')", datetime.datetime.now())
 }
 
-standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'nullable', 'enum', 'array', 'uuid']
+standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'nullable', 'enum',  'uuid']
 
 
 def create_table(client: BaseDriver, col_names: List[str], rows: int):
@@ -55,9 +54,7 @@ def check_reads(client: BaseDriver, tries: int = 100, rows: int = 10000):
     total_time = time.time() - start_time
     avg_time = total_time / tries
     speed = int(1 / avg_time * rows)
-    print(
-        f"- Avg time reading {rows} rows from {tries} runs: {avg_time} sec. Total: {total_time}"
-    )
+    print(f"- Avg time reading {rows} rows from {tries} runs: {avg_time} sec. Total: {total_time}")
     print(f"  Speed: {speed} rows/sec")
 
 
@@ -66,6 +63,7 @@ def main():
     parser.add_argument('-t', '--tries', help="Total tries for each test", type=int, default=50)
     parser.add_argument('-r', '--rows', help="Total rows in dataset", type=int, default=10000)
     parser.add_argument('-c', '--columns', help="Column types to test", type=str, nargs='+')
+    parser.add_argument('-f', '--format', help="HTTP input/output format", type=str, default='native')
 
     args = parser.parse_args()
     rows = args.rows
@@ -81,8 +79,10 @@ def main():
                 quit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.client(compress=False)
+    client = clickhouse_connect.client(compress=False, data_format=args.format)
     datatypes.ip_format('string')
+    datatypes.uuid_format('string')
+    #datatypes.fixed_string_format('string')
     create_table(client, col_names, rows )
     check_reads(client, tries, rows)
 

@@ -1,41 +1,47 @@
 import logging
 import json
-from typing import Iterable, Optional, Dict, Any, Sequence, Collection
+from typing import Optional, Dict, Any, Sequence, Collection
 
 import requests
-
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
 from clickhouse_connect.driver.query import QueryResult
-from clickhouse_connect.driver.native import build_insert, parse_response
 
 logger = logging.getLogger(__name__)
 
-format_str = ' FORMAT Native'
-
-
-def format_query(query:str) -> str:
-    if not query.strip().endswith(format_str):
-        query += format_str
-    return query
-
 
 class HttpDriver(BaseDriver):
-    def __init__(self, scheme: str, host:str, port: int, username:str, password: str, database: str,
-                 compress: bool = True, **kwargs):
+    def __init__(self, scheme: str, host: str, port: int, username: str, password: str, database: str,
+                 compress: bool = True, data_format: str = 'native', **kwargs):
         super().__init__(database, **kwargs)
         self.params = {}
         self.headers = {}
         self.compress = compress
         self.url = '{}://{}:{}'.format(scheme, host, port)
         self.auth = (username, password if password else '') if username else None
+        if data_format == 'native':
+            self.read_format = self.write_format = 'Native'
+            import clickhouse_connect.driver.native
+            self.build_insert = clickhouse_connect.driver.native.build_insert
+            self.parse_response = clickhouse_connect.driver.native.parse_response
+        elif data_format in ('row_binary', 'rb'):
+            self.read_format = 'RowBinaryWithNamesAndTypes'
+            import clickhouse_connect.driver.rowbinary
+            self.write_format = 'RowBinary'
+            self.build_insert = clickhouse_connect.driver.rowbinary.build_insert
+            self.parse_response = clickhouse_connect.driver.rowbinary.parse_response
 
-    def query(self, query:str) -> QueryResult:
+    def format_query(self, query: str) -> str:
+        if not query.strip().endswith(self.read_format):
+            query += f' FORMAT {self.read_format}'
+        return query
+
+    def query(self, query: str) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
-        response = self.raw_request(format_query(query), params=params, headers=headers)
-        result_set, column_names, column_types = parse_response(response.content)
+        response = self.raw_request(self.format_query(query), params=params, headers=headers)
+        result_set, column_names, column_types = self.parse_response(response.content)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -48,15 +54,15 @@ class HttpDriver(BaseDriver):
                            response.headers.get('X-ClickHouse-Query-Id'),
                            summary)
 
-    def data_insert(self, table:str, column_names: Sequence[str], data: Collection[Collection[Any]],
+    def data_insert(self, table: str, column_names: Sequence[str], data: Collection[Collection[Any]],
                     column_types: Sequence[ClickHouseType]):
         headers = {'Content-Type': 'application/octet-stream'}
-        params = {'query':  f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT Native"}
-        insert_block = build_insert(data, column_types=column_types, column_names=column_names)
+        params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}"}
+        insert_block = self.build_insert(data, column_types=column_types, column_names=column_names)
         response = self.raw_request(insert_block, params=params, headers=headers)
         logger.debug(f'Insert response code: {response.status_code}, content: {str(response.content)}')
 
-    def command(self, cmd:str):
+    def command(self, cmd: str):
         headers = {'Content-Type': 'text/plain'}
         return self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1]
 
@@ -65,12 +71,12 @@ class HttpDriver(BaseDriver):
         if headers:
             req_headers.update(headers)
         try:
-            response:requests.Response = requests.request(method, self.url,
-                                     auth=self.auth,
-                                     headers=req_headers,
-                                     timeout=(10, 60),
-                                     data=data,
-                                     params=params)
+            response: requests.Response = requests.request(method, self.url,
+                                                           auth=self.auth,
+                                                           headers=req_headers,
+                                                           timeout=(10, 60),
+                                                           data=data,
+                                                           params=params)
         except Exception:
             logger.exception("Unexpected Http Driver Exception")
             raise DriverError(f"Error executing HTTP request {self.url}")

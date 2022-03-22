@@ -1,4 +1,4 @@
-from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence
+from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence, Optional
 
 from clickhouse_connect.datatypes.tools import array_column, array_type, int_size, read_uint64, array_bytes
 from clickhouse_connect.driver.exceptions import NotSupportedError
@@ -107,6 +107,12 @@ class ClickHouseType():
         keys, end = array_column(array_type(key_size, False), source, loc, num_rows)
         return tuple(values[key] for key in keys), end
 
+    def _first_value(self,  column: Sequence) -> Optional[Any]:
+        if self.nullable:
+            return next((x for x in column if x is not None), None)
+        if column:
+            return column[0]
+
 
 type_map: Dict[str, Type[ClickHouseType]] = {}
 
@@ -172,10 +178,6 @@ class FixedType(ClickHouseType, registered=False):
         loc += num_rows
         column, loc = self._from_native(source, loc, num_rows, **kwargs)
         return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
-
-    def _nullable_to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        dest += bytes(1 if x is None else 0 for x in column)
-        self._to_native(column, dest)
 
 
 class UnsupportedType(ClickHouseType, registered=False):

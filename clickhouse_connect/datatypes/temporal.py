@@ -25,6 +25,11 @@ class Date(FixedType):
     def _to_python(column: Sequence):
         return [epoch_start_date + timedelta(days) for days in column]
 
+    @staticmethod
+    def _from_python(column:Sequence):
+        esd = epoch_start_date
+        return [(x - esd).days for x in column]
+
 
 class Date32(FixedType):
     _array_type = 'i'
@@ -66,6 +71,12 @@ class DateTime(FixedType):
     def _to_python(column: Sequence):
         return [from_ts_naive(ts) for ts in column]
 
+    def _from_python(self, column:Sequence):
+        first = self._first_value(column)
+        if first is None or isinstance(first, int):
+            return column
+        return [int(dt.timestamp()) for dt in column]
+
 
 class DateTime64(FixedType):
     __slots__ = 'prec', 'tzinfo'
@@ -87,11 +98,11 @@ class DateTime64(FixedType):
         seconds = ticks // self.prec
         dt_sec = datetime.fromtimestamp(seconds, self.tzinfo)
         microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
-        return dt_sec + timedelta(microseconds=microseconds), loc + 8
+        return dt_sec + timedelta(microseconds=microseconds), loc
 
     def _to_row_binary(self, value: datetime, dest: bytearray):
         microseconds = int(value.timestamp()) * 1000000 + value.microsecond
-        dest += (int(microseconds * 1000000) // self.prec).to_bytes(8, 'little', signed=True)
+        dest += (int(microseconds * self.prec) // 1000000).to_bytes(8, 'little', signed=True)
 
     def _to_python_tz(self, column: Sequence):
         new_col = []
@@ -115,3 +126,10 @@ class DateTime64(FixedType):
             dt_sec = df(seconds)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
+
+    def _from_python(self, column: Sequence):
+        first = self._first_value(column)
+        if first is None:
+            return column
+        prec = self.prec
+        return [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]

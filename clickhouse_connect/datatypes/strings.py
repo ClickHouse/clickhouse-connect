@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType, FixedType, TypeDef
@@ -59,8 +60,14 @@ class FixedString(FixedType):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
 
     @staticmethod
-    def _to_row_binary(value: Union[str, bytes, bytearray], dest: bytearray):
+    def _to_row_binary_bytes(value: Union[bytes, bytearray], dest: bytearray):
         dest += value
+
+    def _to_row_binary_str(self, value, dest: bytearray):
+        value = str.encode(value, self._encoding)
+        dest += value
+        if len(value) < self._byte_size:
+            dest += bytes((0,) * (self._byte_size - len(value)))
 
     def _to_python_str(self, column: Sequence):
         encoding = self._encoding
@@ -73,13 +80,36 @@ class FixedString(FixedType):
                 app(x.hex())
         return new_col
 
+    def _from_python(self, column: Sequence):
+        first = self._first_value(column)
+        if first is None or not isinstance(first, str):
+            return column
+        dec = partial(str.encode, encoding=self._encoding)
+        new_col = []
+        app = new_col.append
+        sz = self._byte_size
+        empty = bytes((0,) * sz)
+        for x in column:
+            try:
+                sb = dec(x)
+            except UnicodeEncodeError:
+                sb = empty
+            app(sb)
+            if len(sb) < sz:
+                app(empty[:-len(sb)])
+        return new_col
+
+    _to_row_binary = _to_row_binary_bytes
+
     @classmethod
     def format(cls, fmt: str, encoding: str = 'utf8'):
         fmt = fmt.lower()
         if fmt.lower().startswith('str'):
             cls._to_python = cls._to_python_str
             cls._encoding = encoding
+            cls._to_row_binary = cls._to_row_binary_str
         elif fmt.startswith('raw') or fmt.startswith('byte'):
             cls._to_python = None
+            cls._to_row_binary = cls._to_row_binary_bytes
         else:
             raise ValueError("Unrecognized FixedString output format")

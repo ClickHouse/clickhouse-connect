@@ -11,8 +11,6 @@ from clickhouse_connect.driver import DriverError
 
 
 class UUID(ClickHouseType):
-    _output = 'uuid'
-
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         int_high, loc = read_uint64(source, loc)
@@ -28,50 +26,67 @@ class UUID(ClickHouseType):
         bytes_low.reverse()
         dest += bytes_high + bytes_low
 
-    @classmethod
-    def _from_native(cls, source: Sequence, loc: int, num_rows: int, **_):
+    @staticmethod
+    def _from_native_uuid(source: Sequence, loc: int, num_rows: int, **_):
         v = suf(f'<{num_rows * 2}Q', source, loc)
         empty_uuid = PyUUID(int=0)
         new_uuid = PyUUID.__new__
-        unsafe_uuid = SafeUUID.unsafe
+        unsafe = SafeUUID.unsafe
         oset = object.__setattr__
         column = []
         app = column.append
-        as_str = cls._output == 'string'
         for ix in range(num_rows):
             s = ix << 1
             int_value = v[s] << 64 | v[s + 1]
             if int_value == 0:
-                app('::' if as_str else empty_uuid)
+                app(empty_uuid)
             else:
                 fast_uuid = new_uuid(PyUUID)
                 oset(fast_uuid, 'int', int_value)
-                oset(fast_uuid, 'is_safe', unsafe_uuid)
-                app(str(fast_uuid) if as_str else fast_uuid)
-        return column, loc + num_rows * 16
+                oset(fast_uuid, 'is_safe', unsafe)
+                app(fast_uuid)
+        return column, loc + (num_rows << 4)
 
-    @classmethod
-    def _to_native(cls, column: Sequence, dest:MutableSequence):
-        if not column:
-            return
-        if isinstance(column[0], str):
-            cls._to_native_str(column, dest)
-        elif isinstance(column[0], int):
-            cls._to_native_int(column, dest)
+    @staticmethod
+    def _from_native_str(source: Sequence, loc: int, num_rows: int, **_):
+        v = suf(f'<{num_rows * 2}Q', source, loc)
+        column = []
+        app = column.append
+        for ix in range(num_rows):
+            s = ix << 1
+            hs = f'{(v[s] << 64 | v[s + 1]):032x}'
+            app(f'{hs[:8]}-{hs[8:12]}-{hs[12:16]}-{hs[16:20]}-{hs[20:]}')
+        return column, loc + num_rows << 4
 
-    @classmethod
-    def _to_native_str(cls, column: Sequence, dest: MutableSequence):
-        pass
+    def _to_native(self, column: Sequence, dest:MutableSequence):
+        first = self._first_value(column)
+        if isinstance(first, str):
+            for v in column:
+                iv = int(v, 16)
+                dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+        elif isinstance(first, int):
+            for iv in column:
+                dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+        elif isinstance(first, PyUUID):
+            for v in column:
+                iv = v.int
+                dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+        elif isinstance(first, (bytes, bytearray, memoryview)):
+            for v in column:
+                dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
+        else:
+            empty = bytes(b'\x00' * 16)
+            dest += empty * len(column)
+
+    _from_native = _from_native_uuid
 
     @classmethod
     def format(cls, fmt: str):
         fmt = fmt.lower()
-        if fmt.startswith('uuid'):
-            cls._output = 'uuid'
-        elif fmt.startswith('str'):
-            cls._output = 'string'
+        if fmt.startswith('str'):
+            cls._from_native = staticmethod(cls._from_native_str)
         else:
-            raise ValueError('Unrecognized Output Format for UUID')
+            cls._from_native = staticmethod(cls._from_native_uuid)
 
 
 class Nothing(FixedType):
@@ -133,6 +148,9 @@ class Array(ClickHouseType):
             val_list, loc = conv(source, loc, cnt, lc_version=lc_version, **kwargs)
             app(tuple(val_list))
         return column, loc
+
+    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
+        pass
 
 
 class Tuple(ClickHouseType):

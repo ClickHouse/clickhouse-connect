@@ -5,6 +5,8 @@ from typing import Union, MutableSequence, Sequence
 
 from clickhouse_connect.datatypes.base import FixedType
 
+ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
+
 
 class IPv4(FixedType):
     _array_type = 'I'
@@ -39,6 +41,15 @@ class IPv4(FixedType):
     def _to_python_str(column: Sequence) -> MutableSequence:
         return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
 
+    def _from_python(self, column: Sequence) -> Sequence:
+        first = self._first_value(column)
+        if first is None or isinstance(first, int):
+            return column
+        if isinstance(first, str):
+            fixed = 24, 16, 8, 0
+            return [sum(int(b) << fixed[ix] for ix, b in enumerate(v.split('.'))) for v in column]
+        return [ip._ip for ip in column]
+
     _to_python = _to_python_ip
 
     @classmethod
@@ -64,14 +75,14 @@ class IPv6(FixedType):
 
     @staticmethod
     def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
-        ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
+        mask = ipv4_v6_mask
         if isinstance(value, str):
             if '.' in value:
-                dest += ipv4_v6_mask + bytes(int(b) for b in value.split('.'))
+                dest += mask + bytes(int(b) for b in value.split('.'))
             else:
                 dest += socket.inet_pton(socket.AF_INET6, value)
         elif isinstance(value, IPv4Address):
-            dest += ipv4_v6_mask + value._ip.to_bytes(4, 'big')
+            dest += mask + value._ip.to_bytes(4, 'big')
         elif isinstance(value, IPv6Address):
             dest += value.packed
         elif len(value) == 4:
@@ -110,6 +121,28 @@ class IPv6(FixedType):
             else:
                 app(tov6(x))
         return new_col
+
+    def _from_python(self, column: Sequence) -> Sequence:
+        first = self._first_value(column)
+        mask = ipv4_v6_mask
+        if isinstance(first, str):
+            tov6 = partial(socket.inet_pton, af = socket.AF_INET6)
+            new_col = []
+            app = new_col.append
+            for v in column:
+                if '.' in v:
+                    app(mask + bytes(int(b) for b in v.split('.')))
+                else:
+                    app(tov6(v))
+            return new_col
+        if isinstance(first, IPv4Address) or isinstance(first, IPv6Address):
+            new_col = []
+            app = new_col.append
+            for v in column:
+                b = v.packed
+                app(b if len(b) == 16 else mask + b)
+            return new_col
+        return column
 
     _to_python = _to_python_ip
 

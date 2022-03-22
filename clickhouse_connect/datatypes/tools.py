@@ -36,6 +36,7 @@ def array_bytes(at: str, column: Sequence, dest: MutableSequence):
         buff.byteswap()
     dest += buff.tobytes()
 
+
 def read_uint64(source: Sequence, loc: int):
     return int.from_bytes(source[loc: loc + 8], 'little', signed=False), loc + 8
 

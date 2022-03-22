@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from clickhouse_connect.datatypes import registry
 from tests.helpers import to_bytes
 from clickhouse_connect.driver.native import parse_response
 
@@ -69,3 +70,9 @@ def test_map():
     check_result(result, {'key1': 'value1', 'key2': 'value2'})
     result = parse_response(to_bytes(low_card_map))
     check_result(result, {'george': UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9'), 'igor': None})
+
+
+def test_ip():
+    ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
+    ipv4_type = registry.get_from_name('IPv4')
+    assert ipv4_type._from_python(ips) == [3232236803, 3391883289, 514]

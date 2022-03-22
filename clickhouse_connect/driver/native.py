@@ -1,4 +1,3 @@
-import sys
 from typing import Union, List, Any, Iterable, Collection
 
 from clickhouse_connect.datatypes import registry
@@ -7,7 +6,7 @@ from clickhouse_connect.datatypes.tools import read_leb128, read_leb128_str, wri
 
 
 def parse_response(source: Union[memoryview, bytes, bytearray]) -> (
-Collection[Collection[Any]], List[str], List[ClickHouseType]):
+        Collection[Collection[Any]], List[str], List[ClickHouseType]):
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0
