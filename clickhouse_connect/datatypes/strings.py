@@ -1,8 +1,7 @@
-from functools import partial
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType, FixedType, TypeDef
-from clickhouse_connect.datatypes.tools import read_leb128, to_leb128
+from clickhouse_connect.datatypes.common import read_leb128, to_leb128
 
 
 class String(ClickHouseType):
@@ -34,7 +33,7 @@ class String(ClickHouseType):
             loc += length
         return column, loc
 
-    def _to_native(self, column:Sequence, dest: MutableSequence):
+    def _to_native(self, column:Sequence, dest: MutableSequence, **_):
         encoding = self._encoding
         for x in column:
             l = len(x)
@@ -84,19 +83,30 @@ class FixedString(FixedType):
         first = self._first_value(column)
         if first is None or not isinstance(first, str):
             return column
-        dec = partial(str.encode, encoding=self._encoding)
         new_col = []
         app = new_col.append
         sz = self._byte_size
         empty = bytes((0,) * sz)
-        for x in column:
-            try:
-                sb = dec(x)
-            except UnicodeEncodeError:
-                sb = empty
-            app(sb)
-            if len(sb) < sz:
-                app(empty[:-len(sb)])
+        e = str.encode
+        if self._encoding in ('utf8', 'utf-8'):
+            for x in column:
+                try:
+                    sb = e(x)
+                except UnicodeEncodeError:
+                    sb = empty
+                app(sb)
+                if len(sb) < sz:
+                    app(empty[:-len(sb)])
+        else:
+            enc = self._encoding
+            for x in column:
+                try:
+                    sb = e(x, enc)
+                except UnicodeEncodeError:
+                    sb = empty
+                app(sb)
+                if len(sb) < sz:
+                    app(empty[:-len(sb)])
         return new_col
 
     _to_row_binary = _to_row_binary_bytes

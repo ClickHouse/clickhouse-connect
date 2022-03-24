@@ -9,21 +9,25 @@ from pytest import fixture
 from clickhouse_connect import create_driver
 
 
-def run_cmd(cmd):
-    popen = Popen(cmd, stdout = PIPE, stderr=PIPE)
-    stdout, stderr = popen.communicate()
-    return popen.returncode, stdout, stderr
-
-
 @fixture(scope='module', autouse=True)
-def test_driver() -> Iterator[BaseDriver]:
-    test_driver = create_driver(port=10123)
+def test_driver(request) -> Iterator[BaseDriver]:
+    host = request.config.getoption('host')
+    port = request.config.getoption('port')
+    docker = request.config.getoption('docker', True)
+    if not port:
+        port = 10273 if docker else 8123
+    print (f'Docker: {docker} Using port {port}')
+    test_driver = create_driver(host=host, port=port)
     yield test_driver
     test_driver.close()
 
 
 @fixture(scope='module', autouse=True)
-def clickhouse_container(test_driver: BaseDriver) -> Iterator[None]:
+def clickhouse_container(request, test_driver: BaseDriver) -> Iterator[None]:
+    if not request.config.getoption('docker', True):
+        yield
+        return
+    print("using docker anyway?")
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
     run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
     sys.stderr.write('Starting docker compose')
@@ -45,3 +49,7 @@ def clickhouse_container(test_driver: BaseDriver) -> Iterator[None]:
         sys.stderr.write('Successfully stopped docker compose')
 
 
+def run_cmd(cmd):
+    popen = Popen(cmd, stdout = PIPE, stderr=PIPE)
+    stdout, stderr = popen.communicate()
+    return popen.returncode, stdout, stderr

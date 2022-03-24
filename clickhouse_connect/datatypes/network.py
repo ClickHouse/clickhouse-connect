@@ -1,5 +1,4 @@
 import socket
-from functools import partial
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
@@ -47,7 +46,11 @@ class IPv4(FixedType):
             return column
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
+            if self.nullable:
+                return [0 if not v else sum(int(b) << fixed[ix] for ix, b in enumerate(v.split('.'))) for v in column]
             return [sum(int(b) << fixed[ix] for ix, b in enumerate(v.split('.'))) for v in column]
+        if self.nullable:
+            return [0 if not ip else ip._ip for ip in column]
         return [ip._ip for ip in column]
 
     _to_python = _to_python_ip
@@ -75,14 +78,14 @@ class IPv6(FixedType):
 
     @staticmethod
     def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
-        mask = ipv4_v6_mask
+        v4mask = ipv4_v6_mask
         if isinstance(value, str):
             if '.' in value:
-                dest += mask + bytes(int(b) for b in value.split('.'))
+                dest += v4mask + bytes(int(b) for b in value.split('.'))
             else:
                 dest += socket.inet_pton(socket.AF_INET6, value)
         elif isinstance(value, IPv4Address):
-            dest += mask + value._ip.to_bytes(4, 'big')
+            dest += v4mask + value._ip.to_bytes(4, 'big')
         elif isinstance(value, IPv6Address):
             dest += value.packed
         elif len(value) == 4:
@@ -110,37 +113,43 @@ class IPv6(FixedType):
 
     @staticmethod
     def _to_python_str(column: Sequence) -> MutableSequence:
-        ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
+        v4mask = ipv4_v6_mask
         tov4 = socket.inet_ntoa
-        tov6 = partial(socket.inet_ntop, af = socket.AF_INET6)
+        tov6 = socket.inet_ntop
         new_col = []
         app = new_col.append
         for x in column:
-            if x[:12] == ipv4_v6_mask:
+            if x[:12] == v4mask:
                 app(tov4(x[12:]))
             else:
-                app(tov6(x))
+                app(tov6(socket.AF_INET6, x))
         return new_col
 
     def _from_python(self, column: Sequence) -> Sequence:
         first = self._first_value(column)
-        mask = ipv4_v6_mask
+        v4mask = ipv4_v6_mask
+        nv = self._ch_null
+        inet6 = socket.AF_INET6
         if isinstance(first, str):
-            tov6 = partial(socket.inet_pton, af = socket.AF_INET6)
             new_col = []
             app = new_col.append
             for v in column:
                 if '.' in v:
-                    app(mask + bytes(int(b) for b in v.split('.')))
+                    app(v4mask + bytes(int(b) for b in v.split('.')))
+                elif v is None:
+                    app(nv)
                 else:
-                    app(tov6(v))
+                    app(socket.inet_pton(inet6, v))
             return new_col
         if isinstance(first, IPv4Address) or isinstance(first, IPv6Address):
             new_col = []
             app = new_col.append
             for v in column:
-                b = v.packed
-                app(b if len(b) == 16 else mask + b)
+                if v is None:
+                    app(nv)
+                else:
+                    b = v.packed
+                    app(b if len(b) == 16 else v4mask + b)
             return new_col
         return column
 

@@ -5,13 +5,14 @@ from struct import unpack_from as suf, pack as sp
 import pytz
 
 from clickhouse_connect.datatypes.base import TypeDef, FixedType
-from clickhouse_connect.datatypes.tools import read_uint64
+from clickhouse_connect.datatypes.common import read_uint64
 
 epoch_start_date = date(1970, 1, 1)
 
 
 class Date(FixedType):
     _array_type = 'H'
+    _ch_null = epoch_start_date
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -31,7 +32,7 @@ class Date(FixedType):
         return [(x - esd).days for x in column]
 
 
-class Date32(FixedType):
+class Date32(Date):
     _array_type = 'i'
 
     @staticmethod
@@ -42,10 +43,6 @@ class Date32(FixedType):
     def _to_row_binary(value: date, dest: bytearray):
         dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
 
-    @staticmethod
-    def _to_python(column: Sequence):
-        return [epoch_start_date + timedelta(days) for days in column]
-
 
 from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
@@ -54,6 +51,7 @@ from_ts_tz = datetime.fromtimestamp
 class DateTime(FixedType):
     __slots__ = '_from_row_binary',
     _array_type = 'I'
+    _ch_null = datetime.utcfromtimestamp(0)
 
     def __init__(self, type_def: TypeDef):
         if type_def.values:

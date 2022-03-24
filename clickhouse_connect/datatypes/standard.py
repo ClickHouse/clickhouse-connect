@@ -1,12 +1,11 @@
 import decimal
 from collections.abc import Sequence
-from functools import partial
 
 from typing import Any, Union, Iterable
 from struct import unpack_from as suf, pack as sp
 
 from clickhouse_connect.datatypes.base import TypeDef, FixedType
-from clickhouse_connect.datatypes.tools import array_type
+from clickhouse_connect.datatypes.common import array_type
 
 
 class Int8(FixedType):
@@ -33,7 +32,7 @@ class UInt8(FixedType):
         return source[loc], loc + 1
 
     @staticmethod
-    def _to_row_binary(value:int, dest: bytearray):
+    def _to_row_binary(value: int, dest: bytearray):
         dest.append(value)
 
 
@@ -41,12 +40,12 @@ class Int16(FixedType):
     _array_type = 'h'
 
     @staticmethod
-    def _from_row_binary(source: bytes, loc:int):
+    def _from_row_binary(source: bytes, loc: int):
         return suf('<h', source, loc)[0], loc + 2
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<h', value,)
+        dest += sp('<h', value, )
 
 
 class UInt16(FixedType):
@@ -58,7 +57,7 @@ class UInt16(FixedType):
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<H', value,)
+        dest += sp('<H', value, )
 
 
 class Int32(FixedType):
@@ -70,7 +69,7 @@ class Int32(FixedType):
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<i', value,)
+        dest += sp('<i', value, )
 
 
 class UInt32(FixedType):
@@ -82,7 +81,7 @@ class UInt32(FixedType):
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<I', value,)
+        dest += sp('<I', value, )
 
 
 class Int64(FixedType):
@@ -94,7 +93,7 @@ class Int64(FixedType):
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<q', value,)
+        dest += sp('<q', value, )
 
 
 class UInt64(FixedType):
@@ -106,10 +105,10 @@ class UInt64(FixedType):
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
-        dest += sp('<Q', value,)
+        dest += sp('<Q', value, )
 
     @classmethod
-    def format(cls, fmt:str):
+    def format(cls, fmt: str):
         fmt = fmt.lower()
         if fmt == 'unsigned':
             cls._array_type = 'Q'
@@ -120,20 +119,36 @@ class UInt64(FixedType):
 
 
 class BigInt(FixedType, registered=False):
-    @staticmethod
-    def _to_python_str(column: Sequence):
-        return [str(x, 'utf8') for x in column]
+    _format = 'string'
+
+    def _to_python(self, column: Sequence):
+        signed = self._signed
+        if self._format == 'string':
+            return [str(int.from_bytes(x, 'little', signed=signed)) for x in column]
+        return [int.from_bytes(x, 'little', signed=signed) for x in column]
+
+    def _replace_nulls(self, column: Sequence):
+        if isinstance(self._first_value(column), str):
+            return ['0' if x is None else x for x in column]
+        return [0 if x is None else x for x in column]
+
+    def _from_python(self, column: Sequence):
+        first = self._first_value(column)
+        if not column:
+            return column
+        sz = self._byte_size
+        signed = self._signed
+        if isinstance(first, str):
+            return [int(x).to_bytes(sz, 'little', signed=signed) for x in column]
+        return [x.to_bytes(sz, 'little', signed=signed) for x in column]
 
     @classmethod
     def format(cls, fmt: str, encoding: str = 'utf8'):
         fmt = fmt.lower()
         if fmt.lower().startswith('str'):
-            cls._to_python = cls._to_python_str
-            cls._encoding = encoding
-        elif fmt.startswith('raw') or fmt.startswith('int') or fmt.startswith('num'):
-            cls._to_python = None
+            cls._format = 'string'
         else:
-            raise ValueError("Unrecognized BigInt output format")
+            cls._format = 'raw'
 
 
 class Int128(BigInt):
@@ -145,12 +160,8 @@ class Int128(BigInt):
         return int.from_bytes(source[loc: loc + 16], 'little', signed=True), loc + 16
 
     @staticmethod
-    def _to_row_binary(value:int, dest: bytearray):
+    def _to_row_binary(value: int, dest: bytearray):
         dest += value.to_bytes(16, 'little')
-
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
-        end = loc + 16 * num_rows
-        return [int.from_bytes(source[ix:ix + 16], 'little', signed=True) for ix in range(loc, end, 16)], end
 
 
 class UInt128(BigInt):
@@ -162,12 +173,8 @@ class UInt128(BigInt):
         return int.from_bytes(source[loc: loc + 16], 'little', signed=False), loc + 16
 
     @staticmethod
-    def _to_row_binary(value:int, dest: bytearray):
+    def _to_row_binary(value: int, dest: bytearray):
         dest += value.to_bytes(16, 'little')
-
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
-        end = loc + 16 * num_rows
-        return [int.from_bytes(source[ix:ix + 16], 'little', signed=False) for ix in range(loc, end, 16)], end
 
 
 class Int256(BigInt):
@@ -179,12 +186,8 @@ class Int256(BigInt):
         return int.from_bytes(source[loc: loc + 32], 'little', signed=True), loc + 32
 
     @staticmethod
-    def _to_row_binary(value:int, dest: bytearray):
+    def _to_row_binary(value: int, dest: bytearray):
         dest += value.to_bytes(32, 'little')
-
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
-        end = loc + 32 * num_rows
-        return [int.from_bytes(source[ix:ix + 32], 'little', signed=True) for ix in range(loc, end, 32)], end
 
 
 class UInt256(BigInt):
@@ -196,12 +199,8 @@ class UInt256(BigInt):
         return int.from_bytes(source[loc: loc + 32], 'little', signed=False), loc + 32
 
     @staticmethod
-    def _to_row_binary(value:int, dest: bytearray):
+    def _to_row_binary(value: int, dest: bytearray):
         dest += value.to_bytes(32, 'little')
-
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
-        end = loc + 32 * num_rows
-        return [int.from_bytes(source[ix:ix + 32], 'little', signed=False) for ix in range(loc, end, 32)], end
 
 
 class Float32(FixedType):
@@ -213,7 +212,7 @@ class Float32(FixedType):
 
     @staticmethod
     def _to_row_binary(value: float, dest: bytearray):
-        dest += sp('f', value,)
+        dest += sp('f', value, )
 
 
 class Float64(FixedType):
@@ -242,6 +241,12 @@ class Boolean(FixedType):
     @staticmethod
     def _to_python(column: Iterable):
         return [b > 0 for b in column]
+
+    def _from_python(self, column: Sequence):
+        first = self._first_value(column)
+        if first is None or isinstance(first, int):
+            return column
+        return [1 if x else 0 for x in column]
 
 
 class Bool(Boolean):
@@ -272,15 +277,15 @@ class Enum8(FixedType):
         dest += value if value < 128 else value - 128
 
     def _to_python(self, column: Sequence):
-        lookup = self._int_map
-        return [lookup[x] for x in column]
+        lookup = self._int_map.get
+        return [lookup(x, None) for x in column]
 
     def _from_python(self, column: Sequence):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
             return column
         lookup = self._name_map.get
-        return [lookup(x) for x in column]
+        return [lookup(x, 0) for x in column]
 
 
 class Enum16(Enum8):
@@ -299,6 +304,7 @@ class Enum16(Enum8):
 
 class Decimal(FixedType):
     __slots__ = 'scale', 'mult', 'zeros'
+    _ch_null = decimal.Decimal(0)
 
     def __init__(self, type_def: TypeDef):
         size = type_def.size
@@ -326,12 +332,14 @@ class Decimal(FixedType):
         super().__init__(type_def)
         if self._array_type:
             self._to_python = self._to_python_int
+            self._from_python = self._from_python_int
         else:
             self._to_python = self._to_python_bytes
+            self._from_python = self._from_python_bytes
 
     def _from_row_binary(self, source, loc):
         end = loc + self._byte_size
-        x = int.from_bytes(source[loc:end], 'little')
+        x = int.from_bytes(source[loc:end], 'little', signed=True)
         scale = self.scale
         if x >= 0:
             digits = str(x)
@@ -361,6 +369,13 @@ class Decimal(FixedType):
         return new_col
 
     def _to_python_bytes(self, column: Sequence):
-        ifb = partial(int.from_bytes, byteorder='little')
-        ints = [ifb(x) for x in column]
-        return self._to_python_int(ints)
+        return self._to_python_int([int.from_bytes(x, 'little', signed=True) for x in column])
+
+    def _from_python_int(self, column: Sequence):
+        mult = self.mult
+        return [int(x * mult) for x in column]
+
+    def _from_python_bytes(self, column: Sequence):
+        mult = self.mult
+        sz = self._byte_size
+        return [int(x * mult).to_bytes(sz, 'little', signed=True) for x in column]

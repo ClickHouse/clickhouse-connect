@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import datetime
 import time
 import uuid
@@ -30,10 +32,11 @@ columns = {
     'bdec': ('Decimal128(10)', 2503.48877233),
     'uint256': ('UInt256', 1057834823498238884432566),
     'dt64': ('DateTime64(9)', datetime.datetime.now()),
-    'dt64d': ("DateTime64(6, 'America/Denver')", datetime.datetime.now())
+    'dt64d': ("DateTime64(6, 'America/Denver')", datetime.datetime.now()),
+    'lcstr': ("LowCardinality(String)",  "A simple string")
 }
 
-standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'nullable', 'enum',  'uuid']
+standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'array', 'nullable', 'enum',  'uuid']
 
 
 def create_table(client: BaseDriver, col_names: List[str], rows: int):
@@ -83,6 +86,7 @@ def main():
     datatypes.ip_format('string')
     datatypes.uuid_format('string')
     #datatypes.fixed_string_format('string')
+    datatypes.big_int_format('string')
     create_table(client, col_names, rows )
     check_reads(client, tries, rows)
 

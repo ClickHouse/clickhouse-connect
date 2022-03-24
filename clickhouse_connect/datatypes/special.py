@@ -1,3 +1,4 @@
+import array
 from collections.abc import Sequence, MutableSequence
 from uuid import UUID as PyUUID, SafeUUID
 from struct import unpack_from as suf
@@ -6,11 +7,14 @@ from typing import Any, Collection, Dict
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType, UnsupportedType
-from clickhouse_connect.datatypes.tools import array_column, read_leb128, to_leb128, read_uint64
+from clickhouse_connect.datatypes.common import array_column, read_leb128, to_leb128, read_uint64, low_card_version, \
+    write_uint64, write_array, must_swap
 from clickhouse_connect.driver import DriverError
 
 
 class UUID(ClickHouseType):
+    _ch_null = PyUUID(int=0)
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         int_high, loc = read_uint64(source, loc)
@@ -58,7 +62,7 @@ class UUID(ClickHouseType):
             app(f'{hs[:8]}-{hs[8:12]}-{hs[12:16]}-{hs[16:20]}-{hs[20:]}')
         return column, loc + num_rows << 4
 
-    def _to_native(self, column: Sequence, dest:MutableSequence):
+    def _to_native(self, column: Sequence, dest:MutableSequence, **_):
         first = self._first_value(column)
         if isinstance(first, str):
             for v in column:
@@ -105,7 +109,7 @@ class Nothing(FixedType):
         dest.append(0x30)
 
     @staticmethod
-    def _to_native(column:Sequence, dest: MutableSequence):
+    def _to_native(column:Sequence, dest: MutableSequence, **_):
         dest += bytes(0x30 for _ in range(len(column)))
 
 
@@ -135,26 +139,39 @@ class Array(ClickHouseType):
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
-        conv = self.element_type.from_native
         if self.element_type.low_card:
             lc_version, loc = read_uint64(source, loc)
         offsets, loc = array_column('Q', source, loc, num_rows)
+        if not offsets:
+            return
+        all_values, loc = self.element_type._from_native(source, loc, offsets[-1], lc_version=lc_version, **kwargs)
         column = []
         app = column.append
         last = 0
         for offset in offsets:
-            cnt = offset - last
+            app(tuple(all_values[last: offset]))
             last = offset
-            val_list, loc = conv(source, loc, cnt, lc_version=lc_version, **kwargs)
-            app(tuple(val_list))
         return column, loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        pass
+    def _to_native(self, column: Sequence, dest: MutableSequence, lc_version=None, **_):
+        if lc_version is None and self.element_type.low_card:
+            lc_version = low_card_version
+            write_uint64(lc_version, dest)
+        offsets = array.array('Q')
+        total = 0
+        for x in column:
+            total += len(x)
+            offsets.append(total)
+        if must_swap:
+            offsets.byteswap()
+        dest += offsets.tobytes()
+        conv = self.element_type.to_native
+        for x in column:
+            conv(x, dest, lc_version=lc_version)
 
 
 class Tuple(ClickHouseType):
-    _slots = 'from_rb_funcs', 'to_rb_funcs', 'from_native_funcs'
+    _slots = 'from_rb_funcs', 'to_rb_funcs'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -162,6 +179,7 @@ class Tuple(ClickHouseType):
         self.from_rb_funcs = tuple((t.from_row_binary for t in element_types))
         self.to_rb_funcs = tuple((t.to_row_binary for t in element_types))
         self.from_native_funcs = tuple((t.from_native for t in element_types))
+        self.to_native_funcs = tuple((t.to_native for t in element_types))
         self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytes, loc: int):
@@ -180,7 +198,12 @@ class Tuple(ClickHouseType):
         for conv in self.from_native_funcs:
             column, loc = conv(source, loc, num_rows, **kwargs)
             columns.append(tuple(column))
-        return list(zip(*columns)), loc
+        return tuple(zip(*columns)), loc
+
+    def _to_native(self, column: Sequence, dest: MutableSequence):
+        columns = zip(*column)
+        for tn, elem_column in zip(self.to_native_funcs, columns):
+            tn(elem_column, dest)
 
 
 class Map(ClickHouseType):
@@ -233,6 +256,27 @@ class Map(ClickHouseType):
             last = offset
         return column, loc
 
+    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
+        lc_version = kwargs.pop('lc_version', low_card_version)
+        if self.key_type.low_card:
+            write_uint64(lc_version, dest)
+        if self.value_type.low_card:
+            write_uint64(lc_version, dest)
+        offsets = array.array('Q')
+        keys = []
+        values = []
+        total = 0
+        for v in column:
+            total += len(v)
+            offsets.append(total)
+            keys.append(v.keys())
+            values.append(v.values())
+        if must_swap:
+            offsets.byteswap()
+        dest += offsets.tobytes()
+        self.key_type.to_native(keys, dest, lc_version=lc_version)
+        self.value_type.to_native(keys, dest, lc_version=lc_version)
+
 
 class SimpleAggregateFunction(ClickHouseType):
     _slots = 'element_type',
@@ -241,6 +285,7 @@ class SimpleAggregateFunction(ClickHouseType):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
+        self._ch_null = self.element_type._ch_null
 
     def _from_row_binary(self, source, loc):
         return self.element_type.from_row_binary(source, loc)
@@ -250,6 +295,9 @@ class SimpleAggregateFunction(ClickHouseType):
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         return self.element_type.from_native(source, loc, num_rows, **kwargs)
+
+    def _to_native(self, source: Sequence, dest: MutableSequence):
+        self.element_type._to_native(source, dest)
 
 
 class AggregateFunction(UnsupportedType):

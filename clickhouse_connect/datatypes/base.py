@@ -1,6 +1,8 @@
+from math import log
 from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence, Optional
 
-from clickhouse_connect.datatypes.tools import array_column, array_type, int_size, read_uint64, array_bytes
+from clickhouse_connect.datatypes.common import array_column, array_type, int_size, read_uint64, write_array, \
+    write_uint64, low_card_version
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
@@ -24,7 +26,7 @@ class ClickHouseType():
     _to_python = None
     _from_native = None
     _from_python = None
-    _to_ch_null = None
+    _ch_null = None
     _name_suffix = ''
 
     def __init_subclass__(cls, registered: bool = True):
@@ -51,6 +53,7 @@ class ClickHouseType():
             self.to_native = self._nullable_to_native
         elif self.low_card:
             self.from_native = self._low_card_from_native
+            self.to_native = self._low_card_to_native
         else:
             self.from_native = self._from_native
             self.to_native = self._to_native
@@ -85,8 +88,12 @@ class ClickHouseType():
 
     def _nullable_to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
         dest += bytes(1 if x is None else 0 for x in column)
-        column = self._to_ch_null(column)
+        column = self._replace_nulls(column)
         self._to_native(column, dest, **kwargs)
+
+    def _replace_nulls(self, column: Sequence):
+        nv = self._ch_null
+        return [x if x is not None else nv for x in column]
 
     def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
@@ -94,7 +101,7 @@ class ClickHouseType():
             return tuple(), loc
         if lc_version is None:
             loc += 8  # Skip dictionary version for now
-        key_size = 2 ** source[loc]
+        key_size = 2 ** source[loc]  # first byte is the key size
         loc += 8  # Skip remaining key information
         index_cnt, loc = read_uint64(source, loc)
         values, loc = self._from_native(source, loc, index_cnt, **kwargs)
@@ -106,6 +113,49 @@ class ClickHouseType():
         loc += 8  # key size should match row count
         keys, end = array_column(array_type(key_size, False), source, loc, num_rows)
         return tuple(values[key] for key in keys), end
+
+    def _low_card_to_native(self, column: Sequence, dest: MutableSequence, lc_version=None, **kwargs):
+        if lc_version is None:
+            write_uint64(low_card_version, dest)
+        if not column:
+            return
+        index = []
+        keys = []
+        rev_map = {}
+        rmg = rev_map.get
+        if self.nullable:
+            index.append(0)
+            keys.append(self._ch_null)
+            key = 1
+            for v in column:
+                if v is None:
+                    index.append(0)
+                else:
+                    ix = rmg(v)
+                    if ix is None:
+                        index.append(key)
+                        keys.append(v)
+                        rev_map[v] = key
+                        key += 1
+                    else:
+                        index.append(ix)
+        else:
+            key = 0
+            for v in column:
+                ix = rmg(v)
+                if ix is None:
+                    index.append(key)
+                    keys.append(v)
+                    rev_map[v] = key
+                    key += 1
+                else:
+                    index.append(ix)
+        ix_type = int(log(len(keys), 2)) // 8   # power of two needed to store the total number of keys
+        write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
+        write_uint64(len(keys), dest)
+        self._to_native(keys, dest, lc_version=lc_version, **kwargs)
+        write_uint64(len(index), dest)
+        write_array(array_type(2 ** ix_type, False), index, dest)
 
     def _first_value(self,  column: Sequence) -> Optional[Any]:
         if self.nullable:
@@ -121,6 +171,7 @@ class FixedType(ClickHouseType, registered=False):
     _signed = True
     _byte_size = 0
     _array_type = None
+    _ch_null = 0
 
     @staticmethod
     def _to_zeros(column: Sequence):
@@ -141,11 +192,10 @@ class FixedType(ClickHouseType, registered=False):
         if self._array_type:
             self._from_native = self._from_array
             self._to_native = self._to_array
-            self._to_ch_null = self._to_zeros
         elif self._byte_size:
             self._from_native = self._from_bytes
             self._to_native = self._to_bytes
-            self._to_ch_null = self._to_zero_bytes
+            self._ch_null = bytes(0 for _ in range(self._byte_size))
         super().__init__(type_def)
 
     def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
@@ -171,7 +221,7 @@ class FixedType(ClickHouseType, registered=False):
     def _to_array(self, column: Sequence, dest: MutableSequence, **_):
         if self._from_python:
             column = self._from_python(column)
-        array_bytes(self._array_type, column, dest)
+        write_array(self._array_type, column, dest)
 
     def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])

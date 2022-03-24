@@ -4,6 +4,7 @@ from collections.abc import Sequence, MutableSequence
 
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize
+low_card_version = 1
 
 array_map = {1: 'b', 2: 'h', 4: 'i', 8: 'q'}
 
@@ -29,7 +30,7 @@ def array_column(at: str, source: Sequence, loc: int, num_rows: int):
     return column, end
 
 
-def array_bytes(at: str, column: Sequence, dest: MutableSequence):
+def write_array(at: str, column: Sequence, dest: MutableSequence):
     buff = array.array(at)
     buff.extend(column)
     if must_swap:
@@ -39,6 +40,10 @@ def array_bytes(at: str, column: Sequence, dest: MutableSequence):
 
 def read_uint64(source: Sequence, loc: int):
     return int.from_bytes(source[loc: loc + 8], 'little', signed=False), loc + 8
+
+
+def write_uint64(value: int, dest: MutableSequence):
+    dest.extend(value.to_bytes(8, 'little', signed=False))
 
 
 def read_leb128(source: Sequence, loc: int):

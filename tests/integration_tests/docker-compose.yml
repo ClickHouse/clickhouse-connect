@@ -4,8 +4,8 @@ services:
   ch_server:
     image: clickhouse/clickhouse-server
     ports:
-      - "10123:8123"
-      - "10443:8443"
+      - "10723:8123"
+      - "10743:8443"
       - "10900:9000"
     volumes:
       - /var/lib/clickhouse

@@ -4,7 +4,7 @@ from typing import List, Any, Sequence, Collection
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.tools import read_leb128, read_leb128_str
+from clickhouse_connect.datatypes.common import read_leb128, read_leb128_str
 from clickhouse_connect.driver.exceptions import DriverError
 
 logger = logging.getLogger(__name__)
