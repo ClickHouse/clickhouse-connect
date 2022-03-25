@@ -90,7 +90,8 @@ class HttpDriver(BaseDriver):
 
     def ping(self) -> bool:
         try:
-            response = requests.request('get', self.url + '/ping')
+            response = requests.request('GET', self.url + '/ping')
             return 200 <= response.status_code < 300
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as ex:
+            logger.debug('ping failed')
             return False

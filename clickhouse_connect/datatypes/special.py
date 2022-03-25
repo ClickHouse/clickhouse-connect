@@ -6,14 +6,19 @@ from struct import unpack_from as suf
 from typing import Any, Collection, Dict
 
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, FixedType, UnsupportedType
+from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.common import array_column, read_leb128, to_leb128, read_uint64, low_card_version, \
-    write_uint64, write_array, must_swap
+    write_uint64, must_swap
 from clickhouse_connect.driver import DriverError
+
+empty_uuid_b = bytes(b'\x00' * 16)
 
 
 class UUID(ClickHouseType):
-    _ch_null = PyUUID(int=0)
+
+    @property
+    def ch_null(self):
+        return empty_uuid_b
 
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
@@ -64,22 +69,34 @@ class UUID(ClickHouseType):
 
     def _to_native(self, column: Sequence, dest:MutableSequence, **_):
         first = self._first_value(column)
+        empty = empty_uuid_b
         if isinstance(first, str):
             for v in column:
-                iv = int(v, 16)
-                dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+                if v:
+                    iv = int(v, 16)
+                    dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+                else:
+                    dest += empty
         elif isinstance(first, int):
             for iv in column:
-                dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+                if iv:
+                    dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+                else:
+                    dest += empty
         elif isinstance(first, PyUUID):
             for v in column:
-                iv = v.int
-                dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+                if v:
+                    iv = v.int
+                    dest += (iv >> 64).to_bytes(8, 'little') + (iv & 0xffffffffffffffff).to_bytes(8, 'little')
+                else:
+                    dest += empty
         elif isinstance(first, (bytes, bytearray, memoryview)):
             for v in column:
-                dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
+                if v:
+                    dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
+                else:
+                    dest += empty
         else:
-            empty = bytes(b'\x00' * 16)
             dest += empty * len(column)
 
     _from_native = _from_native_uuid
@@ -93,7 +110,7 @@ class UUID(ClickHouseType):
             cls._from_native = staticmethod(cls._from_native_uuid)
 
 
-class Nothing(FixedType):
+class Nothing(ArrayType):
     _array_type = 'b'
 
     def __init(self, type_def: TypeDef):

@@ -1,14 +1,14 @@
 import decimal
-from collections.abc import Sequence
+from collections.abc import Sequence, MutableSequence
 
-from typing import Any, Union, Iterable
+from typing import Any, Union, Iterable, Type
 from struct import unpack_from as suf, pack as sp
 
-from clickhouse_connect.datatypes.base import TypeDef, FixedType
-from clickhouse_connect.datatypes.common import array_type
+from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
+from clickhouse_connect.datatypes.common import array_type, array_column, write_array
 
 
-class Int8(FixedType):
+class Int8(ArrayType):
     _array_type = 'b'
 
     @staticmethod
@@ -24,7 +24,7 @@ class Int8(FixedType):
             dest.append(value + 128)
 
 
-class UInt8(FixedType):
+class UInt8(ArrayType):
     _array_type = 'B'
 
     @staticmethod
@@ -36,7 +36,7 @@ class UInt8(FixedType):
         dest.append(value)
 
 
-class Int16(FixedType):
+class Int16(ArrayType):
     _array_type = 'h'
 
     @staticmethod
@@ -48,7 +48,7 @@ class Int16(FixedType):
         dest += sp('<h', value, )
 
 
-class UInt16(FixedType):
+class UInt16(ArrayType):
     _array_type = 'H'
 
     @staticmethod
@@ -60,7 +60,7 @@ class UInt16(FixedType):
         dest += sp('<H', value, )
 
 
-class Int32(FixedType):
+class Int32(ArrayType):
     _array_type = 'i'
 
     @staticmethod
@@ -72,7 +72,7 @@ class Int32(FixedType):
         dest += sp('<i', value, )
 
 
-class UInt32(FixedType):
+class UInt32(ArrayType):
     _array_type = 'I'
 
     @staticmethod
@@ -84,7 +84,7 @@ class UInt32(FixedType):
         dest += sp('<I', value, )
 
 
-class Int64(FixedType):
+class Int64(ArrayType):
     _array_type = 'q'
 
     @staticmethod
@@ -96,7 +96,7 @@ class Int64(FixedType):
         dest += sp('<q', value, )
 
 
-class UInt64(FixedType):
+class UInt64(ArrayType):
     _array_type = 'Q'
 
     @staticmethod
@@ -118,29 +118,58 @@ class UInt64(FixedType):
             raise ValueError("Unrecognized UInt64 Output Format")
 
 
-class BigInt(FixedType, registered=False):
-    _format = 'string'
+class BigInt(ClickHouseType, registered=False):
+    _format = 'raw'
+    _signed = True
+    _byte_size = 0
 
-    def _to_python(self, column: Sequence):
+    @property
+    def ch_null(self):
+        return bytes(b'\x00' * self._byte_size)
+
+    def _from_native(self, source: MutableSequence, loc: int, num_rows: int, **_):
         signed = self._signed
+        sz = self._byte_size
+        end = loc + num_rows * sz
+        column = []
+        app = column.append
+        ifb = int.from_bytes
         if self._format == 'string':
-            return [str(int.from_bytes(x, 'little', signed=signed)) for x in column]
-        return [int.from_bytes(x, 'little', signed=signed) for x in column]
+            for ix in range(loc, end, sz):
+                app(str(ifb(source[ix: ix + sz], 'little', signed=signed)))
+        else:
+            for ix in range(loc, end, sz):
+                app(ifb(source[ix: ix + sz], 'little', signed=signed))
+        return column, end
 
-    def _replace_nulls(self, column: Sequence):
-        if isinstance(self._first_value(column), str):
-            return ['0' if x is None else x for x in column]
-        return [0 if x is None else x for x in column]
-
-    def _from_python(self, column: Sequence):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         first = self._first_value(column)
         if not column:
             return column
         sz = self._byte_size
         signed = self._signed
+        empty = self.ch_null
+        ext = dest.extend
         if isinstance(first, str):
-            return [int(x).to_bytes(sz, 'little', signed=signed) for x in column]
-        return [x.to_bytes(sz, 'little', signed=signed) for x in column]
+            if self.nullable:
+                for x in column:
+                    if x:
+                        ext(int(x).to_bytes(sz, 'little', signed=signed))
+                    else:
+                        ext(empty)
+            else:
+                for x in column:
+                    ext(int(x).to_bytes(sz, 'little', signed=signed))
+        else:
+            if self.nullable:
+                for x in column:
+                    if x:
+                        ext(x.to_bytes(sz, 'little', signed=signed))
+                    else:
+                        ext(empty)
+            else:
+                for x in column:
+                    ext(x.to_bytes(sz, 'little', signed=signed))
 
     @classmethod
     def format(cls, fmt: str, encoding: str = 'utf8'):
@@ -203,7 +232,7 @@ class UInt256(BigInt):
         dest += value.to_bytes(32, 'little')
 
 
-class Float32(FixedType):
+class Float32(ArrayType):
     _array_type = 'f'
 
     @staticmethod
@@ -215,7 +244,7 @@ class Float32(FixedType):
         dest += sp('f', value, )
 
 
-class Float64(FixedType):
+class Float64(ArrayType):
     _array_type = 'd'
 
     @staticmethod
@@ -227,9 +256,7 @@ class Float64(FixedType):
         dest += sp('d', (value,))
 
 
-class Boolean(FixedType):
-    _array_type = 'B'
-
+class Boolean(ClickHouseType):
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
@@ -239,21 +266,20 @@ class Boolean(FixedType):
         dest += b'\x01' if value else b'\x00'
 
     @staticmethod
-    def _to_python(column: Iterable):
-        return [b > 0 for b in column]
+    def _from_native(source: Sequence, loc: int, num_rows: int, **_):
+        column, loc = array_column('B', source, loc, num_rows)
+        return [b > 0 for b in column], loc
 
-    def _from_python(self, column: Sequence):
-        first = self._first_value(column)
-        if first is None or isinstance(first, int):
-            return column
-        return [1 if x else 0 for x in column]
+    @staticmethod
+    def _to_native(column: Sequence, dest: MutableSequence, **_):
+        write_array('B', [1 if x else 0 for x in column], dest)
 
 
 class Bool(Boolean):
     pass
 
 
-class Enum8(FixedType):
+class Enum8(ArrayType):
     __slots__ = '_name_map', '_int_map'
     _array_type = 'b'
 
@@ -276,16 +302,20 @@ class Enum8(FixedType):
             pass
         dest += value if value < 128 else value - 128
 
-    def _to_python(self, column: Sequence):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         lookup = self._int_map.get
-        return [lookup(x, None) for x in column]
+        return [lookup(x, None) for x in column], loc
 
-    def _from_python(self, column: Sequence):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
-            return column
-        lookup = self._name_map.get
-        return [lookup(x, 0) for x in column]
+            if self.nullable:
+                column = [0 if not x else x for x in column]
+            write_array(self._array_type, column, dest)
+        else:
+            lookup = self._name_map.get
+            write_array(self._array_type, [lookup(x, 0) for x in column], dest)
 
 
 class Enum16(Enum8):
@@ -302,16 +332,17 @@ class Enum16(Enum8):
         dest += sp('<h', value)
 
 
-class Decimal(FixedType):
-    __slots__ = 'scale', 'mult', 'zeros'
-    _ch_null = decimal.Decimal(0)
+class Decimal(ClickHouseType):
+    __slots__ = '_scale', '_mult', '_zeros'
 
-    def __init__(self, type_def: TypeDef):
+    @classmethod
+    def build(cls: Type['ClickHouseType'], type_def: TypeDef):
+        if type_def in cls._instance_cache:
+            return cls._instance_cache[type_def]
         size = type_def.size
         if size == 0:
-            self._name_suffix = type_def.arg_str
             prec = type_def.values[0]
-            self.scale = type_def.values[1]
+            scale = type_def.values[1]
             if prec < 1 or prec > 79:
                 raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
             if prec < 10:
@@ -323,24 +354,27 @@ class Decimal(FixedType):
             else:
                 size = 256
         else:
-            self.scale = type_def.values[0]
-            self._name_suffix = f'{type_def.size}({self.scale})'
-        self._byte_size = size // 8
-        self.zeros = bytes([0] * self._byte_size)
-        self._array_type = array_type(self._byte_size, True)
-        self.mult = 10 ** self.scale
+            scale = type_def.values[0]
+        type_cls = BigDecimal if size > 64 else Decimal
+        return cls._instance_cache.setdefault(type_def, type_cls(type_def, size, scale))
+
+    def __init__(self, type_def: TypeDef, size, scale):
         super().__init__(type_def)
-        if self._array_type:
-            self._to_python = self._to_python_int
-            self._from_python = self._from_python_int
-        else:
-            self._to_python = self._to_python_bytes
-            self._from_python = self._from_python_bytes
+        self._scale = scale
+        self._mult = 10 ** scale
+        self._byte_size = size // 8
+        self._zeros = bytes([0] * self._byte_size)
+        self._name_suffix = f'{size}({scale})'
+        self._array_type = array_type(self._byte_size, True)
+
+    @property
+    def ch_null(self):
+        return self._zeros
 
     def _from_row_binary(self, source, loc):
         end = loc + self._byte_size
         x = int.from_bytes(source[loc:end], 'little', signed=True)
-        scale = self.scale
+        scale = self._scale
         if x >= 0:
             digits = str(x)
             return decimal.Decimal(f'{digits[:-scale]}.{digits[-scale:]}'), end
@@ -350,13 +384,14 @@ class Decimal(FixedType):
     def _to_row_binary(self, value: Any, dest: bytearray):
         if isinstance(value, int) or isinstance(value, float) or (
                 isinstance(value, decimal.Decimal) and value.is_finite()):
-            dest += int(value * self.mult).to_bytes(self._byte_size, 'little')
+            dest += int(value * self._mult).to_bytes(self._byte_size, 'little')
         else:
-            dest += self.zeros
+            dest += self._zeros
 
-    def _to_python_int(self, column: Sequence[int]):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         dec = decimal.Decimal
-        scale = self.scale
+        scale = self._scale
         new_col = []
         app = new_col.append
         for x in column:
@@ -366,16 +401,43 @@ class Decimal(FixedType):
             else:
                 digits = str(-x)
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
-        return new_col
+        return new_col, loc
 
-    def _to_python_bytes(self, column: Sequence):
-        return self._to_python_int([int.from_bytes(x, 'little', signed=True) for x in column])
+    def _to_native(self, column:Sequence, dest: MutableSequence, **_):
+        mult = self._mult
+        if self.nullable:
+            write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
+        else:
+            write_array(self._array_type, [int(x * mult) for x in column], dest)
 
-    def _from_python_int(self, column: Sequence):
-        mult = self.mult
-        return [int(x * mult) for x in column]
 
-    def _from_python_bytes(self, column: Sequence):
-        mult = self.mult
+class BigDecimal(Decimal, registered=False):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+        dec = decimal.Decimal
+        scale = self._scale
+        column = []
+        app = column.append
         sz = self._byte_size
-        return [int(x * mult).to_bytes(sz, 'little', signed=True) for x in column]
+        end = loc + sz * num_rows
+        ifb = int.from_bytes
+        for ix in range(loc, end, sz):
+            x = ifb(source[ix: ix + sz], 'little', signed=True)
+            if x >= 0:
+                digits = str(x)
+                app(dec(f'{digits[:-scale]}.{digits[-scale:]}'))
+            else:
+                digits = str(-x)
+                app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
+        return column, end
+
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+        mult = self._mult
+        sz = self._byte_size
+        itb = int.to_bytes
+        if self.nullable:
+            nv = self._zeros
+            for x in column:
+                dest += nv if not x else itb(int(x * mult), sz, 'little', signed=True)
+        else:
+            for x in column:
+                dest += itb(int(x * mult), sz, 'little', signed=True)

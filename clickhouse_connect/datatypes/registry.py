@@ -15,12 +15,12 @@ def get_from_name(name: str) -> ClickHouseType:
     wrappers = []
     keys = tuple()
     values = tuple()
-    if base.upper().startswith('NULLABLE'):
-        wrappers.append('Nullable')
-        base = base[9:-1]
     if base.upper().startswith('LOWCARDINALITY'):
         wrappers.append('LowCardinality')
         base = base[15:-1]
+    if base.upper().startswith('NULLABLE'):
+        wrappers.append('Nullable')
+        base = base[9:-1]
     if base.upper().startswith('ENUM'):
         keys, values = _parse_enum(base)
         base = base[:base.find('(')]

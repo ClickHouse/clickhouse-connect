@@ -1,6 +1,6 @@
 from typing import Union, Sequence, MutableSequence
 
-from clickhouse_connect.datatypes.base import ClickHouseType, FixedType, TypeDef
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.datatypes.common import read_leb128, to_leb128
 
 
@@ -35,25 +35,42 @@ class String(ClickHouseType):
 
     def _to_native(self, column:Sequence, dest: MutableSequence, **_):
         encoding = self._encoding
-        for x in column:
-            l = len(x)
-            while True:
-                b = l & 0x7f
-                l = l >> 7
-                if l == 0:
-                    dest.append(b)
-                    break
-                dest.append(0x80 | b)
-            dest += x.encode(encoding)
+        app = dest.append
+        if self.nullable:
+            for x in column:
+                if x is None:
+                    app(0)
+                else:
+                    l = len(x)
+                    while True:
+                        b = l & 0x7f
+                        l = l >> 7
+                        if l == 0:
+                            app(b)
+                            break
+                        app(0x80 | b)
+                    dest += x.encode(encoding)
+        else:
+            for x in column:
+                l = len(x)
+                while True:
+                    b = l & 0x7f
+                    l = l >> 7
+                    if l == 0:
+                        app(b)
+                        break
+                    app(0x80 | b)
+                dest += x.encode(encoding)
 
 
-class FixedString(FixedType):
+class FixedString(ClickHouseType):
     _encoding = 'utf8'
+    _format = 'bytes'
 
     def __init__(self, type_def: TypeDef):
-        self._byte_size = type_def.values[0]
-        self._name_suffix = f'({self._byte_size})'
         super().__init__(type_def)
+        self._byte_size = type_def.values[0]
+        self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytearray, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
@@ -68,46 +85,61 @@ class FixedString(FixedType):
         if len(value) < self._byte_size:
             dest += bytes((0,) * (self._byte_size - len(value)))
 
-    def _to_python_str(self, column: Sequence):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         encoding = self._encoding
-        new_col = []
-        app = new_col.append
-        for x in column:
-            try:
-                app(str(x, encoding).rstrip('\x00'))
-            except UnicodeDecodeError:
-                app(x.hex())
-        return new_col
+        column = []
+        app = column.append
+        sz = self._byte_size
+        end = loc + sz * num_rows
+        if self._format == 'string':
+            for ix in range(loc, end, sz):
+                try:
+                    app(str(source[ix: ix + sz], encoding).rstrip('\x00'))
+                except UnicodeDecodeError:
+                    app(source[ix: ix + sz].hex())
+        else:
+            for ix in range(loc, end, sz):
+                app(bytes(source[ix: ix + sz]))
+        return column, end
 
-    def _from_python(self, column: Sequence):
-        first = self._first_value(column)
-        if first is None or not isinstance(first, str):
-            return column
-        new_col = []
-        app = new_col.append
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+        ext = dest.extend
         sz = self._byte_size
         empty = bytes((0,) * sz)
         e = str.encode
-        if self._encoding in ('utf8', 'utf-8'):
+        enc = self._encoding
+        first = self._first_value(column)
+        if isinstance(first, str):
+            if self.nullable:
+                for x in column:
+                    if x is None:
+                        ext(empty)
+                    else:
+                        try:
+                            sb = e(x, enc)
+                        except UnicodeEncodeError:
+                            sb = empty
+                        ext(sb)
+                        if len(sb) < sz:
+                            ext(empty[:-len(sb)])
+            else:
+                for x in column:
+                    try:
+                        sb = e(x, enc)
+                    except UnicodeEncodeError:
+                        sb = empty
+                    ext(sb)
+                    if len(sb) < sz:
+                        ext(empty[:-len(sb)])
+        elif self.nullable:
             for x in column:
-                try:
-                    sb = e(x)
-                except UnicodeEncodeError:
-                    sb = empty
-                app(sb)
-                if len(sb) < sz:
-                    app(empty[:-len(sb)])
+                if not x:
+                    ext(empty)
+                else:
+                    ext(x)
         else:
-            enc = self._encoding
             for x in column:
-                try:
-                    sb = e(x, enc)
-                except UnicodeEncodeError:
-                    sb = empty
-                app(sb)
-                if len(sb) < sz:
-                    app(empty[:-len(sb)])
-        return new_col
+                ext(x)
 
     _to_row_binary = _to_row_binary_bytes
 
@@ -115,11 +147,9 @@ class FixedString(FixedType):
     def format(cls, fmt: str, encoding: str = 'utf8'):
         fmt = fmt.lower()
         if fmt.lower().startswith('str'):
-            cls._to_python = cls._to_python_str
+            cls._format = 'string'
             cls._encoding = encoding
             cls._to_row_binary = cls._to_row_binary_str
-        elif fmt.startswith('raw') or fmt.startswith('byte'):
-            cls._to_python = None
-            cls._to_row_binary = cls._to_row_binary_bytes
         else:
-            raise ValueError("Unrecognized FixedString output format")
+            cls._format = 'raw'
+            cls._to_row_binary = cls._to_row_binary_bytes

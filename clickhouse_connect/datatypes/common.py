@@ -11,6 +11,9 @@ array_map = {1: 'b', 2: 'h', 4: 'i', 8: 'q'}
 if int_size == 2:
     array_map[4] = 'l'
 
+array_sizes = {v: k for k,v in array_map.items()}
+array_sizes['f'] = 4
+array_sizes['d'] = 8
 
 def array_type(size: int, signed:bool):
     try:
@@ -31,11 +34,10 @@ def array_column(at: str, source: Sequence, loc: int, num_rows: int):
 
 
 def write_array(at: str, column: Sequence, dest: MutableSequence):
-    buff = array.array(at)
-    buff.extend(column)
+    buff = array.array(at, column)
     if must_swap:
         buff.byteswap()
-    dest += buff.tobytes()
+    dest += buff
 
 
 def read_uint64(source: Sequence, loc: int):

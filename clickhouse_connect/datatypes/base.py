@@ -1,8 +1,8 @@
 from math import log
-from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence, Optional
+from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence, Optional, Union
 
 from clickhouse_connect.datatypes.common import array_column, array_type, int_size, read_uint64, write_array, \
-    write_uint64, low_card_version
+    write_uint64, low_card_version, array_sizes
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
@@ -23,16 +23,15 @@ class ClickHouseType():
     _from_row_binary = None
     _to_row_binary = None
     _to_native = None
-    _to_python = None
     _from_native = None
-    _from_python = None
-    _ch_null = None
+    _ch_name = None
     _name_suffix = ''
 
     def __init_subclass__(cls, registered: bool = True):
         if registered:
+            cls._ch_name = cls.__name__
             cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
-            type_map[cls.__name__.upper()] = cls
+            type_map[cls._ch_name.upper()] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -60,10 +59,14 @@ class ClickHouseType():
 
     @property
     def name(self):
-        name = f'{self.__class__.__name__}{self._name_suffix}'
-        for wrapper in self.wrappers:
+        name = f'{self._ch_name}{self._name_suffix}'
+        for wrapper in reversed(self.wrappers):
             name = f'{wrapper}({name})'
         return name
+
+    @property
+    def ch_null(self):
+        return b'\x00'
 
     def _nullable_from_row_binary(self, source, loc) -> (Any, int):
         if source[loc] == 0:
@@ -88,12 +91,7 @@ class ClickHouseType():
 
     def _nullable_to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
         dest += bytes(1 if x is None else 0 for x in column)
-        column = self._replace_nulls(column)
         self._to_native(column, dest, **kwargs)
-
-    def _replace_nulls(self, column: Sequence):
-        nv = self._ch_null
-        return [x if x is not None else nv for x in column]
 
     def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
@@ -125,7 +123,7 @@ class ClickHouseType():
         rmg = rev_map.get
         if self.nullable:
             index.append(0)
-            keys.append(self._ch_null)
+            keys.append(self.ch_null)
             key = 1
             for v in column:
                 if v is None:
@@ -167,60 +165,27 @@ class ClickHouseType():
 type_map: Dict[str, Type[ClickHouseType]] = {}
 
 
-class FixedType(ClickHouseType, registered=False):
+class ArrayType(ClickHouseType, registered=False):
     _signed = True
-    _byte_size = 0
     _array_type = None
-    _ch_null = 0
-
-    @staticmethod
-    def _to_zeros(column: Sequence):
-        return [0 if x is None else x for x in column]
-
-    def _to_zero_bytes(self, column:Sequence):
-        empty = bytes(0 for _ in range(self._byte_size))
-        return [empty if x is None else x for x in column]
+    _ch_null = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        if not cls._array_type and cls._byte_size:
-            cls._array_type = array_type(cls._byte_size, cls._signed)
-        elif cls._array_type in ('i', 'I') and int_size == 2:
+        if cls._array_type in ('i', 'I') and int_size == 2:
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
+        if cls._array_type:
+            cls._ch_null = bytes(b'\x00' * array_sizes[cls._array_type.lower()])
 
-    def __init__(self, type_def: TypeDef):
-        if self._array_type:
-            self._from_native = self._from_array
-            self._to_native = self._to_array
-        elif self._byte_size:
-            self._from_native = self._from_bytes
-            self._to_native = self._to_bytes
-            self._ch_null = bytes(0 for _ in range(self._byte_size))
-        super().__init__(type_def)
+    @property
+    def ch_null(self):
+        return self._ch_null
 
-    def _from_bytes(self, source: Sequence, loc: int, num_rows: int, **_):
-        sz = self._byte_size
-        end = loc + sz * num_rows
-        column = [bytes(source[ix:ix + sz]) for ix in range(loc, end, sz)]
-        if self._to_python:
-            column = self._to_python(column)
-        return column, end
-
-    def _to_bytes(self, column: Sequence, dest: MutableSequence, **_):
-        if self._from_python:
-            column = self._from_python(column)
-        for x in column:
-            dest += x
-
-    def _from_array(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
-        if self._to_python:
-            column = self._to_python(column)
         return column, loc
 
-    def _to_array(self, column: Sequence, dest: MutableSequence, **_):
-        if self._from_python:
-            column = self._from_python(column)
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         write_array(self._array_type, column, dest)
 
     def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
@@ -228,6 +193,19 @@ class FixedType(ClickHouseType, registered=False):
         loc += num_rows
         column, loc = self._from_native(source, loc, num_rows, **kwargs)
         return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
+
+    def _nullable_to_native(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, **kwargs):
+        dest += bytes(1 if x is None else 0 for x in column)
+        first = column[0]
+        try:
+            column[0] = None
+            for ix, x in enumerate(column):
+                if not x:
+                    column[ix] = 0
+            column[0] = first or 0
+        except TypeError:
+            column = [0 if x is None else x for x in column]
+        self._to_native(column, dest, **kwargs)
 
 
 class UnsupportedType(ClickHouseType, registered=False):

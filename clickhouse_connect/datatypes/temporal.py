@@ -1,18 +1,17 @@
-from collections.abc import Sequence
+from collections.abc import Sequence, MutableSequence
 from datetime import date, timedelta, datetime
 from struct import unpack_from as suf, pack as sp
 
 import pytz
 
-from clickhouse_connect.datatypes.base import TypeDef, FixedType
-from clickhouse_connect.datatypes.common import read_uint64
+from clickhouse_connect.datatypes.base import TypeDef, ArrayType
+from clickhouse_connect.datatypes.common import read_uint64, array_column, write_array
 
 epoch_start_date = date(1970, 1, 1)
 
 
-class Date(FixedType):
+class Date(ArrayType):
     _array_type = 'H'
-    _ch_null = epoch_start_date
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -22,14 +21,16 @@ class Date(FixedType):
     def _to_row_binary(value: date, dest: bytearray):
         dest += sp('<H', (value - epoch_start_date).days, )
 
-    @staticmethod
-    def _to_python(column: Sequence):
-        return [epoch_start_date + timedelta(days) for days in column]
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+        column, loc = array_column(self._array_type, source, loc, num_rows)
+        return [epoch_start_date + timedelta(days) for days in column], loc
 
-    @staticmethod
-    def _from_python(column:Sequence):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         esd = epoch_start_date
-        return [(x - esd).days for x in column]
+        if self.nullable:
+            write_array(self._array_type, [0 if x is None else (x - esd).days for x in column], dest)
+        else:
+            write_array(self._array_type, [(x - esd).days for x in column], dest)
 
 
 class Date32(Date):
@@ -48,10 +49,9 @@ from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
 
 
-class DateTime(FixedType):
+class DateTime(ArrayType):
     __slots__ = '_from_row_binary',
     _array_type = 'I'
-    _ch_null = datetime.utcfromtimestamp(0)
 
     def __init__(self, type_def: TypeDef):
         if type_def.values:
@@ -65,18 +65,19 @@ class DateTime(FixedType):
     def _to_row_binary(value: datetime, dest: bytearray):
         dest += sp('<I', int(value.timestamp()), )
 
-    @staticmethod
-    def _to_python(column: Sequence):
-        return [from_ts_naive(ts) for ts in column]
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+        column, loc = array_column(self._array_type, source, loc, num_rows)
+        return [from_ts_naive(ts) for ts in column], loc
 
-    def _from_python(self, column:Sequence):
-        first = self._first_value(column)
-        if first is None or isinstance(first, int):
-            return column
-        return [int(dt.timestamp()) for dt in column]
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+        if self.nullable:
+            column = [int(x.timestamp()) if x else 0 for x in column]
+        else:
+            column = [int(x.timestamp()) for x in column]
+        write_array(self._array_type, column, dest)
 
 
-class DateTime64(FixedType):
+class DateTime64(ArrayType):
     __slots__ = 'prec', 'tzinfo'
     _array_type = 'Q'
 
@@ -86,9 +87,9 @@ class DateTime64(FixedType):
         self.prec = 10 ** type_def.values[0]
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
-            self._to_python = self._to_python_tz
+            self._from_native = self._from_native_tz
         else:
-            self._to_python = self._to_python_naive
+            self._from_native = self._from_native_naive
             self.tzinfo = None
 
     def _from_row_binary(self, source, loc):
@@ -102,7 +103,8 @@ class DateTime64(FixedType):
         microseconds = int(value.timestamp()) * 1000000 + value.microsecond
         dest += (int(microseconds * self.prec) // 1000000).to_bytes(8, 'little', signed=True)
 
-    def _to_python_tz(self, column: Sequence):
+    def _from_native_tz(self, source: Sequence, loc: int, num_rows: int, **_):
+        column = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
         df = datetime.fromtimestamp
@@ -114,7 +116,8 @@ class DateTime64(FixedType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _to_python_naive(self, column: Sequence):
+    def _from_native_naive(self, source: Sequence, loc: int, num_rows: int, **_):
+        column = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
         df = datetime.utcfromtimestamp
@@ -125,9 +128,10 @@ class DateTime64(FixedType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _from_python(self, column: Sequence):
-        first = self._first_value(column)
-        if first is None:
-            return column
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         prec = self.prec
-        return [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
+        if self.nullable:
+            column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]
+        else:
+            column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
+        write_array(self._array_type, column, dest)

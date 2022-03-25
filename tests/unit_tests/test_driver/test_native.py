@@ -1,3 +1,4 @@
+from ipaddress import IPv4Address
 from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
@@ -75,4 +76,7 @@ def test_map():
 def test_ip():
     ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
     ipv4_type = registry.get_from_name('IPv4')
-    assert ipv4_type._from_python(ips) == [3232236803, 3391883289, 514]
+    dest = bytearray()
+    ipv4_type.to_native(ips, dest)
+    python, loc = ipv4_type.from_native(dest, 0, 3)
+    assert python == [IPv4Address(ip) for ip in ips]

@@ -2,12 +2,14 @@ import socket
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
-from clickhouse_connect.datatypes.base import FixedType
+from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
+from clickhouse_connect.datatypes.common import write_array, array_column
 
 ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
+v6_null = bytes(b'\x00' * 16)
 
 
-class IPv4(FixedType):
+class IPv4(ArrayType):
     _array_type = 'I'
 
     @staticmethod
@@ -25,8 +27,8 @@ class IPv4(FixedType):
         else:
             dest += value.to_bytes(4, 'little')
 
-    @staticmethod
-    def _to_python_ip(column: Sequence) -> MutableSequence:
+    def _from_native_ip(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
         app = new_col.append
@@ -34,37 +36,38 @@ class IPv4(FixedType):
             ipv4 = fast_ip_v4(IPv4Address)
             ipv4._ip = x
             app(ipv4)
-        return new_col
+        return new_col, loc
 
-    @staticmethod
-    def _to_python_str(column: Sequence) -> MutableSequence:
-        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
+    def _from_native_str(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+        column, loc = array_column(self._array_type, source, loc, num_rows)
+        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column], loc
 
-    def _from_python(self, column: Sequence) -> Sequence:
+    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
         first = self._first_value(column)
-        if first is None or isinstance(first, int):
-            return column
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
+            column = [(sum([int(b) << fixed[ix] for ix, b in enumerate(x.split('.'))])) if x else 0 for x in column]
+        else:
             if self.nullable:
-                return [0 if not v else sum(int(b) << fixed[ix] for ix, b in enumerate(v.split('.'))) for v in column]
-            return [sum(int(b) << fixed[ix] for ix, b in enumerate(v.split('.'))) for v in column]
-        if self.nullable:
-            return [0 if not ip else ip._ip for ip in column]
-        return [ip._ip for ip in column]
+                column = [x._ip if x else 0 for x in column]
+            else:
+                column = [x._ip for x in column]
+        write_array(self._array_type, column, dest)
 
-    _to_python = _to_python_ip
+    _from_native = _from_native_ip
 
     @classmethod
     def format(cls, fmt: str):
         if fmt == 'string':
-            cls._to_python = staticmethod(cls._to_python_str)
+            cls._from_native = cls._from_native_str
         else:
-            cls._to_python = staticmethod(cls._to_python_ip)
+            cls._from_native = cls._from_native_ip
 
 
-class IPv6(FixedType):
-    _byte_size = 16
+class IPv6(ClickHouseType):
+    @property
+    def ch_null(self):
+        return v6_null
 
     @staticmethod
     def _from_row_binary(source: Sequence, loc: int):
@@ -94,70 +97,70 @@ class IPv6(FixedType):
             dest += value
 
     @staticmethod
-    def _to_python_ip(column: Sequence) -> MutableSequence:
+    def _from_native_ip(source: Sequence, loc: int, num_rows: int, **_):
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
-        for x in column:
-            int_value = int.from_bytes(x, 'big')
+        app = new_col.append
+        ifb = int.from_bytes
+        end = loc + (num_rows << 4)
+        for ix in range(loc, end, 16):
+            int_value = ifb(source[ix: ix + 16], 'big')
             if int_value & 0xFFFF00000000 == 0xFFFF00000000:
                 ipv4 = fast_ip_v4(IPv4Address)
                 ipv4._ip = int_value & 0xFFFFFFFF
-                new_col.append(ipv4)
+                app(ipv4)
             else:
                 ipv6 = fast_ip_v6(IPv6Address)
                 ipv6._ip = int_value
                 ipv6._scope_id = None
-                new_col.append(ipv6)
-        return new_col
+                app(ipv6)
+        return new_col, end
 
     @staticmethod
-    def _to_python_str(column: Sequence) -> MutableSequence:
+    def _from_native_str(source: Sequence, loc: int, num_rows: int, **_):
+        new_col = []
+        app = new_col.append
         v4mask = ipv4_v6_mask
         tov4 = socket.inet_ntoa
         tov6 = socket.inet_ntop
-        new_col = []
-        app = new_col.append
-        for x in column:
+        af6 = socket.AF_INET6
+        end = loc + (num_rows << 4)
+        for ix in range(loc, end, 16):
+            x = source[ix: ix + 16]
             if x[:12] == v4mask:
                 app(tov4(x[12:]))
             else:
-                app(tov6(socket.AF_INET6, x))
-        return new_col
+                app(tov6(af6, x))
+        return new_col, end
 
-    def _from_python(self, column: Sequence) -> Sequence:
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+        nv = v6_null
         first = self._first_value(column)
         v4mask = ipv4_v6_mask
-        nv = self._ch_null
-        inet6 = socket.AF_INET6
+        af6 = socket.AF_INET6
+        tov6 = socket.inet_pton
         if isinstance(first, str):
-            new_col = []
-            app = new_col.append
-            for v in column:
-                if '.' in v:
-                    app(v4mask + bytes(int(b) for b in v.split('.')))
-                elif v is None:
-                    app(nv)
+            for x in column:
+                if x is None:
+                    dest += nv
+                elif '.' in x:
+                    dest += v4mask + bytes(int(b) for b in x.split('.'))
                 else:
-                    app(socket.inet_pton(inet6, v))
-            return new_col
-        if isinstance(first, IPv4Address) or isinstance(first, IPv6Address):
-            new_col = []
-            app = new_col.append
-            for v in column:
-                if v is None:
-                    app(nv)
+                    dest += tov6(af6, x)
+        elif isinstance(first, (IPv4Address, IPv6Address)):
+            for x in column:
+                if x is None:
+                    dest += nv
                 else:
-                    b = v.packed
-                    app(b if len(b) == 16 else v4mask + b)
-            return new_col
-        return column
+                    b = x.packed
+                    dest += b if len(b) == 16 else (v4mask + b)
 
-    _to_python = _to_python_ip
+    _from_native = _from_native_ip
 
     @classmethod
     def format(cls, fmt: str):
         if fmt == 'string':
-            cls._to_python = staticmethod(cls._to_python_str)
+            cls._from_native = staticmethod(cls._from_native_str)
         else:
-            cls._to_python = staticmethod(cls._to_python_ip)
+            cls._from_native = staticmethod(cls._from_native_ip)
