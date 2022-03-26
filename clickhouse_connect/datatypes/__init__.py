@@ -6,10 +6,6 @@ import clickhouse_connect.datatypes.special
 import clickhouse_connect.datatypes.network
 
 
-def load_datatypes():
-    pass
-
-
 def fixed_string_format(fmt: str, encoding:str = 'utf8'):
     clickhouse_connect.datatypes.strings.FixedString.format(fmt, encoding)
 

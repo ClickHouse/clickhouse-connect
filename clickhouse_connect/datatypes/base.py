@@ -195,7 +195,7 @@ class ArrayType(ClickHouseType, registered=False):
         return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
 
     def _nullable_to_native(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, **kwargs):
-        dest += bytes(1 if x is None else 0 for x in column)
+        write_array('B', [1 if x is None else 0 for x in column], dest)
         first = column[0]
         try:
             column[0] = None

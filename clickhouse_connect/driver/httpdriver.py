@@ -93,5 +93,5 @@ class HttpDriver(BaseDriver):
             response = requests.request('GET', self.url + '/ping')
             return 200 <= response.status_code < 300
         except requests.exceptions.RequestException as ex:
-            logger.debug('ping failed')
+            logger.debug('ping failed', exc_info=True)
             return False

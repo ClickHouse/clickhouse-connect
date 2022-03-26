@@ -15,6 +15,7 @@ array_sizes = {v: k for k,v in array_map.items()}
 array_sizes['f'] = 4
 array_sizes['d'] = 8
 
+
 def array_type(size: int, signed:bool):
     try:
         at = array_map[size]
@@ -41,11 +42,11 @@ def write_array(at: str, column: Sequence, dest: MutableSequence):
 
 
 def read_uint64(source: Sequence, loc: int):
-    return int.from_bytes(source[loc: loc + 8], 'little', signed=False), loc + 8
+    return int.from_bytes(source[loc: loc + 8], 'little'), loc + 8
 
 
 def write_uint64(value: int, dest: MutableSequence):
-    dest.extend(value.to_bytes(8, 'little', signed=False))
+    dest.extend(value.to_bytes(8, 'little'))
 
 
 def read_leb128(source: Sequence, loc: int):

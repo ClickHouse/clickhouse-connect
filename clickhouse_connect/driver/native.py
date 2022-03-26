@@ -1,4 +1,4 @@
-from typing import Union, List, Any, Iterable, Collection
+from typing import Union, List, Any, Collection
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType

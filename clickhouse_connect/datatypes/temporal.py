@@ -67,7 +67,8 @@ class DateTime(ArrayType):
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
-        return [from_ts_naive(ts) for ts in column], loc
+        fts = from_ts_naive
+        return [fts(ts) for ts in column], loc
 
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         if self.nullable:

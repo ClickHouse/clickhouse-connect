@@ -172,7 +172,7 @@ class BigInt(ClickHouseType, registered=False):
                     ext(x.to_bytes(sz, 'little', signed=signed))
 
     @classmethod
-    def format(cls, fmt: str, encoding: str = 'utf8'):
+    def format(cls, fmt: str):
         fmt = fmt.lower()
         if fmt.lower().startswith('str'):
             cls._format = 'string'
@@ -225,7 +225,7 @@ class UInt256(BigInt):
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
-        return int.from_bytes(source[loc: loc + 32], 'little', signed=False), loc + 32
+        return int.from_bytes(source[loc: loc + 32], 'little'), loc + 32
 
     @staticmethod
     def _to_row_binary(value: int, dest: bytearray):
@@ -328,7 +328,7 @@ class Enum16(Enum8):
         try:
             value = self._name_map[value]
         except KeyError:
-            pass
+            value = 0
         dest += sp('<h', value)
 
 
