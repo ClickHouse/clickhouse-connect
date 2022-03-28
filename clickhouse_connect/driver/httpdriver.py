@@ -37,7 +37,7 @@ class HttpDriver(BaseDriver):
             query += f' FORMAT {self.read_format}'
         return query
 
-    def query(self, query: str) -> QueryResult:
+    def exec_query(self, query: str) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
         response = self.raw_request(self.format_query(query), params=params, headers=headers)

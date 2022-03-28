@@ -27,9 +27,9 @@ class ClickHouseType():
     _ch_name = None
     _name_suffix = ''
 
-    def __init_subclass__(cls, registered: bool = True):
+    def __init_subclass__(cls, registered: bool = True, ch_name:str = None):
         if registered:
-            cls._ch_name = cls.__name__
+            cls._ch_name = ch_name or cls.__name__
             cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
             type_map[cls._ch_name.upper()] = cls
 

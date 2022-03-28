@@ -77,7 +77,7 @@ class ClickHouseDialect(DefaultDialect):
             table = table_name
         else:
             table = '.'.join((schema, table_name))
-        rows = connection.execute('EXISTS TABLE {}'.format(table))
+        rows = connection.execute(f'EXISTS TABLE {table}')
         return rows.next().result == 1
 
     def has_sequence(self, connection, sequence_name, schema=None):
@@ -99,7 +99,7 @@ class ClickHouseDialect(DefaultDialect):
         raise NotImplementedError
 
     def set_isolation_level(self, dbapi_conn, level):
-        raise NotImplementedError
+        pass
 
     def get_isolation_level(self, dbapi_conn):
         return None

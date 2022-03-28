@@ -35,7 +35,7 @@ type_mapping = (
     (r'^FLOAT\d*$', Float),
     (r'^ENUM', String),
     (r'(FIXED)?STRING', String),
-    (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL)', UserDefinedType),
+    (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL|OBJECT|NESTED)', UserDefinedType),
     (r'(SIMPLE)?AGGREGATEFUNCTION$', UserDefinedType),
     (r'^DATETIME', DateTime),
     (r'^DATE', Date),

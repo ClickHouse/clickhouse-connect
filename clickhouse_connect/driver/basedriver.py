@@ -34,9 +34,10 @@ class TableDef(NamedTuple):
 
 
 class BaseDriver(metaclass=ABCMeta):
-    def __init__(self, database: str, **kwargs):
+    def __init__(self, database: str, query_limit=5000, **kwargs):
         if database and not database == '__default__':
             self._database = database
+        self.limit = query_limit
 
     @property
     def database(self):
@@ -44,8 +45,13 @@ class BaseDriver(metaclass=ABCMeta):
             self._database = self.command('SELECT database()')
         return self._database
 
+    def query(self, query: str) -> QueryResult:
+        if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
+            query += f' LIMIT {self.limit}'
+        return self.exec_query(query)
+
     @abstractmethod
-    def query(self, query: str, ) -> QueryResult:
+    def exec_query(self, query: str) -> QueryResult:
         pass
 
     @abstractmethod

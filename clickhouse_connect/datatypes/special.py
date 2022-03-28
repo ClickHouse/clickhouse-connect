@@ -302,7 +302,7 @@ class SimpleAggregateFunction(ClickHouseType):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
-        self._ch_null = self.element_type._ch_null
+        self._ch_null = self.element_type.ch_null
 
     def _from_row_binary(self, source, loc):
         return self.element_type.from_row_binary(source, loc)
@@ -319,3 +319,13 @@ class SimpleAggregateFunction(ClickHouseType):
 
 class AggregateFunction(UnsupportedType):
     pass
+
+
+class Object(UnsupportedType):
+    pass
+
+
+class Nested(UnsupportedType):
+    pass
+
+
