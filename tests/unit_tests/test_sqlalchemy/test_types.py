@@ -3,7 +3,7 @@
 from sqlalchemy import Integer, DateTime
 
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.sqlalchemy.datatypes import map_schema_types
+from clickhouse_connect.cc_sqlalchemy.typemap import map_schema_types
 
 
 def test_mapping():

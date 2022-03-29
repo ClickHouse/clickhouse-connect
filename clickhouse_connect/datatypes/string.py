@@ -33,7 +33,7 @@ class String(ClickHouseType):
             loc += length
         return column, loc
 
-    def _to_native(self, column:Sequence, dest: MutableSequence, **_):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_) -> None:
         encoding = self._encoding
         app = dest.append
         if self.nullable:
@@ -41,22 +41,22 @@ class String(ClickHouseType):
                 if x is None:
                     app(0)
                 else:
-                    l = len(x)
+                    ln = len(x)
                     while True:
-                        b = l & 0x7f
-                        l = l >> 7
-                        if l == 0:
+                        b = ln & 0x7f
+                        ln = ln >> 7
+                        if ln == 0:
                             app(b)
                             break
                         app(0x80 | b)
                     dest += x.encode(encoding)
         else:
             for x in column:
-                l = len(x)
+                ln = len(x)
                 while True:
-                    b = l & 0x7f
-                    l = l >> 7
-                    if l == 0:
+                    b = ln & 0x7f
+                    ln = ln >> 7
+                    if ln == 0:
                         app(b)
                         break
                     app(0x80 | b)
@@ -144,7 +144,7 @@ class FixedString(ClickHouseType):
     _to_row_binary = _to_row_binary_bytes
 
     @classmethod
-    def format(cls, fmt: str, encoding: str = 'utf8'):
+    def format(cls, fmt: str, encoding: str = 'utf8') -> None:
         fmt = fmt.lower()
         if fmt.lower().startswith('str'):
             cls._format = 'string'

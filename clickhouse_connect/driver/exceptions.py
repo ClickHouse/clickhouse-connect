@@ -8,6 +8,3 @@ class DriverError(Exception):
 
 class NotSupportedError(DriverError):
     pass
-
-
-

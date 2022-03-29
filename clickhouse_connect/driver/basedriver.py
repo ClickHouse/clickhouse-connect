@@ -46,6 +46,7 @@ class BaseDriver(metaclass=ABCMeta):
         return self._database
 
     def query(self, query: str) -> QueryResult:
+        query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
         return self.exec_query(query)
@@ -120,4 +121,3 @@ class BaseDriver(metaclass=ABCMeta):
 
     def __exit__(self):
         self.close()
-

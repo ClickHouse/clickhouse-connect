@@ -17,7 +17,7 @@ class TypeDef(NamedTuple):
         return f"({', '.join(str(v) for v in self.values)})" if self.values else ''
 
 
-class ClickHouseType():
+class ClickHouseType:
     __slots__ = ('from_row_binary', 'to_row_binary', 'nullable', 'low_card', 'from_native', 'to_native', '__dict__')
     _instance_cache = None
     _from_row_binary = None
@@ -27,7 +27,7 @@ class ClickHouseType():
     _ch_name = None
     _name_suffix = ''
 
-    def __init_subclass__(cls, registered: bool = True, ch_name:str = None):
+    def __init_subclass__(cls, registered: bool = True, ch_name: str = None):
         if registered:
             cls._ch_name = ch_name or cls.__name__
             cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
@@ -148,14 +148,14 @@ class ClickHouseType():
                     key += 1
                 else:
                     index.append(ix)
-        ix_type = int(log(len(keys), 2)) // 8   # power of two needed to store the total number of keys
+        ix_type = int(log(len(keys), 2)) // 8  # power of two needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(keys), dest)
         self._to_native(keys, dest, lc_version=lc_version, **kwargs)
         write_uint64(len(index), dest)
         write_array(array_type(2 ** ix_type, False), index, dest)
 
-    def _first_value(self,  column: Sequence) -> Optional[Any]:
+    def _first_value(self, column: Sequence) -> Optional[Any]:
         if self.nullable:
             return next((x for x in column if x is not None), None)
         if column:
@@ -217,10 +217,10 @@ class UnsupportedType(ClickHouseType, registered=False):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
     def _to_row_binary(self, *_):
-        raise NotSupportedError('{self.name} serialization not supported')
+        raise NotSupportedError(f'{self.name} serialization not supported')
 
     def _from_native(self, *_):
-        raise NotSupportedError('{self.name} deserialization not supported')
+        raise NotSupportedError(f'{self.name} deserialization not supported')
 
     def _to_native(self, *_):
-        raise NotSupportedError('{self.name} serialization  not supported')
+        raise NotSupportedError(f'{self.name} serialization  not supported')

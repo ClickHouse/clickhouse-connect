@@ -18,7 +18,7 @@ class HttpDriver(BaseDriver):
         self.params = {}
         self.headers = {}
         self.compress = compress
-        self.url = '{}://{}:{}'.format(scheme, host, port)
+        self.url = f'{scheme}://{host}:{port}'
         self.auth = (username, password if password else '') if username else None
         if data_format == 'native':
             self.read_format = self.write_format = 'Native'
@@ -40,6 +40,8 @@ class HttpDriver(BaseDriver):
     def exec_query(self, query: str) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
+        if self.compress:
+            headers['Accept-Encoding'] = 'br, gzip'
         response = self.raw_request(self.format_query(query), params=params, headers=headers)
         result_set, column_names, column_types = self.parse_response(response.content)
         summary = {}
@@ -92,6 +94,6 @@ class HttpDriver(BaseDriver):
         try:
             response = requests.request('GET', self.url + '/ping')
             return 200 <= response.status_code < 300
-        except requests.exceptions.RequestException as ex:
+        except requests.exceptions.RequestException:
             logger.debug('ping failed', exc_info=True)
             return False

@@ -11,12 +11,12 @@ array_map = {1: 'b', 2: 'h', 4: 'i', 8: 'q'}
 if int_size == 2:
     array_map[4] = 'l'
 
-array_sizes = {v: k for k,v in array_map.items()}
+array_sizes = {v: k for k, v in array_map.items()}
 array_sizes['f'] = 4
 array_sizes['d'] = 8
 
 
-def array_type(size: int, signed:bool):
+def array_type(size: int, signed: bool):
     try:
         at = array_map[size]
     except KeyError:
@@ -76,7 +76,7 @@ def write_leb128(value: int, dest: MutableSequence):
         dest.append(0x80 | b)
 
 
-def to_leb128(value: int) -> bytearray:  #Unsigned only
+def to_leb128(value: int) -> bytearray:  # Unsigned only
     result = bytearray()
     while True:
         b = value & 0x7f
@@ -86,4 +86,3 @@ def to_leb128(value: int) -> bytearray:  #Unsigned only
             break
         result.append(0x80 | b)
     return result
-

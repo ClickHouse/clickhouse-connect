@@ -19,7 +19,7 @@ from superset.utils.network import is_hostname_valid, is_port_open
 from clickhouse_connect import driver_name
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver import default_port
-from clickhouse_connect.superset.datatypes import configure_types
+from clickhouse_connect.cc_superset.datatypes import configure_types
 from superset.models.core import Database
 
 logger = logging.getLogger(__name__)

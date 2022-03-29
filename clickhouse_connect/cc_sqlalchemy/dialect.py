@@ -2,7 +2,7 @@ from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import driver_name, dbapi
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.sqlalchemy import ischema_names
+from clickhouse_connect.cc_sqlalchemy import ischema_names
 
 
 class ClickHouseDialect(DefaultDialect):

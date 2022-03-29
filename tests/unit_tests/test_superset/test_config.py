@@ -2,7 +2,7 @@ from superset.app import SupersetApp
 
 
 def test_build_uri(superset_app: SupersetApp):
-    from clickhouse_connect.superset.engine import ClickHouseEngineSpec
+    from clickhouse_connect.cc_superset.engine import ClickHouseEngineSpec
     spec = ClickHouseEngineSpec
     parameters = {
         'username': 'ClickHouse',
@@ -14,7 +14,7 @@ def test_build_uri(superset_app: SupersetApp):
 
 
 def test_json_schema(superset_app: SupersetApp):
-    from clickhouse_connect.superset.engine import ClickHouseEngineSpec
+    from clickhouse_connect.cc_superset.engine import ClickHouseEngineSpec
     spec = ClickHouseEngineSpec
     json_schema = spec.parameters_json_schema()
     assert json_schema['properties']['port']['maximum'] == 65535

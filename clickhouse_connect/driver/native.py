@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Union, List, Any, Collection
 
 from clickhouse_connect.datatypes import registry
@@ -6,7 +7,7 @@ from clickhouse_connect.datatypes.common import read_leb128, read_leb128_str, wr
 
 
 def parse_response(source: Union[memoryview, bytes, bytearray]) -> (
-        Collection[Collection[Any]], List[str], List[ClickHouseType]):
+        Sequence[Sequence[Any]], List[str], List[ClickHouseType]):
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0

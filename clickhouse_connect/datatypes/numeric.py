@@ -1,8 +1,7 @@
 import decimal
 from collections.abc import Sequence, MutableSequence
-
-from typing import Any, Union, Iterable, Type
 from struct import unpack_from as suf, pack as sp
+from typing import Any, Union, Type
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.datatypes.common import array_type, array_column, write_array
@@ -403,7 +402,7 @@ class Decimal(ClickHouseType):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col, loc
 
-    def _to_native(self, column:Sequence, dest: MutableSequence, **_):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         mult = self._mult
         if self.nullable:
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)

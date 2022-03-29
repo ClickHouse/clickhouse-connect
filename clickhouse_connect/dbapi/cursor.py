@@ -30,7 +30,7 @@ class Cursor:
     def close(self):
         self.data = None
 
-    def execute(self, operation, parameters=None, context=None):
+    def execute(self, operation, *_a, **_kw):
         qr = self.driver.query(operation)
         self.data = qr.result_set
         self.names = qr.column_names

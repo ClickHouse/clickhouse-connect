@@ -1,6 +1,7 @@
 import re
 from typing import Type
 
+
 from sqlalchemy import Integer, Float, String, DateTime, Date, Boolean, DECIMAL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.type_api import TypeEngine, UserDefinedType
@@ -35,7 +36,7 @@ type_mapping = (
     (r'^FLOAT\d*$', Float),
     (r'^ENUM', String),
     (r'(FIXED)?STRING', String),
-    (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL|OBJECT|NESTED)', UserDefinedType),
+    (r'^(NOTHING|UUID|ARRAY|TUPLE|MAP|IP|DECIMAL|OBJECT|NESTED|JSON)', UserDefinedType),
     (r'(SIMPLE)?AGGREGATEFUNCTION$', UserDefinedType),
     (r'^DATETIME', DateTime),
     (r'^DATE', Date),

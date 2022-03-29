@@ -27,7 +27,7 @@ class IPv4(ArrayType):
         else:
             dest += value.to_bytes(4, 'little')
 
-    def _from_native_ip(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+    def _from_native_ip(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
@@ -38,7 +38,7 @@ class IPv4(ArrayType):
             app(ipv4)
         return new_col, loc
 
-    def _from_native_str(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+    def _from_native_str(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column], loc
 
