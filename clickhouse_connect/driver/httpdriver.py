@@ -37,13 +37,13 @@ class HttpDriver(BaseDriver):
             query += f' FORMAT {self.read_format}'
         return query
 
-    def exec_query(self, query: str) -> QueryResult:
+    def exec_query(self, query: str, use_none: bool = True) -> QueryResult:
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
         if self.compress:
             headers['Accept-Encoding'] = 'br, gzip'
         response = self.raw_request(self.format_query(query), params=params, headers=headers)
-        result_set, column_names, column_types = self.parse_response(response.content)
+        result_set, column_names, column_types = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:

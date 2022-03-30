@@ -1,4 +1,5 @@
 from clickhouse_connect.driver import BaseDriver
+from clickhouse_connect.driver.common import has_numpy, has_pandas
 
 
 def test_query(test_driver: BaseDriver):
@@ -16,3 +17,15 @@ def test_insert(test_driver: BaseDriver):
     test_driver.command('CREATE TABLE test_system_insert AS system.tables Engine MergeTree() ORDER BY name')
     tables_result = test_driver.query("SELECT * from system.tables")
     test_driver.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
+
+
+def test_numpy(test_driver: BaseDriver):
+    if has_numpy:
+        np_array = test_driver.query_np('SELECT * FROM system.tables')
+        print (np_array['name'])
+
+
+def test_pandas(test_driver: BaseDriver):
+    if has_pandas:
+        df = test_driver.query_df('SELECT * FROM system.tables')
+        print(df['database'])

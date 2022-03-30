@@ -1,4 +1,5 @@
 import array
+import logging
 import sys
 from collections.abc import Sequence, MutableSequence
 
@@ -86,3 +87,19 @@ def to_leb128(value: int) -> bytearray:  # Unsigned only
             break
         result.append(0x80 | b)
     return result
+
+
+has_numpy = False
+has_pandas = False
+
+try:
+    import numpy as np
+    has_numpy = True
+except ImportError:
+    logging.info("Numpy library not available")
+
+try:
+    import pandas as pa
+    has_pandas = True
+except ImportError:
+    logging.info("Numpy library not available")

@@ -4,13 +4,14 @@ from typing import Any
 from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
-from clickhouse_connect.datatypes.common import read_uint64
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.common import read_uint64
 
 empty_uuid_b = bytes(b'\x00' * 16)
 
 
 class UUID(ClickHouseType):
+    python_null = PYUUID(int=0)
 
     @property
     def ch_null(self):

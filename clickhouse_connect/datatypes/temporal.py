@@ -5,13 +5,15 @@ from struct import unpack_from as suf, pack as sp
 import pytz
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
-from clickhouse_connect.datatypes.common import read_uint64, array_column, write_array
+from clickhouse_connect.driver.common import read_uint64, array_column, write_array
 
 epoch_start_date = date(1970, 1, 1)
 
 
 class Date(ArrayType):
     _array_type = 'H'
+    python_null = epoch_start_date
+    np_type = 'M8[D]'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -52,6 +54,8 @@ from_ts_tz = datetime.fromtimestamp
 class DateTime(ArrayType):
     __slots__ = '_from_row_binary',
     _array_type = 'I'
+    np_type = 'M8[us]'
+    python_null = from_ts_naive(0)
 
     def __init__(self, type_def: TypeDef):
         if type_def.values:
@@ -81,6 +85,7 @@ class DateTime(ArrayType):
 class DateTime64(ArrayType):
     __slots__ = 'prec', 'tzinfo'
     _array_type = 'Q'
+    python_null = epoch_start_date
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)

@@ -3,7 +3,7 @@ from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
-from clickhouse_connect.datatypes.common import write_array, array_column
+from clickhouse_connect.driver.common import write_array, array_column
 
 ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
 v6_null = bytes(b'\x00' * 16)
@@ -11,6 +11,7 @@ v6_null = bytes(b'\x00' * 16)
 
 class IPv4(ArrayType):
     _array_type = 'I'
+    python_null = IPv4Address(0)
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -60,11 +61,15 @@ class IPv4(ArrayType):
     def format(cls, fmt: str):
         if fmt == 'string':
             cls._from_native = cls._from_native_str
+            cls.np_type = 'U'
         else:
             cls._from_native = cls._from_native_ip
+            cls.np_type = 'O'
 
 
 class IPv6(ClickHouseType):
+    python_null = IPv6Address(0)
+
     @property
     def ch_null(self):
         return v6_null

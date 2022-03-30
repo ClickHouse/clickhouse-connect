@@ -4,11 +4,12 @@ from struct import unpack_from as suf, pack as sp
 from typing import Any, Union, Type
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
-from clickhouse_connect.datatypes.common import array_type, array_column, write_array
+from clickhouse_connect.driver.common import array_type, array_column, write_array
 
 
 class Int8(ArrayType):
     _array_type = 'b'
+    np_type = 'b'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -25,6 +26,7 @@ class Int8(ArrayType):
 
 class UInt8(ArrayType):
     _array_type = 'B'
+    np_type = 'B'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -37,6 +39,7 @@ class UInt8(ArrayType):
 
 class Int16(ArrayType):
     _array_type = 'h'
+    np_type = 'i2'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -49,6 +52,7 @@ class Int16(ArrayType):
 
 class UInt16(ArrayType):
     _array_type = 'H'
+    np_type = 'u2'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -61,6 +65,7 @@ class UInt16(ArrayType):
 
 class Int32(ArrayType):
     _array_type = 'i'
+    np_type = 'i4'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -73,6 +78,7 @@ class Int32(ArrayType):
 
 class UInt32(ArrayType):
     _array_type = 'I'
+    np_type = 'u4'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -85,6 +91,7 @@ class UInt32(ArrayType):
 
 class Int64(ArrayType):
     _array_type = 'q'
+    np_type = 'i8'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -97,6 +104,7 @@ class Int64(ArrayType):
 
 class UInt64(ArrayType):
     _array_type = 'Q'
+    np_type = 'u8'
 
     @staticmethod
     def _from_row_binary(source: bytes, loc: int):
@@ -233,6 +241,7 @@ class UInt256(BigInt):
 
 class Float32(ArrayType):
     _array_type = 'f'
+    np_type = 'f4'
 
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
@@ -245,6 +254,7 @@ class Float32(ArrayType):
 
 class Float64(ArrayType):
     _array_type = 'd'
+    np_type = 'f8'
 
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
@@ -256,6 +266,8 @@ class Float64(ArrayType):
 
 
 class Boolean(ClickHouseType):
+    np_type = '?'
+
     @staticmethod
     def _from_row_binary(source: bytearray, loc: int):
         return source[loc] > 0, loc + 1

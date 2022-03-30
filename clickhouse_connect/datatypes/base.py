@@ -1,7 +1,7 @@
 from math import log
 from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence, Optional, Union
 
-from clickhouse_connect.datatypes.common import array_column, array_type, int_size, read_uint64, write_array, \
+from clickhouse_connect.driver.common import array_column, array_type, int_size, read_uint64, write_array, \
     write_uint64, low_card_version, array_sizes
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
@@ -26,6 +26,8 @@ class ClickHouseType:
     _from_native = None
     _ch_name = None
     _name_suffix = ''
+    np_type = 'O'
+    python_null = 0
 
     def __init_subclass__(cls, registered: bool = True, ch_name: str = None):
         if registered:
@@ -68,10 +70,10 @@ class ClickHouseType:
     def ch_null(self):
         return b'\x00'
 
-    def _nullable_from_row_binary(self, source, loc) -> (Any, int):
+    def _nullable_from_row_binary(self, source, loc, use_none: bool = True) -> (Any, int):
         if source[loc] == 0:
             return self._from_row_binary(source, loc + 1)
-        return None, loc + 1
+        return None if use_none else self.python_null, loc + 1
 
     def _nullable_to_row_binary(self, value, dest: bytearray):
         if value is None:
@@ -80,20 +82,21 @@ class ClickHouseType:
             dest += b'\x00'
             self._to_row_binary(value, dest)
 
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, use_none = True, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
         loc += num_rows
         column, loc = self._from_native(source, loc, num_rows, **kwargs)
-        for ix in range(num_rows):
-            if null_map[ix]:
-                column[ix] = None
+        if use_none:
+            for ix in range(num_rows):
+                if null_map[ix]:
+                    column[ix] = None
         return column, loc
 
     def _nullable_to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
         dest += bytes(1 if x is None else 0 for x in column)
         self._to_native(column, dest, **kwargs)
 
-    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, use_none = True, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
         if num_rows == 0:
             return tuple(), loc
@@ -105,9 +108,9 @@ class ClickHouseType:
         values, loc = self._from_native(source, loc, index_cnt, **kwargs)
         if self.nullable:
             try:
-                values[0] = None
+                values[0] = None if use_none else self.python_null
             except TypeError:
-                values = (None,) + values[1:]
+                values = (None if use_none else self.python_null,) + values[1:]
         loc += 8  # key size should match row count
         keys, end = array_column(array_type(key_size, False), source, loc, num_rows)
         return tuple(values[key] for key in keys), end
@@ -188,11 +191,13 @@ class ArrayType(ClickHouseType, registered=False):
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         write_array(self._array_type, column, dest)
 
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
         loc += num_rows
         column, loc = self._from_native(source, loc, num_rows, **kwargs)
-        return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
+        if use_none:
+            return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
+        return column, loc
 
     def _nullable_to_native(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, **kwargs):
         write_array('B', [1 if x is None else 0 for x in column], dest)

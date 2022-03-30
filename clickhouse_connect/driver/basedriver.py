@@ -3,8 +3,9 @@ from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.exceptions import ServerError
-from clickhouse_connect.driver.query import QueryResult
+from clickhouse_connect.driver.exceptions import ServerError, NotSupportedError
+from clickhouse_connect.driver.query import QueryResult, np_result, pandas_df
+from clickhouse_connect.driver.common import has_numpy, has_pandas
 
 
 class ColumnDef(NamedTuple):
@@ -45,14 +46,24 @@ class BaseDriver(metaclass=ABCMeta):
             self._database = self.command('SELECT database()')
         return self._database
 
-    def query(self, query: str) -> QueryResult:
+    def query(self, query: str, use_none: bool = True) -> QueryResult:
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
-        return self.exec_query(query)
+        return self.exec_query(query, use_none)
+
+    def query_np(self, query: str):
+        if not has_numpy:
+            raise NotSupportedError("Numpy package is not installed")
+        return np_result(self.query(query, use_none = False))
+
+    def query_df(self, query: str):
+        if not has_pandas:
+            raise NotSupportedError("Pandas package is not installed")
+        return pandas_df(self.query(query, use_none = False))
 
     @abstractmethod
-    def exec_query(self, query: str) -> QueryResult:
+    def exec_query(self, query: str, use_none: bool = True) -> QueryResult:
         pass
 
     @abstractmethod

@@ -53,12 +53,12 @@ def check_result(result, expected, row_num=0, col_num=0):
 
 def test_uint16_nulls():
     result = parse_response(to_bytes(uint16_nulls))
-    assert result[0] == ((None,), (20,), (None,), (40,))
+    assert result[0] == [(None,), (20,), (None,), (40,)]
 
 
 def test_low_cardinality():
     result = parse_response(to_bytes(low_cardinality))
-    assert result[0] == (('CDMA',), ('GSM',), ('UMTS',))
+    assert result[0] == [('CDMA',), ('GSM',), ('UMTS',)]
 
 
 def test_low_card_array():

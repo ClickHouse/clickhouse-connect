@@ -21,7 +21,9 @@ setup(
     extras_require={
         'sqlalchemy': ['sqlalchemy>1.3.21, <1.4'],
         'superset': ['apache_superset>=1.4.1', 'sqlalchemy>1.3.21, <1.4'],
-        'brotli': ['brotli>=1.09']
+        'brotli': ['brotli>=1.09'],
+        'numpy': ['numpy'],
+        'pandas': ['pandas']
     },
     entry_points={
         'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',

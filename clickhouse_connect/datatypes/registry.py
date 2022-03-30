@@ -9,7 +9,7 @@ size_pattern = re.compile(r'^([A-Z]+)(\d+)')
 int_pattern = re.compile(r'^-?\d+$')
 
 
-def get_from_name(name: str) -> ClickHouseType:
+def get_from_name(name: str, no_nulls: bool = False) -> ClickHouseType:
     base = name
     size = 0
     wrappers = []
@@ -19,7 +19,8 @@ def get_from_name(name: str) -> ClickHouseType:
         wrappers.append('LowCardinality')
         base = base[15:-1]
     if base.upper().startswith('NULLABLE'):
-        wrappers.append('Nullable')
+        if not no_nulls:
+            wrappers.append('Nullable')
         base = base[9:-1]
     if base.upper().startswith('ENUM'):
         keys, values = _parse_enum(base)

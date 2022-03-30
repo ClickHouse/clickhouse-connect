@@ -1,11 +1,12 @@
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
-from clickhouse_connect.datatypes.common import read_leb128, to_leb128
+from clickhouse_connect.driver.common import read_leb128, to_leb128
 
 
 class String(ClickHouseType):
     _encoding = 'utf8'
+    python_null = ''
 
     def _from_row_binary(self, source, loc):
         length, loc = read_leb128(source, loc)
@@ -71,6 +72,15 @@ class FixedString(ClickHouseType):
         super().__init__(type_def)
         self._byte_size = type_def.values[0]
         self._name_suffix = type_def.arg_str
+        self._python_null = self._ch_null = bytes(b'\x00' * self._byte_size)
+
+    @property
+    def python_null(self):
+        return self._python_null if format == 'bytes' else ''
+
+    @property
+    def ch_null(self):
+        return self._ch_null
 
     def _from_row_binary(self, source: bytearray, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
@@ -151,5 +161,6 @@ class FixedString(ClickHouseType):
             cls._encoding = encoding
             cls._to_row_binary = cls._to_row_binary_str
         else:
-            cls._format = 'raw'
+            cls._format = 'bytes'
             cls._to_row_binary = cls._to_row_binary_bytes
+

@@ -1,17 +1,18 @@
 import logging
 
-from typing import List, Any, Sequence, Collection
+from typing import List, Any, Sequence, Collection, Union
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.common import read_leb128, read_leb128_str
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str
 from clickhouse_connect.driver.exceptions import DriverError
 
 logger = logging.getLogger(__name__)
 
 
-def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHouseType]):
-    source = memoryview(source)
+def parse_response(source: Union [bytes, bytearray, memoryview], use_none: bool = True) -> (List[List[Any]], List[str], List[ClickHouseType]):
+    if not isinstance(source, memoryview):
+        source = memoryview(source)
     response_size = len(source)
     loc = 0
     num_columns, loc = read_leb128(source, loc)
@@ -34,7 +35,7 @@ def parse_response(source: bytes) -> (List[List[Any]], List[str], List[ClickHous
     while loc < response_size:
         row = []
         for conv in convs:
-            v, loc = conv(source, loc)
+            v, loc = conv(source, loc, use_none)
             row.append(v)
         result.append(row)
     return result, names, col_types

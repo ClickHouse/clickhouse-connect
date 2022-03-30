@@ -3,10 +3,10 @@ from typing import Union, List, Any, Collection
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.common import read_leb128, read_leb128_str, write_leb128
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
 
 
-def parse_response(source: Union[memoryview, bytes, bytearray]) -> (
+def parse_response(source: Union[memoryview, bytes, bytearray], use_none: bool = True) -> (
         Sequence[Sequence[Any]], List[str], List[ClickHouseType]):
     if not isinstance(source, memoryview):
         source = memoryview(source)
@@ -29,13 +29,13 @@ def parse_response(source: Union[memoryview, bytes, bytearray]) -> (
                 col_types.append(col_type)
             else:
                 col_type = col_types[col_num]
-            column, loc = col_type.from_native(source, loc, num_rows)
+            column, loc = col_type.from_native(source, loc, num_rows, use_none=use_none)
             if block == 0:
                 result.append(column)
             else:
                 result[col_num] += column
         block += 1
-    result = tuple(zip(*result))
+    result = list(zip(*result))
     return result, names, col_types
 
 

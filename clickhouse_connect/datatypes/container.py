@@ -3,7 +3,7 @@ from collections.abc import Sequence, MutableSequence
 from typing import Any, Dict
 
 from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
-from clickhouse_connect.datatypes.common import read_leb128, to_leb128, read_uint64, array_column, low_card_version, \
+from clickhouse_connect.driver.common import read_leb128, to_leb128, read_uint64, array_column, low_card_version, \
     write_uint64, must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import DriverError
