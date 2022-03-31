@@ -22,7 +22,7 @@ class ClickHouseDialect(DefaultDialect):
     def initialize(self, connection):
         pass
 
-    def get_schema_names(self, connection, **kwargs):
+    def get_schema_names(self, connection, **_):
         return [row.name for row in connection.execute('SHOW DATABASES')]
 
     def get_table_names(self, connection, schema=None, **kw):

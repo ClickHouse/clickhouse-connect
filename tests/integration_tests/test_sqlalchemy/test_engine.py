@@ -13,9 +13,9 @@ def test_create():
 
 def test_basic_reflection(test_engine: Engine):
     conn = test_engine.connect()
-    metadata = db.MetaData(bind=test_engine, reflect=True)
-    table = db.Table('cell_towers', metadata)
-    query = db.select([table])
+    metadata = db.MetaData(bind=test_engine, reflect=True, schema='system')
+    table = db.Table('tables', metadata)
+    query = db.select([table.c.create_table_query])
     result = conn.execute(query)
     rows = result.fetchmany(100)
     print(rows)

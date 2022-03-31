@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 class HttpDriver(BaseDriver):
     def __init__(self, scheme: str, host: str, port: int, username: str, password: str, database: str,
-                 compress: bool = True, data_format: str = 'native', **kwargs):
-        super().__init__(database, **kwargs)
+                 compress: bool = True, data_format: str = 'native', query_limit: int =5000):
+        super().__init__(database, query_limit)
         self.params = {}
         self.headers = {}
         self.compress = compress

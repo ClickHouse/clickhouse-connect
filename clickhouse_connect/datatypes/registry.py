@@ -90,6 +90,7 @@ def _parse_args(name) -> [Any]:
     in_str = False
     escaped = False
     pos = 0
+    parens = 0
 
     def add_value():
         if int_pattern.match(value):
@@ -115,12 +116,16 @@ def _parse_args(name) -> [Any]:
                 pos += 1
                 if pos == l:
                     break
-            if char == ',':
+            if char == ',' and not parens:
                 add_value()
                 value = ''
             else:
                 if char == "'" and not value:
                     in_str = True
+                elif char == '(':
+                    parens += 1
+                elif char == ')' and parens:
+                    parens -= 1
                 value += char
     if value != '':
         add_value()

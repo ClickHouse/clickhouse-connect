@@ -35,7 +35,7 @@ class TableDef(NamedTuple):
 
 
 class BaseDriver(metaclass=ABCMeta):
-    def __init__(self, database: str, query_limit=5000, **kwargs):
+    def __init__(self, database: str, query_limit: int):
         if database and not database == '__default__':
             self._database = database
         self.limit = query_limit
@@ -46,7 +46,7 @@ class BaseDriver(metaclass=ABCMeta):
             self._database = self.command('SELECT database()')
         return self._database
 
-    def query(self, query: str, use_none: bool = True) -> QueryResult:
+    def query(self, query: str, parameters=None, use_none: bool = True) -> QueryResult:
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
@@ -55,12 +55,12 @@ class BaseDriver(metaclass=ABCMeta):
     def query_np(self, query: str):
         if not has_numpy:
             raise NotSupportedError("Numpy package is not installed")
-        return np_result(self.query(query, use_none = False))
+        return np_result(self.query(query, use_none=False))
 
     def query_df(self, query: str):
         if not has_pandas:
             raise NotSupportedError("Pandas package is not installed")
-        return pandas_df(self.query(query, use_none = False))
+        return pandas_df(self.query(query, use_none=False))
 
     @abstractmethod
     def exec_query(self, query: str, use_none: bool = True) -> QueryResult:

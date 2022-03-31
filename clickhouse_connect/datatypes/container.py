@@ -17,7 +17,7 @@ class Array(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[0])
         if isinstance(self.element_type, Array):
             raise DriverError("Nested arrays not supported")
-        self._name_suffix = type_def.arg_str
+        self._name_suffix = f'({self.element_type.name})'
 
     def _from_row_binary(self, source: bytearray, loc: int):
         sz, loc = read_leb128(source, loc)

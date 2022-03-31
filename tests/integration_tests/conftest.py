@@ -9,7 +9,7 @@ from pytest import fixture
 from clickhouse_connect import create_driver
 
 
-@fixture(scope='module', autouse=True)
+@fixture(scope='session', autouse=True)
 def test_driver(request) -> Iterator[BaseDriver]:
     host = request.config.getoption('host')
     port = request.config.getoption('port')
@@ -21,7 +21,7 @@ def test_driver(request) -> Iterator[BaseDriver]:
     test_driver.close()
 
 
-@fixture(scope='module', autouse=True)
+@fixture(scope='session', autouse=True)
 def clickhouse_container(request, test_driver: BaseDriver) -> Iterator[None]:
     if not request.config.getoption('docker', True):
         yield
