@@ -165,6 +165,7 @@ class ClickHouseType:
             return column[0]
 
 
+NULL_TYPE_DEF = TypeDef()
 type_map: Dict[str, Type[ClickHouseType]] = {}
 
 

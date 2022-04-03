@@ -12,7 +12,8 @@ from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropData
 def test_engine(request) -> Iterator[Engine]:
     host = request.config.getoption('host')
     port = request.config.getoption('port')
-    docker = request.config.getoption('docker', True)
+    docker = request.config.getoption('docker')
+    cleanup = request.config.getoption('cleanup')
     if not port:
         port = 10723 if docker else 8123
     test_engine: Engine = create_engine(f'clickhousedb://{host}:{port}')
@@ -21,8 +22,9 @@ def test_engine(request) -> Iterator[Engine]:
         cs = CreateDatabase('sqla_test')
         conn.execute(cs)
     yield test_engine
-    ds = DropDatabase('sqla_test')
-    conn.execute(ds)
+    if cleanup:
+        ds = DropDatabase('sqla_test')
+        conn.execute(ds)
     test_engine.dispose()
 
 

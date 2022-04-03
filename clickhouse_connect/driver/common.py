@@ -89,6 +89,19 @@ def to_leb128(value: int) -> bytearray:  # Unsigned only
     return result
 
 
+def decimal_size(prec: int):
+    if prec < 1 or prec > 79:
+        raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
+    if prec < 10:
+        return 32
+    if prec < 19:
+        return 64
+    if prec < 39:
+        return 128
+    return 256
+
+
+decimal_prec = {32: 9, 64: 18, 128: 38, 256: 79}
 has_numpy = False
 has_pandas = False
 

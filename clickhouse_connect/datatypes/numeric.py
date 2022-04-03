@@ -4,7 +4,7 @@ from struct import unpack_from as suf, pack as sp
 from typing import Any, Union, Type
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import array_type, array_column, write_array
+from clickhouse_connect.driver.common import array_type, array_column, write_array, decimal_size, decimal_prec
 
 
 class Int8(ArrayType):
@@ -344,7 +344,7 @@ class Enum16(Enum8):
 
 
 class Decimal(ClickHouseType):
-    __slots__ = '_scale', '_mult', '_zeros'
+    __slots__ = 'prec', 'scale', '_mult', '_zeros'
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -354,28 +354,21 @@ class Decimal(ClickHouseType):
         if size == 0:
             prec = type_def.values[0]
             scale = type_def.values[1]
-            if prec < 1 or prec > 79:
-                raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
-            if prec < 10:
-                size = 32
-            elif prec < 19:
-                size = 64
-            elif prec < 39:
-                size = 128
-            else:
-                size = 256
+            size = decimal_size(prec)
         else:
+            prec = decimal_prec[size]
             scale = type_def.values[0]
         type_cls = BigDecimal if size > 64 else Decimal
-        return cls._instance_cache.setdefault(type_def, type_cls(type_def, size, scale))
+        return cls._instance_cache.setdefault(type_def, type_cls(type_def, prec, size, scale))
 
-    def __init__(self, type_def: TypeDef, size, scale):
+    def __init__(self, type_def: TypeDef, prec, size, scale):
         super().__init__(type_def)
-        self._scale = scale
+        self.prec = prec
+        self.scale = scale
         self._mult = 10 ** scale
         self._byte_size = size // 8
         self._zeros = bytes([0] * self._byte_size)
-        self._name_suffix = f'{size}({scale})'
+        self._name_suffix = f'({prec}, {scale})'
         self._array_type = array_type(self._byte_size, True)
 
     @property
@@ -385,7 +378,7 @@ class Decimal(ClickHouseType):
     def _from_row_binary(self, source, loc):
         end = loc + self._byte_size
         x = int.from_bytes(source[loc:end], 'little', signed=True)
-        scale = self._scale
+        scale = self.scale
         if x >= 0:
             digits = str(x)
             return decimal.Decimal(f'{digits[:-scale]}.{digits[-scale:]}'), end
@@ -402,7 +395,7 @@ class Decimal(ClickHouseType):
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         dec = decimal.Decimal
-        scale = self._scale
+        scale = self.scale
         new_col = []
         app = new_col.append
         for x in column:
@@ -425,7 +418,7 @@ class Decimal(ClickHouseType):
 class BigDecimal(Decimal, registered=False):
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         dec = decimal.Decimal
-        scale = self._scale
+        scale = self.scale
         column = []
         app = column.append
         sz = self._byte_size
