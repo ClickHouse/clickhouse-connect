@@ -7,10 +7,10 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
 class TypeDef(NamedTuple):
-    size: int
-    wrappers: tuple
-    keys: tuple
-    values: tuple
+    size: int = 0
+    wrappers: tuple = ()
+    keys: tuple = ()
+    values: tuple = ()
 
     @property
     def arg_str(self):

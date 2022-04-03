@@ -1,6 +1,8 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import driver_name, dbapi
+from clickhouse_connect.cc_sqlalchemy.datatypes.compiler import ChTypeCompiler
+from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.cc_sqlalchemy import ischema_names
 
@@ -10,7 +12,11 @@ class ClickHouseDialect(DefaultDialect):
     driver = 'connect'
 
     default_schema_name = 'default'
+    supports_native_decimal = True
     returns_unicode_strings = True
+    postfetch_lastrowid = False
+    ddl_compiler = ChDDLCompiler
+    type_compiler = ChTypeCompiler
     description_encoding = None
     max_identifier_length = 127
     ischema_names = ischema_names
@@ -22,10 +28,16 @@ class ClickHouseDialect(DefaultDialect):
     def initialize(self, connection):
         pass
 
-    def get_schema_names(self, connection, **_):
+    @staticmethod
+    def get_schema_names(connection, **_):
         return [row.name for row in connection.execute('SHOW DATABASES')]
 
-    def get_table_names(self, connection, schema=None, **kw):
+    @staticmethod
+    def has_database(connection, db_name):
+        return (connection.execute(f"SELECT name FROM system.databases WHERE name = '{db_name}'")).rowcount > 0
+
+    @staticmethod
+    def get_table_names(connection, schema=None, **kw):
         st = 'SHOW TABLES'
         if schema:
             st += ' FROM ' + schema

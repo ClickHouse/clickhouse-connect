@@ -1,12 +1,55 @@
-from sqlalchemy.types import Integer
+from sqlalchemy.types import Integer, Float
 
-from cc_sqlalchemy.datatypes.base import ChSqlaType
-from clickhouse_connect.datatypes.registry import get_from_name
-
-
-class Int8(Integer, ChSqlaType):
-    ch_type = get_from_name('Int8')
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 
 
-class UInt16(Integer, ChSqlaType):
-    ch_type = get_from_name('Int16')
+class Int8(ChSqlaType, Integer):
+    pass
+
+
+class UInt8(ChSqlaType, Integer):
+    pass
+
+
+class Int16(ChSqlaType, Integer):
+    pass
+
+
+class UInt16(ChSqlaType, Integer):
+    pass
+
+
+class Int32(ChSqlaType, Integer):
+    pass
+
+
+class UInt32(ChSqlaType, Integer):
+    pass
+
+
+class Int64(ChSqlaType, Integer):
+    pass
+
+
+class UInt64(ChSqlaType, Integer):
+    pass
+
+
+class Int128(ChSqlaType, Integer):
+    pass
+
+
+class UInt128(ChSqlaType, Integer):
+    pass
+
+
+class Int256(ChSqlaType, Integer):
+    pass
+
+
+class UInt256(ChSqlaType, Integer):
+    pass
+
+
+class Float32(ChSqlaType, Float):
+    pass

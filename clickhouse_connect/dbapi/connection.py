@@ -29,5 +29,12 @@ class Connection:
     def rollback(self):
         pass
 
+    def command(self, cmd: str):
+        result = self.driver.command(cmd)
+        try:
+            return int(result)
+        except ValueError:
+            return result
+
     def cursor(self):
         return Cursor(self.driver)
