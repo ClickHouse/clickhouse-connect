@@ -1,9 +1,12 @@
-from sqlalchemy.types import Integer, Float, Numeric
+from collections.abc import Sequence
+from enum import Enum as PyEnum
+from typing import Type
+
+from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, UserDefinedType
 from sqlalchemy.exc import ArgumentError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.datatypes.base import TypeDef
-from clickhouse_connect.datatypes.numeric import Decimal as ChDecimal
 from clickhouse_connect.driver.common import decimal_prec
 
 
@@ -59,9 +62,21 @@ class Float32(ChSqlaType, Float):
     pass
 
 
-class Decimal(ChSqlaType, Numeric):
-    _ch_type_cls = ChDecimal
+class Float64(ChSqlaType, Float):
+    pass
 
+
+class Bool(ChSqlaType, SqlaBoolean):
+    def __init__(self):
+        SqlaBoolean.__init__(self)
+        ChSqlaType.__init__(self)
+
+
+class Boolean(Bool):
+    pass
+
+
+class Decimal(ChSqlaType, Numeric):
     def __init__(self, precision: int = 0, scale: int = 0, type_def: TypeDef = None):
         if type_def:
             if type_def.size:
@@ -75,3 +90,22 @@ class Decimal(ChSqlaType, Numeric):
             type_def = TypeDef(values=(precision, scale))
         ChSqlaType.__init__(self, type_def)
         Numeric.__init__(self, precision, scale)
+
+
+class Enum(ChSqlaType, UserDefinedType):
+    def __init__(self, enum: Type[PyEnum] = None, keys: Sequence[str] = None, values: Sequence[int] = None,
+                 type_def: TypeDef = None):
+        if not type_def:
+            if enum:
+                keys = [e.name for e in enum]
+                values = [e.value for e in enum]
+            type_def = TypeDef(keys=tuple(keys), values=tuple(values))
+        super().__init__(type_def)
+
+
+class Enum8(Enum):
+    pass
+
+
+class Enum16(Enum):
+    pass

@@ -290,9 +290,14 @@ class Bool(Boolean):
     pass
 
 
-class Enum8(ArrayType):
+class Enum(ArrayType):
     __slots__ = '_name_map', '_int_map'
-    _array_type = 'b'
+
+    @classmethod
+    def build(cls, type_def: TypeDef):
+        if max(type_def.values) <= 127 and min(type_def.values) >= -128:
+            return Enum8._instance_cache.setdefault(type_def, Enum8(type_def))
+        return Enum16._instance_cache.setdefault(type_def, Enum16(type_def))
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -301,17 +306,6 @@ class Enum8(ArrayType):
         self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        value = source[loc]
-        return self._int_map[value if value < 128 else value - 128], loc + 1
-
-    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
-        try:
-            value = self._name_map[value]
-        except KeyError:
-            pass
-        dest += value if value < 128 else value - 128
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -329,7 +323,22 @@ class Enum8(ArrayType):
             write_array(self._array_type, [lookup(x, 0) for x in column], dest)
 
 
-class Enum16(Enum8):
+class Enum8(Enum):
+    _array_type = 'b'
+
+    def _from_row_binary(self, source: bytes, loc: int):
+        value = source[loc]
+        return self._int_map[value if value < 128 else value - 128], loc + 1
+
+    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
+        try:
+            value = self._name_map[value]
+        except KeyError:
+            pass
+        dest += value if value < 128 else value - 128
+
+
+class Enum16(Enum):
     _array_type = 'h'
 
     def _from_row_binary(self, source: bytes, loc: int):

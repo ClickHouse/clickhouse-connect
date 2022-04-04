@@ -1,7 +1,6 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import driver_name, dbapi
-from clickhouse_connect.cc_sqlalchemy.datatypes.compiler import ChTypeCompiler
 from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.cc_sqlalchemy import ischema_names
@@ -13,10 +12,10 @@ class ClickHouseDialect(DefaultDialect):
 
     default_schema_name = 'default'
     supports_native_decimal = True
+    supports_native_boolean = True
     returns_unicode_strings = True
     postfetch_lastrowid = False
     ddl_compiler = ChDDLCompiler
-    type_compiler = ChTypeCompiler
     description_encoding = None
     max_identifier_length = 127
     ischema_names = ischema_names

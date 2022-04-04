@@ -7,7 +7,7 @@ from clickhouse_connect.datatypes.registry import parse_name, get_from_name, get
 
 
 class ChSqlaType:
-    ch_type: [ClickHouseType] = None
+    ch_type: ClickHouseType = None
     _ch_type_cls = None
     _instance = None
     _instance_cache: Dict[TypeDef, 'ChSqlaType'] = None
@@ -19,15 +19,10 @@ class ChSqlaType:
         sqla_type_map[base] = cls
         if not cls._ch_type_cls:
             cls._ch_type_cls = get_type(base, cls.__name__)
-        if '__init__' in cls.__dict__:
-            cls._instance_cache = {}
-        else:
-            cls._instance = cls()
+        cls._instance_cache = {}
 
     @classmethod
     def build(cls, type_def: TypeDef):
-        if cls._instance:
-            return cls._instance
         return cls._instance_cache.setdefault(type_def, cls(type_def = type_def))
 
     def __init__(self, type_def: TypeDef = NULL_TYPE_DEF):
@@ -52,4 +47,4 @@ def sqla_type_from_name(name: str) -> ChSqlaType:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
         logging.error(err_str)
         raise CompileError(err_str)
-    return type_cls.build(base, type_def)
+    return type_cls.build(type_def)
