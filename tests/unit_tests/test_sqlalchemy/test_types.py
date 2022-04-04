@@ -1,21 +1,16 @@
-
-
 from sqlalchemy import Integer, DateTime
 
-from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.cc_sqlalchemy.typemap import map_schema_types
+
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_map, sqla_type_from_name
 
 
 def test_mapping():
-    schema_mapping = map_schema_types()
-    assert issubclass(schema_mapping['UINT16'], Integer)
-    assert issubclass(schema_mapping['DATETIME64'], DateTime)
+    assert issubclass(sqla_type_map['UINT16'], Integer)
+    assert issubclass(sqla_type_map['DATETIME'], DateTime)
 
 
 def test_sqla():
-    int16 = get_from_name('Int16')
-    sqla_type = int16.sqla_type
-    assert 'Int16' == sqla_type.compile()
-    enum = get_from_name("Enum8('value1' = 7, 'value2'=5)")
-    sqla_type = enum.sqla_type
-    assert "Enum8('value1' = 7, 'value2' = 5)" == sqla_type.compile()
+    int16 = sqla_type_from_name('Int16')
+    assert 'Int16' == int16._compiler_dispatch(None)
+    enum = sqla_type_from_name("Enum8('value1' = 7, 'value2'=5)")
+    assert "Enum8('value1' = 7, 'value2' = 5)" == enum._compiler_dispatch(None)

@@ -13,14 +13,14 @@ from superset.db_engine_specs.base import BaseEngineSpec, BasicParametersType, B
 from superset.db_engine_specs.exceptions import SupersetDBAPIDatabaseError
 from superset.errors import SupersetError, SupersetErrorType, ErrorLevel
 from superset.utils import core as utils
-from superset.utils.core import GenericDataType
 from superset.utils.network import is_hostname_valid, is_port_open
+from superset.models.core import Database
 
 from clickhouse_connect import driver_name
-from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver import default_port
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_superset.datatypes import configure_types
-from superset.models.core import Database
+
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +106,11 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
             return []
 
     @classmethod
-    def get_sqla_column_type(cls, column_type: Optional[str], *args, **kwargs) \
-            -> Optional[Tuple[TypeEngine, GenericDataType]]:
+    def get_sqla_column_type(cls, column_type: Optional[str], *args, **kwargs):
         if column_type is None:
             return None
-        ch_type = registry.get_from_name(column_type)
-        return ch_type.sqla_type, ch_type.generic_type
+        sqla_type = sqla_type_from_name(column_type)
+        return sqla_type, sqla_type.generic_type
 
     @classmethod
     def column_datatype_to_string(cls, sqla_column_type: TypeEngine, *args):

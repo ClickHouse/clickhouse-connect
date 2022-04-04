@@ -1,11 +1,10 @@
 from collections.abc import Sequence, MutableSequence
-from struct import unpack_from as suf
 from typing import Any
 from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.common import read_uint64
+from clickhouse_connect.driver.common import read_uint64, array_column
 
 empty_uuid_b = bytes(b'\x00' * 16)
 
@@ -34,7 +33,7 @@ class UUID(ClickHouseType):
 
     @staticmethod
     def _from_native_uuid(source: Sequence, loc: int, num_rows: int, **_):
-        v = suf(f'<{num_rows * 2}Q', source, loc)
+        v, end = array_column('Q', source, loc, num_rows * 2)
         empty_uuid = PYUUID(int=0)
         new_uuid = PYUUID.__new__
         unsafe = SafeUUID.unsafe
@@ -51,18 +50,18 @@ class UUID(ClickHouseType):
                 oset(fast_uuid, 'int', int_value)
                 oset(fast_uuid, 'is_safe', unsafe)
                 app(fast_uuid)
-        return column, loc + (num_rows << 4)
+        return column, end
 
     @staticmethod
     def _from_native_str(source: Sequence, loc: int, num_rows: int, **_):
-        v = suf(f'<{num_rows * 2}Q', source, loc)
+        v, end = array_column('Q', source, loc, num_rows * 2)
         column = []
         app = column.append
         for ix in range(num_rows):
             s = ix << 1
             hs = f'{(v[s] << 64 | v[s + 1]):032x}'
             app(f'{hs[:8]}-{hs[8:12]}-{hs[12:16]}-{hs[16:20]}-{hs[20:]}')
-        return column, loc + num_rows << 4
+        return column, end
 
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         first = self._first_value(column)

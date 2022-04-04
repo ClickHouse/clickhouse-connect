@@ -163,4 +163,3 @@ class FixedString(ClickHouseType):
         else:
             cls._format = 'bytes'
             cls._to_row_binary = cls._to_row_binary_bytes
-

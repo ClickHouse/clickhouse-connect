@@ -2,7 +2,8 @@ from collections.abc import Sequence
 from enum import Enum as PyEnum
 from typing import Type
 
-from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, UserDefinedType, String as SqlaString
+from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, \
+    UserDefinedType, String as SqlaString, DateTime as SqlaDateTime, Date as SqlaDate
 from sqlalchemy.exc import ArgumentError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
@@ -118,6 +119,42 @@ class String(ChSqlaType, SqlaString):
 class FixedString(ChSqlaType, SqlaString):
     def __init__(self, size: int = 0, type_def: TypeDef = None):
         if not type_def:
-            type_def = TypeDef(values = (size,))
+            type_def = TypeDef(values=(size,))
         ChSqlaType.__init__(self, type_def)
         SqlaString.__init__(self, size)
+
+
+class IPv4(ChSqlaType, UserDefinedType):
+    pass
+
+
+class IPv6(ChSqlaType, UserDefinedType):
+    pass
+
+
+class UUID(ChSqlaType, UserDefinedType):
+    pass
+
+
+class Date(ChSqlaType, SqlaDate):
+    pass
+
+
+class Date32(ChSqlaType, SqlaDate):
+    pass
+
+
+class DateTime(ChSqlaType, SqlaDateTime):
+    pass
+
+
+class DateTime64(ChSqlaType, SqlaDateTime):
+    pass
+
+
+class Array(ChSqlaType, UserDefinedType):
+    pass
+
+
+class Map(ChSqlaType, UserDefinedType):
+    pass

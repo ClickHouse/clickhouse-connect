@@ -1,8 +1,8 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import driver_name, dbapi
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
-from clickhouse_connect.datatypes import registry
 from clickhouse_connect.cc_sqlalchemy import ischema_names
 
 
@@ -47,11 +47,11 @@ class ClickHouseDialect(DefaultDialect):
             table = table_name
         else:
             table = '.'.join((schema, table_name))
-        rows = [(row.name, registry.get_from_name(row.type)) for row in connection.execute(f'DESCRIBE TABLE {table}')]
+        rows = [(row.name, sqla_type_from_name(row.type)) for row in connection.execute(f'DESCRIBE TABLE {table}')]
         return [{'name': name,
-                 'type': ch_type.sqla_type,
-                 'nullable': ch_type.nullable,
-                 'autoincrement': False} for name, ch_type in rows]
+                 'type': sqla_type,
+                 'nullable': sqla_type.nullable,
+                 'autoincrement': False} for name, sqla_type in rows]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kwargs):
         return []
