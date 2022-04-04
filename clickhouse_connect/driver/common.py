@@ -1,5 +1,5 @@
 import array
-import logging
+
 import sys
 from collections.abc import Sequence, MutableSequence
 
@@ -102,17 +102,3 @@ def decimal_size(prec: int):
 
 
 decimal_prec = {32: 9, 64: 18, 128: 38, 256: 79}
-has_numpy = False
-has_pandas = False
-
-try:
-    import numpy as np
-    has_numpy = True
-except ImportError:
-    logging.info("Numpy library not available")
-
-try:
-    import pandas as pa
-    has_pandas = True
-except ImportError:
-    logging.info("Numpy library not available")

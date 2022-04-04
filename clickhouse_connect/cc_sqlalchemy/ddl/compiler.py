@@ -20,4 +20,7 @@ class ChDDLCompiler(DDLCompiler):
             raise CompileError("No engine defined for table")
         return engine.compile()
 
+    #def get_column_specification(self, column, **kw):
+    #    return column.compile()
+
 

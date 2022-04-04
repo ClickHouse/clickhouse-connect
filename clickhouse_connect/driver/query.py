@@ -2,16 +2,13 @@ from collections.abc import Sequence
 from typing import NamedTuple, Any, Tuple, Dict
 
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.options import has_numpy, has_pandas, check_pandas, check_numpy
 
-try:
-    import numpy as np
-except ImportError:
-    pass
-
-try:
+if has_pandas:
     import pandas as pa
-except ImportError:
-    pass
+
+if has_numpy:
+    import numpy as np
 
 
 class QueryResult(NamedTuple):
@@ -23,9 +20,19 @@ class QueryResult(NamedTuple):
 
 
 def np_result(result: QueryResult) -> np.array:
+    check_numpy()
     np_types = [(name, ch_type.np_type) for name, ch_type in zip(result.column_names, result.column_types)]
     return np.array(result.result_set, dtype=np_types)
 
 
-def pandas_df(result: QueryResult) -> pa.DataFrame:
+def to_pandas_df(result: QueryResult) -> pa.DataFrame:
+    check_pandas()
     return pa.DataFrame(np_result(result))
+
+
+def from_pandas_df(df: pa.DataFrame):
+    check_pandas()
+    return {
+        'column_names': df.columns,
+        'data': df.to_numpy()
+    }

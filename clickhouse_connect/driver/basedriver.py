@@ -3,9 +3,8 @@ from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.exceptions import ServerError, NotSupportedError
-from clickhouse_connect.driver.query import QueryResult, np_result, pandas_df
-from clickhouse_connect.driver.common import has_numpy, has_pandas
+from clickhouse_connect.driver.exceptions import ServerError, OperationError
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df
 
 
 class ColumnDef(NamedTuple):
@@ -53,14 +52,14 @@ class BaseDriver(metaclass=ABCMeta):
         return self.exec_query(query, use_none)
 
     def query_np(self, query: str):
-        if not has_numpy:
-            raise NotSupportedError("Numpy package is not installed")
         return np_result(self.query(query, use_none=False))
 
     def query_df(self, query: str):
-        if not has_pandas:
-            raise NotSupportedError("Pandas package is not installed")
-        return pandas_df(self.query(query, use_none=False))
+        return to_pandas_df(self.query(query, use_none=False))
+
+    def insert_df(self, table: str, df):
+        insert = from_pandas_df(df)
+        return self.insert(table, **insert)
 
     @abstractmethod
     def exec_query(self, query: str, use_none: bool = True) -> QueryResult:
@@ -78,19 +77,25 @@ class BaseDriver(metaclass=ABCMeta):
                database: str = '', column_types: Optional[Iterable[ClickHouseType]] = None,
                column_type_names: Optional[Iterable[str]] = None):
         table, database, full_table = self.normalize_table(table, database)
-        if column_names == '*':
-            column_defs = [cd for cd in self.table_columns(table, database)
-                           if cd.default_kind not in ('ALIAS', 'MATERIALIZED')]
-            column_names = [cd.name for cd in column_defs]
-            column_types = [cd.type for cd in column_defs]
-        elif not column_names:
+        if isinstance(column_names, str):
+            if column_names == '*':
+                column_defs = [cd for cd in self.table_columns(table, database)
+                               if cd.default_kind not in ('ALIAS', 'MATERIALIZED')]
+                column_names = [cd.name for cd in column_defs]
+                column_types = [cd.type for cd in column_defs]
+            else:
+                column_names = [column_names]
+        elif len(column_names) == 0:
             raise ValueError("Column names must be specified for insert")
-        elif not column_types:
+        if column_types is None:
             if column_type_names:
                 column_types = [get_from_name(name) for name in column_type_names]
             else:
-                column_defs = self.table_columns(table, database)
-                column_types = [cd.type for cd in column_defs]
+                column_map: dict[str: ColumnDef] = {d.name: d for d in self.table_columns(table, database)}
+                try:
+                    column_types = [column_map[name].type for name in column_names]
+                except KeyError as ke:
+                    raise OperationError(f"Unrecognized column {ke} in table {table}")
         assert len(column_names) == len(column_types)
         self.data_insert(full_table, column_names, data, column_types)
 
@@ -109,7 +114,7 @@ class BaseDriver(metaclass=ABCMeta):
     def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
         column_result = self.query(
             "SELECT name, type, default_kind, default_kind, default_expression, compression_codec, comment "
-            f"FROM system.columns  WHERE database = '{database}' and table = '{table}'  ORDER BY position")
+            f"FROM system.columns WHERE database = '{database}' and table = '{table}'  ORDER BY position")
         if not column_result.result_set:
             raise ServerError(f'No table columns found for {database}.{table}')
         return tuple([ColumnDef(row[0], get_from_name(row[1]), row[2], row[3], row[4], row[5])

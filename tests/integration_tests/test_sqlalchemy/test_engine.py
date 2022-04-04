@@ -4,8 +4,8 @@ import sqlalchemy as db
 
 from sqlalchemy.engine.base import Engine
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.numeric import Int8, UInt16, Decimal, Enum16, Float64, Boolean
-from clickhouse_connect.cc_sqlalchemy.datatypes.string import FixedString, String
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
+    FixedString, String
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.engine import MergeTree
 from tests import helpers

@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from enum import Enum as PyEnum
 from typing import Type
 
-from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, UserDefinedType
+from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, UserDefinedType, String as SqlaString
 from sqlalchemy.exc import ArgumentError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
@@ -109,3 +109,15 @@ class Enum8(Enum):
 
 class Enum16(Enum):
     pass
+
+
+class String(ChSqlaType, SqlaString):
+    pass
+
+
+class FixedString(ChSqlaType, SqlaString):
+    def __init__(self, size: int = 0, type_def: TypeDef = None):
+        if not type_def:
+            type_def = TypeDef(values = (size,))
+        ChSqlaType.__init__(self, type_def)
+        SqlaString.__init__(self, size)

@@ -3,7 +3,7 @@ from typing import Dict, Type
 
 from sqlalchemy.exc import CompileError
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, NULL_TYPE_DEF
-from clickhouse_connect.datatypes.registry import parse_name, get_from_name, get_type
+from clickhouse_connect.datatypes.registry import parse_name, get_type
 
 
 class ChSqlaType:
