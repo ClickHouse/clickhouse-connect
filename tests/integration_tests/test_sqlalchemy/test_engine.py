@@ -5,7 +5,8 @@ import sqlalchemy as db
 from sqlalchemy.engine.base import Engine
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
-    FixedString, String
+    FixedString, String, UInt128, UUID, DateTime, Date32, DateTime64, LowCardinality, Nullable, Date, Array, \
+    AggregateFunction
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.engine import MergeTree
 from tests import helpers
@@ -50,5 +51,19 @@ def test_create_table(test_engine: Engine):
                      db.Column('str_col', String),
                      db.Column('fstr_col', FixedString(17)),
                      db.Column('bool_col', Boolean),
-                     MergeTree(order_by=['key_col']))
+                     MergeTree('key_col'))
+    table.create(conn)
+    conn.execute('DROP TABLE IF EXISTS sqla_test.advanced_table')
+    table = db.Table('advanced_table', metadata,
+                     db.Column('key_col', UInt128),
+                     db.Column('uuid_col', UUID),
+                     db.Column('dt_col', DateTime),
+                     db.Column('date_col', Date32),
+                     db.Column('dt64_col', DateTime64(3, 'Europe/Moscow')),
+                     db.Column('lc_col', LowCardinality(FixedString(16))),
+                     db.Column('lcdate_col', LowCardinality(Nullable(String))),
+                     db.Column('null_dt_col', Nullable(DateTime('America/Denver'))),
+                     db.Column('arr_col', Array(UUID)),
+                     db.Column('agg_col', AggregateFunction('uniq', LowCardinality(String))),
+                     MergeTree('key_col'))
     table.create(conn)

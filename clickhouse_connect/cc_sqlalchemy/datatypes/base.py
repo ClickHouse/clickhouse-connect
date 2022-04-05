@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Type
 
 from sqlalchemy.exc import CompileError
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, NULL_TYPE_DEF
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, EMPTY_TYPE_DEF
 from clickhouse_connect.datatypes.registry import parse_name, get_type
 
 
@@ -27,15 +27,28 @@ class ChSqlaType:
     def build(cls, type_def: TypeDef):
         return cls._instance_cache.setdefault(type_def, cls(type_def = type_def))
 
-    def __init__(self, type_def: TypeDef = NULL_TYPE_DEF):
+    def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF):
+        self.type_def = type_def
         self.ch_type = self._ch_type_cls.build(type_def)
+
+    @property
+    def name(self):
+        return self.ch_type.name
+
+    @name.setter
+    def name(self, name):  # Keep SQLAlchemy from overriding our ClickHouse name
+        pass
 
     @property
     def nullable(self):
         return self.ch_type.nullable
 
+    @property
+    def low_card(self):
+        return self.ch_type.low_card
+
     @staticmethod
-    def result_processor():  # The driver handles type conversions to python datatypes
+    def result_processor():  # The driver currently handles all type conversions to python datatypes
         return None
 
     @staticmethod
@@ -43,7 +56,7 @@ class ChSqlaType:
         return None
 
     def _compiler_dispatch(self, _visitor, **_):  # The driver handles name conversions
-        return self.ch_type.name
+        return self.name
 
 
 sqla_type_map: Dict[str, Type[ChSqlaType]] = {}

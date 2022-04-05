@@ -165,7 +165,9 @@ class ClickHouseType:
             return column[0]
 
 
-NULL_TYPE_DEF = TypeDef()
+EMPTY_TYPE_DEF = TypeDef()
+NULLABLE_TYPE_DEF = TypeDef(wrappers=('Nullable',))
+LC_TYPE_DEF = TypeDef(wrappers=('LowCardinality',))
 type_map: Dict[str, Type[ClickHouseType]] = {}
 
 

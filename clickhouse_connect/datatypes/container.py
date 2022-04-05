@@ -175,7 +175,9 @@ class Map(ClickHouseType):
 
 
 class Object(UnsupportedType):
-    pass
+    def __init__(self, type_def):
+        super().__init__(type_def)
+        self._name_suffix = type_def.arg_str
 
 
 class JSON(UnsupportedType):
@@ -183,4 +185,6 @@ class JSON(UnsupportedType):
 
 
 class Nested(UnsupportedType):
-    pass
+    def __init__(self, type_def):
+        super().__init__(type_def)
+        self._name_suffix = type_def.arg_str

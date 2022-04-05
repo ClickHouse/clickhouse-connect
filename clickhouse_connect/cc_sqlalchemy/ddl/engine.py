@@ -16,7 +16,7 @@ class Engine(SchemaEventTarget, Visitable):
 
 class MergeTree(Engine):
     def __init__(self, order_by):
-        self.order_by = order_by
+        self.order_by = [order_by] if isinstance(order_by, str) else order_by
 
     def _engine_params(self):
         return f" ORDER BY ({','.join(self.order_by)})"
