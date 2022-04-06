@@ -11,13 +11,11 @@ class Int8(ArrayType):
     _array_type = 'b'
     np_type = 'b'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         x = source[loc]
         return x if x < 128 else x - 128, loc + 1
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         if value < 128:
             dest.append(value)
         else:
@@ -28,12 +26,10 @@ class UInt8(ArrayType):
     _array_type = 'B'
     np_type = 'B'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return source[loc], loc + 1
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         dest.append(value)
 
 
@@ -41,12 +37,10 @@ class Int16(ArrayType):
     _array_type = 'h'
     np_type = 'i2'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<h', source, loc)[0], loc + 2
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         dest += sp('<h', value, )
 
 
@@ -54,12 +48,10 @@ class UInt16(ArrayType):
     _array_type = 'H'
     np_type = 'u2'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<H', source, loc)[0], loc + 2
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         dest += sp('<H', value, )
 
 
@@ -80,12 +72,10 @@ class UInt32(ArrayType):
     _array_type = 'I'
     np_type = 'u4'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<I', source, loc)[0], loc + 4
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: bytearray):
         dest += sp('<I', value, )
 
 
@@ -93,12 +83,10 @@ class Int64(ArrayType):
     _array_type = 'q'
     np_type = 'i8'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<q', source, loc)[0], loc + 8
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         dest += sp('<q', value, )
 
 
@@ -106,12 +94,10 @@ class UInt64(ArrayType):
     _array_type = 'Q'
     np_type = 'u8'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<q', source, loc)[0], loc + 8
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         dest += sp('<Q', value, )
 
     @classmethod
@@ -122,7 +108,7 @@ class UInt64(ArrayType):
         elif fmt == 'signed':
             cls._array_type = 'q'
         else:
-            raise ValueError("Unrecognized UInt64 Output Format")
+            raise ValueError('Unrecognized UInt64 Output Format')
 
 
 class BigInt(ClickHouseType, registered=False):
@@ -152,7 +138,7 @@ class BigInt(ClickHouseType, registered=False):
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         first = self._first_value(column)
         if not column:
-            return column
+            return
         sz = self._byte_size
         signed = self._signed
         empty = self.ch_null
@@ -217,12 +203,10 @@ class Int256(BigInt):
     _byte_size = 32
     _signed = True
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         return int.from_bytes(source[loc: loc + 32], 'little', signed=True), loc + 32
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: bytearray):
         dest += value.to_bytes(32, 'little')
 
 
@@ -230,12 +214,10 @@ class UInt256(BigInt):
     _byte_size = 32
     _signed = False
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         return int.from_bytes(source[loc: loc + 32], 'little'), loc + 32
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: MutableSequence):
         dest += value.to_bytes(32, 'little')
 
 
@@ -256,33 +238,27 @@ class Float64(ArrayType):
     _array_type = 'd'
     np_type = 'f8'
 
-    @staticmethod
-    def _from_row_binary(source: bytearray, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return suf('d', source, loc)[0], loc + 8
 
-    @staticmethod
-    def _to_row_binary(value: float, dest: bytearray):
+    def _to_row_binary(self, value: float, dest: MutableSequence):
         dest += sp('d', (value,))
 
 
 class Boolean(ClickHouseType):
     np_type = '?'
 
-    @staticmethod
-    def _from_row_binary(source: bytearray, loc: int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
 
-    @staticmethod
-    def _to_row_binary(value: bool, dest: bytearray):
+    def _to_row_binary(self, value: bool, dest: MutableSequence):
         dest += b'\x01' if value else b'\x00'
 
-    @staticmethod
-    def _from_native(source: Sequence, loc: int, num_rows: int, **_):
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column('B', source, loc, num_rows)
         return [b > 0 for b in column], loc
 
-    @staticmethod
-    def _to_native(column: Sequence, dest: MutableSequence, **_):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         write_array('B', [1 if x else 0 for x in column], dest)
 
 

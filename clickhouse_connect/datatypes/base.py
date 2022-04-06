@@ -1,5 +1,5 @@
 from math import log
-from typing import NamedTuple, Dict, Type, Tuple, Any, Sequence, MutableSequence, Optional, Union
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union
 
 from clickhouse_connect.driver.common import array_column, array_type, int_size, read_uint64, write_array, \
     write_uint64, low_card_version, array_sizes
@@ -18,20 +18,16 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType:
-    __slots__ = ('from_row_binary', 'to_row_binary', 'nullable', 'low_card', 'from_native', 'to_native', '__dict__')
+    __slots__ = 'nullable', 'low_card', 'wrappers', '__dict__'
     _instance_cache = None
-    _from_row_binary = None
-    _to_row_binary = None
-    _to_native = None
-    _from_native = None
     _ch_name = None
     _name_suffix = ''
     np_type = 'O'
     python_null = 0
 
-    def __init_subclass__(cls, registered: bool = True, ch_name: str = None):
+    def __init_subclass__(cls, registered: bool = True):
         if registered:
-            cls._ch_name = ch_name or cls.__name__
+            cls._ch_name = cls.__name__
             cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
             type_map[cls._ch_name.upper()] = cls
 
@@ -40,7 +36,7 @@ class ClickHouseType:
         return cls._instance_cache.setdefault(type_def, cls(type_def))
 
     def __init__(self, type_def: TypeDef):
-        self.wrappers: Tuple[str] = type_def.wrappers
+        self.wrappers = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
         self.nullable = 'Nullable' in self.wrappers
         if self.nullable:
@@ -70,6 +66,18 @@ class ClickHouseType:
     def ch_null(self):
         return b'\x00'
 
+    def _from_row_binary(self, source: Sequence, loc: int):
+        raise NotImplementedError
+
+    def _to_row_binary(self, value: Any, dest: MutableSequence):
+        raise NotImplementedError
+
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+        raise NotImplementedError
+
+    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
+        raise NotImplementedError
+
     def _nullable_from_row_binary(self, source, loc, use_none: bool = True) -> (Any, int):
         if source[loc] == 0:
             return self._from_row_binary(source, loc + 1)
@@ -82,7 +90,7 @@ class ClickHouseType:
             dest += b'\x00'
             self._to_row_binary(value, dest)
 
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, use_none = True, **kwargs):
+    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, use_none=True, **kwargs):
         null_map = memoryview(source[loc: loc + num_rows])
         loc += num_rows
         column, loc = self._from_native(source, loc, num_rows, **kwargs)
@@ -96,7 +104,7 @@ class ClickHouseType:
         dest += bytes(1 if x is None else 0 for x in column)
         self._to_native(column, dest, **kwargs)
 
-    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, use_none = True, **kwargs):
+    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, use_none=True, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
         if num_rows == 0:
             return tuple(), loc
@@ -128,26 +136,26 @@ class ClickHouseType:
             index.append(0)
             keys.append(self.ch_null)
             key = 1
-            for v in column:
-                if v is None:
+            for x in column:
+                if x is None:
                     index.append(0)
                 else:
-                    ix = rmg(v)
+                    ix = rmg(x)
                     if ix is None:
                         index.append(key)
-                        keys.append(v)
-                        rev_map[v] = key
+                        keys.append(x)
+                        rev_map[x] = key
                         key += 1
                     else:
                         index.append(ix)
         else:
             key = 0
-            for v in column:
-                ix = rmg(v)
+            for x in column:
+                ix = rmg(x)
                 if ix is None:
                     index.append(key)
-                    keys.append(v)
-                    rev_map[v] = key
+                    keys.append(x)
+                    rev_map[x] = key
                     key += 1
                 else:
                     index.append(ix)
@@ -163,6 +171,7 @@ class ClickHouseType:
             return next((x for x in column if x is not None), None)
         if column:
             return column[0]
+        return None
 
 
 EMPTY_TYPE_DEF = TypeDef()
@@ -176,8 +185,8 @@ class ArrayType(ClickHouseType, registered=False):
     _array_type = None
     _ch_null = None
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
+    def __init_subclass__(cls, registered: bool = True):
+        super().__init_subclass__(registered)
         if cls._array_type in ('i', 'I') and int_size == 2:
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
         if cls._array_type:
@@ -186,6 +195,12 @@ class ArrayType(ClickHouseType, registered=False):
     @property
     def ch_null(self):
         return self._ch_null
+
+    def _from_row_binary(self, source: bytearray, loc: int):
+        raise NotImplementedError
+
+    def _to_row_binary(self, value: Any, dest: bytearray):
+        raise NotImplementedError
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -221,14 +236,14 @@ class UnsupportedType(ClickHouseType, registered=False):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
 
-    def _from_row_binary(self, *_):
+    def _from_row_binary(self, *_args):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
-    def _to_row_binary(self, *_):
+    def _to_row_binary(self, *_args):
         raise NotSupportedError(f'{self.name} serialization not supported')
 
-    def _from_native(self, *_):
+    def _from_native(self, *_args, **_kwargs):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
-    def _to_native(self, *_):
+    def _to_native(self, *_args, **_kwargs):
         raise NotSupportedError(f'{self.name} serialization  not supported')

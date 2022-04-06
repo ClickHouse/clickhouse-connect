@@ -6,6 +6,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy import ischema_names
 
 
+# pylint: disable-msg=too-many-public-methods
 class ClickHouseDialect(DefaultDialect):
     name = driver_name
     driver = 'connect'
@@ -35,14 +36,13 @@ class ClickHouseDialect(DefaultDialect):
     def has_database(connection, db_name):
         return (connection.execute(f"SELECT name FROM system.databases WHERE name = '{db_name}'")).rowcount > 0
 
-    @staticmethod
-    def get_table_names(connection, schema=None, **kw):
-        st = 'SHOW TABLES'
+    def get_table_names(self, connection, schema=None, **kw):
+        cmd = 'SHOW TABLES'
         if schema:
-            st += ' FROM ' + schema
-        return [row.name for row in connection.execute(st)]
+            cmd += ' FROM ' + schema
+        return [row.name for row in connection.execute(cmd)]
 
-    def get_columns(self, connection, table_name, schema=None, **kwargs):
+    def get_columns(self, connection, table_name, schema=None, **kw):
         if table_name.startswith('(') or '.' in table_name or not schema:
             table = table_name
         else:
@@ -53,7 +53,7 @@ class ClickHouseDialect(DefaultDialect):
                  'nullable': sqla_type.nullable,
                  'autoincrement': False} for name, sqla_type in rows]
 
-    def get_primary_keys(self, connection, table_name, schema=None, **kwargs):
+    def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
 
     def get_pk_constraint(self, conn, table_name, schema=None, **kw):

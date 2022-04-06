@@ -25,5 +25,3 @@ def configure_types():
                 break
         else:
             sqla_type.generic_type = GenericDataType.STRING
-
-

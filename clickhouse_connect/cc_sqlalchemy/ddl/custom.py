@@ -3,6 +3,7 @@ from sqlalchemy.exc import ArgumentError
 
 
 class CreateDatabase(DDL):
+    # pylint: disable-msg=too-many-arguments
     def __init__(self, name:str, engine: str = None, zoo_path: str = None, shard_name: str = '{shard}',
                  replica_name: str = '{replica}'):
         if engine and engine not in ('Atomic', 'Lazy', 'Replicated'):

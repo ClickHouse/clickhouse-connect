@@ -25,7 +25,7 @@ class ChSqlaType:
 
     @classmethod
     def build(cls, type_def: TypeDef):
-        return cls._instance_cache.setdefault(type_def, cls(type_def = type_def))
+        return cls._instance_cache.setdefault(type_def, cls(type_def=type_def))
 
     def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF):
         self.type_def = type_def
@@ -70,5 +70,5 @@ def sqla_type_from_name(name: str) -> ChSqlaType:
     except KeyError:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
         logging.error(err_str)
-        raise CompileError(err_str)
+        raise CompileError(err_str) from KeyError
     return type_cls.build(type_def)

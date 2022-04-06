@@ -5,22 +5,21 @@ from typing import Union, MutableSequence, Sequence
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import write_array, array_column
 
-ipv4_v6_mask = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
-v6_null = bytes(b'\x00' * 16)
+IPV4_V6_MASK = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
+V6_NULL = bytes(b'\x00' * 16)
 
 
+# pylint: disable=protected-access
 class IPv4(ArrayType):
     _array_type = 'I'
     python_null = IPv4Address(0)
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         ipv4 = IPv4Address.__new__(IPv4Address)
         ipv4._ip = int.from_bytes(source[loc: loc + 4], 'little')
         return ipv4, loc + 4
 
-    @staticmethod
-    def _to_row_binary(value: [int, IPv4Address, str], dest: bytearray):
+    def _to_row_binary(self, value: [int, IPv4Address, str], dest: bytearray):
         if isinstance(value, IPv4Address):
             dest += value._ip.to_bytes(4, 'little')
         elif isinstance(value, str):
@@ -67,15 +66,15 @@ class IPv4(ArrayType):
             cls.np_type = 'O'
 
 
+# pylint: disable=protected-access
 class IPv6(ClickHouseType):
     python_null = IPv6Address(0)
 
     @property
     def ch_null(self):
-        return v6_null
+        return V6_NULL
 
-    @staticmethod
-    def _from_row_binary(source: Sequence, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         end = loc + 16
         int_value = int.from_bytes(source[loc:end], 'big')
         if int_value & 0xFFFF00000000 == 0xFFFF00000000:
@@ -84,9 +83,8 @@ class IPv6(ClickHouseType):
             return ipv4, end
         return IPv6Address(int_value), end
 
-    @staticmethod
-    def _to_row_binary(value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
-        v4mask = ipv4_v6_mask
+    def _to_row_binary(self, value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
+        v4mask = IPV4_V6_MASK
         if isinstance(value, str):
             if '.' in value:
                 dest += v4mask + bytes(int(b) for b in value.split('.'))
@@ -97,7 +95,7 @@ class IPv6(ClickHouseType):
         elif isinstance(value, IPv6Address):
             dest += value.packed
         elif len(value) == 4:
-            dest += ipv4_v6_mask + value
+            dest += IPV4_V6_MASK + value
         else:
             dest += value
 
@@ -126,7 +124,7 @@ class IPv6(ClickHouseType):
     def _from_native_str(source: Sequence, loc: int, num_rows: int, **_):
         new_col = []
         app = new_col.append
-        v4mask = ipv4_v6_mask
+        v4mask = IPV4_V6_MASK
         tov4 = socket.inet_ntoa
         tov6 = socket.inet_ntop
         af6 = socket.AF_INET6
@@ -140,15 +138,15 @@ class IPv6(ClickHouseType):
         return new_col, end
 
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
-        nv = v6_null
+        v = V6_NULL
         first = self._first_value(column)
-        v4mask = ipv4_v6_mask
+        v4mask = IPV4_V6_MASK
         af6 = socket.AF_INET6
         tov6 = socket.inet_pton
         if isinstance(first, str):
             for x in column:
                 if x is None:
-                    dest += nv
+                    dest += v
                 elif '.' in x:
                     dest += v4mask + bytes(int(b) for b in x.split('.'))
                 else:
@@ -156,7 +154,7 @@ class IPv6(ClickHouseType):
         elif isinstance(first, (IPv4Address, IPv6Address)):
             for x in column:
                 if x is None:
-                    dest += nv
+                    dest += v
                 else:
                     b = x.packed
                     dest += b if len(b) == 16 else (v4mask + b)

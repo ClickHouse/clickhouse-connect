@@ -51,10 +51,10 @@ def get_from_name(name: str, no_nulls: bool = False) -> ClickHouseType:
 def get_type(base: str, name: str = None, _type_def: TypeDef = None):
     try:
         return type_map[base]
-    except KeyError:
+    except KeyError as ex:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name if name else base}'
         logging.error(err_str)
-        raise DriverError(err_str)
+        raise DriverError(err_str) from ex
 
 
 def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
@@ -95,10 +95,11 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
     return tuple(keys), tuple(values)
 
 
+# pylint: disable=too-many-branches
 def _parse_args(name) -> [Any]:
     values: List[Any] = []
     value = ''
-    l = len(name)
+    sz = len(name)
     in_str = False
     escaped = False
     pos = 0
@@ -110,7 +111,7 @@ def _parse_args(name) -> [Any]:
         else:
             values.append(value)
 
-    while pos < l:
+    while pos < sz:
         char = name[pos]
         pos += 1
         if in_str:
@@ -126,7 +127,7 @@ def _parse_args(name) -> [Any]:
             while char == ' ':
                 char = name[pos]
                 pos += 1
-                if pos == l:
+                if pos == sz:
                     break
             if char == ',' and not parens:
                 add_value()

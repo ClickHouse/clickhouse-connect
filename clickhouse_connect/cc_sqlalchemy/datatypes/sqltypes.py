@@ -91,7 +91,7 @@ class Decimal(ChSqlaType, Numeric):
             else:
                 precision, scale = type_def.values
         elif not precision or not scale:
-            raise ArgumentError("Precision and scale required for ClickHouse Decimal type")
+            raise ArgumentError('Precision and scale required for ClickHouse Decimal type')
         else:
             type_def = TypeDef(values=(precision, scale))
         ChSqlaType.__init__(self, type_def)
@@ -100,6 +100,7 @@ class Decimal(ChSqlaType, Numeric):
 
 class Enum(ChSqlaType, UserDefinedType):
     _size = 16
+    python_type = str
 
     def __init__(self, enum: Type[PyEnum] = None, keys: Sequence[str] = None, values: Sequence[int] = None,
                  type_def: TypeDef = None):
@@ -119,9 +120,9 @@ class Enum(ChSqlaType, UserDefinedType):
         bad_value = next((x for x in values if not isinstance(x, int)), None)
         if bad_value:
             raise ArgumentError(f'ClickHouse enum value {bad_value} is not an integer')
-        min = -(2 ** (cls._size - 1))
-        max = 2 ** (cls._size - 1) - 1
-        bad_value = next((x for x in values if x < min or x > max), None)
+        value_min = -(2 ** (cls._size - 1))
+        value_max = 2 ** (cls._size - 1) - 1
+        bad_value = next((x for x in values if x < value_min or x > value_max), None)
         if bad_value:
             raise ArgumentError(f'Clickhouse enum value {bad_value} is out of range')
 
@@ -147,15 +148,15 @@ class FixedString(ChSqlaType, SqlaString):
 
 
 class IPv4(ChSqlaType, UserDefinedType):
-    pass
+    python_type = None
 
 
 class IPv6(ChSqlaType, UserDefinedType):
-    pass
+    python_type = None
 
 
 class UUID(ChSqlaType, UserDefinedType):
-    pass
+    python_type = None
 
 
 class Date(ChSqlaType, SqlaDate):
@@ -190,21 +191,22 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         if not isinstance(prec, int) or prec < 0 or prec > 9:
             raise ArgumentError(f'Invalid precision value {prec} for ClickHouse DateTime64')
         ChSqlaType.__init__(self, type_def)
+        SqlaDateTime.__init__(self)
 
 
 class Nullable():
-    def __new__(self, element: Union[ChSqlaType, Type[ChSqlaType]]):
+    def __new__(cls, element: Union[ChSqlaType, Type[ChSqlaType]]):
         if callable(element):
             return element(type_def=NULLABLE_TYPE_DEF)
         if element.low_card:
-            raise ArgumentError("Low Cardinality type cannot be Nullable")
+            raise ArgumentError('Low Cardinality type cannot be Nullable')
         orig = element.type_def
         wrappers = orig if 'Nullable' in orig.wrappers else orig.wrappers + ('Nullable',)
         return element.__class__(type_def=TypeDef(orig.size, wrappers, orig.keys, orig.values))
 
 
 class LowCardinality():
-    def __new__(self, element: Union[ChSqlaType, Type[ChSqlaType]]):
+    def __new__(cls, element: Union[ChSqlaType, Type[ChSqlaType]]):
         if callable(element):
             return element(type_def=LC_TYPE_DEF)
         orig = element.type_def
@@ -213,6 +215,8 @@ class LowCardinality():
 
 
 class Array(ChSqlaType, UserDefinedType):
+    python_type = list
+
     def __init__(self, element: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
         if not type_def:
             if callable(element):
@@ -222,6 +226,8 @@ class Array(ChSqlaType, UserDefinedType):
 
 
 class Map(ChSqlaType, UserDefinedType):
+    python_type = dict
+
     def __init__(self, key_type: Union[ChSqlaType, Type[ChSqlaType]] = None,
                  value_type: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
         if not type_def:
@@ -234,6 +240,8 @@ class Map(ChSqlaType, UserDefinedType):
 
 
 class Tuple(ChSqlaType, UserDefinedType):
+    python_type = tuple
+
     def __init__(self, elements: Sequence[Union[ChSqlaType, Type[ChSqlaType]]] = None, type_def: TypeDef = None):
         if not type_def:
             values = [et() if callable(et) else et for et in elements]
@@ -242,14 +250,16 @@ class Tuple(ChSqlaType, UserDefinedType):
 
 
 class JSON(ChSqlaType, UserDefinedType):
-    pass
+    python_type = None
 
 
 class Nested(ChSqlaType, UserDefinedType):
-    pass
+    python_type = None
 
 
 class Object(ChSqlaType, UserDefinedType):
+    python_type = None
+
     def __init__(self, fmt: str = None, type_def: TypeDef = None):
         if not type_def:
             type_def = TypeDef(values=(fmt,))
@@ -257,6 +267,8 @@ class Object(ChSqlaType, UserDefinedType):
 
 
 class SimpleAggregateFunction(ChSqlaType, UserDefinedType):
+    python_type = None
+
     def __init__(self, element: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
         if not type_def:
             if callable(element):
@@ -266,14 +278,16 @@ class SimpleAggregateFunction(ChSqlaType, UserDefinedType):
 
 
 class AggregateFunction(ChSqlaType, UserDefinedType):
+    python_type = None
+
     def __init__(self, *params, type_def: TypeDef = None):
         if not type_def:
             values = ()
-            for p in params:
-                if callable(p):
-                    p = p()
-                if isinstance(p, ChSqlaType):
-                    p = p.name
-                values += p,
+            for x in params:
+                if callable(x):
+                    x = x()
+                if isinstance(x, ChSqlaType):
+                    x = x.name
+                values += (x,)
             type_def = TypeDef(values=values)
         super().__init__(type_def)

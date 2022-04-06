@@ -1,6 +1,6 @@
 import array
 from collections.abc import Sequence, MutableSequence
-from typing import Any, Dict
+from typing import Dict
 
 from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import read_leb128, to_leb128, read_uint64, array_column, low_card_version, \
@@ -10,28 +10,28 @@ from clickhouse_connect.driver import DriverError
 
 
 class Array(ClickHouseType):
-    __slots__ = 'element_type',
+    __slots__ = ('element_type',)
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.element_type: ClickHouseType = get_from_name(type_def.values[0])
+        self.element_type = get_from_name(type_def.values[0])
         if isinstance(self.element_type, Array):
-            raise DriverError("Nested arrays not supported")
+            raise DriverError('Nested arrays not supported')
         self._name_suffix = f'({self.element_type.name})'
 
     def _from_row_binary(self, source: bytearray, loc: int):
-        sz, loc = read_leb128(source, loc)
+        size, loc = read_leb128(source, loc)
         values = []
-        for x in range(sz):
+        for _ in range(size):
             value, loc = self.element_type.from_row_binary(source, loc)
             values.append(value)
         return values, loc
 
-    def _to_row_binary(self, values: Sequence[Any], dest: bytearray):
-        dest += to_leb128(len(values))
+    def _to_row_binary(self, value: Sequence, dest: MutableSequence):
+        dest += to_leb128(len(value))
         conv = self.element_type.to_row_binary
-        for value in values:
-            conv(value, dest)
+        for x in value:
+            conv(x, dest)
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
@@ -39,7 +39,7 @@ class Array(ClickHouseType):
             lc_version, loc = read_uint64(source, loc)
         offsets, loc = array_column('Q', source, loc, num_rows)
         if not offsets:
-            return
+            return [], loc
         all_values, loc = self.element_type._from_native(source, loc, offsets[-1], lc_version=lc_version, **kwargs)
         column = []
         app = column.append
@@ -85,9 +85,9 @@ class Tuple(ClickHouseType):
             values.append(value)
         return tuple(values), loc
 
-    def _to_row_binary(self, values: Sequence, dest: bytearray):
-        for value, conv in zip(values, self.to_rb_funcs):
-            conv(value, dest)
+    def _to_row_binary(self, value: Sequence, dest: MutableSequence):
+        for x, conv in zip(value, self.to_rb_funcs):
+            conv(x, dest)
 
     def _from_native(self, source, loc, num_rows, **kwargs):
         columns = []
@@ -96,10 +96,10 @@ class Tuple(ClickHouseType):
             columns.append(tuple(column))
         return tuple(zip(*columns)), loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
         columns = zip(*column)
-        for tn, elem_column in zip(self.to_native_funcs, columns):
-            tn(elem_column, dest)
+        for conv, elem_column in zip(self.to_native_funcs, columns):
+            conv(elem_column, dest, **kwargs)
 
 
 class Map(ClickHouseType):
@@ -118,19 +118,20 @@ class Map(ClickHouseType):
         values = {}
         key_from = self.key_from_rb
         value_from = self.value_from_rb
-        for x in range(size):
+        for _ in range(size):
             key, loc = key_from(source, loc)
             value, loc = value_from(source, loc)
             values[key] = value
         return values, loc
 
-    def _to_row_binary(self, values: Dict, dest: bytearray):
+    def _to_row_binary(self, value: Dict, dest: bytearray):
         key_to = self.key_to_rb
         value_to = self.value_to_rb
-        for key, value in values.items():
-            dest += key_to(key)
-            dest += value_to(key)
+        for k, v in value.items():
+            dest += key_to(k, dest)
+            dest += value_to(v, dest)
 
+    # pylint: disable=too-many-locals
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         kwargs.pop('lc_version', None)
         key_version = None
@@ -148,7 +149,7 @@ class Map(ClickHouseType):
         app = column.append
         last = 0
         for offset in offsets:
-            app({key: value for key, value in all_pairs[last: offset]})
+            app(dict(all_pairs[last: offset]))
             last = offset
         return column, loc
 
