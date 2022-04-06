@@ -42,22 +42,22 @@ class String(ClickHouseType):
                 if x is None:
                     app(0)
                 else:
-                    ln = len(x)
+                    sz = len(x)
                     while True:
-                        b = ln & 0x7f
-                        ln = ln >> 7
-                        if ln == 0:
+                        b = sz & 0x7f
+                        sz >>= 7
+                        if sz == 0:
                             app(b)
                             break
                         app(0x80 | b)
                     dest += x.encode(encoding)
         else:
             for x in column:
-                ln = len(x)
+                sz = len(x)
                 while True:
-                    b = ln & 0x7f
-                    ln = ln >> 7
-                    if ln == 0:
+                    b = sz & 0x7f
+                    sz >>= 7
+                    if sz == 0:
                         app(b)
                         break
                     app(0x80 | b)
@@ -76,7 +76,7 @@ class FixedString(ClickHouseType):
 
     @property
     def python_null(self):
-        return self._python_null if format == 'bytes' else ''
+        return self._python_null if self._format == 'bytes' else ''
 
     @property
     def ch_null(self):
@@ -112,11 +112,12 @@ class FixedString(ClickHouseType):
                 app(bytes(source[ix: ix + sz]))
         return column, end
 
+    # pylint: disable=too-many-branches
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         ext = dest.extend
         sz = self._byte_size
         empty = bytes((0,) * sz)
-        e = str.encode
+        str_enc = str.encode
         enc = self._encoding
         first = self._first_value(column)
         if isinstance(first, str):
@@ -126,21 +127,21 @@ class FixedString(ClickHouseType):
                         ext(empty)
                     else:
                         try:
-                            sb = e(x, enc)
+                            b = str_enc(x, enc)
                         except UnicodeEncodeError:
-                            sb = empty
-                        ext(sb)
-                        if len(sb) < sz:
-                            ext(empty[:-len(sb)])
+                            b = empty
+                        ext(b)
+                        if len(b) < sz:
+                            ext(empty[:-len(b)])
             else:
                 for x in column:
                     try:
-                        sb = e(x, enc)
+                        b = str_enc(x, enc)
                     except UnicodeEncodeError:
-                        sb = empty
-                    ext(sb)
-                    if len(sb) < sz:
-                        ext(empty[:-len(sb)])
+                        b = empty
+                    ext(b)
+                    if len(b) < sz:
+                        ext(empty[:-len(b)])
         elif self.nullable:
             for x in column:
                 if not x:

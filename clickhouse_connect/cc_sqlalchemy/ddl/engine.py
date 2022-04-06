@@ -2,7 +2,7 @@ from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.visitors import Visitable
 
 
-class Engine(SchemaEventTarget, Visitable):
+class TableEngine(SchemaEventTarget, Visitable):
 
     def compile(self):
         return f'Engine {self.__class__.__name__}{self._engine_params()}'
@@ -14,7 +14,7 @@ class Engine(SchemaEventTarget, Visitable):
         raise NotImplementedError
 
 
-class MergeTree(Engine):
+class MergeTree(TableEngine):
     def __init__(self, order_by):
         self.order_by = [order_by] if isinstance(order_by, str) else order_by
 

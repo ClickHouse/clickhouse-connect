@@ -5,6 +5,7 @@ from clickhouse_connect.driver.basedriver import BaseDriver
 from clickhouse_connect.driver.httpdriver import HttpDriver
 
 
+# pylint: disable=too-many-arguments
 def create_driver(host: str = 'localhost', username: str = '', password: str = '', database: str = '__default__',
                   interface: Optional[str] = None, port: int = 0, secure: Union[bool, str] = False,
                   **kwargs) -> BaseDriver:
@@ -17,11 +18,11 @@ def create_driver(host: str = 'localhost', username: str = '', password: str = '
     if interface.startswith('http'):
         driver = HttpDriver(interface, host, port, username, password, database, **kwargs)
     else:
-        raise DriverError(f"Unrecognized driver type {interface}")
+        raise DriverError(f'Unrecognized driver type {interface}')
     return driver
 
 
 def default_port(interface: str, secure: bool):
     if interface.startswith('http'):
         return 8443 if secure else 8123
-    raise ValueError("Unrecognized ClickHouse interface")
+    raise ValueError('Unrecognized ClickHouse interface')

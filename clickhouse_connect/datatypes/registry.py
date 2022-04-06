@@ -3,7 +3,7 @@ import logging
 
 from typing import Tuple, Any, List, Type
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
-from clickhouse_connect.driver import DriverError
+from clickhouse_connect.driver.exceptions import DriverError
 
 size_pattern = re.compile(r'^([A-Z]+)(\d+)')
 int_pattern = re.compile(r'^-?\d+$')
@@ -51,10 +51,10 @@ def get_from_name(name: str, no_nulls: bool = False) -> ClickHouseType:
 def get_type(base: str, name: str = None, _type_def: TypeDef = None):
     try:
         return type_map[base]
-    except KeyError as ex:
+    except KeyError:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name if name else base}'
         logging.error(err_str)
-        raise DriverError(err_str) from ex
+        raise DriverError(err_str) from None
 
 
 def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:

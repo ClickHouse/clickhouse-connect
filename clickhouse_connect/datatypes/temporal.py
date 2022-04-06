@@ -15,12 +15,10 @@ class Date(ArrayType):
     python_null = epoch_start_date
     np_type = 'M8[D]'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
 
-    @staticmethod
-    def _to_row_binary(value: date, dest: bytearray):
+    def _to_row_binary(self, value: date, dest: MutableSequence):
         dest += sp('<H', (value - epoch_start_date).days, )
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
@@ -38,12 +36,10 @@ class Date(ArrayType):
 class Date32(Date):
     _array_type = 'i'
 
-    @staticmethod
-    def _from_row_binary(source, loc):
+    def _from_row_binary(self, source: Sequence, loc: int):
         return epoch_start_date + timedelta(suf('<i', source, loc)[0]), loc + 4
 
-    @staticmethod
-    def _to_row_binary(value: date, dest: bytearray):
+    def _to_row_binary(self, value: date, dest: MutableSequence):
         dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
 
 
@@ -51,8 +47,9 @@ from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
 
 
+# pylint: disable=abstract-method
 class DateTime(ArrayType):
-    __slots__ = '_from_row_binary',
+    __slots__ = ('_from_row_binary',)
     _array_type = 'I'
     np_type = 'M8[us]'
     python_null = from_ts_naive(0)
@@ -65,8 +62,7 @@ class DateTime(ArrayType):
             self._from_row_binary = lambda source, loc: (from_ts_naive(suf('<L', source, loc)[0]), loc + 4)
         super().__init__(type_def)
 
-    @staticmethod
-    def _to_row_binary(value: datetime, dest: bytearray):
+    def _to_row_binary(self, value: datetime, dest: MutableSequence):
         dest += sp('<I', int(value.timestamp()), )
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
@@ -113,12 +109,12 @@ class DateTime64(ArrayType):
         column = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
-        df = datetime.fromtimestamp
+        dt_from = datetime.fromtimestamp
         prec = self.prec
-        tz = self.tzinfo
+        tz_info = self.tzinfo
         for ticks in column:
             seconds = ticks // prec
-            dt_sec = df(seconds, tz)
+            dt_sec = dt_from(seconds, tz_info)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
@@ -126,11 +122,11 @@ class DateTime64(ArrayType):
         column = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
-        df = datetime.utcfromtimestamp
+        dt_from = datetime.utcfromtimestamp
         prec = self.prec
         for ticks in column:
             seconds = ticks // prec
-            dt_sec = df(seconds)
+            dt_sec = dt_from(seconds)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 

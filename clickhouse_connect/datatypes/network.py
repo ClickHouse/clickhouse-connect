@@ -42,7 +42,7 @@ class IPv4(ArrayType):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column], loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
+    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         first = self._first_value(column)
         if isinstance(first, str):
             fixed = 24, 16, 8, 0

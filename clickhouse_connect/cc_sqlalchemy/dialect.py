@@ -21,6 +21,7 @@ class ClickHouseDialect(DefaultDialect):
     max_identifier_length = 127
     ischema_names = ischema_names
 
+    # pylint: disable=method-hidden
     @classmethod
     def dbapi(cls):
         return dbapi

@@ -1,3 +1,4 @@
+from abc import ABCMeta, abstractmethod
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union
 
@@ -17,10 +18,10 @@ class TypeDef(NamedTuple):
         return f"({', '.join(str(v) for v in self.values)})" if self.values else ''
 
 
-class ClickHouseType:
+class ClickHouseType(metaclass=ABCMeta):
     __slots__ = 'nullable', 'low_card', 'wrappers', '__dict__'
-    _instance_cache = None
     _ch_name = None
+    _instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
     _name_suffix = ''
     np_type = 'O'
     python_null = 0
@@ -28,7 +29,7 @@ class ClickHouseType:
     def __init_subclass__(cls, registered: bool = True):
         if registered:
             cls._ch_name = cls.__name__
-            cls._instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
+            cls._instance_cache = {}
             type_map[cls._ch_name.upper()] = cls
 
     @classmethod
@@ -66,17 +67,21 @@ class ClickHouseType:
     def ch_null(self):
         return b'\x00'
 
+    @abstractmethod
     def _from_row_binary(self, source: Sequence, loc: int):
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def _to_row_binary(self, value: Any, dest: MutableSequence):
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        raise NotImplementedError
+        pass
 
+    @abstractmethod
     def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        raise NotImplementedError
+        pass
 
     def _nullable_from_row_binary(self, source, loc, use_none: bool = True) -> (Any, int):
         if source[loc] == 0:
@@ -180,10 +185,12 @@ LC_TYPE_DEF = TypeDef(wrappers=('LowCardinality',))
 type_map: Dict[str, Type[ClickHouseType]] = {}
 
 
+# pylint: disable=abstract-method
 class ArrayType(ClickHouseType, registered=False):
     _signed = True
     _array_type = None
     _ch_null = None
+    _struct_type = None
 
     def __init_subclass__(cls, registered: bool = True):
         super().__init_subclass__(registered)
@@ -191,16 +198,11 @@ class ArrayType(ClickHouseType, registered=False):
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
         if cls._array_type:
             cls._ch_null = bytes(b'\x00' * array_sizes[cls._array_type.lower()])
+            cls._struct_type = '<' + cls._array_type
 
     @property
     def ch_null(self):
         return self._ch_null
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        raise NotImplementedError
-
-    def _to_row_binary(self, value: Any, dest: bytearray):
-        raise NotImplementedError
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)

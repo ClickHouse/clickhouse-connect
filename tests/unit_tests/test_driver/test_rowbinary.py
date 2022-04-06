@@ -88,8 +88,8 @@ def test_ip():
 
 def test_decimal():
     round_trip('Decimal128(5)', 'b8 6a 05 00 00 00 00 00 00 00 00 00 00 00 00 00', decimal.Decimal('3.5500'))
-    #dec_type = gfn('Decimal64(8)')
-    #assert dec_type.to_row_binary(float(3.55)) == to_bytes('c0 de 28 15 00 00 00 00')
+    # dec_type = gfn('Decimal64(8)')
+    # assert dec_type.to_row_binary(float(3.55)) == to_bytes('c0 de 28 15 00 00 00 00')
 
 
 def test_date():
@@ -99,10 +99,10 @@ def test_date():
 
 
 def test_datetime64():
-    dt = gfn("DateTime64(6, 'Europe/Moscow')")
+    dt64 = gfn("DateTime64(6, 'Europe/Moscow')")
     source = to_bytes('80 0b af 48 aa 8d 03 00')
-    value, loc = dt.from_row_binary(source, 0)
+    value, _ = dt64.from_row_binary(source, 0)
     assert value.tzinfo.zone == 'Europe/Moscow'
     assert value.microsecond == 520000
     assert value.year == 2001
-    assert_trb(dt, value, source)
+    assert_trb(dt64, value, source)

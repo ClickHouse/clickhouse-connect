@@ -45,7 +45,7 @@ class BaseDriver(metaclass=ABCMeta):
             self._database = self.command('SELECT database()')
         return self._database
 
-    def query(self, query: str, parameters=None, use_none: bool = True) -> QueryResult:
+    def query(self, query: str, use_none: bool = True) -> QueryResult:
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
@@ -57,8 +57,8 @@ class BaseDriver(metaclass=ABCMeta):
     def query_df(self, query: str):
         return to_pandas_df(self.query(query, use_none=False))
 
-    def insert_df(self, table: str, df):
-        insert = from_pandas_df(df)
+    def insert_df(self, table: str, data_frame):
+        insert = from_pandas_df(data_frame)
         return self.insert(table, **insert)
 
     @abstractmethod
@@ -73,6 +73,7 @@ class BaseDriver(metaclass=ABCMeta):
     def ping(self):
         pass
 
+    # pylint: disable=too-many-arguments
     def insert(self, table: str, column_names: Union[str or Iterable[str]], data: Iterable[Iterable[Any]],
                database: str = '', column_types: Optional[Iterable[ClickHouseType]] = None,
                column_type_names: Optional[Iterable[str]] = None):
@@ -86,7 +87,7 @@ class BaseDriver(metaclass=ABCMeta):
             else:
                 column_names = [column_names]
         elif len(column_names) == 0:
-            raise ValueError("Column names must be specified for insert")
+            raise ValueError('Column names must be specified for insert')
         if column_types is None:
             if column_type_names:
                 column_types = [get_from_name(name) for name in column_type_names]
@@ -94,8 +95,8 @@ class BaseDriver(metaclass=ABCMeta):
                 column_map: dict[str: ColumnDef] = {d.name: d for d in self.table_columns(table, database)}
                 try:
                     column_types = [column_map[name].type for name in column_names]
-                except KeyError as ke:
-                    raise OperationError(f"Unrecognized column {ke} in table {table}")
+                except KeyError as ex:
+                    raise OperationError(f'Unrecognized column {ex} in table {table}') from None
         assert len(column_names) == len(column_types)
         self.data_insert(full_table, column_names, data, column_types)
 
@@ -113,20 +114,16 @@ class BaseDriver(metaclass=ABCMeta):
 
     def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
         column_result = self.query(
-            "SELECT name, type, default_kind, default_kind, default_expression, compression_codec, comment "
+            'SELECT name, type, default_kind, default_kind, default_expression, compression_codec, comment '
             f"FROM system.columns WHERE database = '{database}' and table = '{table}'  ORDER BY position")
         if not column_result.result_set:
             raise ServerError(f'No table columns found for {database}.{table}')
-        return tuple([ColumnDef(row[0], get_from_name(row[1]), row[2], row[3], row[4], row[5])
-                      for row in column_result.result_set])
+        return tuple(ColumnDef(row[0], get_from_name(row[1]), row[2], row[3], row[4], row[5])
+                     for row in column_result.result_set)
 
     @abstractmethod
     def data_insert(self, table: str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
                     column_types: Iterable[ClickHouseType]):
-        pass
-
-    @abstractmethod
-    def raw_request(self, data=None, **kwargs) -> Any:
         pass
 
     def close(self):
@@ -135,5 +132,5 @@ class BaseDriver(metaclass=ABCMeta):
     def __enter__(self):
         return self
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_value, exc_traceback):
         self.close()

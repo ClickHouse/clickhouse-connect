@@ -3,6 +3,7 @@ import array
 import sys
 from collections.abc import Sequence, MutableSequence
 
+# pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize
 low_card_version = 1
@@ -19,14 +20,14 @@ array_sizes['d'] = 8
 
 def array_type(size: int, signed: bool):
     try:
-        at = array_map[size]
+        code = array_map[size]
     except KeyError:
         return None
-    return at if signed else at.upper()
+    return code if signed else code.upper()
 
 
-def array_column(at: str, source: Sequence, loc: int, num_rows: int):
-    column = array.array(at)
+def array_column(code: str, source: Sequence, loc: int, num_rows: int):
+    column = array.array(code)
     sz = column.itemsize * num_rows
     end = loc + sz
     column.frombytes(source[loc: end])
@@ -35,8 +36,8 @@ def array_column(at: str, source: Sequence, loc: int, num_rows: int):
     return column, end
 
 
-def write_array(at: str, column: Sequence, dest: MutableSequence):
-    buff = array.array(at, column)
+def write_array(code: str, column: Sequence, dest: MutableSequence):
+    buff = array.array(code, column)
     if must_swap:
         buff.byteswap()
     dest += buff
@@ -70,7 +71,7 @@ def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8'):
 def write_leb128(value: int, dest: MutableSequence):
     while True:
         b = value & 0x7f
-        value = value >> 7
+        value >>= 7
         if value == 0:
             dest.append(b)
             return
@@ -81,7 +82,7 @@ def to_leb128(value: int) -> bytearray:  # Unsigned only
     result = bytearray()
     while True:
         b = value & 0x7f
-        value = value >> 7
+        value >>= 7
         if value == 0:
             result.append(b)
             break
@@ -91,7 +92,7 @@ def to_leb128(value: int) -> bytearray:  # Unsigned only
 
 def decimal_size(prec: int):
     if prec < 1 or prec > 79:
-        raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
+        raise ArithmeticError(f'Invalid precision {prec} for ClickHouse Decimal type')
     if prec < 10:
         return 32
     if prec < 19:

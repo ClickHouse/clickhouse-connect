@@ -59,12 +59,10 @@ class Int32(ArrayType):
     _array_type = 'i'
     np_type = 'i4'
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         return suf('<i', source, loc)[0], loc + 4
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: bytearray):
         dest += sp('<i', value, )
 
 
@@ -111,6 +109,7 @@ class UInt64(ArrayType):
             raise ValueError('Unrecognized UInt64 Output Format')
 
 
+# pylint: disable=abstract-method
 class BigInt(ClickHouseType, registered=False):
     _format = 'raw'
     _signed = True
@@ -135,6 +134,7 @@ class BigInt(ClickHouseType, registered=False):
                 app(ifb(source[ix: ix + sz], 'little', signed=signed))
         return column, end
 
+    # pylint: disable=too-many-branches
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         first = self._first_value(column)
         if not column:
@@ -177,12 +177,10 @@ class Int128(BigInt):
     _byte_size = 16
     _signed = True
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         return int.from_bytes(source[loc: loc + 16], 'little', signed=True), loc + 16
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: bytearray):
         dest += value.to_bytes(16, 'little')
 
 
@@ -190,12 +188,10 @@ class UInt128(BigInt):
     _byte_size = 16
     _signed = False
 
-    @staticmethod
-    def _from_row_binary(source: bytes, loc: int):
+    def _from_row_binary(self, source: bytes, loc: int):
         return int.from_bytes(source[loc: loc + 16], 'little', signed=False), loc + 16
 
-    @staticmethod
-    def _to_row_binary(value: int, dest: bytearray):
+    def _to_row_binary(self, value: int, dest: bytearray):
         dest += value.to_bytes(16, 'little')
 
 
@@ -225,12 +221,10 @@ class Float32(ArrayType):
     _array_type = 'f'
     np_type = 'f4'
 
-    @staticmethod
-    def _from_row_binary(source: bytearray, loc: int):
+    def _from_row_binary(self, source: bytearray, loc: int):
         return suf('f', source, loc)[0], loc + 4
 
-    @staticmethod
-    def _to_row_binary(value: float, dest: bytearray):
+    def _to_row_binary(self, value: float, dest: bytearray):
         dest += sp('f', value, )
 
 
@@ -266,9 +260,11 @@ class Bool(Boolean):
     pass
 
 
+# pylint: disable=abstract-method
 class Enum(ArrayType):
     __slots__ = '_name_map', '_int_map'
 
+    # pylint: disable=protected-access
     @classmethod
     def build(cls, type_def: TypeDef):
         if max(type_def.values) <= 127 and min(type_def.values) >= -128:
@@ -278,8 +274,8 @@ class Enum(ArrayType):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
-        self._name_map = {key: value for key, value in zip(type_def.keys, type_def.values)}
-        self._int_map = {value: key for key, value in zip(type_def.keys, type_def.values)}
+        self._name_map = dict(zip(type_def.keys, type_def.values))
+        self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
 
@@ -329,7 +325,7 @@ class Enum16(Enum):
 
 
 class Decimal(ClickHouseType):
-    __slots__ = 'prec', 'scale', '_mult', '_zeros'
+    __slots__ = 'prec', 'scale', '_mult', '_zeros', '_byte_size', '_array_type'
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -371,8 +367,7 @@ class Decimal(ClickHouseType):
         return decimal.Decimal(f'-{digits[:-scale]}.{digits[-scale:]}'), end
 
     def _to_row_binary(self, value: Any, dest: bytearray):
-        if isinstance(value, int) or isinstance(value, float) or (
-                isinstance(value, decimal.Decimal) and value.is_finite()):
+        if isinstance(value, (float, int)) or (isinstance(value, decimal.Decimal) and value.is_finite()):
             dest += int(value * self._mult).to_bytes(self._byte_size, 'little')
         else:
             dest += self._zeros
@@ -424,9 +419,9 @@ class BigDecimal(Decimal, registered=False):
         sz = self._byte_size
         itb = int.to_bytes
         if self.nullable:
-            nv = self._zeros
+            v = self._zeros
             for x in column:
-                dest += nv if not x else itb(int(x * mult), sz, 'little', signed=True)
+                dest += v if not x else itb(int(x * mult), sz, 'little', signed=True)
         else:
             for x in column:
                 dest += itb(int(x * mult), sz, 'little', signed=True)

@@ -3,6 +3,8 @@ import json
 from typing import Optional, Dict, Any, Sequence, Collection
 
 import requests
+from clickhouse_connect.driver import native
+from clickhouse_connect.driver import rowbinary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.exceptions import ServerError, DriverError
@@ -11,9 +13,11 @@ from clickhouse_connect.driver.query import QueryResult
 logger = logging.getLogger(__name__)
 
 
+# pylint: disable=too-many-instance-attributes
 class HttpDriver(BaseDriver):
+    # pylint: disable=too-many-arguments
     def __init__(self, scheme: str, host: str, port: int, username: str, password: str, database: str,
-                 compress: bool = True, data_format: str = 'native', query_limit: int =5000):
+                 compress: bool = True, data_format: str = 'native', query_limit: int = 5000):
         super().__init__(database, query_limit)
         self.params = {}
         self.headers = {}
@@ -22,15 +26,13 @@ class HttpDriver(BaseDriver):
         self.auth = (username, password if password else '') if username else None
         if data_format == 'native':
             self.read_format = self.write_format = 'Native'
-            import clickhouse_connect.driver.native
-            self.build_insert = clickhouse_connect.driver.native.build_insert
-            self.parse_response = clickhouse_connect.driver.native.parse_response
+            self.build_insert = native.build_insert
+            self.parse_response = native.parse_response
         elif data_format in ('row_binary', 'rb'):
             self.read_format = 'RowBinaryWithNamesAndTypes'
-            import clickhouse_connect.driver.rowbinary
             self.write_format = 'RowBinary'
-            self.build_insert = clickhouse_connect.driver.rowbinary.build_insert
-            self.parse_response = clickhouse_connect.driver.rowbinary.parse_response
+            self.build_insert = rowbinary.build_insert
+            self.parse_response = rowbinary.parse_response
 
     def format_query(self, query: str) -> str:
         if not query.strip().endswith(self.read_format):
@@ -62,7 +64,7 @@ class HttpDriver(BaseDriver):
         params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}"}
         insert_block = self.build_insert(data, column_types=column_types, column_names=column_names)
         response = self.raw_request(insert_block, params=params, headers=headers)
-        logger.debug(f'Insert response code: {response.status_code}, content: {str(response.content)}')
+        logger.debug('Insert response code: {}, content: {}', response.status_code, response.content)
 
     def command(self, cmd: str):
         headers = {'Content-Type': 'text/plain'}
@@ -79,15 +81,15 @@ class HttpDriver(BaseDriver):
                                                            timeout=(10, 60),
                                                            data=data,
                                                            params=params)
-        except Exception:
-            logger.exception("Unexpected Http Driver Exception")
-            raise DriverError(f"Error executing HTTP request {self.url}")
+        except Exception as ex:
+            logger.exception('Unexpected Http Driver Exception')
+            raise DriverError(f'Error executing HTTP request {self.url}') from ex
         if 200 <= response.status_code < 300:
             return response
-        err_str = f"HTTPDriver url {self.url} returned response code {response.status_code})"
+        err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
         logger.error(err_str)
         if response.content:
-            logger.error(str(response.content, encoding='utf8'))
+            logger.error(str(response.content))
         raise ServerError(err_str)
 
     def ping(self) -> bool:

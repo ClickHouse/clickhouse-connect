@@ -30,11 +30,11 @@ class Cursor:
     def close(self):
         self.data = None
 
-    def execute(self, operation, parameters = None, **_):
-        qr = self.driver.query(operation)
-        self.data = qr.result_set
-        self.names = qr.column_names
-        self.types = qr.column_types
+    def execute(self, operation, *_):
+        query_result = self.driver.query(operation)
+        self.data = query_result.result_set
+        self.names = query_result.column_names
+        self.types = query_result.column_types
         self._rowcount = len(self.data)
 
     def fetchall(self):

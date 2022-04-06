@@ -5,7 +5,7 @@ import sqlalchemy as db
 from sqlalchemy.engine.base import Engine
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
-    FixedString, String, UInt128, UUID, DateTime, Date32, DateTime64, LowCardinality, Nullable, Date, Array, \
+    FixedString, String, UInt128, UUID, DateTime, Date32, DateTime64, LowCardinality, Nullable, Array, \
     AggregateFunction
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.engine import MergeTree
@@ -61,7 +61,7 @@ def test_create_table(test_engine: Engine):
                      db.Column('date_col', Date32),
                      db.Column('dt64_col', DateTime64(3, 'Europe/Moscow')),
                      db.Column('lc_col', LowCardinality(FixedString(16))),
-                     db.Column('lcdate_col', LowCardinality(Nullable(String))),
+                     db.Column('lc_date_col', LowCardinality(Nullable(String))),
                      db.Column('null_dt_col', Nullable(DateTime('America/Denver'))),
                      db.Column('arr_col', Array(UUID)),
                      db.Column('agg_col', AggregateFunction('uniq', LowCardinality(String))),

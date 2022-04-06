@@ -8,6 +8,7 @@ class ClickHouseError(Exception):
     """Exception related to operation with ClickHouse."""
 
 
+# pylint: disable=redefined-builtin
 class Warning(Warning, ClickHouseError):
     """Exception raised for important warnings like data truncations
     while inserting, etc."""

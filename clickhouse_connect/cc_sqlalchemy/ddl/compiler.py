@@ -1,7 +1,7 @@
 from sqlalchemy.sql.compiler import DDLCompiler
 from sqlalchemy.exc import CompileError
 
-from clickhouse_connect.cc_sqlalchemy.ddl.engine import Engine
+from clickhouse_connect.cc_sqlalchemy.ddl.engine import TableEngine
 
 
 class ChDDLCompiler(DDLCompiler):
@@ -15,12 +15,10 @@ class ChDDLCompiler(DDLCompiler):
         return 'DROP DATABASE ' + schema
 
     def post_create_table(self, table):
-        engine: Engine = getattr(table, 'engine', None)
+        engine: TableEngine = getattr(table, 'engine', None)
         if not engine:
             raise CompileError('No engine defined for table')
         return engine.compile()
 
-    #def get_column_specification(self, column, **kw):
+    # def get_column_specification(self, column, **kw):
     #    return column.compile()
-
-

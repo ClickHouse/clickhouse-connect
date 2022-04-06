@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 from clickhouse_connect.dbapi.connection import Connection
 
 

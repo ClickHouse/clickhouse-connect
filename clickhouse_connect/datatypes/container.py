@@ -40,6 +40,7 @@ class Array(ClickHouseType):
         offsets, loc = array_column('Q', source, loc, num_rows)
         if not offsets:
             return [], loc
+        # pylint: disable=protected-access
         all_values, loc = self.element_type._from_native(source, loc, offsets[-1], lc_version=lc_version, **kwargs)
         column = []
         app = column.append

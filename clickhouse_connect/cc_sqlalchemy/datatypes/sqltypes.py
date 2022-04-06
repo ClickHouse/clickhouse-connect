@@ -194,7 +194,7 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         SqlaDateTime.__init__(self)
 
 
-class Nullable():
+class Nullable:
     def __new__(cls, element: Union[ChSqlaType, Type[ChSqlaType]]):
         if callable(element):
             return element(type_def=NULLABLE_TYPE_DEF)
@@ -205,7 +205,7 @@ class Nullable():
         return element.__class__(type_def=TypeDef(orig.size, wrappers, orig.keys, orig.values))
 
 
-class LowCardinality():
+class LowCardinality:
     def __new__(cls, element: Union[ChSqlaType, Type[ChSqlaType]]):
         if callable(element):
             return element(type_def=LC_TYPE_DEF)
