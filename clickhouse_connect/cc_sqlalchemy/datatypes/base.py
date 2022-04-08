@@ -3,7 +3,7 @@ from typing import Dict, Type
 
 from sqlalchemy.exc import CompileError
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, EMPTY_TYPE_DEF
-from clickhouse_connect.datatypes.registry import parse_name, get_type
+from clickhouse_connect.datatypes.registry import parse_name, type_map
 
 
 class ChSqlaType:
@@ -13,14 +13,16 @@ class ChSqlaType:
     _instance = None
     _instance_cache: Dict[TypeDef, 'ChSqlaType'] = None
 
-    def __init_subclass__(cls, registered: bool = True, **kwargs):
-        if not registered:
-            return
+    def __init_subclass__(cls):
         base = cls.__name__.upper()
+        if not cls._ch_type_cls:
+            try:
+                cls._ch_type_cls = type_map[base]
+            except KeyError:
+                logging.warning('Attempted to register SQLAlchemy type without corresponding ClickHouse Type')
+                return
         schema_types.append(cls.__name__)
         sqla_type_map[base] = cls
-        if not cls._ch_type_cls:
-            cls._ch_type_cls = get_type(base, cls.__name__)
         cls._instance_cache = {}
 
     @classmethod

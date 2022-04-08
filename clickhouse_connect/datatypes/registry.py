@@ -1,7 +1,7 @@
 import re
 import logging
 
-from typing import Tuple, Any, List, Type
+from typing import Tuple, Any, List
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
 from clickhouse_connect.driver.exceptions import DriverError
 
@@ -39,18 +39,10 @@ def parse_name(name: str, no_nulls: bool = False) -> Tuple[str, str, TypeDef]:
     return base, name, TypeDef(size, tuple(wrappers), keys, values)
 
 
-def get_type_from_name(name: str, no_nulls: bool = False) -> Type[ClickHouseType]:
-    return get_type(*parse_name(name, no_nulls))
-
-
 def get_from_name(name: str, no_nulls: bool = False) -> ClickHouseType:
     base, name, type_def = parse_name(name, no_nulls)
-    return get_type(base, name).build(type_def)
-
-
-def get_type(base: str, name: str = None, _type_def: TypeDef = None):
     try:
-        return type_map[base]
+        return type_map[base].build(type_def)
     except KeyError:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name if name else base}'
         logging.error(err_str)
