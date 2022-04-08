@@ -17,7 +17,10 @@ class String(ClickHouseType):
         dest += to_leb128(len(value)) + value
 
     def _from_native(self, source, loc, num_rows, **_):
-        encoding = self._encoding
+        return self._from_native_impl(source, loc, num_rows, self._encoding)
+
+    @staticmethod
+    def _from_native_python(source, loc, num_rows, encoding: str):
         column = []
         app = column.append
         for _ in range(num_rows):
@@ -63,6 +66,8 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += x.encode(encoding)
 
+    _from_native_impl = _from_native_python
+
 
 class FixedString(ClickHouseType):
     _encoding = 'utf8'
@@ -96,21 +101,26 @@ class FixedString(ClickHouseType):
             dest += bytes((0,) * (self._byte_size - len(value)))
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
-        encoding = self._encoding
+        if self._format == 'string':
+            return self._from_native_str(source, loc, num_rows, self._byte_size, self._encoding)
+        return self._from_native_bytes(source, loc, num_rows, self._byte_size)
+
+    @staticmethod
+    def _from_native_str_python(source: Sequence, loc: int, num_rows: int, sz: int, encoding: str):
         column = []
         app = column.append
-        sz = self._byte_size
         end = loc + sz * num_rows
-        if self._format == 'string':
-            for ix in range(loc, end, sz):
-                try:
-                    app(str(source[ix: ix + sz], encoding).rstrip('\x00'))
-                except UnicodeDecodeError:
-                    app(source[ix: ix + sz].hex())
-        else:
-            for ix in range(loc, end, sz):
-                app(bytes(source[ix: ix + sz]))
+        for ix in range(loc, end, sz):
+            try:
+                app(str(source[ix: ix + sz], encoding).rstrip('\x00'))
+            except UnicodeDecodeError:
+                app(source[ix: ix + sz].hex())
         return column, end
+
+    @staticmethod
+    def _from_native_bytes_python(source: Sequence, loc: int, num_rows: int, sz: int):
+        end = loc + sz * num_rows
+        return [bytes(source[ix: ix + sz]) for ix in range(loc, end, sz)], end
 
     # pylint: disable=too-many-branches
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
@@ -153,6 +163,8 @@ class FixedString(ClickHouseType):
                 ext(x)
 
     _to_row_binary = _to_row_binary_bytes
+    _from_native_str = _from_native_str_python
+    _from_native_bytes = _from_native_bytes_python
 
     @classmethod
     def format(cls, fmt: str, encoding: str = 'utf8') -> None:

@@ -1,11 +1,24 @@
+# Test configuration when developing with superset
 /superset_config.py
 
+# Test data
 .pytest_cache
 
+# Development Python environments
 *venv
+
+# IDE files
 *.idea
+
+# Build artifacts
 /dist
 /build
 *.egg-info/
-dev_*
+
+# Temporary development stuff (tests/etc)
+/dev
+
+# C extensions
+*.so
+*.pyd
 

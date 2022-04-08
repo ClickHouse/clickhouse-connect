@@ -9,6 +9,7 @@ from sqlalchemy.exc import ArgumentError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.datatypes.base import TypeDef, NULLABLE_TYPE_DEF, LC_TYPE_DEF, EMPTY_TYPE_DEF
+from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8, Enum16 as ChEnum16
 from clickhouse_connect.driver.common import decimal_prec
 
 
@@ -109,6 +110,11 @@ class Enum(ChSqlaType, UserDefinedType):
                 keys = [e.name for e in enum]
                 values = [e.value for e in enum]
             self._validate(keys, values)
+            if self.__class__.__name__ == 'Enum':
+                if max(values) <= 127 and min(values) >= -128 :
+                    self._ch_type_cls = ChEnum8
+                else:
+                    self._ch_type_cls = ChEnum16
             type_def = TypeDef(keys=tuple(keys), values=tuple(values))
         super().__init__(type_def)
 

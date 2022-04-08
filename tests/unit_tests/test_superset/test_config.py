@@ -1,4 +1,6 @@
+# pylint: disable=import-outside-toplevel,unused-argument
 from superset.app import SupersetApp
+
 
 
 def test_build_uri(superset_app: SupersetApp):
@@ -18,5 +20,3 @@ def test_json_schema(superset_app: SupersetApp):
     spec = ClickHouseEngineSpec
     json_schema = spec.parameters_json_schema()
     assert json_schema['properties']['port']['maximum'] == 65535
-
-

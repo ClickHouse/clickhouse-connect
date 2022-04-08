@@ -1,3 +1,4 @@
+# pylint: disable=protected-access
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
 
 
@@ -16,4 +17,5 @@ def test_names():
     assert array_type.name == 'Array(Nullable(FixedString(50)))'
     array_type = gfn(
         "Array(Enum8(\'user_name\' = 1, \'ip_address\' = 2, \'forwarded_ip_address\' = 3, \'client_key\' = 4))")
-    assert array_type.name == "Array(Enum8('user_name' = 1, 'ip_address' = 2, 'forwarded_ip_address' = 3, 'client_key' = 4))"
+    assert array_type.name == (
+        "Array(Enum8('user_name' = 1, 'ip_address' = 2, 'forwarded_ip_address' = 3, 'client_key' = 4))")

@@ -1,5 +1,5 @@
 from clickhouse_connect.driver import BaseDriver
-from clickhouse_connect.driver.options import has_numpy, has_pandas
+from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
 
 
 def test_query(test_driver: BaseDriver):
@@ -20,13 +20,13 @@ def test_insert(test_driver: BaseDriver):
 
 
 def test_numpy(test_driver: BaseDriver):
-    if has_numpy:
+    if HAS_NUMPY:
         np_array = test_driver.query_np('SELECT * FROM system.tables')
         print(np_array['name'])
 
 
 def test_pandas(test_driver: BaseDriver):
-    if not has_pandas:
+    if not HAS_PANDAS:
         return
     df = test_driver.query_df('SELECT * FROM system.tables')
     print(df['database'])

@@ -260,16 +260,9 @@ class Bool(Boolean):
     pass
 
 
-# pylint: disable=abstract-method
 class Enum(ArrayType):
     __slots__ = '_name_map', '_int_map'
-
-    # pylint: disable=protected-access
-    @classmethod
-    def build(cls, type_def: TypeDef):
-        if max(type_def.values) <= 127 and min(type_def.values) >= -128:
-            return Enum8._instance_cache.setdefault(type_def, Enum8(type_def))
-        return Enum16._instance_cache.setdefault(type_def, Enum16(type_def))
+    _array_type = 'b'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -278,6 +271,16 @@ class Enum(ArrayType):
         self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
+
+    def _from_row_binary(self, source: bytes, loc: int):
+        return self._int_map[suf(self._struct_type, source, loc)[0]], loc + 2
+
+    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
+        try:
+            value = self._name_map[value]
+        except KeyError:
+            value = 0
+        dest += sp(self._struct_type, value)
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -298,30 +301,9 @@ class Enum(ArrayType):
 class Enum8(Enum):
     _array_type = 'b'
 
-    def _from_row_binary(self, source: bytes, loc: int):
-        value = source[loc]
-        return self._int_map[value if value < 128 else value - 128], loc + 1
-
-    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
-        try:
-            value = self._name_map[value]
-        except KeyError:
-            pass
-        dest += value if value < 128 else value - 128
-
 
 class Enum16(Enum):
     _array_type = 'h'
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        return self._int_map[suf('<h', source, loc)[0]], loc + 2
-
-    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
-        try:
-            value = self._name_map[value]
-        except KeyError:
-            value = 0
-        dest += sp('<h', value)
 
 
 class Decimal(ClickHouseType):

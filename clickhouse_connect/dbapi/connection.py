@@ -3,7 +3,7 @@ from urllib.parse import urlparse, parse_qs
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import create_driver
 
-
+# pylint: disable=too-many-arguments
 class Connection:
     def __init__(self, dsn: str = None, username: str = None, password: str = None, host: str = None,
                  database: str = None, interface: str = None, port: int = 0, **kwargs):
