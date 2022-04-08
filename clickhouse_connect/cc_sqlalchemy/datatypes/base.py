@@ -19,7 +19,8 @@ class ChSqlaType:
         base = cls.__name__.upper()
         schema_types.append(cls.__name__)
         sqla_type_map[base] = cls
-        cls._ch_type_cls = get_type(base, cls.__name__)
+        if not cls._ch_type_cls:
+            cls._ch_type_cls = get_type(base, cls.__name__)
         cls._instance_cache = {}
 
     @classmethod

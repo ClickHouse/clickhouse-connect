@@ -135,10 +135,11 @@ class Enum(ChSqlaType, UserDefinedType):
 
 class Enum8(Enum):
     _size = 8
+    _ch_type_cls = ChEnum8
 
 
 class Enum16(Enum):
-    pass
+    _ch_type_cls = ChEnum16
 
 
 class String(ChSqlaType, SqlaString):
