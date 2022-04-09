@@ -6,7 +6,6 @@ from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, T
 from clickhouse_connect.driver.common import read_leb128, to_leb128, read_uint64, array_column, low_card_version, \
     write_uint64, must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver import DriverError
 
 
 class Array(ClickHouseType):
@@ -15,8 +14,6 @@ class Array(ClickHouseType):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.element_type = get_from_name(type_def.values[0])
-        if isinstance(self.element_type, Array):
-            raise DriverError('Nested arrays not supported')
         self._name_suffix = f'({self.element_type.name})'
 
     def _from_row_binary(self, source: bytearray, loc: int):
@@ -33,38 +30,58 @@ class Array(ClickHouseType):
         for x in value:
             conv(x, dest)
 
+    # pylint: disable=too-many-locals
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
         lc_version = kwargs.pop('lc_version', None)
-        if self.element_type.low_card:
+        final_type = self.element_type
+        depth = 1
+        while isinstance(final_type, Array):
+            depth += 1
+            final_type = final_type.element_type
+        if final_type.low_card:
             lc_version, loc = read_uint64(source, loc)
-        offsets, loc = array_column('Q', source, loc, num_rows)
-        if not offsets:
-            return [], loc
-        # pylint: disable=protected-access
-        all_values, loc = self.element_type._from_native(source, loc, offsets[-1], lc_version=lc_version, **kwargs)
-        column = []
-        app = column.append
-        last = 0
-        for offset in offsets:
-            app(tuple(all_values[last: offset]))
-            last = offset
+        level_size = num_rows
+        offset_sizes = []
+        for _ in range(depth):
+            level_offsets, loc = array_column('Q', source, loc, level_size)
+            offset_sizes.append(level_offsets)
+            level_size = level_offsets[-1] if level_offsets else 0
+        if level_size:
+            all_values, loc = final_type.from_native(source, loc, level_size, lc_version=lc_version, **kwargs)
+        else:
+            all_values = []
+        column = tuple(all_values)
+        for offset_range in reversed(offset_sizes):
+            data = []
+            last = 0
+            for x in offset_range:
+                data.append(column[last: x])
+                last = x
+            column = data
         return column, loc
 
     def _to_native(self, column: Sequence, dest: MutableSequence, lc_version=None, **_):
-        if lc_version is None and self.element_type.low_card:
+        final_type = self.element_type
+        depth = 1
+        while isinstance(final_type, Array):
+            depth += 1
+            final_type = final_type.element_type
+        if lc_version is None and final_type.low_card:
             lc_version = low_card_version
             write_uint64(lc_version, dest)
-        offsets = array.array('Q')
-        total = 0
-        for x in column:
-            total += len(x)
-            offsets.append(total)
-        if must_swap:
-            offsets.byteswap()
-        dest += offsets.tobytes()
-        conv = self.element_type.to_native
-        for x in column:
-            conv(x, dest, lc_version=lc_version)
+        for _ in range(depth):
+            total = 0
+            data = []
+            offsets = array.array('Q')
+            for x in column:
+                total += len(x)
+                offsets.append(total)
+                data.extend(x)
+            if must_swap:
+                offsets.byteswap()
+            dest += offsets.tobytes()
+            column = data
+        final_type.to_native(column, dest, lc_version=lc_version)
 
 
 class Tuple(ClickHouseType):

@@ -23,6 +23,7 @@ columns = {
     'nullable': ('Nullable(Int8)', None),
     'enum': ("Enum16('hello' = 1, 'world' = 2)", 'hello'),
     'array': ('Array(String)', ['q', 'w', 'e', 'r']),
+    'narray': ('Array(Array(String))', [['xkcd', 'abs', 'norbert'], ['George', 'John', 'Thomas']]),
     'uuid': ('UUID', uuid.UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9')),
     'bool': ('Bool', True),
     'ipv4': ('IPv4', '107.34.202.7'),

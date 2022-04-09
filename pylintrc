@@ -44,7 +44,7 @@ persistent=yes
 
 # Minimum Python version to use for version dependent checks. Will default to
 # the version used to run pylint.
-py-version=3.7
+py-version=3.9
 
 # Discover python modules and packages in the file system subtree.
 recursive=no
@@ -392,7 +392,7 @@ function-naming-style=snake_case
 #function-rgx=
 
 # Good variable names which should always be accepted, separated by a comma.
-good-names=_,a,b,i,j,k,x,v,df,ex,ix,sz
+good-names=_,a,b,i,j,k,v,x,y,df,ex,ix,sz
 
 # Good variable names regexes, separated by a comma. If names match any regex,
 # they will always be accepted

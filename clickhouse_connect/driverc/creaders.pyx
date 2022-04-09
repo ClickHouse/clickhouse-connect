@@ -25,7 +25,7 @@ def read_string_column(source, loc: int, num_rows: int, encoding: str):
             sz = 0
             shift = 0
             while 1:
-                b = source[cloc]
+                b = source_ptr[cloc]
                 sz += ((b & 0x7f) << shift)
                 cloc += 1
                 if (b & 0x80) == 0:
