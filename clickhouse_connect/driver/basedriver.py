@@ -3,7 +3,7 @@ from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.exceptions import ServerError, OperationError
+from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df
 
 
@@ -96,7 +96,7 @@ class BaseDriver(metaclass=ABCMeta):
                 try:
                     column_types = [column_map[name].type for name in column_names]
                 except KeyError as ex:
-                    raise OperationError(f'Unrecognized column {ex} in table {table}') from None
+                    raise ProgrammingError(f'Unrecognized column {ex} in table {table}') from None
         assert len(column_names) == len(column_types)
         self.data_insert(full_table, column_names, data, column_types)
 
@@ -117,7 +117,7 @@ class BaseDriver(metaclass=ABCMeta):
             'SELECT name, type, default_kind, default_kind, default_expression, compression_codec, comment '
             f"FROM system.columns WHERE database = '{database}' and table = '{table}'  ORDER BY position")
         if not column_result.result_set:
-            raise ServerError(f'No table columns found for {database}.{table}')
+            raise InternalError(f'No table columns found for {database}.{table}')
         return tuple(ColumnDef(row[0], get_from_name(row[1]), row[2], row[3], row[4], row[5])
                      for row in column_result.result_set)
 

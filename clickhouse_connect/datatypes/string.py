@@ -1,23 +1,30 @@
-from typing import Union, Sequence, MutableSequence
+from typing import Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import read_leb128, to_leb128
 
 
 class String(ClickHouseType):
-    _encoding = 'utf8'
+    encoding = 'utf8'
     python_null = ''
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        try:
+            self.encoding = type_def.values[0]
+        except IndexError:
+            pass
 
     def _from_row_binary(self, source, loc):
         length, loc = read_leb128(source, loc)
-        return str(source[loc:loc + length], self._encoding), loc + length
+        return str(source[loc:loc + length], self.encoding), loc + length
 
     def _to_row_binary(self, value: str, dest: bytearray):
-        value = bytes(value, self._encoding)
+        value = bytes(value, self.encoding)
         dest += to_leb128(len(value)) + value
 
     def _from_native(self, source, loc, num_rows, **_):
-        return self._from_native_impl(source, loc, num_rows, self._encoding)
+        return self._from_native_impl(source, loc, num_rows, self.encoding)
 
     @staticmethod
     def _from_native_python(source, loc, num_rows, encoding: str):
@@ -38,7 +45,7 @@ class String(ClickHouseType):
         return column, loc
 
     def _to_native(self, column: Sequence, dest: MutableSequence, **_) -> None:
-        encoding = self._encoding
+        encoding = self.encoding
         app = dest.append
         if self.nullable:
             for x in column:
@@ -70,39 +77,50 @@ class String(ClickHouseType):
 
 
 class FixedString(ClickHouseType):
-    _encoding = 'utf8'
-    _format = 'bytes'
+    encoding = 'utf8'
+    format = 'bytes'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._byte_size = type_def.values[0]
+        try:
+            self.encoding = type_def.values[1]
+        except IndexError:
+            pass
         self._name_suffix = type_def.arg_str
         self._python_null = self._ch_null = bytes(b'\x00' * self._byte_size)
+        if self.format == 'bytes':
+            self._to_row_binary = self._to_row_binary_bytes
+        else:
+            self._to_row_binary = self._to_row_binary_str
 
     @property
     def python_null(self):
-        return self._python_null if self._format == 'bytes' else ''
+        return self._python_null if self.format == 'bytes' else ''
 
     @property
     def ch_null(self):
         return self._ch_null
 
-    def _from_row_binary(self, source: bytearray, loc: int):
+    def _to_row_binary(self, value, dest):
+        pass  # Overridden anyway on instance creation
+
+    def _from_row_binary(self, source: Sequence, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
 
     @staticmethod
-    def _to_row_binary_bytes(value: Union[bytes, bytearray], dest: bytearray):
+    def _to_row_binary_bytes(value: Sequence, dest: MutableSequence):
         dest += value
 
     def _to_row_binary_str(self, value, dest: bytearray):
-        value = str.encode(value, self._encoding)
+        value = str.encode(value, self.encoding)
         dest += value
         if len(value) < self._byte_size:
             dest += bytes((0,) * (self._byte_size - len(value)))
 
     def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
-        if self._format == 'string':
-            return self._from_native_str(source, loc, num_rows, self._byte_size, self._encoding)
+        if self.format == 'string':
+            return self._from_native_str(source, loc, num_rows, self._byte_size, self.encoding)
         return self._from_native_bytes(source, loc, num_rows, self._byte_size)
 
     @staticmethod
@@ -128,7 +146,7 @@ class FixedString(ClickHouseType):
         sz = self._byte_size
         empty = bytes((0,) * sz)
         str_enc = str.encode
-        enc = self._encoding
+        enc = self.encoding
         first = self._first_value(column)
         if isinstance(first, str):
             if self.nullable:
@@ -162,17 +180,5 @@ class FixedString(ClickHouseType):
             for x in column:
                 ext(x)
 
-    _to_row_binary = _to_row_binary_bytes
     _from_native_str = _from_native_str_python
     _from_native_bytes = _from_native_bytes_python
-
-    @classmethod
-    def format(cls, fmt: str, encoding: str = 'utf8') -> None:
-        fmt = fmt.lower()
-        if fmt.lower().startswith('str'):
-            cls._format = 'string'
-            cls._encoding = encoding
-            cls._to_row_binary = cls._to_row_binary_str
-        else:
-            cls._format = 'bytes'
-            cls._to_row_binary = cls._to_row_binary_bytes

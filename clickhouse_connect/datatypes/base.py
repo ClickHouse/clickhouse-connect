@@ -1,4 +1,4 @@
-from abc import ABCMeta, abstractmethod
+from abc import abstractmethod, ABC
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union
 
@@ -12,19 +12,21 @@ class TypeDef(NamedTuple):
     wrappers: tuple = ()
     keys: tuple = ()
     values: tuple = ()
+    format: str = None
 
     @property
     def arg_str(self):
         return f"({', '.join(str(v) for v in self.values)})" if self.values else ''
 
 
-class ClickHouseType(metaclass=ABCMeta):
-    __slots__ = 'nullable', 'low_card', 'wrappers', '__dict__'
+class ClickHouseType(ABC):
+    __slots__ = 'nullable', 'low_card', 'wrappers', 'format', '__dict__'
     _ch_name = None
     _instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
     _name_suffix = ''
     np_type = 'O'
     python_null = 0
+    python_type = None
 
     def __init_subclass__(cls, registered: bool = True):
         if registered:
@@ -39,6 +41,8 @@ class ClickHouseType(metaclass=ABCMeta):
     def __init__(self, type_def: TypeDef):
         self.wrappers = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
+        if type_def.format:
+            self.format = type_def.format
         self.nullable = 'Nullable' in self.wrappers
         if self.nullable:
             self.from_row_binary = self._nullable_from_row_binary
@@ -185,12 +189,12 @@ LC_TYPE_DEF = TypeDef(wrappers=('LowCardinality',))
 type_map: Dict[str, Type[ClickHouseType]] = {}
 
 
-# pylint: disable=abstract-method
-class ArrayType(ClickHouseType, registered=False):
+class ArrayType(ClickHouseType, ABC, registered=False):
     _signed = True
     _array_type = None
     _ch_null = None
     _struct_type = None
+    python_type = int
 
     def __init_subclass__(cls, registered: bool = True):
         super().__init_subclass__(registered)
@@ -233,7 +237,7 @@ class ArrayType(ClickHouseType, registered=False):
         self._to_native(column, dest, **kwargs)
 
 
-class UnsupportedType(ClickHouseType, registered=False):
+class UnsupportedType(ClickHouseType, ABC, registered=False):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str

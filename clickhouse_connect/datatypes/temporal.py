@@ -14,6 +14,7 @@ class Date(ArrayType):
     _array_type = 'H'
     python_null = epoch_start_date
     np_type = 'M8[D]'
+    python_type = date
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
@@ -53,6 +54,7 @@ class DateTime(ArrayType):
     _array_type = 'I'
     np_type = 'M8[us]'
     python_null = from_ts_naive(0)
+    python_type = datetime
 
     def __init__(self, type_def: TypeDef):
         if type_def.values:
@@ -82,6 +84,7 @@ class DateTime64(ArrayType):
     __slots__ = 'prec', 'tzinfo'
     _array_type = 'Q'
     python_null = epoch_start_date
+    python_type = datetime
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)

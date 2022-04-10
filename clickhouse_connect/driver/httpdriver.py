@@ -7,7 +7,7 @@ from clickhouse_connect.driver import native
 from clickhouse_connect.driver import rowbinary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver import BaseDriver
-from clickhouse_connect.driver.exceptions import ServerError, DriverError
+from clickhouse_connect.driver.exceptions import DatabaseError
 from clickhouse_connect.driver.query import QueryResult
 
 logger = logging.getLogger(__name__)
@@ -83,14 +83,14 @@ class HttpDriver(BaseDriver):
                                                            params=params)
         except Exception as ex:
             logger.exception('Unexpected Http Driver Exception')
-            raise DriverError(f'Error executing HTTP request {self.url}') from ex
+            raise DatabaseError(f'Error executing HTTP request {self.url}') from ex
         if 200 <= response.status_code < 300:
             return response
         err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
         logger.error(err_str)
         if response.content:
             logger.error(str(response.content))
-        raise ServerError(err_str)
+        raise DatabaseError(err_str)
 
     def ping(self) -> bool:
         try:

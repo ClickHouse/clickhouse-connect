@@ -10,6 +10,7 @@ from clickhouse_connect.datatypes.registry import get_from_name
 
 class Array(ClickHouseType):
     __slots__ = ('element_type',)
+    python_type = list
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -86,6 +87,7 @@ class Array(ClickHouseType):
 
 class Tuple(ClickHouseType):
     _slots = 'from_rb_funcs', 'to_rb_funcs'
+    python_type = tuple
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -122,6 +124,7 @@ class Tuple(ClickHouseType):
 
 class Map(ClickHouseType):
     _slots = 'key_type', 'value_type', 'key_from_rb', 'key_to_rb', 'value_from_rb', 'value_to_rb'
+    python_type = dict
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -194,16 +197,20 @@ class Map(ClickHouseType):
 
 
 class Object(UnsupportedType):
+    python_type = dict
+
     def __init__(self, type_def):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
 
 
 class JSON(UnsupportedType):
-    pass
+    python_type = dict
 
 
 class Nested(UnsupportedType):
+    python_type = list
+
     def __init__(self, type_def):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str

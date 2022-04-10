@@ -12,7 +12,7 @@ type_mapping = (
 
 
 def configure_types():
-    fixed_string_format(fmt='str', encoding='utf8')
+    fixed_string_format('string', 'utf8')
     uint64_format('signed')
     ip_format('string')
     uuid_format('string')

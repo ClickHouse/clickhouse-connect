@@ -91,6 +91,16 @@ class Int64(ArrayType):
 class UInt64(ArrayType):
     _array_type = 'Q'
     np_type = 'u8'
+    format = 'unsigned'
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        if self.format == 'unsigned':
+            self._array_type = 'Q'
+            self.np_type = 'u8'
+        else:
+            self._array_type = 'q'
+            self.np_type = 'i8'
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<q', source, loc)[0], loc + 8
@@ -98,22 +108,12 @@ class UInt64(ArrayType):
     def _to_row_binary(self, value: int, dest: MutableSequence):
         dest += sp('<Q', value, )
 
-    @classmethod
-    def format(cls, fmt: str):
-        fmt = fmt.lower()
-        if fmt == 'unsigned':
-            cls._array_type = 'Q'
-        elif fmt == 'signed':
-            cls._array_type = 'q'
-        else:
-            raise ValueError('Unrecognized UInt64 Output Format')
-
 
 # pylint: disable=abstract-method
 class BigInt(ClickHouseType, registered=False):
-    _format = 'raw'
     _signed = True
     _byte_size = 0
+    format = 'int'
 
     @property
     def ch_null(self):
@@ -126,7 +126,7 @@ class BigInt(ClickHouseType, registered=False):
         column = []
         app = column.append
         ifb = int.from_bytes
-        if self._format == 'string':
+        if self.format == 'string':
             for ix in range(loc, end, sz):
                 app(str(ifb(source[ix: ix + sz], 'little', signed=signed)))
         else:
@@ -164,13 +164,6 @@ class BigInt(ClickHouseType, registered=False):
                 for x in column:
                     ext(x.to_bytes(sz, 'little', signed=signed))
 
-    @classmethod
-    def format(cls, fmt: str):
-        fmt = fmt.lower()
-        if fmt.lower().startswith('str'):
-            cls._format = 'string'
-        else:
-            cls._format = 'raw'
 
 
 class Int128(BigInt):
@@ -231,6 +224,7 @@ class Float32(ArrayType):
 class Float64(ArrayType):
     _array_type = 'd'
     np_type = 'f8'
+    python_type = float
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return suf('d', source, loc)[0], loc + 8
@@ -241,6 +235,7 @@ class Float64(ArrayType):
 
 class Boolean(ClickHouseType):
     np_type = '?'
+    python_type = bool
 
     def _from_row_binary(self, source: bytearray, loc: int):
         return source[loc] > 0, loc + 1
@@ -263,6 +258,7 @@ class Bool(Boolean):
 class Enum(ArrayType):
     __slots__ = '_name_map', '_int_map'
     _array_type = 'b'
+    python_type = str
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -308,6 +304,7 @@ class Enum16(Enum):
 
 class Decimal(ClickHouseType):
     __slots__ = 'prec', 'scale', '_mult', '_zeros', '_byte_size', '_array_type'
+    python_type = decimal.Decimal
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):

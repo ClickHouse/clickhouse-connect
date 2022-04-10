@@ -5,7 +5,7 @@ from typing import List, Any, Sequence, Collection, Union
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import read_leb128, read_leb128_str
-from clickhouse_connect.driver.exceptions import DriverError
+from clickhouse_connect.driver.exceptions import InterfaceError
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def parse_response(source: Union[bytes, bytearray, memoryview], use_none: bool =
         try:
             col_types.append(registry.get_from_name(col_type))
         except KeyError:
-            raise DriverError(f'Unknown ClickHouse type returned for type {col_type}') from None
+            raise InterfaceError(f'Unknown ClickHouse type returned for type {col_type}') from None
     convs = tuple(t.from_row_binary for t in col_types)
     result = []
     while loc < response_size:

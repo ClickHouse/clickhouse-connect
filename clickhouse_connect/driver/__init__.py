@@ -1,6 +1,6 @@
 from typing import Optional, Union
 
-from clickhouse_connect.driver.exceptions import DriverError
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.basedriver import BaseDriver
 from clickhouse_connect.driver.httpdriver import HttpDriver
 
@@ -18,7 +18,7 @@ def create_driver(host: str = 'localhost', username: str = '', password: str = '
     if interface.startswith('http'):
         driver = HttpDriver(interface, host, port, username, password, database, **kwargs)
     else:
-        raise DriverError(f'Unrecognized driver type {interface}')
+        raise ProgrammingError(f'Unrecognized driver type {interface}')
     return driver
 
 

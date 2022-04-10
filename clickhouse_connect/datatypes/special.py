@@ -11,6 +11,7 @@ empty_uuid_b = bytes(b'\x00' * 16)
 
 class UUID(ClickHouseType):
     python_null = PYUUID(int=0)
+    format = 'uuid'
 
     @property
     def ch_null(self):
@@ -29,9 +30,14 @@ class UUID(ClickHouseType):
         bytes_low.reverse()
         dest += bytes_high + bytes_low
 
+    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+        if self.format == 'string':
+            return self._from_native_str(source, loc, num_rows)
+        return self._from_native_uuid(source, loc, num_rows)
+
     # pylint: disable=too-many-locals
     @staticmethod
-    def _from_native_uuid(source: Sequence, loc: int, num_rows: int, **_):
+    def _from_native_uuid(source: Sequence, loc: int, num_rows: int):
         v, end = array_column('Q', source, loc, num_rows * 2)
         empty_uuid = PYUUID(int=0)
         new_uuid = PYUUID.__new__
@@ -52,7 +58,7 @@ class UUID(ClickHouseType):
         return column, end
 
     @staticmethod
-    def _from_native_str(source: Sequence, loc: int, num_rows: int, **_):
+    def _from_native_str(source: Sequence, loc: int, num_rows: int):
         v, end = array_column('Q', source, loc, num_rows * 2)
         column = []
         app = column.append
@@ -94,16 +100,6 @@ class UUID(ClickHouseType):
                     dest += empty
         else:
             dest += empty * len(column)
-
-    _from_native = _from_native_uuid
-
-    @classmethod
-    def format(cls, fmt: str):
-        fmt = fmt.lower()
-        if fmt.startswith('str'):
-            cls._from_native = staticmethod(cls._from_native_str)
-        else:
-            cls._from_native = staticmethod(cls._from_native_uuid)
 
 
 class Nothing(ArrayType):
