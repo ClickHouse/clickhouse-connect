@@ -5,6 +5,7 @@ c_modules = []
 
 try:
     from Cython.Build import cythonize
+
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
     C_PKG = None
 except ImportError:
@@ -13,7 +14,6 @@ except ImportError:
 
 
 def run_setup(try_c: bool = True):
-
     if try_c:
         kwargs = {'ext_modules': c_modules}
         if C_PKG:
@@ -59,8 +59,9 @@ def run_setup(try_c: bool = True):
         **kwargs
     )
 
+
 try:
     run_setup()
 except (CCompilerError, DistutilsExecError, DistutilsPlatformError):
-    print ('Unable to compile C extensions for faster performance, will use pure Python')
+    print('Unable to compile C extensions for faster performance, will use pure Python')
     run_setup(False)

@@ -6,6 +6,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
 
 
+# pylint: disable=too-many-locals
 def parse_response(source: Union[memoryview, bytes, bytearray], use_none: bool = True) -> (
         Sequence[Sequence[Any]], List[str], List[ClickHouseType]):
     if not isinstance(source, memoryview):
@@ -17,6 +18,7 @@ def parse_response(source: Union[memoryview, bytes, bytearray], use_none: bool =
     total_size = len(source)
     block = 0
     while loc < total_size:
+        result_block = []
         num_cols, loc = read_leb128(source, loc)
         num_rows, loc = read_leb128(source, loc)
         for col_num in range(num_cols):
@@ -30,12 +32,9 @@ def parse_response(source: Union[memoryview, bytes, bytearray], use_none: bool =
             else:
                 col_type = col_types[col_num]
             column, loc = col_type.from_native(source, loc, num_rows, use_none=use_none)
-            if block == 0:
-                result.append(column)
-            else:
-                result[col_num] += column
+            result_block.append(column)
         block += 1
-    result = list(zip(*result))
+        result.extend(list(zip(*result_block)))
     return result, names, col_types
 
 
