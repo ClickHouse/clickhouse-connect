@@ -213,6 +213,7 @@ class UInt256(BigInt):
 class Float32(ArrayType):
     _array_type = 'f'
     np_type = 'f4'
+    python_type = float
 
     def _from_row_binary(self, source: bytearray, loc: int):
         return suf('f', source, loc)[0], loc + 4

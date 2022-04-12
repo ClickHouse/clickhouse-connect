@@ -4,11 +4,12 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.native import build_insert, parse_response
 from tests.helpers import random_columns, random_data
 
-TEST_RUNS = 20
-TEST_COLUMNS = 12
-MAX_DATA_ROWS = 200
+TEST_RUNS = 10
+TEST_COLUMNS = 16
+MAX_DATA_ROWS = 150
 
 
+# pylint: disable=duplicate-code
 def test_native_round_trips():
     for _ in range(TEST_RUNS):
         data_rows = random.randint(1, MAX_DATA_ROWS)

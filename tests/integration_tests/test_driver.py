@@ -22,7 +22,7 @@ def test_insert(test_driver: BaseDriver):
 def test_numpy(test_driver: BaseDriver):
     if HAS_NUMPY:
         np_array = test_driver.query_np('SELECT * FROM system.tables')
-        print(np_array['name'])
+        assert len(np_array['database']) > 10
 
 
 def test_pandas(test_driver: BaseDriver):

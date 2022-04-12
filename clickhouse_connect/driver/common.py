@@ -42,7 +42,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
     buff = array.array(code, column)
     if must_swap:
         buff.byteswap()
-    dest += buff
+    dest += buff.tobytes()
 
 
 def read_uint64(source: Sequence, loc: int):

@@ -1,3 +1,4 @@
+import array
 from abc import abstractmethod, ABC
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union
@@ -103,10 +104,13 @@ class ClickHouseType(ABC):
         null_map = memoryview(source[loc: loc + num_rows])
         loc += num_rows
         column, loc = self._from_native(source, loc, num_rows, **kwargs)
-        if use_none:
-            for ix in range(num_rows):
-                if null_map[ix]:
-                    column[ix] = None
+        if not use_none:
+            return column, loc
+        if isinstance(column, (tuple, array.array)):
+            return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
+        for ix in range(num_rows):
+            if null_map[ix]:
+                column[ix] = None
         return column, loc
 
     def _nullable_to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
@@ -168,7 +172,7 @@ class ClickHouseType(ABC):
                     key += 1
                 else:
                     index.append(ix)
-        ix_type = int(log(len(keys), 2)) // 8  # power of two needed to store the total number of keys
+        ix_type = int(log(len(keys), 2)) // 8  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(keys), dest)
         self._to_native(keys, dest, lc_version=lc_version, **kwargs)
@@ -214,14 +218,6 @@ class ArrayType(ClickHouseType, ABC, registered=False):
 
     def _to_native(self, column: Sequence, dest: MutableSequence, **_):
         write_array(self._array_type, column, dest)
-
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True, **kwargs):
-        null_map = memoryview(source[loc: loc + num_rows])
-        loc += num_rows
-        column, loc = self._from_native(source, loc, num_rows, **kwargs)
-        if use_none:
-            return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
-        return column, loc
 
     def _nullable_to_native(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, **kwargs):
         write_array('B', [1 if x is None else 0 for x in column], dest)

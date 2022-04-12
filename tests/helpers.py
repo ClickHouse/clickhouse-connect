@@ -9,7 +9,7 @@ from clickhouse_connect.driver.extras import random_col_data
 
 SUPPORTED_TYPES = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int32', 1), ('UInt32', 1), ('Int64', 1),
                    ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 8),
-                   ('FixedString', 4), ('Array', 8))
+                   ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('UUID', 3), ('Array', 8))
 LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.3
 FIXED_STR_RANGE = 256
@@ -42,15 +42,15 @@ def random_columns(cnt: int = 16, col_prefix: str = 'col'):
         if base_type == 'Array':
             depth = 0
             while True:
-                depth += 1
                 element = random_type()
                 if depth > 3 and element == 'Array':  # Three levels of array nesting should be enough to test
                     continue
+                depth += 1
                 col_type = f'{col_type}({element}'
                 if element != 'Array':
                     col_type += ')' * depth
                     break
-        col_name = f'{col_prefix}{y}_{base_type.lower()}'.replace('(', '_').replace(')', '_')
+        col_name = f'{col_prefix}{y}_{base_type.lower()}'.replace('(', '_').replace(')', '')
         col_names.append(col_name)
         col_types.append(get_from_name(col_type))
     return tuple(col_names), tuple(col_types)
