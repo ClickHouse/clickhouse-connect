@@ -12,11 +12,17 @@ if HAS_NUMPY:
 
 
 class QueryResult(NamedTuple):
-    result_set: Sequence[Sequence[Any]] = []
-    column_names: Tuple[str] = []
-    column_types: Tuple[ClickHouseType] = []
+    result_set: Sequence[Sequence[Any]]
+    column_names: Tuple[str]
+    column_types: Tuple[ClickHouseType]
     query_id: str = None
     summary: Dict[str, Any] = {}
+
+
+class DataResult(NamedTuple):
+    result: Sequence[Sequence[Any]]
+    column_names: Tuple[str]
+    column_types: Tuple[ClickHouseType]
 
 
 def np_result(result: QueryResult) -> 'np.array':

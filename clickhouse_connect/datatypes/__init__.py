@@ -1,12 +1,12 @@
 import logging
 
-import clickhouse_connect.datatypes.registry
 import clickhouse_connect.datatypes.container
 import clickhouse_connect.datatypes.network as dt_network
 import clickhouse_connect.datatypes.numeric as dt_numeric
 import clickhouse_connect.datatypes.special as dt_special
 import clickhouse_connect.datatypes.string as dt_string
 import clickhouse_connect.datatypes.temporal
+import clickhouse_connect.datatypes.registry
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 

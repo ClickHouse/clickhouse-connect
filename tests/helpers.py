@@ -8,10 +8,10 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.extras import random_col_data
 
 SUPPORTED_TYPES = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int32', 1), ('UInt32', 1), ('Int64', 1),
-                   ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 4),
+                   ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 8),
                    ('FixedString', 4), ('Array', 8))
-LOW_CARD_PERC = 0.3
-NULLABLE_PERC = 0.2
+LOW_CARD_PERC = 0.4
+NULLABLE_PERC = 0.3
 FIXED_STR_RANGE = 256
 
 total_weight = sum(x[1] for x in SUPPORTED_TYPES)
@@ -44,6 +44,8 @@ def random_columns(cnt: int = 16, col_prefix: str = 'col'):
             while True:
                 depth += 1
                 element = random_type()
+                if depth > 3 and element == 'Array':  # Three levels of array nesting should be enough to test
+                    continue
                 col_type = f'{col_type}({element}'
                 if element != 'Array':
                     col_type += ')' * depth
@@ -51,7 +53,7 @@ def random_columns(cnt: int = 16, col_prefix: str = 'col'):
         col_name = f'{col_prefix}{y}_{base_type.lower()}'.replace('(', '_').replace(')', '_')
         col_names.append(col_name)
         col_types.append(get_from_name(col_type))
-    return col_names, col_types
+    return tuple(col_names), tuple(col_types)
 
 
 def random_data(col_types: Sequence[ClickHouseType], num_rows: int = 1):
@@ -61,8 +63,13 @@ def random_data(col_types: Sequence[ClickHouseType], num_rows: int = 1):
     return list(zip(*all_cols))
 
 
-def to_bytes(hex_str):
+def to_bytes(hex_str:str ):
     return memoryview(bytes.fromhex(hex_str))
+
+
+def to_hex(b: bytes):
+    lines = [(b[ix: ix + 16].hex(' ', -2)) for ix in range(0, len(b), 16)]
+    return '\n'.join(lines)
 
 
 def add_test_entries():

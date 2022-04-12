@@ -51,7 +51,7 @@ class Array(ClickHouseType):
             all_values, loc = final_type.from_native(source, loc, level_size, lc_version=lc_version, **kwargs)
         else:
             all_values = []
-        column = tuple(all_values)
+        column = all_values if isinstance(all_values, list) else list(all_values)
         for offset_range in reversed(offset_sizes):
             data = []
             last = 0

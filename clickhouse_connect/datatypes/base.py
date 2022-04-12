@@ -119,18 +119,19 @@ class ClickHouseType(ABC):
             return tuple(), loc
         if lc_version is None:
             loc += 8  # Skip dictionary version for now
-        key_size = 2 ** source[loc]  # first byte is the key size
+        index_sz = 2 ** source[loc]  # first byte is the key size
         loc += 8  # Skip remaining key information
-        index_cnt, loc = read_uint64(source, loc)
-        values, loc = self._from_native(source, loc, index_cnt, **kwargs)
+        key_cnt, loc = read_uint64(source, loc)
+        keys, loc = self._from_native(source, loc, key_cnt, **kwargs)
         if self.nullable:
             try:
-                values[0] = None if use_none else self.python_null
+                keys[0] = None if use_none else self.python_null
             except TypeError:
-                values = (None if use_none else self.python_null,) + values[1:]
-        loc += 8  # key size should match row count
-        keys, end = array_column(array_type(key_size, False), source, loc, num_rows)
-        return tuple(values[key] for key in keys), end
+                keys = (None if use_none else self.python_null,) + keys[1:]
+        index_cnt, loc = read_uint64(source, loc)
+        assert index_cnt == num_rows
+        indexes, end = array_column(array_type(index_sz, False), source, loc, num_rows)
+        return tuple(keys[ix] for ix in indexes), end
 
     def _low_card_to_native(self, column: Sequence, dest: MutableSequence, lc_version=None, **kwargs):
         if lc_version is None:
@@ -142,8 +143,7 @@ class ClickHouseType(ABC):
         rev_map = {}
         rmg = rev_map.get
         if self.nullable:
-            index.append(0)
-            keys.append(self.ch_null)
+            keys.append(None)
             key = 1
             for x in column:
                 if x is None:

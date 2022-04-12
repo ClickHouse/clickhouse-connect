@@ -72,7 +72,7 @@ def test_low_cardinality():
 
 def test_low_card_array():
     result = parse_response(to_bytes(LOW_CARD_ARRAY))
-    assert result[0][0] == ((),), ((),)
+    assert result[0][0] == ([],), ([],)
 
 
 def test_map():

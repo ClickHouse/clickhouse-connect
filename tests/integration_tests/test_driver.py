@@ -29,7 +29,6 @@ def test_pandas(test_driver: BaseDriver):
     if not HAS_PANDAS:
         return
     df = test_driver.query_df('SELECT * FROM system.tables')
-    print(df['database'])
     test_driver.command('DROP TABLE IF EXISTS test_system_insert')
     test_driver.command('CREATE TABLE test_system_insert as system.tables Engine Memory')
     test_driver.insert_df('test_system_insert', df)

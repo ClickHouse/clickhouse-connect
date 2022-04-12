@@ -45,16 +45,16 @@ class HttpDriver(BaseDriver):
         if self.compress:
             headers['Accept-Encoding'] = 'br, gzip'
         response = self.raw_request(self.format_query(query), params=params, headers=headers)
-        result_set, column_names, column_types = self.parse_response(response.content, use_none)
+        data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
                 summary = json.loads(response.headers['X-ClickHouse-Summary'])
             except json.JSONDecodeError:
                 pass
-        return QueryResult(result_set,
-                           column_names,
-                           column_types,
+        return QueryResult(data_result.result,
+                           data_result.column_names,
+                           data_result.column_types,
                            response.headers.get('X-ClickHouse-Query-Id'),
                            summary)
 

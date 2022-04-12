@@ -1,14 +1,16 @@
 from collections.abc import Sequence
-from typing import Union, List, Any, Collection
+from typing import Any
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
+from clickhouse_connect.driver.query import DataResult
 
 
 # pylint: disable=too-many-locals
-def parse_response(source: Union[memoryview, bytes, bytearray], use_none: bool = True) -> (
-        Sequence[Sequence[Any]], List[str], List[ClickHouseType]):
+
+
+def parse_response(source: Sequence, use_none: bool = True) -> DataResult:
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0
@@ -35,11 +37,11 @@ def parse_response(source: Union[memoryview, bytes, bytearray], use_none: bool =
             result_block.append(column)
         block += 1
         result.extend(list(zip(*result_block)))
-    return result, names, col_types
+    return DataResult(result, tuple(names), tuple(col_types))
 
 
-def build_insert(data: Collection[Collection[Any]], *, column_names: Collection[str],
-                 column_type_names: Collection[str] = None, column_types: Collection[ClickHouseType] = None):
+def build_insert(data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
+                 column_type_names: Sequence[str] = None, column_types: Sequence[ClickHouseType] = None):
     if not column_types:
         column_types = [registry.get_from_name(name) for name in column_type_names]
     output = bytearray()

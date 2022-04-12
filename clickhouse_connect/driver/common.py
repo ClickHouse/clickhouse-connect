@@ -4,6 +4,8 @@ import sys
 from collections.abc import Sequence, MutableSequence
 
 # pylint: disable=invalid-name
+from typing import Tuple
+
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize
 low_card_version = 1
@@ -63,7 +65,7 @@ def read_leb128(source: Sequence, loc: int):
     return length, loc + ix
 
 
-def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8'):
+def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8') -> Tuple[str, int]:
     length, loc = read_leb128(source, loc)
     return str(source[loc:loc + length], encoding), loc + length
 

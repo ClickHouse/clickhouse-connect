@@ -28,7 +28,7 @@ def test_basic_reflection(test_engine: Engine):
     query = db.select([table.c.create_table_query])
     result = conn.execute(query)
     rows = result.fetchmany(100)
-    print(rows)
+    assert rows
 
 
 class TestEnum(PyEnum):
