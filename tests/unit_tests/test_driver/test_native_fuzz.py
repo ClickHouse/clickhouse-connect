@@ -23,3 +23,16 @@ def test_native_round_trips():
         assert data_result.column_names == col_names
         assert data_result.column_types == col_types
         assert data_result.result == data
+
+
+def test_native_small():
+    for _ in range(TEST_RUNS):
+        col_names, col_types = random_columns(1)
+        data = random_data(col_types, 2)
+        col_names = ('row_id',) + col_names
+        col_types = (get_from_name('UInt32'),) + col_types
+        output = build_insert(data, column_names=col_names, column_types=col_types)
+        data_result = parse_response(output)
+        assert data_result.column_names == col_names
+        assert data_result.column_types == col_types
+        assert data_result.result == data

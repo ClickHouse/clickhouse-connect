@@ -190,13 +190,13 @@ class Map(ClickHouseType):
         for v in column:
             total += len(v)
             offsets.append(total)
-            keys.append(v.keys())
-            values.append(v.values())
+            keys.extend(v.keys())
+            values.extend(v.values())
         if must_swap:
             offsets.byteswap()
         dest += offsets.tobytes()
         self.key_type.to_native_data(keys, dest)
-        self.value_type.to_native_data(keys, dest)
+        self.value_type.to_native_data(values, dest)
 
 
 class Object(UnsupportedType):

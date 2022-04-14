@@ -16,8 +16,8 @@ NESTED_DEPTH = 3
 
 weighted_types = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int32', 1), ('UInt32', 1), ('Int64', 1),
                   ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 8),
-                  ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('UUID', 2), ('Array', 8), ('Tuple', 4),
-                  ('Map', 0))
+                  ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('UUID', 2), ('Date', 2), ('Date32', 1),
+                  ('DateTime', 4), ('DateTime64', 2), ('Array', 8), ('Tuple', 4), ('Map', 4))
 all_types, all_weights = tuple(zip(*weighted_types))
 nested_types = ['Array', 'Tuple', 'Map']
 terminal_types = set(all_types) - set(nested_types)
@@ -34,6 +34,8 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_p
     if base_type in terminal_types:
         if base_type == 'FixedString':
             base_type = f'{base_type}({random.randint(1, FIXED_STR_RANGE)})'
+        if base_type == 'DateTime64':
+            base_type = f'{base_type}({random.randint(0, 3) * 3})'
         if random.random() < nullable_perc:
             base_type = f'Nullable({base_type})'
         if 'String' in base_type and random.random() < low_card_perc:
@@ -49,7 +51,15 @@ def build_nested_type(base_type: str, depth: int):
     if base_type == 'Tuple':
         elements = [random_type(depth + 1) for _ in range(random.randint(1, TUPLE_MAX))]
         return get_from_name(f"Tuple({', '.join(x.name for x in elements)})")
-    return None
+    if base_type == 'Map':
+        key = random_type(1000, nullable_perc=0)
+        while key.python_type not in (int, str):
+            key = random_type(1000, nullable_perc=0)
+        value = random_type(depth + 1)
+        while value.python_type not in (int, str, list):
+            value = random_type(depth + 1)
+        return get_from_name(f'Map({key.name}, {value.name})')
+    raise ValueError(f'Unrecognized nested type {base_type}')
 
 
 def random_columns(cnt: int = 16, col_prefix: str = 'col'):

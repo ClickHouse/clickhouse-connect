@@ -110,7 +110,7 @@ class DateTime64(ArrayType):
         dest += (int(microseconds * self.prec) // 1000000).to_bytes(8, 'little', signed=True)
 
     def _from_native_tz(self, source: Sequence, loc: int, num_rows: int):
-        column = array_column(self._array_type, source, loc, num_rows)
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
         dt_from = datetime.fromtimestamp
@@ -120,10 +120,10 @@ class DateTime64(ArrayType):
             seconds = ticks // prec
             dt_sec = dt_from(seconds, tz_info)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
-        return new_col
+        return new_col, loc
 
     def _from_native_naive(self, source: Sequence, loc: int, num_rows: int):
-        column = array_column(self._array_type, source, loc, num_rows)
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
         dt_from = datetime.utcfromtimestamp
@@ -132,7 +132,7 @@ class DateTime64(ArrayType):
             seconds = ticks // prec
             dt_sec = dt_from(seconds)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
-        return new_col
+        return new_col, loc
 
     def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
         prec = self.prec

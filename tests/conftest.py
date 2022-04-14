@@ -1,3 +1,9 @@
+import os
+import time
+
+os.environ['TZ'] = 'UTC'
+time.tzset()
+
 def pytest_addoption(parser):
     parser.addoption('--docker', default=True, action='store_true')
     parser.addoption('--no-docker', dest='docker', action='store_false')
