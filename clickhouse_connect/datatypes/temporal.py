@@ -1,6 +1,7 @@
 from collections.abc import Sequence, MutableSequence
 from datetime import date, timedelta, datetime
 from struct import unpack_from as suf, pack as sp
+from typing import Union
 
 import pytz
 
@@ -22,11 +23,11 @@ class Date(ArrayType):
     def _to_row_binary(self, value: date, dest: MutableSequence):
         dest += sp('<H', (value - epoch_start_date).days, )
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         return [epoch_start_date + timedelta(days) for days in column], loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
         esd = epoch_start_date
         if self.nullable:
             write_array(self._array_type, [0 if x is None else (x - esd).days for x in column], dest)
@@ -67,12 +68,12 @@ class DateTime(ArrayType):
     def _to_row_binary(self, value: datetime, dest: MutableSequence):
         dest += sp('<I', int(value.timestamp()), )
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         fts = from_ts_naive
         return [fts(ts) for ts in column], loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
         if self.nullable:
             column = [int(x.timestamp()) if x else 0 for x in column]
         else:
@@ -92,9 +93,9 @@ class DateTime64(ArrayType):
         self.prec = 10 ** type_def.values[0]
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
-            self._from_native = self._from_native_tz
+            self._read_native_data = self._from_native_tz
         else:
-            self._from_native = self._from_native_naive
+            self._read_native_data = self._from_native_naive
             self.tzinfo = None
 
     def _from_row_binary(self, source, loc):
@@ -108,7 +109,7 @@ class DateTime64(ArrayType):
         microseconds = int(value.timestamp()) * 1000000 + value.microsecond
         dest += (int(microseconds * self.prec) // 1000000).to_bytes(8, 'little', signed=True)
 
-    def _from_native_tz(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _from_native_tz(self, source: Sequence, loc: int, num_rows: int):
         column = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
@@ -121,7 +122,7 @@ class DateTime64(ArrayType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _from_native_naive(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _from_native_naive(self, source: Sequence, loc: int, num_rows: int):
         column = array_column(self._array_type, source, loc, num_rows)
         new_col = []
         app = new_col.append
@@ -133,7 +134,7 @@ class DateTime64(ArrayType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
         prec = self.prec
         if self.nullable:
             column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]

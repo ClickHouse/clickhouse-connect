@@ -1,4 +1,4 @@
-from typing import Sequence, MutableSequence
+from typing import Sequence, MutableSequence, Union
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import read_leb128, to_leb128
@@ -23,7 +23,7 @@ class String(ClickHouseType):
         value = bytes(value, self.encoding)
         dest += to_leb128(len(value)) + value
 
-    def _from_native(self, source, loc, num_rows, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         return self._from_native_impl(source, loc, num_rows, self.encoding)
 
     @staticmethod
@@ -44,7 +44,7 @@ class String(ClickHouseType):
             loc += length
         return column, loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_) -> None:
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         encoding = self.encoding
         app = dest.append
         if self.nullable:
@@ -118,7 +118,7 @@ class FixedString(ClickHouseType):
         if len(value) < self._byte_size:
             dest += bytes((0,) * (self._byte_size - len(value)))
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         if self.format == 'string':
             return self._from_native_str(source, loc, num_rows, self._byte_size, self.encoding)
         return self._from_native_bytes(source, loc, num_rows, self._byte_size)
@@ -141,7 +141,7 @@ class FixedString(ClickHouseType):
         return [bytes(source[ix: ix + sz]) for ix in range(loc, end, sz)], end
 
     # pylint: disable=too-many-branches
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         ext = dest.extend
         sz = self._byte_size
         empty = bytes((0,) * sz)

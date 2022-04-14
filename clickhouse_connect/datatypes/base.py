@@ -51,15 +51,6 @@ class ClickHouseType(ABC):
         else:
             self.to_row_binary = self._to_row_binary
             self.from_row_binary = self._from_row_binary
-        if self.nullable and not self.low_card:
-            self.from_native = self._nullable_from_native
-            self.to_native = self._nullable_to_native
-        elif self.low_card:
-            self.from_native = self._low_card_from_native
-            self.to_native = self._low_card_to_native
-        else:
-            self.from_native = self._from_native
-            self.to_native = self._to_native
 
     @property
     def name(self):
@@ -72,20 +63,65 @@ class ClickHouseType(ABC):
     def ch_null(self):
         return b'\x00'
 
+    def write_native_prefix(self, dest: MutableSequence):
+        if self.low_card:
+            write_uint64(low_card_version, dest)
+
+    def read_native_prefix(self, source: Sequence, loc: int):
+        if self.low_card:
+            v, loc = read_uint64(source, loc)
+            assert v == low_card_version
+        return loc
+
+    def from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+        loc = self.read_native_prefix(source, loc)
+        return self.from_native_data(source, loc, num_rows, **kwargs)
+
+    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
+        if self.low_card:
+            return self._read_native_low_card(source, loc, num_rows, use_none)
+        if self.nullable:
+            null_map = memoryview(source[loc: loc + num_rows])
+            loc += num_rows
+            # pylint: disable=assignment-from-no-return
+            column, loc = self._read_native_data(source, loc, num_rows)
+            if not use_none:
+                return column, loc
+            if isinstance(column, (tuple, array.array)):
+                return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
+            for ix in range(num_rows):
+                if null_map[ix]:
+                    column[ix] = None
+            return column, loc
+        return self._read_native_data(source, loc, num_rows)
+
+    # These two methods are really abstract, but they won't be implemented for container classes that
+    # override from_native_data and to_native_data without having native read/write methods of their own
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+        pass
+
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+        pass
+
+    def to_native(self, column: Sequence, dest: MutableSequence):
+        self.write_native_prefix(dest)
+        self.to_native_data(column, dest)
+
+    def to_native_data(self, column: Sequence, dest: MutableSequence):
+        if self.low_card:
+            self._write_native_low_card(column, dest)
+        else:
+            if self.nullable:
+                dest += bytes(1 if x is None else 0 for x in column)
+            self._write_native_data(column, dest)
+
+
     @abstractmethod
     def _from_row_binary(self, source: Sequence, loc: int):
         pass
 
     @abstractmethod
     def _to_row_binary(self, value: Any, dest: MutableSequence):
-        pass
-
-    @abstractmethod
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        pass
-
-    @abstractmethod
-    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
         pass
 
     def _nullable_from_row_binary(self, source, loc, use_none: bool = True) -> (Any, int):
@@ -100,33 +136,14 @@ class ClickHouseType(ABC):
             dest += b'\x00'
             self._to_row_binary(value, dest)
 
-    def _nullable_from_native(self, source: Sequence, loc: int, num_rows: int, use_none=True, **kwargs):
-        null_map = memoryview(source[loc: loc + num_rows])
-        loc += num_rows
-        column, loc = self._from_native(source, loc, num_rows, **kwargs)
-        if not use_none:
-            return column, loc
-        if isinstance(column, (tuple, array.array)):
-            return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
-        for ix in range(num_rows):
-            if null_map[ix]:
-                column[ix] = None
-        return column, loc
-
-    def _nullable_to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        dest += bytes(1 if x is None else 0 for x in column)
-        self._to_native(column, dest, **kwargs)
-
-    def _low_card_from_native(self, source: Sequence, loc: int, num_rows: int, use_none=True, **kwargs):
-        lc_version = kwargs.pop('lc_version', None)
+    def _read_native_low_card(self, source: Sequence, loc: int, num_rows: int, use_none=True):
         if num_rows == 0:
             return tuple(), loc
-        if lc_version is None:
-            loc += 8  # Skip dictionary version for now
-        index_sz = 2 ** source[loc]  # first byte is the key size
-        loc += 8  # Skip remaining key information
+        index_sz = 2 ** source[loc]    # first byte is the key size
+        loc += 8                       # Skip remaining key information
         key_cnt, loc = read_uint64(source, loc)
-        keys, loc = self._from_native(source, loc, key_cnt, **kwargs)
+        # pylint: disable=assignment-from-no-return
+        keys, loc = self._read_native_data(source, loc, key_cnt)
         if self.nullable:
             try:
                 keys[0] = None if use_none else self.python_null
@@ -137,9 +154,7 @@ class ClickHouseType(ABC):
         indexes, end = array_column(array_type(index_sz, False), source, loc, num_rows)
         return tuple(keys[ix] for ix in indexes), end
 
-    def _low_card_to_native(self, column: Sequence, dest: MutableSequence, lc_version=None, **kwargs):
-        if lc_version is None:
-            write_uint64(low_card_version, dest)
+    def _write_native_low_card(self, column: Sequence, dest: MutableSequence):
         if not column:
             return
         index = []
@@ -175,7 +190,7 @@ class ClickHouseType(ABC):
         ix_type = int(log(len(keys), 2)) // 8  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(keys), dest)
-        self._to_native(keys, dest, lc_version=lc_version, **kwargs)
+        self._write_native_data(keys, dest)
         write_uint64(len(index), dest)
         write_array(array_type(2 ** ix_type, False), index, dest)
 
@@ -212,25 +227,21 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def ch_null(self):
         return self._ch_null
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
-        return column, loc
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+        return array_column(self._array_type, source, loc, num_rows)
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
+        if column and self.nullable:
+            first = column[0]
+            try:
+                column[0] = None
+                for ix, x in enumerate(column):
+                    if not x:
+                        column[ix] = 0
+                column[0] = first or 0
+            except TypeError:
+                column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
-
-    def _nullable_to_native(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, **kwargs):
-        write_array('B', [1 if x is None else 0 for x in column], dest)
-        first = column[0]
-        try:
-            column[0] = None
-            for ix, x in enumerate(column):
-                if not x:
-                    column[ix] = 0
-            column[0] = first or 0
-        except TypeError:
-            column = [0 if x is None else x for x in column]
-        self._to_native(column, dest, **kwargs)
 
 
 class UnsupportedType(ClickHouseType, ABC, registered=False):
@@ -244,8 +255,8 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
     def _to_row_binary(self, *_args):
         raise NotSupportedError(f'{self.name} serialization not supported')
 
-    def _from_native(self, *_args, **_kwargs):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
-    def _to_native(self, *_args, **_kwargs):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         raise NotSupportedError(f'{self.name} serialization  not supported')

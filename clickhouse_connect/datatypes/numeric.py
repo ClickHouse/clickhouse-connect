@@ -119,7 +119,7 @@ class BigInt(ClickHouseType, registered=False):
     def ch_null(self):
         return bytes(b'\x00' * self._byte_size)
 
-    def _from_native(self, source: MutableSequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         signed = self._signed
         sz = self._byte_size
         end = loc + num_rows * sz
@@ -135,7 +135,7 @@ class BigInt(ClickHouseType, registered=False):
         return column, end
 
     # pylint: disable=too-many-branches
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if not column:
             return
@@ -163,7 +163,6 @@ class BigInt(ClickHouseType, registered=False):
             else:
                 for x in column:
                     ext(x.to_bytes(sz, 'little', signed=signed))
-
 
 
 class Int128(BigInt):
@@ -244,11 +243,11 @@ class Boolean(ClickHouseType):
     def _to_row_binary(self, value: bool, dest: MutableSequence):
         dest += b'\x01' if value else b'\x00'
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column('B', source, loc, num_rows)
         return [b > 0 for b in column], loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         write_array('B', [1 if x else 0 for x in column], dest)
 
 
@@ -279,12 +278,12 @@ class Enum(ArrayType):
             value = 0
         dest += sp(self._struct_type, value)
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         lookup = self._int_map.get
         return [lookup(x, None) for x in column], loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
             if self.nullable:
@@ -352,7 +351,7 @@ class Decimal(ClickHouseType):
         else:
             dest += self._zeros
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         dec = decimal.Decimal
         scale = self.scale
@@ -367,7 +366,7 @@ class Decimal(ClickHouseType):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col, loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         mult = self._mult
         if self.nullable:
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
@@ -376,7 +375,7 @@ class Decimal(ClickHouseType):
 
 
 class BigDecimal(Decimal, registered=False):
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         dec = decimal.Decimal
         scale = self.scale
         column = []
@@ -394,7 +393,7 @@ class BigDecimal(Decimal, registered=False):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return column, end
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         mult = self._mult
         sz = self._byte_size
         itb = int.to_bytes

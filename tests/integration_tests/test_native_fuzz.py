@@ -5,9 +5,9 @@ from clickhouse_connect.driver import BaseDriver
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
 from tests.helpers import random_data, random_columns
 
-TEST_RUNS = 5
+TEST_RUNS = 50
 TEST_COLUMNS = 10
-MAX_DATA_ROWS = 100
+MAX_DATA_ROWS = 25
 
 
 # pylint: disable=duplicate-code
@@ -21,7 +21,8 @@ def test_query_fuzz(test_driver: BaseDriver):
         col_types = (get_from_name('UInt32'),) + col_types
 
         col_defs = [TableColumnDef(name, ch_type) for name, ch_type in zip(col_names, col_types)]
-        create_table(test_driver, 'cc_fuzz_test', col_defs, 'MergeTree', {'order by': 'tuple()'})
+        create_stmt = create_table('cc_fuzz_test', col_defs, 'MergeTree', {'order by': 'row_id'})
+        test_driver.command(create_stmt)
         test_driver.insert('cc_fuzz_test', col_names, data)
 
         data_result = test_driver.query('SELECT * FROM cc_fuzz_test')

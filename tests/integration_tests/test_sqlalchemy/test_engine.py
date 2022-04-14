@@ -11,7 +11,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropData
 from clickhouse_connect.cc_sqlalchemy.ddl.engine import MergeTree
 from tests import helpers
 
-helpers.add_test_entries()
+helpers.add_test_entry_points()
 
 
 def test_create_database(test_engine: Engine):

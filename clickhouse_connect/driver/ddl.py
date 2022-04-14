@@ -1,7 +1,6 @@
 from typing import NamedTuple, Sequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver import BaseDriver
 
 
 class TableColumnDef(NamedTuple):
@@ -18,10 +17,9 @@ class TableColumnDef(NamedTuple):
         return expr
 
 
-def create_table(driver: BaseDriver, table_name: str, columns: Sequence[TableColumnDef],
-                 engine: str, engine_params: dict):
+def create_table(table_name: str, columns: Sequence[TableColumnDef], engine: str, engine_params: dict):
     stmt = f"CREATE TABLE {table_name} ({', '.join(col.col_expr for col in columns)}) ENGINE {engine} "
     if engine_params:
         for key, value in engine_params.items():
             stmt += f' {key} {value}'
-    return driver.command(stmt)
+    return stmt

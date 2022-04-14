@@ -3,8 +3,7 @@ from collections.abc import Sequence, MutableSequence
 from typing import Dict
 
 from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
-from clickhouse_connect.driver.common import read_leb128, to_leb128, read_uint64, array_column, low_card_version, \
-    write_uint64, must_swap
+from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
 
 
@@ -31,16 +30,16 @@ class Array(ClickHouseType):
         for x in value:
             conv(x, dest)
 
+    def read_native_prefix(self, source: Sequence, loc: int):
+        return self.element_type.read_native_prefix(source, loc)
+
     # pylint: disable=too-many-locals
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        lc_version = kwargs.pop('lc_version', None)
+    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
             depth += 1
             final_type = final_type.element_type
-        if final_type.low_card:
-            lc_version, loc = read_uint64(source, loc)
         level_size = num_rows
         offset_sizes = []
         for _ in range(depth):
@@ -48,7 +47,7 @@ class Array(ClickHouseType):
             offset_sizes.append(level_offsets)
             level_size = level_offsets[-1] if level_offsets else 0
         if level_size:
-            all_values, loc = final_type.from_native(source, loc, level_size, lc_version=lc_version, **kwargs)
+            all_values, loc = final_type.from_native_data(source, loc, level_size, use_none)
         else:
             all_values = []
         column = all_values if isinstance(all_values, list) else list(all_values)
@@ -61,15 +60,15 @@ class Array(ClickHouseType):
             column = data
         return column, loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, lc_version=None, **_):
+    def write_native_prefix(self, dest: MutableSequence):
+        self.element_type.write_native_prefix(dest)
+
+    def to_native_data(self, column: Sequence, dest: MutableSequence):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
             depth += 1
             final_type = final_type.element_type
-        if lc_version is None and final_type.low_card:
-            lc_version = low_card_version
-            write_uint64(lc_version, dest)
         for _ in range(depth):
             total = 0
             data = []
@@ -82,20 +81,18 @@ class Array(ClickHouseType):
                 offsets.byteswap()
             dest += offsets.tobytes()
             column = data
-        final_type.to_native(column, dest, lc_version=lc_version)
+        final_type.to_native_data(column, dest)
 
 
 class Tuple(ClickHouseType):
-    _slots = 'from_rb_funcs', 'to_rb_funcs'
+    _slots = 'element_types', 'from_rb_funcs', 'to_rb_funcs'
     python_type = tuple
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        element_types = [get_from_name(name) for name in type_def.values]
-        self.from_rb_funcs = tuple((t.from_row_binary for t in element_types))
-        self.to_rb_funcs = tuple((t.to_row_binary for t in element_types))
-        self.from_native_funcs = tuple((t.from_native for t in element_types))
-        self.to_native_funcs = tuple((t.to_native for t in element_types))
+        self.element_types = [get_from_name(name) for name in type_def.values]
+        self.from_rb_funcs = tuple((t.from_row_binary for t in self.element_types))
+        self.to_rb_funcs = tuple((t.to_row_binary for t in self.element_types))
         self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytes, loc: int):
@@ -109,17 +106,26 @@ class Tuple(ClickHouseType):
         for x, conv in zip(value, self.to_rb_funcs):
             conv(x, dest)
 
-    def _from_native(self, source, loc, num_rows, **kwargs):
+    def read_native_prefix(self, source: Sequence, loc: int):
+        for e_type in self.element_types:
+            loc = e_type.read_native_prefix(source, loc)
+        return loc
+
+    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
         columns = []
-        for conv in self.from_native_funcs:
-            column, loc = conv(source, loc, num_rows, **kwargs)
-            columns.append(tuple(column))
+        for e_type in self.element_types:
+            column, loc = e_type.from_native_data(source, loc, num_rows, use_none)
+            columns.append(column)
         return tuple(zip(*columns)), loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        columns = zip(*column)
-        for conv, elem_column in zip(self.to_native_funcs, columns):
-            conv(elem_column, dest, **kwargs)
+    def write_native_prefix(self, dest: MutableSequence):
+        for e_type in self.element_types:
+            e_type.write_native_prefix(dest)
+
+    def to_native_data(self, column: Sequence, dest: MutableSequence):
+        columns = list(zip(*column))
+        for e_type, elem_column in zip(self.element_types, columns):
+            e_type.to_native_data(elem_column, dest)
 
 
 class Map(ClickHouseType):
@@ -152,19 +158,17 @@ class Map(ClickHouseType):
             dest += key_to(k, dest)
             dest += value_to(v, dest)
 
+    def read_native_prefix(self, source: Sequence, loc: int):
+        loc = self.key_type.read_native_prefix(source, loc)
+        loc = self.value_type.read_native_prefix(source, loc)
+        return loc
+
     # pylint: disable=too-many-locals
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        kwargs.pop('lc_version', None)
-        key_version = None
-        value_version = None
-        if self.key_type.low_card:
-            key_version, loc = read_uint64(source, loc)
-        if self.value_type.low_card:
-            value_version = read_uint64(source, loc)
+    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
         offsets, loc = array_column('Q', source, loc, num_rows)
         total_rows = offsets[-1]
-        keys, loc = self.key_type.from_native(source, loc, total_rows, lc_version=key_version, **kwargs)
-        values, loc = self.value_type.from_native(source, loc, total_rows, lc_version=value_version, **kwargs)
+        keys, loc = self.key_type.from_native_data(source, loc, total_rows, use_none)
+        values, loc = self.value_type.from_native_data(source, loc, total_rows, use_none)
         all_pairs = tuple(zip(keys, values))
         column = []
         app = column.append
@@ -174,12 +178,11 @@ class Map(ClickHouseType):
             last = offset
         return column, loc
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        lc_version = kwargs.pop('lc_version', low_card_version)
-        if self.key_type.low_card:
-            write_uint64(lc_version, dest)
-        if self.value_type.low_card:
-            write_uint64(lc_version, dest)
+    def write_native_prefix(self, dest: MutableSequence):
+        self.key_type.write_native_prefix(dest)
+        self.value_type.write_native_prefix(dest)
+
+    def to_native_data(self, column: Sequence, dest: MutableSequence):
         offsets = array.array('Q')
         keys = []
         values = []
@@ -192,8 +195,8 @@ class Map(ClickHouseType):
         if must_swap:
             offsets.byteswap()
         dest += offsets.tobytes()
-        self.key_type.to_native(keys, dest, lc_version=lc_version)
-        self.value_type.to_native(keys, dest, lc_version=lc_version)
+        self.key_type.to_native_data(keys, dest)
+        self.value_type.to_native_data(keys, dest)
 
 
 class Object(UnsupportedType):

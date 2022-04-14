@@ -1,5 +1,5 @@
 from collections.abc import Sequence, MutableSequence
-from typing import Any
+from typing import Any, Union
 from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
@@ -30,7 +30,7 @@ class UUID(ClickHouseType):
         bytes_low.reverse()
         dest += bytes_high + bytes_low
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **_):
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         if self.format == 'string':
             return self._from_native_str(source, loc, num_rows)
         return self._from_native_uuid(source, loc, num_rows)
@@ -69,7 +69,7 @@ class UUID(ClickHouseType):
         return column, end
 
     # pylint: disable=too-many-branches
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         empty = empty_uuid_b
         if isinstance(first, str):
@@ -115,7 +115,7 @@ class Nothing(ArrayType):
     def _to_row_binary(self, value: Any, dest: bytearray):
         dest.append(0x30)
 
-    def _to_native(self, column: Sequence, dest: MutableSequence, **_):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
         dest += bytes(0x30 for _ in range(len(column)))
 
 
@@ -134,12 +134,11 @@ class SimpleAggregateFunction(ClickHouseType):
     def _to_row_binary(self, value: Any, dest: MutableSequence):
         dest += self.element_type.to_row_binary(value, dest)
 
-    def _from_native(self, source: Sequence, loc: int, num_rows: int, **kwargs):
-        return self.element_type.from_native(source, loc, num_rows, **kwargs)
+    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+        return self.element_type.from_native_data(source, loc, num_rows)
 
-    # pylint: disable=protected-access
-    def _to_native(self, column: Sequence, dest: MutableSequence, **kwargs):
-        self.element_type._to_native(column, dest, **kwargs)
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+        self.element_type.to_native_data(column, dest)
 
 
 class AggregateFunction(UnsupportedType):
