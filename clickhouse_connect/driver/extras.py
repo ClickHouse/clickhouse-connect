@@ -1,13 +1,15 @@
 import struct
 import uuid
 from collections.abc import Sequence
-from random import random
-from typing import Union, NamedTuple
+from ipaddress import IPv4Address, IPv6Address
+from random import random, choice
+from typing import Union, NamedTuple, Callable, Type
 from datetime import date, datetime, timedelta
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Tuple, Map
-from clickhouse_connect.datatypes.numeric import BigInt, Float32, Float64
+from clickhouse_connect.datatypes.network import IPv4, IPv6
+from clickhouse_connect.datatypes.numeric import BigInt, Float32, Float64, Enum, Bool, Boolean
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.special import UUID
 from clickhouse_connect.datatypes.string import String, FixedString
@@ -38,6 +40,8 @@ def random_col_data(ch_type: Union[str, ClickHouseType], cnt: int, col_def: Rand
 
 # pylint: disable=too-many-return-statements,too-many-branches,protected-access
 def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
+    if ch_type.__class__ in gen_map:
+        return gen_map[ch_type.__class__]
     if isinstance(ch_type, BigInt) or ch_type.python_type == int:
         if isinstance(ch_type, BigInt):
             sz = 2 ** (ch_type._byte_size * 8)
@@ -55,26 +59,18 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
         return lambda: random_map(ch_type.key_type, ch_type.value_type, int(random() * col_def.arr_len), col_def)
     if isinstance(ch_type, Tuple):
         return lambda: random_tuple(ch_type.element_types, col_def)
+    if isinstance(ch_type, Enum):
+        keys = list(ch_type._name_map.keys())
+        return lambda: choice(keys)
     if isinstance(ch_type, String):
-        char_max = 127 - 32 if col_def.ascii_only else 32767 - 32
-        return lambda: ''.join((chr(int(random() * char_max) + 32) for _ in range(int(random() * col_def.str_len))))
+        if col_def.ascii_only:
+            return lambda: random_ascii_str(col_def.str_len)
+        return lambda: random_utf8_str(col_def.str_len)
     if isinstance(ch_type, FixedString):
         return lambda: bytes((int(random() * 256) for _ in range(ch_type._byte_size)))
-    if isinstance(ch_type, Float64):
-        return random_float
-    if isinstance(ch_type, Float32):
-        return random_float32
-    if isinstance(ch_type, Date32):
-        return lambda: date32_start_date + timedelta(days=random() * 130000)
-    if isinstance(ch_type, Date):
-        return lambda: epoch_date + timedelta(days=int(random() * (2 ** 16)))
     if isinstance(ch_type, DateTime64):
         prec = ch_type.prec
         return lambda: random_datetime64(prec)
-    if isinstance(ch_type, DateTime):
-        return random_datetime
-    if isinstance(ch_type, UUID):
-        return uuid.uuid4
     raise ValueError(f'Invalid ClickHouse type {ch_type.name} for random column data')
 
 
@@ -98,7 +94,15 @@ def random_map(key_type, value_type, sz: int, col_def):
 
 
 def random_datetime():
-    return dt_from_ts(int(random() * (2 ** 32))).replace(microsecond=0)
+    return dt_from_ts(int(random() * 2 ** 32)).replace(microsecond=0)
+
+
+def random_ascii_str(max_len: int = 200, min_len: int = 0):
+    return ''.join((chr(int(random() * 95) + 32) for _ in range(int(random() * max_len) + min_len)))
+
+
+def random_utf8_str(max_len: int = 200):
+    return ''.join((chr(int(random() * 65000) + 32) for _ in range(int(random() * max_len))))
 
 
 def random_datetime64(prec: int):
@@ -107,5 +111,28 @@ def random_datetime64(prec: int):
     elif prec == 1000:
         u_sec = int(random() * 1000) * 1000
     else:
-        u_sec= int(random() * 1000000)
-    return dt_from_ts(int(random() * (2 ** 32))).replace(microsecond=u_sec)
+        u_sec = int(random() * 1000000)
+    return dt_from_ts(int(random() * 4294967296)).replace(microsecond=u_sec)
+
+
+def random_ipv6():
+    if random() > 0.2:
+        # multiple randoms because of random float multiply limitations
+        ip_int = (int(random() * 4294967296) << 96) | (int(random() * 4294967296)) | (
+                    int(random() * 4294967296) << 32) | ( int(random() * 4294967296) << 64)
+        return IPv6Address(ip_int)
+    return IPv4Address(int(random() * 2 ** 32))
+
+
+gen_map: dict[Type[ClickHouseType], Callable] = {
+    Float64: random_float,
+    Float32: random_float32,
+    Date: lambda: epoch_date + timedelta(days=int(random() * 65536)),
+    Date32: lambda: date32_start_date + timedelta(days=random() * 130000),
+    DateTime: random_datetime,
+    UUID: uuid.uuid4,
+    IPv4: lambda: IPv4Address(int(random() * 4294967296)),
+    IPv6: random_ipv6,
+    Boolean: lambda: random() > .5,
+    Bool: lambda: random() > .5
+}

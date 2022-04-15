@@ -69,7 +69,7 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
                     keys.append(key)
                     key = ''
                     in_key = False
-                elif char == '\\':
+                elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:] != "')":
                     escaped = True
                 else:
                     key += char
@@ -84,6 +84,7 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
                 in_key = True
             else:
                 value += char
+    values, keys = zip(*sorted(zip(values, keys)))
     return tuple(keys), tuple(values)
 
 
@@ -113,10 +114,10 @@ def _parse_args(name) -> [Any]:
             else:
                 if char == "'":
                     in_str = False
-                elif char == '\\':
+                elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:pos + 2] != "')":
                     escaped = True
         else:
-            while char == ' ':
+            while char == ' ' and 'Enum' not in value:
                 char = name[pos]
                 pos += 1
                 if pos == sz:
@@ -125,7 +126,7 @@ def _parse_args(name) -> [Any]:
                 add_value()
                 value = ''
             else:
-                if char == "'" and not value:
+                if char == "'" and (not value or 'Enum' in value):
                     in_str = True
                 elif char == '(':
                     parens += 1

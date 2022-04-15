@@ -175,7 +175,7 @@ class IPv6(ClickHouseType):
                     dest += v4mask + bytes(int(b) for b in x.split('.'))
                 else:
                     dest += tov6(af6, x)
-        elif isinstance(first, (IPv4Address, IPv6Address)):
+        else:
             for x in column:
                 if x is None:
                     dest += v

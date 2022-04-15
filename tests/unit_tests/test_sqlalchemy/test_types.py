@@ -14,7 +14,7 @@ def test_sqla():
     int16 = sqla_type_from_name('Int16')
     assert 'Int16' == int16._compiler_dispatch(None)
     enum = sqla_type_from_name("Enum8('value1' = 7, 'value2'=5)")
-    assert "Enum8('value1' = 7, 'value2' = 5)" == enum._compiler_dispatch(None)
+    assert "Enum8('value2' = 5, 'value1' = 7)" == enum._compiler_dispatch(None)
 
 
 # pylint: disable=no-member

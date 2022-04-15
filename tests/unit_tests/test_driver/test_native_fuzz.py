@@ -4,9 +4,9 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.native import build_insert, parse_response
 from tests.helpers import random_columns, random_data
 
-TEST_RUNS = 50
+TEST_RUNS = 200
 TEST_COLUMNS = 12
-MAX_DATA_ROWS = 150
+MAX_DATA_ROWS = 100
 
 
 # pylint: disable=duplicate-code

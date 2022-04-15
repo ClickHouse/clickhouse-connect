@@ -233,7 +233,7 @@ class Float64(ArrayType):
         dest += sp('d', (value,))
 
 
-class Boolean(ClickHouseType):
+class Bool(ClickHouseType):
     np_type = '?'
     python_type = bool
 
@@ -251,7 +251,7 @@ class Boolean(ClickHouseType):
         write_array('B', [1 if x else 0 for x in column], dest)
 
 
-class Bool(Boolean):
+class Boolean(Bool):
     pass
 
 
@@ -283,7 +283,7 @@ class Enum(ArrayType):
         lookup = self._int_map.get
         return [lookup(x, None) for x in column], loc
 
-    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
+    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
             if self.nullable:
