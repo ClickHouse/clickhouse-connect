@@ -355,14 +355,17 @@ class Decimal(ClickHouseType):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         dec = decimal.Decimal
         scale = self.scale
+        prec = self.prec
+        if scale == 0:
+            return [dec(str(x)) for x in column], loc
         new_col = []
         app = new_col.append
         for x in column:
             if x >= 0:
-                digits = str(x)
+                digits = str(x).rjust(prec, '0')
                 app(dec(f'{digits[:-scale]}.{digits[-scale:]}'))
             else:
-                digits = str(-x)
+                digits = str(-x).rjust(prec, '0')
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col, loc
 
@@ -378,29 +381,36 @@ class BigDecimal(Decimal, registered=False):
     def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
         dec = decimal.Decimal
         scale = self.scale
+        prec = self.prec
         column = []
         app = column.append
         sz = self._byte_size
         end = loc + sz * num_rows
         ifb = int.from_bytes
+        if scale == 0:
+            for ix in range(loc, end, sz):
+                app(dec(str(ifb(source[ix: ix + sz], 'little', signed=True))))
+            return column, end
         for ix in range(loc, end, sz):
             x = ifb(source[ix: ix + sz], 'little', signed=True)
             if x >= 0:
-                digits = str(x)
+                digits = str(x).rjust(prec, '0')
                 app(dec(f'{digits[:-scale]}.{digits[-scale:]}'))
             else:
-                digits = str(-x)
+                digits = str(-x).rjust(prec, '0')
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return column, end
 
     def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        mult = self._mult
-        sz = self._byte_size
-        itb = int.to_bytes
-        if self.nullable:
-            v = self._zeros
-            for x in column:
-                dest += v if not x else itb(int(x * mult), sz, 'little', signed=True)
-        else:
-            for x in column:
-                dest += itb(int(x * mult), sz, 'little', signed=True)
+        with decimal.localcontext() as ctx:
+            ctx.prec = self.prec
+            mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
+            sz = self._byte_size
+            itb = int.to_bytes
+            if self.nullable:
+                v = self._zeros
+                for x in column:
+                    dest += v if not x else itb(int(x * mult), sz, 'little', signed=True)
+            else:
+                for x in column:
+                    dest += itb(int(x * mult), sz, 'little', signed=True)

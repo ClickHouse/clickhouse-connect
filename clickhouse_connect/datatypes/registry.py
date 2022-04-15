@@ -117,7 +117,7 @@ def _parse_args(name) -> [Any]:
                 elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:pos + 2] != "')":
                     escaped = True
         else:
-            while char == ' ' and 'Enum' not in value:
+            while char == ' ' and not parens:
                 char = name[pos]
                 pos += 1
                 if pos == sz:

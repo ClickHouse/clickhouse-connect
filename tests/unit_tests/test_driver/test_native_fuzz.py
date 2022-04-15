@@ -22,7 +22,10 @@ def test_native_round_trips():
         data_result = parse_response(output)
         assert data_result.column_names == col_names
         assert data_result.column_types == col_types
-        assert data_result.result == data
+        dataset = data_result.result
+        for row in range(data_rows):
+            for col in range(TEST_COLUMNS):
+                assert data[row][col] == dataset[row][col]
 
 
 def test_native_small():

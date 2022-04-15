@@ -12,14 +12,14 @@ LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2
 TUPLE_MAX = 5
 FIXED_STR_RANGE = 256
-ENUM_VALUES = 16
-NESTED_DEPTH = 3
+ENUM_VALUES = 5
+NESTED_DEPTH = 2
 
 weighted_types = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int32', 1), ('UInt32', 1), ('Int64', 1),
                   ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 8),
-                  ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('Enum8', 2), ('Enum16', 2), ('Bool', 1000),
-                  ('UUID', 2), ('Date', 2), ('Date32', 1), ('DateTime', 4), ('DateTime64', 2), ('IPv4', 2), ('IPv6', 2),
-                  ('Array', 12), ('Tuple', 10), ('Map', 6))
+                  ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('Enum8', 2), ('Decimal', 4), ('Enum16', 2),
+                  ('Bool', 2), ('UUID', 2), ('Date', 2), ('Date32', 1), ('DateTime', 4), ('DateTime64', 2), ('IPv4', 2),
+                  ('IPv6', 2), ('Array', 16), ('Tuple', 10), ('Map', 10))
 all_types, all_weights = tuple(zip(*weighted_types))
 nested_types = ['Array', 'Tuple', 'Map']
 terminal_types = set(all_types) - set(nested_types)
@@ -38,6 +38,10 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_p
             base_type = f'{base_type}({random.randint(1, FIXED_STR_RANGE)})'
         if base_type == 'DateTime64':
             base_type = f'{base_type}({random.randint(0, 3) * 3})'
+        if base_type == 'Decimal':
+            prec = int(random.random() * 76) + 1
+            scale = int(random.random() * prec)
+            base_type = f'Decimal({prec}, {scale})'
         if base_type.startswith('Enum'):
             sz = 8 if base_type == 'Enum8' else 16
             keys = set()

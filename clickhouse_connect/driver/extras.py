@@ -1,5 +1,6 @@
 import struct
 import uuid
+from decimal import Decimal as PyDecimal
 from collections.abc import Sequence
 from ipaddress import IPv4Address, IPv6Address
 from random import random, choice
@@ -9,7 +10,7 @@ from datetime import date, datetime, timedelta
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Tuple, Map
 from clickhouse_connect.datatypes.network import IPv4, IPv6
-from clickhouse_connect.datatypes.numeric import BigInt, Float32, Float64, Enum, Bool, Boolean
+from clickhouse_connect.datatypes.numeric import BigInt, Float32, Float64, Enum, Bool, Boolean, Decimal
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.special import UUID
 from clickhouse_connect.datatypes.string import String, FixedString
@@ -55,6 +56,8 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
         return lambda: int(random() * sz)
     if isinstance(ch_type, Array):
         return lambda: list(random_col_data(ch_type.element_type, int(random() * col_def.arr_len), col_def))
+    if isinstance(ch_type, Decimal):
+        return lambda: random_decimal(ch_type.prec, ch_type.scale)
     if isinstance(ch_type, Map):
         return lambda: random_map(ch_type.key_type, ch_type.value_type, int(random() * col_def.arr_len), col_def)
     if isinstance(ch_type, Tuple):
@@ -81,6 +84,14 @@ def random_float():
 def random_float32():
     f64 = (random() * random() * 65536) / (random() * (random() * 256 - 128))
     return struct.unpack('f', struct.pack('f', f64))[0]
+
+
+def random_decimal(prec: int, scale: int):
+    digits = ''.join(str(int(random() * 12000000000)) for _ in range(prec // 10 + 1)).rjust(prec, '0')[:prec]
+    sign = '' if ord(digits[0]) & 0x01 else '-'
+    if scale == 0:
+        return PyDecimal(f'{sign}{digits}')
+    return PyDecimal(f'{sign}{digits[:-scale]}.{digits[-scale:]}')
 
 
 def random_tuple(element_types: Sequence[ClickHouseType], col_def):
