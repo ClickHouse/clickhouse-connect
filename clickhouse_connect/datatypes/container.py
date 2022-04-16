@@ -34,7 +34,7 @@ class Array(ClickHouseType):
         return self.element_type.read_native_prefix(source, loc)
 
     # pylint: disable=too-many-locals
-    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
@@ -47,7 +47,7 @@ class Array(ClickHouseType):
             offset_sizes.append(level_offsets)
             level_size = level_offsets[-1] if level_offsets else 0
         if level_size:
-            all_values, loc = final_type.from_native_data(source, loc, level_size, use_none)
+            all_values, loc = final_type.read_native_data(source, loc, level_size, use_none)
         else:
             all_values = []
         column = all_values if isinstance(all_values, list) else list(all_values)
@@ -63,7 +63,7 @@ class Array(ClickHouseType):
     def write_native_prefix(self, dest: MutableSequence):
         self.element_type.write_native_prefix(dest)
 
-    def to_native_data(self, column: Sequence, dest: MutableSequence):
+    def write_native_data(self, column: Sequence, dest: MutableSequence):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
@@ -81,7 +81,7 @@ class Array(ClickHouseType):
                 offsets.byteswap()
             dest += offsets.tobytes()
             column = data
-        final_type.to_native_data(column, dest)
+        final_type.write_native_data(column, dest)
 
 
 class Tuple(ClickHouseType):
@@ -111,10 +111,10 @@ class Tuple(ClickHouseType):
             loc = e_type.read_native_prefix(source, loc)
         return loc
 
-    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
         columns = []
         for e_type in self.element_types:
-            column, loc = e_type.from_native_data(source, loc, num_rows, use_none)
+            column, loc = e_type.read_native_data(source, loc, num_rows, use_none)
             columns.append(column)
         return tuple(zip(*columns)), loc
 
@@ -122,10 +122,10 @@ class Tuple(ClickHouseType):
         for e_type in self.element_types:
             e_type.write_native_prefix(dest)
 
-    def to_native_data(self, column: Sequence, dest: MutableSequence):
+    def write_native_data(self, column: Sequence, dest: MutableSequence):
         columns = list(zip(*column))
         for e_type, elem_column in zip(self.element_types, columns):
-            e_type.to_native_data(elem_column, dest)
+            e_type.write_native_data(elem_column, dest)
 
 
 class Map(ClickHouseType):
@@ -164,11 +164,11 @@ class Map(ClickHouseType):
         return loc
 
     # pylint: disable=too-many-locals
-    def from_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
         offsets, loc = array_column('Q', source, loc, num_rows)
         total_rows = offsets[-1]
-        keys, loc = self.key_type.from_native_data(source, loc, total_rows, use_none)
-        values, loc = self.value_type.from_native_data(source, loc, total_rows, use_none)
+        keys, loc = self.key_type.read_native_data(source, loc, total_rows, use_none)
+        values, loc = self.value_type.read_native_data(source, loc, total_rows, use_none)
         all_pairs = tuple(zip(keys, values))
         column = []
         app = column.append
@@ -182,7 +182,7 @@ class Map(ClickHouseType):
         self.key_type.write_native_prefix(dest)
         self.value_type.write_native_prefix(dest)
 
-    def to_native_data(self, column: Sequence, dest: MutableSequence):
+    def write_native_data(self, column: Sequence, dest: MutableSequence):
         offsets = array.array('Q')
         keys = []
         values = []
@@ -195,8 +195,8 @@ class Map(ClickHouseType):
         if must_swap:
             offsets.byteswap()
         dest += offsets.tobytes()
-        self.key_type.to_native_data(keys, dest)
-        self.value_type.to_native_data(values, dest)
+        self.key_type.write_native_data(keys, dest)
+        self.value_type.write_native_data(values, dest)
 
 
 class Object(UnsupportedType):

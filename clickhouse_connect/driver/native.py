@@ -33,7 +33,7 @@ def parse_response(source: Sequence, use_none: bool = True) -> DataResult:
                 col_types.append(col_type)
             else:
                 col_type = col_types[col_num]
-            column, loc = col_type.from_native(source, loc, num_rows, use_none=use_none)
+            column, loc = col_type.read_native_column(source, loc, num_rows, use_none=use_none)
             result_block.append(column)
         block += 1
         result.extend(list(zip(*result_block)))
@@ -53,5 +53,5 @@ def build_insert(data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
         output += col_name.encode()
         write_leb128(len(col_type.name), output)
         output += col_type.name.encode()
-        col_type.to_native(column, output)
+        col_type.write_native_column(column, output)
     return output

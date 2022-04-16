@@ -14,9 +14,9 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 try:
     from clickhouse_connect.driverc import creaders
 
-    dt_string.String._from_native_impl = creaders.read_string_column
-    dt_string.FixedString._from_native_str = creaders.read_fixed_string_str
-    dt_string.FixedString._from_native_bytes = creaders.read_fixed_string_bytes
+    dt_string.String._read_native_impl = creaders.read_string_column
+    dt_string.FixedString._read_native_str = creaders.read_fixed_string_str
+    dt_string.FixedString._read_native_bytes = creaders.read_fixed_string_bytes
 except ImportError:
     logging.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
 

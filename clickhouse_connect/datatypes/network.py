@@ -40,7 +40,7 @@ class IPv4(ArrayType):
         else:
             dest += value.to_bytes(4, 'little')
 
-    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.format == 'string':
             return self._from_native_str(source, loc, num_rows)
         return self._from_native_ip(source, loc, num_rows)
@@ -60,7 +60,7 @@ class IPv4(ArrayType):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column], loc
 
-    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
@@ -89,10 +89,6 @@ class IPv6(ClickHouseType):
         else:
             raise ProgrammingError('Unrecognized output format for IP6 type')
 
-    @property
-    def ch_null(self):
-        return V6_NULL
-
     def _from_row_binary(self, source: Sequence, loc: int):
         end = loc + 16
         int_value = int.from_bytes(source[loc:end], 'big')
@@ -118,13 +114,13 @@ class IPv6(ClickHouseType):
         else:
             dest += value
 
-    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.format == 'string':
-            return self._from_native_str(source, loc, num_rows)
-        return self._from_native_ip(source, loc, num_rows)
+            return self._read_native_str(source, loc, num_rows)
+        return self._read_native_ip(source, loc, num_rows)
 
     @staticmethod
-    def _from_native_ip(source: Sequence, loc: int, num_rows: int):
+    def _read_native_ip(source: Sequence, loc: int, num_rows: int):
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
@@ -145,7 +141,7 @@ class IPv6(ClickHouseType):
         return new_col, end
 
     @staticmethod
-    def _from_native_str(source: Sequence, loc: int, num_rows: int):
+    def _read_native_str(source: Sequence, loc: int, num_rows: int):
         new_col = []
         app = new_col.append
         v4mask = IPV4_V6_MASK
@@ -161,7 +157,7 @@ class IPv6(ClickHouseType):
                 app(tov6(af6, x))
         return new_col, end
 
-    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         v = V6_NULL
         first = self._first_value(column)
         v4mask = IPV4_V6_MASK

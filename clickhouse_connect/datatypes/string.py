@@ -23,11 +23,11 @@ class String(ClickHouseType):
         value = bytes(value, self.encoding)
         dest += to_leb128(len(value)) + value
 
-    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
-        return self._from_native_impl(source, loc, num_rows, self.encoding)
+    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+        return self._read_native_impl(source, loc, num_rows, self.encoding)
 
     @staticmethod
-    def _from_native_python(source, loc, num_rows, encoding: str):
+    def _read_native_python(source, loc, num_rows, encoding: str):
         column = []
         app = column.append
         for _ in range(num_rows):
@@ -44,7 +44,7 @@ class String(ClickHouseType):
             loc += length
         return column, loc
 
-    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         encoding = self.encoding
         app = dest.append
         if self.nullable:
@@ -73,7 +73,7 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += x.encode(encoding)
 
-    _from_native_impl = _from_native_python
+    _read_native_impl = _read_native_python
 
 
 class FixedString(ClickHouseType):
@@ -88,7 +88,7 @@ class FixedString(ClickHouseType):
         except IndexError:
             pass
         self._name_suffix = type_def.arg_str
-        self._python_null = self._ch_null = bytes(b'\x00' * self._byte_size)
+        self._python_null = bytes(b'\x00' * self._byte_size)
         if self.format == 'bytes':
             self._to_row_binary = self._to_row_binary_bytes
         else:
@@ -97,10 +97,6 @@ class FixedString(ClickHouseType):
     @property
     def python_null(self):
         return self._python_null if self.format == 'bytes' else ''
-
-    @property
-    def ch_null(self):
-        return self._ch_null
 
     def _to_row_binary(self, value, dest):
         pass  # Overridden anyway on instance creation
@@ -118,13 +114,13 @@ class FixedString(ClickHouseType):
         if len(value) < self._byte_size:
             dest += bytes((0,) * (self._byte_size - len(value)))
 
-    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.format == 'string':
-            return self._from_native_str(source, loc, num_rows, self._byte_size, self.encoding)
-        return self._from_native_bytes(source, loc, num_rows, self._byte_size)
+            return self._read_native_str(source, loc, num_rows, self._byte_size, self.encoding)
+        return self._read_native_bytes(source, loc, num_rows, self._byte_size)
 
     @staticmethod
-    def _from_native_str_python(source: Sequence, loc: int, num_rows: int, sz: int, encoding: str):
+    def _read_native_str_python(source: Sequence, loc: int, num_rows: int, sz: int, encoding: str):
         column = []
         app = column.append
         end = loc + sz * num_rows
@@ -136,12 +132,12 @@ class FixedString(ClickHouseType):
         return column, end
 
     @staticmethod
-    def _from_native_bytes_python(source: Sequence, loc: int, num_rows: int, sz: int):
+    def _read_native_bytes_python(source: Sequence, loc: int, num_rows: int, sz: int):
         end = loc + sz * num_rows
         return [bytes(source[ix: ix + sz]) for ix in range(loc, end, sz)], end
 
     # pylint: disable=too-many-branches
-    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         ext = dest.extend
         sz = self._byte_size
         empty = bytes((0,) * sz)
@@ -180,5 +176,5 @@ class FixedString(ClickHouseType):
             for x in column:
                 ext(x)
 
-    _from_native_str = _from_native_str_python
-    _from_native_bytes = _from_native_bytes_python
+    _read_native_str = _read_native_str_python
+    _read_native_bytes = _read_native_bytes_python

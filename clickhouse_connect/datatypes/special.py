@@ -13,10 +13,6 @@ class UUID(ClickHouseType):
     python_null = PYUUID(int=0)
     format = 'uuid'
 
-    @property
-    def ch_null(self):
-        return empty_uuid_b
-
     def _from_row_binary(self, source: bytearray, loc: int):
         int_high, loc = read_uint64(source, loc)
         int_low, loc = read_uint64(source, loc)
@@ -30,14 +26,14 @@ class UUID(ClickHouseType):
         bytes_low.reverse()
         dest += bytes_high + bytes_low
 
-    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.format == 'string':
-            return self._from_native_str(source, loc, num_rows)
-        return self._from_native_uuid(source, loc, num_rows)
+            return self._read_native_str(source, loc, num_rows)
+        return self._read_native_uuid(source, loc, num_rows)
 
     # pylint: disable=too-many-locals
     @staticmethod
-    def _from_native_uuid(source: Sequence, loc: int, num_rows: int):
+    def _read_native_uuid(source: Sequence, loc: int, num_rows: int):
         v, end = array_column('Q', source, loc, num_rows * 2)
         empty_uuid = PYUUID(int=0)
         new_uuid = PYUUID.__new__
@@ -58,7 +54,7 @@ class UUID(ClickHouseType):
         return column, end
 
     @staticmethod
-    def _from_native_str(source: Sequence, loc: int, num_rows: int):
+    def _read_native_str(source: Sequence, loc: int, num_rows: int):
         v, end = array_column('Q', source, loc, num_rows * 2)
         column = []
         app = column.append
@@ -69,7 +65,7 @@ class UUID(ClickHouseType):
         return column, end
 
     # pylint: disable=too-many-branches
-    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         empty = empty_uuid_b
         if isinstance(first, str):
@@ -115,7 +111,7 @@ class Nothing(ArrayType):
     def _to_row_binary(self, value: Any, dest: bytearray):
         dest.append(0x30)
 
-    def _write_native_data(self, column: Union[Sequence, MutableSequence],  dest: MutableSequence):
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         dest += bytes(0x30 for _ in range(len(column)))
 
 
@@ -126,7 +122,6 @@ class SimpleAggregateFunction(ClickHouseType):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
-        self._ch_null = self.element_type.ch_null
 
     def _from_row_binary(self, source, loc):
         return self.element_type.from_row_binary(source, loc)
@@ -134,11 +129,11 @@ class SimpleAggregateFunction(ClickHouseType):
     def _to_row_binary(self, value: Any, dest: MutableSequence):
         dest += self.element_type.to_row_binary(value, dest)
 
-    def _read_native_data(self, source: Sequence, loc: int, num_rows: int):
-        return self.element_type.from_native_data(source, loc, num_rows)
+    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+        return self.element_type.read_native_data(source, loc, num_rows)
 
-    def _write_native_data(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        self.element_type.to_native_data(column, dest)
+    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+        self.element_type.write_native_data(column, dest)
 
 
 class AggregateFunction(UnsupportedType):

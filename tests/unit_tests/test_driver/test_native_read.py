@@ -86,6 +86,6 @@ def test_ip():
     ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
     ipv4_type = registry.get_from_name('IPv4')
     dest = bytearray()
-    ipv4_type.to_native(ips, dest)
-    python, _ = ipv4_type.from_native(dest, 0, 3)
+    ipv4_type.write_native_column(ips, dest)
+    python, _ = ipv4_type.read_native_column(dest, 0, 3)
     assert python == [IPv4Address(ip) for ip in ips]
