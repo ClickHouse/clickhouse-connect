@@ -80,18 +80,17 @@ class ClickHouseType(ABC):
             null_map = memoryview(source[loc: loc + num_rows])
             loc += num_rows
             column, loc = self._read_native_binary(source, loc, num_rows)
-            if not use_none:
-                return column, loc
-            if isinstance(column, (tuple, array.array)):
-                return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
-            for ix in range(num_rows):
-                if null_map[ix]:
-                    column[ix] = None
+            if use_none:
+                if isinstance(column, (tuple, array.array)):
+                    return [None if null_map[ix] else column[ix] for ix in range(num_rows)], loc
+                for ix in range(num_rows):
+                    if null_map[ix]:
+                        column[ix] = None
             return column, loc
         return self._read_native_binary(source, loc, num_rows)
 
     # These two methods are really abstract, but they aren't implemented for container classes which
-    # delegate binary reads to their elements
+    # delegate binary operations to their elements
     # pylint: disable=no-self-use
     def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) -> Tuple[
         Union[Sequence, MutableSequence], int]:
@@ -109,7 +108,7 @@ class ClickHouseType(ABC):
             self._write_native_low_card(column, dest)
         else:
             if self.nullable:
-                dest += bytes(1 if x is None else 0 for x in column)
+                dest += bytes([1 if x is None else 0 for x in column])
             self._write_native_binary(column, dest)
 
     @abstractmethod
@@ -182,12 +181,12 @@ class ClickHouseType(ABC):
                     key += 1
                 else:
                     index.append(ix)
-        ix_type = int(log(len(keys), 2)) // 8  # power of two bytes needed to store the total number of keys
+        ix_type = int(log(len(keys), 2)) >> 3  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(keys), dest)
         self._write_native_binary(keys, dest)
         write_uint64(len(index), dest)
-        write_array(array_type(2 ** ix_type, False), index, dest)
+        write_array(array_type(1 << ix_type, False), index, dest)
 
     def _first_value(self, column: Sequence) -> Optional[Any]:
         if self.nullable:

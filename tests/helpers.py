@@ -15,18 +15,17 @@ FIXED_STR_RANGE = 256
 ENUM_VALUES = 5
 NESTED_DEPTH = 2
 
+random.seed()
 weighted_types = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int32', 1), ('UInt32', 1), ('Int64', 1),
                   ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 8),
                   ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('Enum8', 2), ('Decimal', 4), ('Enum16', 2),
-                  ('Bool', 2), ('UUID', 2), ('Date', 2), ('Date32', 1), ('DateTime', 4), ('DateTime64', 2), ('IPv4', 2),
-                  ('IPv6', 1500), ('Array', 16), ('Tuple', 10), ('Map', 10))
+                  ('Bool', 1), ('UUID', 2), ('Date', 2), ('Date32', 1), ('DateTime', 4), ('DateTime64', 2), ('IPv4', 2),
+                  ('IPv6', 2), ('Array', 16), ('Tuple', 10), ('Map', 10))
 all_types, all_weights = tuple(zip(*weighted_types))
 nested_types = ['Array', 'Tuple', 'Map']
 terminal_types = set(all_types) - set(nested_types)
 total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
-
-random.seed()
 
 
 def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_perc: float = NULLABLE_PERC):
