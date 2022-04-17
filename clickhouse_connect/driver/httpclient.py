@@ -66,7 +66,7 @@ class HttpClient(BaseClient):
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
         response = self.raw_request(self.format_query(query), params=params, headers=headers)
-        data_result = self.parse_response(response.content, use_none)
+        data_result = self.parse_response(response.raw, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
