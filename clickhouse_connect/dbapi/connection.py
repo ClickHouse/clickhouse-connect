@@ -1,7 +1,7 @@
 from urllib.parse import urlparse, parse_qs
 
 from clickhouse_connect.dbapi.cursor import Cursor
-from clickhouse_connect.driver import create_driver
+from clickhouse_connect.driver import create_client
 
 # pylint: disable=too-many-arguments
 class Connection:
@@ -18,7 +18,7 @@ class Connection:
                 database = parsed.path[1:].split('/')[0]
             database = database or parsed.path
             settings = dict(parse_qs(parsed.query)).update(settings)
-        self.driver = create_driver(host, username, password, database, interface, port, **settings)
+        self.driver = create_client(host, username, password, database, interface, port, **settings)
 
     def close(self):
         self.driver.close()

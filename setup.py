@@ -23,11 +23,11 @@ def run_setup(try_c: bool = True):
 
     setup(
         name='clickhouse-connect',
-        version='0.0.5',
+        version='0.0.6',
         author='ClickHouse Inc.',
         author_email='clickhouse-connect@clickhouse.com',
         packages=find_packages(exclude=['tests*']),
-        python_requires='~=3.7',
+        python_requires='~=3.9',
         install_requires=[
             'requests',
             'pytz'

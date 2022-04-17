@@ -10,7 +10,7 @@ from typing import List
 
 import clickhouse_connect
 from clickhouse_connect import datatypes
-from clickhouse_connect.driver import BaseDriver
+from clickhouse_connect.driver import BaseClient
 
 columns = {
     'uint16': ('UInt16', 1),
@@ -40,17 +40,17 @@ columns = {
 standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'array', 'nullable', 'enum', 'uuid']
 
 
-def create_table(client: BaseDriver, col_names: List[str], rows: int):
+def create_table(client: BaseClient, col_names: List[str], rows: int):
     if not col_names:
         col_names = columns.keys()
     col_list = ','.join([f'{cn} {columns[cn][0]}' for cn in sorted(col_names)])
     client.command('DROP TABLE IF EXISTS benchmark_test')
     client.command(f'CREATE TABLE benchmark_test ({col_list}) ENGINE Memory')
     row_data = [columns[cn][1] for cn in sorted(col_names)]
-    client.insert('benchmark_test', '*', (row_data,) * rows)
+    client.insert('benchmark_test', (row_data,) * rows)
 
 
-def check_reads(client: BaseDriver, tries: int = 100, rows: int = 10000):
+def check_reads(client: BaseClient, tries: int = 100, rows: int = 10000):
     start_time = time.time()
     for _ in range(tries):
         result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}')

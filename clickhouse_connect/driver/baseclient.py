@@ -33,7 +33,7 @@ class TableDef(NamedTuple):
         return (t.type for t in self.column_defs)
 
 
-class BaseDriver(metaclass=ABCMeta):
+class BaseClient(metaclass=ABCMeta):
     def __init__(self, database: str, query_limit: int):
         if database and not database == '__default__':
             self._database = database
@@ -74,7 +74,7 @@ class BaseDriver(metaclass=ABCMeta):
         pass
 
     # pylint: disable=too-many-arguments
-    def insert(self, table: str, column_names: Union[str or Iterable[str]], data: Iterable[Iterable[Any]],
+    def insert(self, table: str, data: Iterable[Iterable[Any]], column_names: Union[str or Iterable[str]] = '*',
                database: str = '', column_types: Optional[Iterable[ClickHouseType]] = None,
                column_type_names: Optional[Iterable[str]] = None):
         table, database, full_table = self.normalize_table(table, database)

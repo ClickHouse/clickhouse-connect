@@ -116,6 +116,7 @@ def random_utf8_str(max_len: int = 200):
     return ''.join((chr(int(random() * 65000) + 32) for _ in range(int(random() * max_len))))
 
 
+#   Only accepts precisions in multiples of 3 because others are extremely unlikely to be actually used
 def random_datetime64(prec: int):
     if prec == 1:
         u_sec = 0

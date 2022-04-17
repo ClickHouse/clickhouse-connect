@@ -128,7 +128,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         return str(URL(f'{cls.engine}+{cls.default_driver}', **url_params))
 
     @classmethod
-    def get_parameters_from_uri(cls, uri: str, *_args) -> BasicParametersType:
+    def get_parameters_from_uri(cls, uri: str, *_args, **_kwargs) -> BasicParametersType:
         url = make_url(uri)
         query = url.query
         if 'secure' in query:

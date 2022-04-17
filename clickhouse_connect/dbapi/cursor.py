@@ -2,11 +2,11 @@ from collections.abc import Sequence
 from typing import Optional
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver import BaseDriver
+from clickhouse_connect.driver import BaseClient
 
 
 class Cursor:
-    def __init__(self, driver: BaseDriver):
+    def __init__(self, driver: BaseClient):
         self.driver = driver
         self.arraysize = 1
         self.data: Optional[Sequence] = None

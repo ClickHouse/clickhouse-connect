@@ -1,7 +1,7 @@
 import array
 from abc import abstractmethod, ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple
 
 from clickhouse_connect.driver.common import array_column, array_type, int_size, read_uint64, write_array, \
     write_uint64, low_card_version
@@ -92,7 +92,9 @@ class ClickHouseType(ABC):
 
     # These two methods are really abstract, but they aren't implemented for container classes which
     # delegate binary reads to their elements
-    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int):  # pylint: disable=no-self-use
+    # pylint: disable=no-self-use
+    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) -> Tuple[
+        Union[Sequence, MutableSequence], int]:
         return [], 0
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -133,10 +135,9 @@ class ClickHouseType(ABC):
     def _read_native_low_card(self, source: Sequence, loc: int, num_rows: int, use_none=True):
         if num_rows == 0:
             return tuple(), loc
-        index_sz = 2 ** source[loc]  # first byte is the key size
-        loc += 8  # Skip remaining key information
+        key_data, loc = read_uint64(source, loc)
+        index_sz = 2 ** (key_data & 0xff)
         key_cnt, loc = read_uint64(source, loc)
-        # pylint: disable=assignment-from-no-return
         keys, loc = self._read_native_binary(source, loc, key_cnt)
         if self.nullable:
             try:
@@ -145,8 +146,8 @@ class ClickHouseType(ABC):
                 keys = (None if use_none else self.python_null,) + keys[1:]
         index_cnt, loc = read_uint64(source, loc)
         assert index_cnt == num_rows
-        indexes, end = array_column(array_type(index_sz, False), source, loc, num_rows)
-        return tuple(keys[ix] for ix in indexes), end
+        index, loc = array_column(array_type(index_sz, False), source, loc, num_rows)
+        return tuple(keys[ix] for ix in index), loc
 
     def _write_native_low_card(self, column: Sequence, dest: MutableSequence):
         if not column:

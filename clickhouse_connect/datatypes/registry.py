@@ -53,7 +53,6 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
     keys = []
     values = []
     pos = name.find('(') + 1
-    escaped = False
     in_key = False
     key = ''
     value = ''
@@ -61,18 +60,15 @@ def _parse_enum(name) -> Tuple[Tuple[str], Tuple[int]]:
         char = name[pos]
         pos += 1
         if in_key:
-            if escaped:
-                key += char
-                escaped = False
+            if char == "'":
+                keys.append(key)
+                key = ''
+                in_key = False
+            elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:] != "')":
+                key += name[pos]
+                pos += 1
             else:
-                if char == "'":
-                    keys.append(key)
-                    key = ''
-                    in_key = False
-                elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:] != "')":
-                    escaped = True
-                else:
-                    key += char
+                key += char
         elif char not in (' ', '='):
             if char == ',':
                 values.append(int(value))
@@ -94,7 +90,6 @@ def _parse_args(name) -> [Any]:
     value = ''
     sz = len(name)
     in_str = False
-    escaped = False
     pos = 0
     parens = 0
 
@@ -109,13 +104,11 @@ def _parse_args(name) -> [Any]:
         pos += 1
         if in_str:
             value += char
-            if escaped:
-                escaped = False
-            else:
-                if char == "'":
-                    in_str = False
-                elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:pos + 2] != "')":
-                    escaped = True
+            if char == "'":
+                in_str = False
+            elif char == '\\' and name[pos] == "'" and name[pos:pos + 4] != "' = " and name[pos:pos + 2] != "')":
+                value += name[pos]
+                pos += 1
         else:
             while char == ' ' and not parens:
                 char = name[pos]

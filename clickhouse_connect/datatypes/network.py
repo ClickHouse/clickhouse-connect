@@ -92,7 +92,7 @@ class IPv6(ClickHouseType):
     def _from_row_binary(self, source: Sequence, loc: int):
         end = loc + 16
         int_value = int.from_bytes(source[loc:end], 'big')
-        if int_value & 0xFFFF00000000 == 0xFFFF00000000:
+        if int_value >> 32 == 0xFFFF:
             ipv4 = IPv4Address.__new__(IPv4Address)
             ipv4._ip = int_value & 0xFFFFFFFF
             return ipv4, end
@@ -129,7 +129,7 @@ class IPv6(ClickHouseType):
         end = loc + (num_rows << 4)
         for ix in range(loc, end, 16):
             int_value = ifb(source[ix: ix + 16], 'big')
-            if int_value & 0xFFFF00000000 == 0xFFFF00000000:
+            if int_value >> 32 == 0xFFFF:
                 ipv4 = fast_ip_v4(IPv4Address)
                 ipv4._ip = int_value & 0xFFFFFFFF
                 app(ipv4)

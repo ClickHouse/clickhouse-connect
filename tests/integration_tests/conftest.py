@@ -5,24 +5,24 @@ from typing import Iterator
 from time import sleep
 
 from pytest import fixture
-from clickhouse_connect.driver import BaseDriver
-from clickhouse_connect import create_driver
+from clickhouse_connect.driver import BaseClient
+from clickhouse_connect import create_client
 
 
 @fixture(scope='session', autouse=True, name='test_driver')
-def test_driver_fixture(request) -> Iterator[BaseDriver]:
+def test_driver_fixture(request) -> Iterator[BaseClient]:
     host = request.config.getoption('host')
     port = request.config.getoption('port')
     docker = request.config.getoption('docker', True)
     if not port:
         port = 10723 if docker else 8123
-    driver = create_driver(host=host, port=port)
+    driver = create_client(host=host, port=port, validate=False)
     yield driver
     driver.close()
 
 
-@fixture(scope='session', autouse=True)
-def clickhouse_container_fixture(request, test_driver: BaseDriver) -> Iterator[None]:
+@fixture(scope='session', autouse=True, name='docker')
+def clickhouse_container_fixture(request, test_driver: BaseClient) -> Iterator[None]:
     if not request.config.getoption('docker', True):
         yield
         return
@@ -32,7 +32,7 @@ def clickhouse_container_fixture(request, test_driver: BaseDriver) -> Iterator[N
     up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
     if up_result[0]:
         raise Exception(f'Failed to start docker: {up_result[2]}')
-    sleep(.500)
+    sleep(5)
     for _ in range(30):
         if test_driver.ping():
             break
