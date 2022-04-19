@@ -6,8 +6,8 @@ from clickhouse_connect.driver import BaseClient
 
 
 class Cursor:
-    def __init__(self, driver: BaseClient):
-        self.driver = driver
+    def __init__(self, client: BaseClient):
+        self.client = client
         self.arraysize = 1
         self.data: Optional[Sequence] = None
         self.names = []
@@ -30,8 +30,8 @@ class Cursor:
     def close(self):
         self.data = None
 
-    def execute(self, operation, *_):
-        query_result = self.driver.query(operation)
+    def execute(self, operation, parameters=None):
+        query_result = self.client.query(operation, parameters)
         self.data = query_result.result_set
         self.names = query_result.column_names
         self.types = query_result.column_types

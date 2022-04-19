@@ -301,12 +301,13 @@ class Enum16(Enum):
 class Decimal(ClickHouseType):
     __slots__ = 'prec', 'scale', '_mult', '_zeros', '_byte_size', '_array_type'
     python_type = decimal.Decimal
+    dec_size = 0
 
     @classmethod
-    def build(cls: Type['ClickHouseType'], type_def: TypeDef):
+    def build(cls: Type['Decimal'], type_def: TypeDef):
         if type_def in cls._instance_cache:
             return cls._instance_cache[type_def]
-        size = type_def.size
+        size = cls.dec_size
         if size == 0:
             prec = type_def.values[0]
             scale = type_def.values[1]
@@ -406,3 +407,19 @@ class BigDecimal(Decimal, registered=False):
             else:
                 for x in column:
                     dest += itb(int(x * mult), sz, 'little', signed=True)
+
+
+class Decimal32(Decimal):
+    dec_size = 32
+
+
+class Decimal64(Decimal):
+    dec_size = 64
+
+
+class Decimal128(Decimal):
+    dec_size = 128
+
+
+class Decimal256(Decimal):
+    dec_size = 256

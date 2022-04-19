@@ -1,7 +1,7 @@
 from sqlalchemy.sql.compiler import DDLCompiler
 from sqlalchemy.exc import CompileError
 
-from clickhouse_connect.cc_sqlalchemy.ddl.engine import TableEngine
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import TableEngine
 
 
 class ChDDLCompiler(DDLCompiler):

@@ -29,9 +29,7 @@ atexit.register(http_adapter.close)
 class HttpClient(BaseClient):
     # pylint: disable=too-many-arguments
     def __init__(self, scheme: str, host: str, port: int, username: str, password: str, database: str,
-                 validate: bool = True, compress: bool = True, data_format: str = 'native', query_limit: int = 5000):
-        super().__init__(database, query_limit)
-
+                 compress: bool = True, data_format: str = 'native', query_limit: int = 5000):
         self.url = f'{scheme}://{host}:{port}'
         self.session = Session()
         self.session.auth = (username, password if password else '') if username else None
@@ -45,8 +43,6 @@ class HttpClient(BaseClient):
 
         if compress:
             self.session.headers['Accept-Encoding'] = 'gzip, br'
-        if validate:
-            self.command('SELECT 1')
         if data_format == 'native':
             self.read_format = self.write_format = 'Native'
             self.build_insert = native.build_insert
@@ -56,6 +52,7 @@ class HttpClient(BaseClient):
             self.write_format = 'RowBinary'
             self.build_insert = rowbinary.build_insert
             self.parse_response = rowbinary.parse_response
+        super().__init__(database, query_limit)
 
     def format_query(self, query: str) -> str:
         if not query.strip().endswith(self.read_format):
@@ -66,7 +63,7 @@ class HttpClient(BaseClient):
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
         response = self.raw_request(self.format_query(query), params=params, headers=headers)
-        data_result = self.parse_response(response.raw, use_none)
+        data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -87,9 +84,10 @@ class HttpClient(BaseClient):
         response = self.raw_request(insert_block, params=params, headers=headers)
         logger.debug('Insert response code: {}, content: {}', response.status_code, response.content)
 
-    def command(self, cmd: str):
+    def command(self, cmd: str) -> list[str]:
         headers = {'Content-Type': 'text/plain'}
-        return self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1]
+        result = self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1].split('\t')
+        return result[0] if len(result) == 1 else result
 
     def raw_request(self, data=None, method='post', params: Optional[Dict] = None, headers: Optional[Dict] = None):
         try:

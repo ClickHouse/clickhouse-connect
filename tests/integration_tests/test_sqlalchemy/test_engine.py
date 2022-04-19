@@ -8,7 +8,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, De
     FixedString, String, UInt128, UUID, DateTime, Date32, DateTime64, LowCardinality, Nullable, Array, \
     AggregateFunction
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
-from clickhouse_connect.cc_sqlalchemy.ddl.engine import MergeTree
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from tests import helpers
 
 helpers.add_test_entry_points()
@@ -19,16 +19,6 @@ def test_create_database(test_engine: Engine):
     if not test_engine.dialect.has_database(conn, 'sqla_create_db_test'):
         conn.execute(CreateDatabase('sqla_create_db_test', 'Atomic'))
     conn.execute(DropDatabase('sqla_create_db_test'))
-
-
-def test_basic_reflection(test_engine: Engine):
-    conn = test_engine.connect()
-    metadata = db.MetaData(bind=test_engine, reflect=True, schema='system')
-    table = db.Table('tables', metadata)
-    query = db.select([table.c.create_table_query])
-    result = conn.execute(query)
-    rows = result.fetchmany(100)
-    assert rows
 
 
 class TestEnum(PyEnum):

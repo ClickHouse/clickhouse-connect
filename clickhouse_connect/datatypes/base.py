@@ -9,7 +9,6 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
 class TypeDef(NamedTuple):
-    size: int = 0
     wrappers: tuple = ()
     keys: tuple = ()
     values: tuple = ()
@@ -33,7 +32,7 @@ class ClickHouseType(ABC):
         if registered:
             cls._ch_name = cls.__name__
             cls._instance_cache = {}
-            type_map[cls._ch_name.upper()] = cls
+            type_map[cls._ch_name] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):

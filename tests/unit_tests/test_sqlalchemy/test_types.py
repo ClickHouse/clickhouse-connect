@@ -5,8 +5,8 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_map, sqla_
 
 
 def test_mapping():
-    assert issubclass(sqla_type_map['UINT16'], Integer)
-    assert issubclass(sqla_type_map['DATETIME'], DateTime)
+    assert issubclass(sqla_type_map['UInt64'], Integer)
+    assert issubclass(sqla_type_map['DateTime'], DateTime)
 
 
 # pylint: disable=protected-access

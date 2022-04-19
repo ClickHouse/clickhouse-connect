@@ -4,7 +4,7 @@ from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, escape_query_value
 
 
 class ColumnDef(NamedTuple):
@@ -35,27 +35,26 @@ class TableDef(NamedTuple):
 
 class BaseClient(metaclass=ABCMeta):
     def __init__(self, database: str, query_limit: int):
+        self.server_version, self.server_tz, self.database = tuple(
+            self.command('SELECT version(), timezone(), database()'))
         if database and not database == '__default__':
-            self._database = database
+            self.database = database
         self.limit = query_limit
 
-    @property
-    def database(self):
-        if not hasattr(self, '_database'):
-            self._database = self.command('SELECT database()')
-        return self._database
-
-    def query(self, query: str, use_none: bool = True) -> QueryResult:
+    def query(self, query: str, parameters=None, use_none: bool = True) -> QueryResult:
+        if parameters:
+            escaped = {k: escape_query_value(v, self.server_tz) for k, v in parameters}
+            query %= escaped
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
         return self.exec_query(query, use_none)
 
-    def query_np(self, query: str):
-        return np_result(self.query(query, use_none=False))
+    def query_np(self, query: str, parameters=None):
+        return np_result(self.query(query, parameters=parameters, use_none=False))
 
-    def query_df(self, query: str):
-        return to_pandas_df(self.query(query, use_none=False))
+    def query_df(self, query: str, parameters=None):
+        return to_pandas_df(self.query(query, parameters=parameters, use_none=False))
 
     def insert_df(self, table: str, data_frame):
         insert = from_pandas_df(data_frame)
@@ -66,7 +65,7 @@ class BaseClient(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def command(self, cmd: str) -> str:
+    def command(self, cmd: str) -> Union[str, int, list[str]]:
         pass
 
     @abstractmethod

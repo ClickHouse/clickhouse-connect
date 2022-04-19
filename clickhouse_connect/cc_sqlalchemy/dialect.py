@@ -1,9 +1,8 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import driver_name, dbapi
-from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
-from clickhouse_connect.cc_sqlalchemy import ischema_names
+from clickhouse_connect.cc_sqlalchemy import ischema_names, reflection
 
 
 # pylint: disable-msg=too-many-public-methods
@@ -43,16 +42,10 @@ class ClickHouseDialect(DefaultDialect):
             cmd += ' FROM ' + schema
         return [row.name for row in connection.execute(cmd)]
 
-    def get_columns(self, connection, table_name, schema=None, **kw):
-        if table_name.startswith('(') or '.' in table_name or not schema:
-            table = table_name
-        else:
-            table = '.'.join((schema, table_name))
-        rows = [(row.name, sqla_type_from_name(row.type)) for row in connection.execute(f'DESCRIBE TABLE {table}')]
-        return [{'name': name,
-                 'type': sqla_type,
-                 'nullable': sqla_type.nullable,
-                 'autoincrement': False} for name, sqla_type in rows]
+    get_columns = staticmethod(reflection.get_columns)
+
+    #def reflecttable(self, connection, table, exclude_columns, include_columns, **_):
+    #    pass
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []

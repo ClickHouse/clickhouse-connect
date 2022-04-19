@@ -84,19 +84,38 @@ class Boolean(Bool):
 
 
 class Decimal(ChSqlaType, Numeric):
+    dec_size = 0
+
     def __init__(self, precision: int = 0, scale: int = 0, type_def: TypeDef = None):
         if type_def:
-            if type_def.size:
-                precision = decimal_prec[type_def.size]
+            if self.dec_size:
+                precision = decimal_prec[self.dec_size]
                 scale = type_def.values[0]
             else:
                 precision, scale = type_def.values
-        elif not precision or not scale:
-            raise ArgumentError('Precision and scale required for ClickHouse Decimal type')
+        elif not precision or scale < 0 or scale > precision:
+            raise ArgumentError('Invalid precision or scale for ClickHouse Decimal type')
         else:
             type_def = TypeDef(values=(precision, scale))
         ChSqlaType.__init__(self, type_def)
         Numeric.__init__(self, precision, scale)
+
+
+# pylint: disable=duplicate-code
+class Decimal32(Decimal):
+    dec_size = 32
+
+
+class Decimal64(Decimal):
+    dec_size = 64
+
+
+class Decimal128(Decimal):
+    dec_size = 128
+
+
+class Decimal256(Decimal):
+    dec_size = 256
 
 
 class Enum(ChSqlaType, UserDefinedType):
@@ -209,7 +228,7 @@ class Nullable:
             raise ArgumentError('Low Cardinality type cannot be Nullable')
         orig = element.type_def
         wrappers = orig if 'Nullable' in orig.wrappers else orig.wrappers + ('Nullable',)
-        return element.__class__(type_def=TypeDef(orig.size, wrappers, orig.keys, orig.values))
+        return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
 class LowCardinality:
@@ -218,7 +237,7 @@ class LowCardinality:
             return element(type_def=LC_TYPE_DEF)
         orig = element.type_def
         wrappers = orig if 'LowCardinality' in orig.wrappers else ('LowCardinality',) + orig.wrappers
-        return element.__class__(type_def=TypeDef(orig.size, wrappers, orig.keys, orig.values))
+        return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
 class Array(ChSqlaType, UserDefinedType):

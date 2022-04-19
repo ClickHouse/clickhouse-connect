@@ -5,24 +5,22 @@ from typing import Tuple, Any, List
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
 from clickhouse_connect.driver.exceptions import InternalError
 
-size_pattern = re.compile(r'^([A-Z]+)(\d+)')
 int_pattern = re.compile(r'^-?\d+$')
 
 
 def parse_name(name: str, no_nulls: bool = False) -> Tuple[str, str, TypeDef]:
     base = name
-    size = 0
     wrappers = []
     keys = tuple()
     values = tuple()
-    if base.upper().startswith('LOWCARDINALITY'):
+    if base.startswith('LowCardinality'):
         wrappers.append('LowCardinality')
         base = base[15:-1]
-    if base.upper().startswith('NULLABLE'):
+    if base.startswith('Nullable'):
         if not no_nulls:
             wrappers.append('Nullable')
         base = base[9:-1]
-    if base.upper().startswith('ENUM'):
+    if base.startswith('Enum'):
         keys, values = _parse_enum(base)
         base = base[:base.find('(')]
     paren = base.find('(')
@@ -30,13 +28,7 @@ def parse_name(name: str, no_nulls: bool = False) -> Tuple[str, str, TypeDef]:
         arg_str = base[paren + 1:-1]
         base = base[:paren]
         values = _parse_args(arg_str)
-    base = base.upper()
-    if base not in type_map:
-        match = size_pattern.match(base)
-        if match:
-            base = match.group(1)
-            size = int(match.group(2))
-    return base, name, TypeDef(size, tuple(wrappers), keys, values)
+    return base, name, TypeDef(tuple(wrappers), keys, values)
 
 
 def get_from_name(name: str, no_nulls: bool = False) -> ClickHouseType:

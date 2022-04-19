@@ -11,7 +11,7 @@ from sqlalchemy.sql.type_api import TypeEngine
 from superset.db_engine_specs.base import BaseEngineSpec, BasicParametersType, BasicParametersMixin
 from superset.db_engine_specs.exceptions import SupersetDBAPIDatabaseError
 from superset.errors import SupersetError, SupersetErrorType, ErrorLevel
-from superset.utils import core as utils
+from superset.utils.core import ColumnSpec, GenericDataType
 from superset.utils.network import is_hostname_valid, is_port_open
 from superset.models.core import Database
 
@@ -19,7 +19,7 @@ from clickhouse_connect import driver_name
 from clickhouse_connect.driver import default_port
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_superset.datatypes import configure_types
-
+from clickhouse_connect.driver.exceptions import ClickHouseError
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +82,11 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         return new_exception(str(exception))
 
     @classmethod
-    def convert_dttm(cls, target_type: str, dttm: datetime, *_) \
-            -> Optional[str]:
-        tt_upper = target_type.upper()
-        if tt_upper == utils.TemporalType.DATE:
-            return f"toDate('{dttm.date().isoformat()}')"
-        if tt_upper == utils.TemporalType.DATETIME:
-            return f"""toDateTime('{dttm.isoformat(sep=" ", timespec="seconds")}')"""
+    def convert_dttm(cls, target_type: str, dttm: datetime, *_) -> Optional[str]:
+        if target_type.upper() == 'DATE':
+            return f"'{dttm.date().isoformat()}'"
+        if target_type.upper() == 'DATETIME':
+            return f"""'{dttm.isoformat(sep=" ", timespec="seconds")}'"""
         return None
 
     @classmethod
@@ -100,9 +98,21 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
                 'SELECT name FROM system.functions UNION ALL SELECT name FROM system.table_functions')['name'].tolist()
             cls._function_names = names
             return names
-        except Exception:  # pylint: disable=broad-except
+        except ClickHouseError:
             logger.exception('Error retrieving system.functions')
             return []
+
+    @classmethod
+    def get_datatype(cls, type_code: str) -> str:
+        return type_code
+
+    @classmethod
+    def get_column_spec(cls, native_type: Optional[str], *_args, **_kwargs) -> Optional[ColumnSpec]:
+        if not native_type:
+            return None
+        sqla_type = sqla_type_from_name(native_type)
+        generic_type = sqla_type.generic_type
+        return ColumnSpec(sqla_type, generic_type, generic_type == GenericDataType.TEMPORAL)
 
     @classmethod
     def get_sqla_column_type(cls, column_type: Optional[str], *_args, **_kwargs):

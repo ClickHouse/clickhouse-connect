@@ -16,7 +16,7 @@ def configure_types():
     uint64_format('signed')
     ip_format('string')
     uuid_format('string')
-    compiled = [(re.compile(pattern), gen_type) for pattern, gen_type in type_mapping]
+    compiled = [(re.compile(pattern, re.IGNORECASE), gen_type) for pattern, gen_type in type_mapping]
     for name, sqla_type in sqla_type_map.items():
         for pattern, gen_type in compiled:
             match = pattern.match(name)
