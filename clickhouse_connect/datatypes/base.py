@@ -20,9 +20,8 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType(ABC):
-    __slots__ = 'nullable', 'low_card', 'wrappers', 'format', '__dict__'
+    __slots__ = 'nullable', 'low_card', 'wrappers', 'format', 'type_def', '__dict__'
     _ch_name = None
-    _instance_cache: Dict[TypeDef, 'ClickHouseType'] = {}
     _name_suffix = ''
     np_type = 'O'
     python_null = 0
@@ -31,14 +30,14 @@ class ClickHouseType(ABC):
     def __init_subclass__(cls, registered: bool = True):
         if registered:
             cls._ch_name = cls.__name__
-            cls._instance_cache = {}
             type_map[cls._ch_name] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
-        return cls._instance_cache.setdefault(type_def, cls(type_def))
+        return cls(type_def)
 
     def __init__(self, type_def: TypeDef):
+        self.type_def = type_def
         self.wrappers = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
         if type_def.format:
@@ -50,6 +49,12 @@ class ClickHouseType(ABC):
         else:
             self.to_row_binary = self._to_row_binary
             self.from_row_binary = self._from_row_binary
+
+    def __eq__(self, other):
+        return other.__class__ == self.__class__ and self.type_def == other.type_def
+
+    def __hash__(self):
+        return hash((self.type_def, self.__class__))
 
     @property
     def name(self):

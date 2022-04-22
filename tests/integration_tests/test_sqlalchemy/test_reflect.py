@@ -2,6 +2,8 @@
 import sqlalchemy as db
 from sqlalchemy.engine import Engine
 
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import UInt32
+
 
 def test_basic_reflection(test_engine: Engine):
     conn = test_engine.connect()
@@ -20,4 +22,4 @@ def test_full_table_reflection(test_engine: Engine):
         'ENGINE MergeTree ORDER BY key')
     metadata = db.MetaData(bind=test_engine, reflect=True, schema='sqla_test')
     table = db.Table('reflect_test', metadata)
-    print(db.select([table.columns.key]))
+    assert table.columns.key.type.__class__ == UInt32

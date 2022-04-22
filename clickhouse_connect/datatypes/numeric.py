@@ -305,8 +305,6 @@ class Decimal(ClickHouseType):
 
     @classmethod
     def build(cls: Type['Decimal'], type_def: TypeDef):
-        if type_def in cls._instance_cache:
-            return cls._instance_cache[type_def]
         size = cls.dec_size
         if size == 0:
             prec = type_def.values[0]
@@ -316,7 +314,7 @@ class Decimal(ClickHouseType):
             prec = decimal_prec[size]
             scale = type_def.values[0]
         type_cls = BigDecimal if size > 64 else Decimal
-        return cls._instance_cache.setdefault(type_def, type_cls(type_def, prec, size, scale))
+        return type_cls(type_def, prec, size, scale)
 
     def __init__(self, type_def: TypeDef, prec, size, scale):
         super().__init__(type_def)

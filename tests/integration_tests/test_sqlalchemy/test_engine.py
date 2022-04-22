@@ -4,12 +4,12 @@ import sqlalchemy as db
 
 from sqlalchemy.engine.base import Engine
 
+from tests import helpers
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
     FixedString, String, UInt128, UUID, DateTime, Date32, DateTime64, LowCardinality, Nullable, Array, \
     AggregateFunction
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
-from tests import helpers
 
 helpers.add_test_entry_points()
 

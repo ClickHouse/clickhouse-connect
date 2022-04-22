@@ -1,13 +1,13 @@
 from sqlalchemy.engine.default import DefaultDialect
 
-from clickhouse_connect import driver_name, dbapi
+from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
-from clickhouse_connect.cc_sqlalchemy import ischema_names, reflection
+from clickhouse_connect.cc_sqlalchemy import ischema_names, reflect, dialect_name
 
 
 # pylint: disable-msg=too-many-public-methods
 class ClickHouseDialect(DefaultDialect):
-    name = driver_name
+    name = dialect_name
     driver = 'connect'
 
     default_schema_name = 'default'
@@ -42,10 +42,8 @@ class ClickHouseDialect(DefaultDialect):
             cmd += ' FROM ' + schema
         return [row.name for row in connection.execute(cmd)]
 
-    get_columns = staticmethod(reflection.get_columns)
-
-    #def reflecttable(self, connection, table, exclude_columns, include_columns, **_):
-    #    pass
+    get_columns = staticmethod(reflect.get_columns)
+    reflecttable = staticmethod(reflect.reflect_table)
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
