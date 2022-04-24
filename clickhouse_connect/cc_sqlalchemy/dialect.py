@@ -1,7 +1,8 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import dbapi
-from clickhouse_connect.cc_sqlalchemy.ddl.compiler import ChDDLCompiler
+from clickhouse_connect.cc_sqlalchemy.sql import full_table
+from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy import ischema_names, reflect, dialect_name
 
 
@@ -67,12 +68,7 @@ class ClickHouseDialect(DefaultDialect):
         return []
 
     def has_table(self, connection, table_name, schema=None):
-        if table_name.startswith('(') or '.' in table_name or not schema:
-            table = table_name
-        else:
-            table = '.'.join((schema, table_name))
-        rows = connection.execute(f'EXISTS TABLE {table}')
-        return rows.next().result == 1
+        return connection.execute(f'EXISTS TABLE {full_table(table_name, schema)}').next() == 1
 
     def has_sequence(self, connection, sequence_name, schema=None):
         return False

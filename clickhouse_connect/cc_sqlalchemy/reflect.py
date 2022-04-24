@@ -1,20 +1,13 @@
-from typing import Optional
-
 import sqlalchemy.schema as sa_schema
 from sqlalchemy.orm.exc import NoResultFound
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy import dialect_name as dn
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
+from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.driver.parser import parse_callable
 
 ch_col_args = ('default_type', 'codec_expression', 'ttl_expression')
-
-
-def full_table(table_name: str, schema: Optional[str]) -> str:
-    if table_name.startswith('(') or '.' in table_name or not schema:
-        return table_name
-    return f'`{schema}`.`{table_name}`'
 
 
 def get_columns(connection, table_name, schema=None, **_kwargs):

@@ -1,6 +1,8 @@
 from sqlalchemy.sql.ddl import DDL
 from sqlalchemy.exc import ArgumentError
 
+from clickhouse_connect.cc_sqlalchemy.sql import quote_id
+
 
 class CreateDatabase(DDL):
     # pylint: disable-msg=too-many-arguments
@@ -8,7 +10,7 @@ class CreateDatabase(DDL):
                  replica_name: str = '{replica}'):
         if engine and engine not in ('Ordinary', 'Atomic', 'Lazy', 'Replicated'):
             raise ArgumentError(f'Unrecognized engine type {engine}')
-        stmt = f'CREATE DATABASE {name}'
+        stmt = f'CREATE DATABASE {quote_id(name)}'
         if engine:
             stmt += f' Engine {engine}'
             if engine == 'Replicated':
@@ -20,4 +22,4 @@ class CreateDatabase(DDL):
 
 class DropDatabase(DDL):
     def __init__(self, name: str):
-        super().__init__(f'DROP DATABASE {name}')
+        super().__init__(f'DROP DATABASE {quote_id(name)}')

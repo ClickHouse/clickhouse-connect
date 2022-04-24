@@ -1,7 +1,7 @@
 import logging
-from argparse import ArgumentError
-from typing import Type
+from typing import Type, Sequence
 
+from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.visitors import Visitable
 
@@ -28,6 +28,9 @@ class TableEngine(SchemaEventTarget, Visitable):
     def compile(self):
         return f'Engine {self.name}{self._engine_params()}'
 
+    def check_primary_keys(self, primary_keys: Sequence):
+        raise SQLAlchemyError(f'Table Engine {self.name} does not support primary keys')
+
     def _set_parent(self, parent):
         parent.engine = self
 
@@ -36,6 +39,7 @@ class TableEngine(SchemaEventTarget, Visitable):
 
 
 class MergeTree(TableEngine):
+
     def __init__(self, order_by=None, primary_key=None, **kwargs):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')

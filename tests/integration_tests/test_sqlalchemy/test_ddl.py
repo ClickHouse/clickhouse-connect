@@ -70,7 +70,7 @@ def test_declarative(test_engine: Engine):
         id = db.Column(UInt32, primary_key=True)
         name = db.Column(String)
         fullname = db.Column(String)
-        nickname = db.Column(String, nullable=True)
+        nickname = db.Column(String)
 
     Base.metadata.create_all(test_engine)
     user = User(name='Alice')
