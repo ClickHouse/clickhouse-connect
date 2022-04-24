@@ -1,10 +1,9 @@
 import struct
 import uuid
 from decimal import Decimal as PyDecimal
-from collections.abc import Sequence
 from ipaddress import IPv4Address, IPv6Address
 from random import random, choice
-from typing import Union, NamedTuple, Callable, Type
+from typing import Sequence, Union, NamedTuple, Callable, Type
 from datetime import date, datetime, timedelta
 
 from clickhouse_connect.datatypes.base import ClickHouseType

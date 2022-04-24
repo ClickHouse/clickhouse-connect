@@ -1,11 +1,9 @@
 import array
-
 import sys
-from collections.abc import Sequence, MutableSequence
+
+from typing import Tuple, Sequence, MutableSequence
 
 # pylint: disable=invalid-name
-from typing import Tuple
-
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize
 low_card_version = 1

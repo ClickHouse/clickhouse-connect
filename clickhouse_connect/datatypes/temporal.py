@@ -1,9 +1,8 @@
-from collections.abc import Sequence, MutableSequence
+import pytz
+
 from datetime import date, timedelta, datetime
 from struct import unpack_from as suf, pack as sp
-from typing import Union
-
-import pytz
+from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import read_uint64, array_column, write_array

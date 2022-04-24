@@ -1,5 +1,4 @@
-from collections.abc import Sequence, MutableSequence
-from typing import Any, Union
+from typing import Any, Union, Sequence, MutableSequence
 from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType

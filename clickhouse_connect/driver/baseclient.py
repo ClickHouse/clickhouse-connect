@@ -1,5 +1,5 @@
 from abc import ABCMeta, abstractmethod
-from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple
+from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple, Sequence
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -19,7 +19,7 @@ class ColumnDef(NamedTuple):
 class TableDef(NamedTuple):
     database: str
     name: str
-    column_defs: tuple[ColumnDef]
+    column_defs: Tuple[ColumnDef]
     engine: str
     order_by: str
     sort_by: str
@@ -65,7 +65,7 @@ class BaseClient(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def command(self, cmd: str) -> Union[str, int, list[str]]:
+    def command(self, cmd: str) -> Union[str, int, Sequence[str]]:
         pass
 
     @abstractmethod

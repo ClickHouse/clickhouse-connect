@@ -1,5 +1,4 @@
-from collections.abc import Sequence
-from typing import Optional
+from typing import Optional, Sequence
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import BaseClient

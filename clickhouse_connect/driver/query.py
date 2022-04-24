@@ -1,8 +1,8 @@
 import ipaddress
 import uuid
-from collections.abc import Sequence
+
 from enum import Enum
-from typing import NamedTuple, Any, Tuple, Dict
+from typing import NamedTuple, Any, Tuple, Dict, Sequence
 from datetime import date, datetime
 from pytz import UTC
 

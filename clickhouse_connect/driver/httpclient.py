@@ -1,7 +1,7 @@
 import logging
 import json
 import atexit
-from typing import Optional, Dict, Any, Sequence, Collection
+from typing import Optional, Dict, Any, Sequence, Collection, Union
 from requests import Session, Response
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import RequestException
@@ -82,12 +82,17 @@ class HttpClient(BaseClient):
         params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}"}
         insert_block = self.build_insert(data, column_types=column_types, column_names=column_names)
         response = self.raw_request(insert_block, params=params, headers=headers)
-        logger.debug('Insert response code: {}, content: {}', response.status_code, response.content)
+        logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
-    def command(self, cmd: str) -> list[str]:
+    def command(self, cmd: str) -> Union[str, int, Sequence[str]]:
         headers = {'Content-Type': 'text/plain'}
         result = self.raw_request(params={'query': cmd}, headers=headers).content.decode('utf8')[:-1].split('\t')
-        return result[0] if len(result) == 1 else result
+        if len(result) == 1:
+            try:
+                return int(result[0])
+            except ValueError:
+                return result[0]
+        return result
 
     def raw_request(self, data=None, method='post', params: Optional[Dict] = None, headers: Optional[Dict] = None):
         try:

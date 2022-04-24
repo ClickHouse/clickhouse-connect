@@ -1,5 +1,4 @@
-from collections.abc import Sequence
-from typing import Any
+from typing import Any, Sequence
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType

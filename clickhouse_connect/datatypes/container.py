@@ -1,6 +1,5 @@
 import array
-from collections.abc import Sequence, MutableSequence
-from typing import Dict
+from typing import Dict, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap

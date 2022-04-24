@@ -1,7 +1,6 @@
 import pytz
-from collections.abc import Sequence
 from enum import Enum as PyEnum
-from typing import Type, Union
+from typing import Type, Union, Sequence
 
 from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, \
     UserDefinedType, String as SqlaString, DateTime as SqlaDateTime, Date as SqlaDate

@@ -28,7 +28,7 @@ def run_setup(try_c: bool = True):
         author='ClickHouse Inc.',
         author_email='clickhouse-connect@clickhouse.com',
         packages=find_packages(exclude=['tests*']),
-        python_requires='~=3.9',
+        python_requires='~=3.7',
         install_requires=[
             'requests',
             'pytz'
@@ -54,8 +54,10 @@ def run_setup(try_c: bool = True):
         classifiers=[
             'Development Status :: 3 - Alpha',
             'Intended Audience :: Developers',
+            'Programming Language :: Python :: 3.7',
+            'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
-            'Programming Language :: Python :: 3.10',
+            'Programming Language :: Python :: 3.10'
         ],
         **kwargs
     )

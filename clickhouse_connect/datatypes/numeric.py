@@ -1,7 +1,6 @@
 import decimal
-from collections.abc import Sequence, MutableSequence
 from struct import unpack_from as suf, pack as sp
-from typing import Any, Union, Type
+from typing import Any, Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, array_column, write_array, decimal_size, decimal_prec

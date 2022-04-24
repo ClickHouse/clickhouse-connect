@@ -1,6 +1,6 @@
 import random
 import re
-from collections.abc import Sequence
+from typing import Sequence
 
 import pkg_resources
 
