@@ -42,9 +42,9 @@ def get_engine(connection, table_name, schema=None):
     result_set = connection.execute(
         'SELECT engine_full, sorting_key, primary_key, partition_key, sampling_key, storage_policy ' +
         f"FROM system.tables WHERE database = '{schema}' and name = '{table_name}'")
-    if not result_set:
+    row = next(result_set, None)
+    if not row:
         raise NoResultFound(f'Table {schema}.{table_name} does not exist')
-    row = next(result_set)
     engine, engine_args, _ = parse_callable(row.engine_full)
     return build_engine(engine,
                         engine_args=engine_args,

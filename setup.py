@@ -9,6 +9,7 @@ try:
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
     C_PKG = None
 except ImportError:
+    cythonize = None
     C_PKG = 'clickhouse_connect/driverc'
     c_modules = [Extension('creaders', ['clickhouse_connect/driverc/creaders.c'])]
 

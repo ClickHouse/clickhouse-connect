@@ -14,6 +14,11 @@ class ChDDLCompiler(DDLCompiler):
         schema = self.preparer.format_schema(drop.element)
         return 'DROP DATABASE ' + schema
 
+    # Primary keys are part of the engine definition.  At some point we should enforce consistency but currently
+    # setting 'primary_key=True' on a column has no practical effect
+    def visit_primary_key_constraint(self, constraint):
+        return ''
+
     def post_create_table(self, table):
         engine: TableEngine = getattr(table, 'engine', None)
         if not engine:
