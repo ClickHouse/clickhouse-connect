@@ -160,8 +160,8 @@ class Enum16(Enum):
     _ch_type_cls = ChEnum16
 
 
-class String(ChSqlaType, SqlaString):
-    pass
+class String(ChSqlaType, UserDefinedType):
+    python_type = str
 
 
 class FixedString(ChSqlaType, SqlaString):

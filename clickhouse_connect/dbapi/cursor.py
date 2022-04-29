@@ -1,7 +1,10 @@
+import logging
+
 from typing import Optional, Sequence
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import BaseClient
+from clickhouse_connect.driver.parser import parse_callable
 
 
 class Cursor:
@@ -16,7 +19,7 @@ class Cursor:
 
     def check_valid(self):
         if self.data is None:
-            raise ProgrammingError("Cursor is not valid")
+            raise ProgrammingError('Cursor is not valid')
 
     @property
     def description(self):
@@ -34,6 +37,41 @@ class Cursor:
         self.data = query_result.result_set
         self.names = query_result.column_names
         self.types = query_result.column_types
+        self._rowcount = len(self.data)
+
+    def _check_insert(self, operation, data):
+        if not operation.upper().startswith('INSERT INTO '):
+            return False
+        temp = operation[11:].strip()
+        table_end = min(temp.find(' '), temp.find('('))
+        table = temp[:table_end].strip()
+        temp = temp[table_end:].strip()
+        if temp[0] == '(':
+            _, col_names, temp = parse_callable(temp)
+        else:
+            col_names = '*'
+        if 'VALUES' not in temp.upper():
+            return False
+        self.client.insert(table, data, col_names)
+        return True
+
+    def executemany(self, operation, parameters):
+        #if self._check_insert(operation, parameters):
+            #return
+        self.data = []
+        try:
+            for param_row in parameters:
+                query_result = self.client.query(operation, param_row)
+                self.data.extend(query_result.result_set)
+                if self.names or self.types:
+                    if query_result.column_names != self.names:
+                        logging.warning('Inconsistent column names %s : %s for operation %s in cursor executemany',
+                                        self.names, query_result.column_names, operation)
+                else:
+                    self.names = query_result.column_names
+                    self.types = query_result.column_types
+        except TypeError as ex:
+            raise ProgrammingError(f'Invalid parameters {parameters} passed to cursor executemany') from ex
         self._rowcount = len(self.data)
 
     def fetchall(self):

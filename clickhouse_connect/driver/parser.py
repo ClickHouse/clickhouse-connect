@@ -1,16 +1,13 @@
-import re
 from typing import Union, Tuple
-
-int_pattern = re.compile(r'^-?\d+$')
-
 
 # pylint: disable=too-many-branches
 def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
+    expr = expr.strip()
     pos = expr.find('(')
-    if pos == -1:
-        space = expr.find(' ')
-        if space == -1:
-            return expr, (), ''
+    space = expr.find(' ')
+    if pos == -1 and space == -1:
+        return expr, (), ''
+    if space != -1 and (pos == -1 or space < pos):
         return expr[:space], (), expr[space:].strip()
     name = expr[:pos]
     pos += 1  # Skip first paren
@@ -20,9 +17,9 @@ def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
     level = 0
 
     def add_value():
-        if int_pattern.match(value):
+        try:
             values.append(int(value))
-        else:
+        except ValueError:
             values.append(value)
 
     while True:

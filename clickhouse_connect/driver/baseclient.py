@@ -1,5 +1,5 @@
 from abc import ABCMeta, abstractmethod
-from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple, Sequence
+from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple, Sequence, Dict
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -35,37 +35,37 @@ class TableDef(NamedTuple):
 
 class BaseClient(metaclass=ABCMeta):
     def __init__(self, database: str, query_limit: int):
-        self.server_version, self.server_tz, self.database = tuple(
-            self.command('SELECT version(), timezone(), database()'))
+        self.server_version, self.server_tz, self.database =\
+            tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
         if database and not database == '__default__':
             self.database = database
         self.limit = query_limit
 
-    def query(self, query: str, parameters=None, use_none: bool = True) -> QueryResult:
+    def query(self, query: str, parameters=None, use_none: bool = True, settings=None) -> QueryResult:
         if parameters:
-            escaped = {k: escape_query_value(v, self.server_tz) for k, v in parameters}
+            escaped = {k: escape_query_value(v, self.server_tz) for k, v in parameters.items()}
             query %= escaped
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
-        return self.exec_query(query, use_none)
+        return self.exec_query(query, use_none, settings)
 
-    def query_np(self, query: str, parameters=None):
-        return np_result(self.query(query, parameters=parameters, use_none=False))
+    def query_np(self, query: str, parameters=None, settings: Optional[Dict] = None):
+        return np_result(self.query(query, parameters=parameters, use_none=False, settings=settings))
 
-    def query_df(self, query: str, parameters=None):
-        return to_pandas_df(self.query(query, parameters=parameters, use_none=False))
+    def query_df(self, query: str, parameters=None, settings: Optional[Dict] = None):
+        return to_pandas_df(self.query(query, parameters=parameters, use_none=False, settings=settings))
 
     def insert_df(self, table: str, data_frame):
         insert = from_pandas_df(data_frame)
         return self.insert(table, **insert)
 
     @abstractmethod
-    def exec_query(self, query: str, use_none: bool = True) -> QueryResult:
+    def exec_query(self, query: str, use_none: bool = True, settings: Optional[Dict] = None) -> QueryResult:
         pass
 
     @abstractmethod
-    def command(self, cmd: str) -> Union[str, int, Sequence[str]]:
+    def command(self, cmd: str, use_database: bool = True) -> Union[str, int, Sequence[str]]:
         pass
 
     @abstractmethod
@@ -75,7 +75,7 @@ class BaseClient(metaclass=ABCMeta):
     # pylint: disable=too-many-arguments
     def insert(self, table: str, data: Iterable[Iterable[Any]], column_names: Union[str or Iterable[str]] = '*',
                database: str = '', column_types: Optional[Iterable[ClickHouseType]] = None,
-               column_type_names: Optional[Iterable[str]] = None):
+               column_type_names: Optional[Iterable[str]] = None, settings: Optional[Dict] = None):
         table, database, full_table = self.normalize_table(table, database)
         if isinstance(column_names, str):
             if column_names == '*':
@@ -97,7 +97,7 @@ class BaseClient(metaclass=ABCMeta):
                 except KeyError as ex:
                     raise ProgrammingError(f'Unrecognized column {ex} in table {table}') from None
         assert len(column_names) == len(column_types)
-        self.data_insert(full_table, column_names, data, column_types)
+        self.data_insert(full_table, column_names, data, column_types, settings)
 
     def normalize_table(self, table: str, database: str) -> Tuple[str, str, str]:
         split = table.split('.')
@@ -122,7 +122,7 @@ class BaseClient(metaclass=ABCMeta):
 
     @abstractmethod
     def data_insert(self, table: str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
-                    column_types: Iterable[ClickHouseType]):
+                    column_types: Iterable[ClickHouseType], settings: Optional[Dict] = None):
         pass
 
     def close(self):

@@ -20,7 +20,10 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
         keys, values = parse_enum(base)
         base = base[:base.find('(')]
     else:
-        base, values, _ = parse_callable(base)
+        try:
+            base, values, _ = parse_callable(base)
+        except IndexError:
+            raise InternalError(f'Can not parse ClickHouse data type: {name}') from None
     return base, name, TypeDef(tuple(wrappers), keys, values)
 
 
@@ -31,7 +34,7 @@ def get_from_name(name: str) -> ClickHouseType:
         try:
             ch_type = type_map[base].build(type_def)
         except KeyError:
-            err_str = f'Unrecognized ClickHouse type base: {base} name: {name if name else base}'
+            err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
             logging.error(err_str)
             raise InternalError(err_str) from None
         type_cache[name] = ch_type

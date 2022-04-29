@@ -46,6 +46,15 @@ class ClickHouseDialect(DefaultDialect):
     get_columns = staticmethod(reflect.get_columns)
     reflecttable = staticmethod(reflect.reflect_table)
 
+    def get_primary_keys(self, connection, table_name, schema=None, **kw):
+        return []
+
+    def get_pk_constraint(self, conn, table_name, schema=None, **kw):
+        return []
+
+    def get_foreign_keys(self, connection, table_name, schema=None, **kw):
+        return []
+
     def get_temp_table_names(self, connection, schema=None, **kw):
         return []
 

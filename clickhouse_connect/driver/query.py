@@ -17,8 +17,8 @@ if HAS_NUMPY:
 
 
 class QueryResult():
-    def __init__(self, result_set: Sequence[Sequence[Any]], column_names: Tuple[str], column_types: Tuple[str],
-                 query_id: str = None, summary: Dict[str, Any] = None):
+    def __init__(self, result_set: Sequence[Sequence[Any]], column_names: Tuple[str, ...],
+                 column_types: Tuple[ClickHouseType, ...], query_id: str = None, summary: Dict[str, Any] = None):
         self.result_set = result_set
         self.column_names = column_names
         self.column_types = column_types

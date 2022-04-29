@@ -16,11 +16,13 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 helpers.add_test_entry_points()
 
 
-def test_create_database(test_engine: Engine):
-    conn = test_engine.connect()
-    if not test_engine.dialect.has_database(conn, 'sqla_create_db_test'):
-        conn.execute(CreateDatabase('sqla_create_db_test', 'Atomic'))
-    conn.execute(DropDatabase('sqla_create_db_test'))
+def test_create_database(test_engine: Engine, test_db: str):
+    if test_db:
+        conn = test_engine.connect()
+        create_db = f'{test_db}_create_db_test'
+        if not test_engine.dialect.has_database(conn, create_db):
+            conn.execute(CreateDatabase(create_db, 'Atomic'))
+        conn.execute(DropDatabase(create_db))
 
 
 class TestEnum(PyEnum):
@@ -30,11 +32,11 @@ class TestEnum(PyEnum):
     COBALT = 877
 
 
-def test_create_table(test_engine: Engine):
+def test_create_table(test_engine: Engine, test_db: str):
     conn = test_engine.connect()
-    metadata = db.MetaData(bind=test_engine, schema='sqla_test')
-    conn.execute('DROP TABLE IF EXISTS sqla_test.simple_table')
-    table = db.Table('simple_table', metadata,
+    metadata = db.MetaData(bind=test_engine, schema=test_db)
+    conn.execute('DROP TABLE IF EXISTS simple_table_test')
+    table = db.Table('simple_table_test', metadata,
                      db.Column('key_col', Int8),
                      db.Column('uint_col', UInt16),
                      db.Column('dec_col', Decimal(40, 5)),
@@ -45,7 +47,7 @@ def test_create_table(test_engine: Engine):
                      db.Column('bool_col', Boolean),
                      MergeTree(('key_col', 'uint_col'), primary_key='key_col'))
     table.create(conn)
-    conn.execute('DROP TABLE IF EXISTS sqla_test.advanced_table')
+    conn.execute('DROP TABLE IF EXISTS advanced_table_test')
     table = db.Table('advanced_table', metadata,
                      db.Column('key_col', UInt128),
                      db.Column('uuid_col', UUID),
@@ -61,11 +63,11 @@ def test_create_table(test_engine: Engine):
     table.create(conn)
 
 
-def test_declarative(test_engine: Engine):
-    Base = declarative_base(metadata=MetaData(schema='sqla_test'))
+def test_declarative(test_engine: Engine, test_db: str):
+    Base = declarative_base(metadata=MetaData(schema=test_db))
 
     class User(Base):
-        __tablename__ = 'users'
+        __tablename__ = 'users_test'
         __table_args__ = (MergeTree(order_by=['id', 'name']),)
         id = db.Column(UInt32, primary_key=True)
         name = db.Column(String)

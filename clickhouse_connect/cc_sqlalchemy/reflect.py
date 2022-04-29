@@ -56,4 +56,4 @@ def reflect_table(connection, table, include_columns, exclude_columns, *_args, *
         col_type = col.pop('type')
         col_args = {f'{dn}_{key}' if key in ch_col_args else key: value for key, value in col.items() if value}
         table.append_column(sa_schema.Column(name, col_type, **col_args))
-        table.engine = get_engine(connection, table.name, schema)
+    table.engine = get_engine(connection, table.name, schema)
