@@ -11,9 +11,9 @@ MAX_DATA_ROWS = 25
 
 
 # pylint: disable=duplicate-code
-def test_query_fuzz(test_client: BaseClient):
+def test_query_fuzz(test_client: BaseClient, test_table_engine: str):
     for _ in range(TEST_RUNS):
-        test_client.command('DROP TABLE IF EXISTS cc_fuzz_test')
+        test_client.command('DROP TABLE IF EXISTS fuzz_test')
         data_rows = random.randint(1, MAX_DATA_ROWS)
         col_names, col_types = random_columns(TEST_COLUMNS)
         data = random_data(col_types, data_rows)
@@ -21,11 +21,11 @@ def test_query_fuzz(test_client: BaseClient):
         col_types = (get_from_name('UInt32'),) + col_types
 
         col_defs = [TableColumnDef(name, ch_type) for name, ch_type in zip(col_names, col_types)]
-        create_stmt = create_table('cc_fuzz_test', col_defs, 'MergeTree', {'order by': 'row_id'})
+        create_stmt = create_table('fuzz_test', col_defs, test_table_engine, {'order by': 'row_id'})
         test_client.command(create_stmt)
-        test_client.insert('cc_fuzz_test', data, col_names)
+        test_client.insert('fuzz_test', data, col_names)
 
-        data_result = test_client.query('SELECT * FROM cc_fuzz_test')
+        data_result = test_client.query('SELECT * FROM fuzz_test')
         assert data_result.column_names == col_names
         assert data_result.column_types == col_types
         assert data_result.result_set == data

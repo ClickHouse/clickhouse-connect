@@ -1,7 +1,7 @@
 import logging
 import json
 import atexit
-from typing import Optional, Dict, Any, Sequence, Collection, Union
+from typing import Optional, Dict, Any, Sequence, Union
 from requests import Session, Response
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import RequestException
@@ -47,12 +47,14 @@ class HttpClient(BaseClient):
             self.read_format = self.write_format = 'Native'
             self.build_insert = native.build_insert
             self.parse_response = native.parse_response
+            self.column_inserts = True
         elif data_format in ('row_binary', 'rb'):
             self.read_format = 'RowBinaryWithNamesAndTypes'
             self.write_format = 'RowBinary'
             self.build_insert = rowbinary.build_insert
             self.parse_response = rowbinary.parse_response
-        super().__init__(database, query_limit)
+            self.column_inserts = False
+        super().__init__(database=database, query_limit=query_limit, uri=self.url)
 
     def format_query(self, query: str) -> str:
         if query.upper().strip().startswith('INSERT ') and 'VALUES' in query.upper():
@@ -77,18 +79,18 @@ class HttpClient(BaseClient):
         return QueryResult(data_result.result, data_result.column_names, data_result.column_types,
                            response.headers.get('X-ClickHouse-Query-Id'), summary)
 
-    def data_insert(self, table: str, column_names: Sequence[str], data: Collection[Collection[Any]],
-                    column_types: Sequence[ClickHouseType], settings: Optional[Dict] = None):
+    def data_insert(self, table: str, column_names: Sequence[str], data: Sequence[Sequence[Any]],
+                    column_types: Sequence[ClickHouseType], settings: Optional[Dict] = None, column_oriented: bool = False):
         headers = {'Content-Type': 'application/octet-stream'}
         params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
                   'database': self.database}
         if settings:
             params.update(settings)
-        insert_block = self.build_insert(data, column_types=column_types, column_names=column_names)
+        insert_block = self.build_insert(data, column_types=column_types, column_names=column_names, column_oriented=column_oriented)
         response = self.raw_request(insert_block, params=params, headers=headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
-    def command(self, cmd: str, use_database: bool = True, settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
+    def exec_command(self, cmd, use_database: bool = True, settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
         headers = {'Content-Type': 'text/plain'}
         params = {'query': cmd}
         if use_database:

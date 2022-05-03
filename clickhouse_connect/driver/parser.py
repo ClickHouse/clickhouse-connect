@@ -1,5 +1,6 @@
 from typing import Union, Tuple
 
+
 # pylint: disable=too-many-branches
 def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
     expr = expr.strip()

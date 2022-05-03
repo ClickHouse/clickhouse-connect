@@ -1,6 +1,6 @@
 import logging
 
-from typing import Any, Sequence, Collection, Union
+from typing import Any, Sequence, Union
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -39,11 +39,13 @@ def parse_response(source: Union[bytes, bytearray, memoryview], use_none: bool =
     return DataResult(result, tuple(names), tuple(col_types))
 
 
-def build_insert(data: Collection[Collection[Any]], *, column_type_names: Sequence[str] = None,
-                 column_types: Sequence[ClickHouseType] = None, **_):
+def build_insert(data: Sequence[Sequence[Any]], *, column_type_names: Sequence[str] = None,
+                 column_types: Sequence[ClickHouseType] = None, column_oriented: bool = False, **_):
     if not column_types:
         column_types = [registry.get_from_name(name) for name in column_type_names]
     convs = tuple(t.to_row_binary for t in column_types)
+    if column_oriented:
+        data = tuple(zip(*data))
     output = bytearray()
     for row in data:
         for (value, conv) in zip(row, convs):

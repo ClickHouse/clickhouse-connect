@@ -10,7 +10,7 @@ from clickhouse_connect import create_client
 from clickhouse_connect.driver.exceptions import ClickHouseError
 
 
-class ClientConfig(NamedTuple):
+class TestConfig(NamedTuple):
     interface: str
     host: str
     port: int
@@ -20,9 +20,13 @@ class ClientConfig(NamedTuple):
     test_database: str
     cleanup: bool
 
+    @property
+    def cloud(self):
+        return self.host.endswith('clickhouse.cloud')
 
-@fixture(scope='session', autouse=True, name='client_config')
-def test_config_fixture(request) -> Iterator[ClientConfig]:
+
+@fixture(scope='session', autouse=True, name='test_config')
+def test_config_fixture(request) -> Iterator[TestConfig]:
     interface = request.config.getoption('interface')
     host = request.config.getoption('host')
     port = request.config.getoption('port')
@@ -42,18 +46,23 @@ def test_config_fixture(request) -> Iterator[ClientConfig]:
         cleanup = False
     else:
         test_database = 'cc_test'
-    yield ClientConfig(interface, host, port, username, password, use_docker, test_database, cleanup)
+    yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup)
 
 
 @fixture(scope='session', name='test_db')
-def test_db_fixture(client_config: ClientConfig) -> Iterator[str]:
-    yield client_config.test_database or 'default'
+def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
+    yield test_config.test_database or 'default'
+
+
+@fixture(scope='session', name='test_table_engine')
+def test_table_engine_fixture(test_config:TestConfig) -> Iterator[str]:
+    yield 'ReplicatedMergeTree' if test_config.cloud else 'MergeTree'
 
 
 @fixture(scope='session', autouse=True, name='test_client')
-def test_client_fixture(client_config: ClientConfig, test_db: str) -> Iterator[BaseClient]:
+def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[BaseClient]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
-    if client_config.use_docker:
+    if test_config.use_docker:
         run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         sys.stderr.write('Starting docker compose')
         up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
@@ -64,11 +73,11 @@ def test_client_fixture(client_config: ClientConfig, test_db: str) -> Iterator[B
     while True:
         tries += 1
         try:
-            driver = create_client(interface=client_config.interface,
-                                   host=client_config.host,
-                                   port=client_config.port,
-                                   username=client_config.username,
-                                   password=client_config.password)
+            driver = create_client(interface=test_config.interface,
+                                   host=test_config.host,
+                                   port=test_config.port,
+                                   username=test_config.username,
+                                   password=test_config.password)
             break
         except ClickHouseError as ex:
             if tries > 15:
@@ -78,7 +87,7 @@ def test_client_fixture(client_config: ClientConfig, test_db: str) -> Iterator[B
         driver.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
         driver.database = test_db
     yield driver
-    if client_config.use_docker:
+    if test_config.use_docker:
         down_result = run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:
             sys.stderr.write(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')

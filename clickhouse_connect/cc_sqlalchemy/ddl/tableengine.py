@@ -18,6 +18,8 @@ def tuple_expr(expr_name, value):
 
 
 class TableEngine(SchemaEventTarget, Visitable):
+    arg_str = None
+
     def __init_subclass__(cls, **kwargs):
         engine_map[cls.__name__] = cls
 
@@ -26,7 +28,9 @@ class TableEngine(SchemaEventTarget, Visitable):
         return self.__class__.__name__
 
     def compile(self):
-        return f'Engine {self.name}{self._engine_params()}'
+        if not self.arg_str:
+            self.arg_str = self._engine_params()
+        return f'Engine {self.name}{self.arg_str}'
 
     def check_primary_keys(self, primary_keys: Sequence):
         raise SQLAlchemyError(f'Table Engine {self.name} does not support primary keys')
@@ -39,7 +43,6 @@ class TableEngine(SchemaEventTarget, Visitable):
 
 
 class MergeTree(TableEngine):
-
     def __init__(self, order_by=None, primary_key=None, **kwargs):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
@@ -51,14 +54,23 @@ class MergeTree(TableEngine):
         self.arg_str = None
 
     def _engine_params(self):
-        if self.arg_str:
-            return self.arg_str
         v = tuple_expr('ORDER BY', self.order_by)
         v += tuple_expr('PARTITION BY', self.args.get('partition_by'))
         v += tuple_expr('PRIMARY KEY', self.primary_key)
         v += tuple_expr('SAMPLE BY', self.args.get('sample_by'))
-        self.arg_str = v
         return v
+
+
+class ReplicatedMergeTree(MergeTree):
+    def __init__(self, order_by=None, primary_key=None, **kwargs):
+        super().__init__(order_by, primary_key, **kwargs)
+        self.zk_path = kwargs.pop('zk_path', None)
+        self.replica = kwargs.pop('replica', None)
+
+    def _engine_params(self):
+        if self.zk_path and self.replica:
+            return f"('{self.zk_path}', '{self.replica}') " + super()._engine_params()
+        return super()._engine_params()
 
 
 def build_engine(name: str, *args, **kwargs):

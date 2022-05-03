@@ -7,8 +7,6 @@ from clickhouse_connect.driver.query import DataResult
 
 
 # pylint: disable=too-many-locals
-
-
 def parse_response(source: Sequence, use_none: bool = True) -> DataResult:
     if not isinstance(source, memoryview):
         source = memoryview(source)
@@ -40,13 +38,15 @@ def parse_response(source: Sequence, use_none: bool = True) -> DataResult:
 
 
 def build_insert(data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
-                 column_type_names: Sequence[str] = None, column_types: Sequence[ClickHouseType] = None):
+                 column_type_names: Sequence[str] = None,
+                 column_types: Sequence[ClickHouseType] = None,
+                 column_oriented: bool = False):
     if not column_types:
         column_types = [registry.get_from_name(name) for name in column_type_names]
     output = bytearray()
-    columns = tuple(zip(*data))
+    columns = data if column_oriented else tuple(zip(*data))
     write_leb128(len(columns), output)
-    write_leb128(len(data), output)
+    write_leb128(len(columns[0]), output)
     for col_name, col_type, column in zip(column_names, column_types, columns):
         write_leb128(len(col_name), output)
         output += col_name.encode()

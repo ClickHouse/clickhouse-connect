@@ -12,9 +12,9 @@ def test_command(test_client: BaseClient):
     assert version.startswith('2')
 
 
-def test_insert(test_client: BaseClient):
+def test_insert(test_client: BaseClient, test_table_engine: str):
     test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    test_client.command('CREATE TABLE test_system_insert AS system.tables Engine MergeTree() ORDER BY name')
+    test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
     tables_result = test_client.query('SELECT * from system.tables')
     test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
 
@@ -25,10 +25,12 @@ def test_numpy(test_client: BaseClient):
         assert len(np_array['database']) > 10
 
 
-def test_pandas(test_client: BaseClient):
+def test_pandas(test_client: BaseClient, test_table_engine: str):
     if not HAS_PANDAS:
         return
     df = test_client.query_df('SELECT * FROM system.tables')
     test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    test_client.command('CREATE TABLE test_system_insert as system.tables Engine Memory')
+    test_client.command(f'CREATE TABLE test_system_insert as system.tables Engine {test_table_engine} ORDER BY (database, name)')
     test_client.insert_df('test_system_insert', df)
+    new_df = test_client.query_df('SELECT * FROM test_system_insert')
+    assert new_df.columns.all() == df.columns.all()

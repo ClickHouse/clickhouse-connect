@@ -2,6 +2,8 @@ import logging
 
 from typing import Optional, Sequence
 
+from clickhouse_connect.datatypes.numeric import Int32
+from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import BaseClient
 from clickhouse_connect.driver.parser import parse_callable
@@ -32,14 +34,27 @@ class Cursor:
     def close(self):
         self.data = None
 
-    def execute(self, operation, parameters=None):
-        query_result = self.client.query(operation, parameters)
-        self.data = query_result.result_set
-        self.names = query_result.column_names
-        self.types = query_result.column_types
+    def execute(self, operation:str, parameters=None):
+        op_start = operation.split(' ')[0].upper()
+        if op_start in ('SELECT', 'WITH', 'SHOW', 'DESCRIBE'):
+            query_result = self.client.query(operation, parameters)
+            self.data = query_result.result_set
+            self.names = query_result.column_names
+            self.types = query_result.column_types
+        else:
+            v = self.client.command(operation, parameters)
+            self.types = [String]
+            self.names = ['response']
+            if not v:
+                v = 'OK'
+            elif isinstance(v, int):
+                self.types = [Int32]
+            if isinstance(v, list):
+                v = '\t'.join(v)
+            self.data = [[v]]
         self._rowcount = len(self.data)
 
-    def _check_insert(self, operation, data):
+    def _try_bulk_insert(self, operation:str, data):
         if not operation.upper().startswith('INSERT INTO '):
             return False
         temp = operation[11:].strip()
@@ -47,17 +62,25 @@ class Cursor:
         table = temp[:table_end].strip()
         temp = temp[table_end:].strip()
         if temp[0] == '(':
-            _, col_names, temp = parse_callable(temp)
+            _, op_columns, temp = parse_callable(temp)
         else:
-            col_names = '*'
+            op_columns = None
         if 'VALUES' not in temp.upper():
             return False
-        self.client.insert(table, data, col_names)
+        col_names = list(data[0].keys())
+        if op_columns and set(op_columns) != set(col_names):
+            return False  # Data sent in doesn't match the columns in the insert statement
+        if self.client.column_inserts:
+            data_values = [[row[k] for row in data] for k in col_names]
+        else:
+            data_values = [list(row.values()) for row in data]
+        self.client.insert(table, data_values, col_names, column_oriented=self.client.column_inserts)
+        self.data = []
         return True
 
     def executemany(self, operation, parameters):
-        #if self._check_insert(operation, parameters):
-            #return
+        if not parameters or self._try_bulk_insert(operation, parameters):
+            return
         self.data = []
         try:
             for param_row in parameters:
