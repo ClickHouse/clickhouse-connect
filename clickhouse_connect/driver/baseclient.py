@@ -9,11 +9,16 @@ from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df
 
 class ColumnDef(NamedTuple):
     name: str
-    type: ClickHouseType
-    default_kind: str
+    type: str
+    default_type: str
     default_expression: str
-    compression_codec: str
     comment: str
+    codec_expression: str
+    ttl_expression: str
+
+    @property
+    def ch_type(self):
+        return get_from_name(self.type)
 
 
 class TableDef(NamedTuple):
@@ -90,9 +95,9 @@ class BaseClient(metaclass=ABCMeta):
         if isinstance(column_names, str):
             if column_names == '*':
                 column_defs = [cd for cd in self.table_columns(table, database)
-                               if cd.default_kind not in ('ALIAS', 'MATERIALIZED')]
+                               if cd.default_type not in ('ALIAS', 'MATERIALIZED')]
                 column_names = [cd.name for cd in column_defs]
-                column_types = [cd.type for cd in column_defs]
+                column_types = [cd.ch_type for cd in column_defs]
             else:
                 column_names = [column_names]
         elif len(column_names) == 0:
@@ -103,7 +108,7 @@ class BaseClient(metaclass=ABCMeta):
             else:
                 column_map: dict[str: ColumnDef] = {d.name: d for d in self.table_columns(table, database)}
                 try:
-                    column_types = [column_map[name].type for name in column_names]
+                    column_types = [column_map[name].ch_type for name in column_names]
                 except KeyError as ex:
                     raise ProgrammingError(f'Unrecognized column {ex} in table {table}') from None
         assert len(column_names) == len(column_types)
@@ -122,13 +127,10 @@ class BaseClient(metaclass=ABCMeta):
         return table, database, full_name
 
     def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
-        column_result = self.query(
-            'SELECT name, type, default_kind, default_kind, default_expression, compression_codec, comment '
-            f"FROM system.columns WHERE database = '{database}' and table = '{table}'  ORDER BY position")
+        column_result = self.query(f'DESCRIBE TABLE {database}.{table}')
         if not column_result.result_set:
             raise InternalError(f'No table columns found for {database}.{table}')
-        return tuple(ColumnDef(row[0], get_from_name(row[1]), row[2], row[3], row[4], row[5])
-                     for row in column_result.result_set)
+        return tuple(ColumnDef(**row) for row in column_result.named_results())
 
     @abstractmethod
     def data_insert(self, table: str, column_names: Iterable[str], data: Iterable[Iterable[Any]],

@@ -4,7 +4,7 @@ from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy import ischema_names, reflect, dialect_name
-
+from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 
 # pylint: disable-msg=too-many-public-methods
 class ClickHouseDialect(DefaultDialect):
@@ -17,6 +17,7 @@ class ClickHouseDialect(DefaultDialect):
     returns_unicode_strings = True
     postfetch_lastrowid = False
     ddl_compiler = ChDDLCompiler
+    preparer = ChIdentifierPreparer
     description_encoding = None
     max_identifier_length = 127
     ischema_names = ischema_names

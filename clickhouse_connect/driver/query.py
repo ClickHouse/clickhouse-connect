@@ -26,10 +26,8 @@ class QueryResult():
         self.summary = summary
 
     def named_results(self):
-        for ix, row in enumerate(self.result_set):
-            x = dict(zip(self.column_names[ix], row))
-            x['@type'] = self.column_types[ix]
-            yield x
+        for row in self.result_set:
+            yield dict(zip(self.column_names, row))
 
 
 class DataResult(NamedTuple):
@@ -47,34 +45,25 @@ must_escape = (BS, '\'')
 def escape_query_value(value, server_tz=UTC):
     if value is None:
         return 'NULL'
-
     if isinstance(value, str):
         return f"'{''.join(f'{BS}{c}' if c in must_escape else c for c in value)}'"
-
     if isinstance(value, date):
         return f"'{value.isoformat()}'"
-
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S%')}'"
-
     if isinstance(value, list):
         return f"[{', '.join(escape_query_value(x, server_tz) for x in value)}]"
-
     if isinstance(value, tuple):
         return f"({', '.join(escape_query_value(x, server_tz) for x in value)})"
-
     if isinstance(value, dict):
         pairs = [escape_query_value(k, server_tz) + ':' + escape_query_value(v, server_tz) for k, v in value.items()]
         return f"{{{', '.join(pairs)}}}"
-
     if isinstance(value, Enum):
         return escape_query_value(value.value, server_tz)
-
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
         return f"'{value}'"
-
     return str(value)
 
 
