@@ -7,6 +7,12 @@ from clickhouse_connect.driver.parser import parse_enum, parse_callable
 
 
 def parse_name(name: str) -> Tuple[str, str, TypeDef]:
+    """
+    Converts a ClickHouse type name into the base class and the definition (TypeDef) needed for any additional instantiation
+    :param name: ClickHouse type name as returned by clickhouse
+    :return: The original base name (before arguments), the full name as passed in, and the TypeDef object that captures any additional
+    arguments
+    """
     base = name
     wrappers = []
     keys = tuple()
@@ -28,6 +34,11 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
 
 
 def get_from_name(name: str) -> ClickHouseType:
+    """
+    Returns the ClickHouseType instance parsed from the ClickHouse type name.  Instances are cached
+    :param name: ClickHouse type name as returned by ClickHouse in WithNamesAndTypes FORMAT or the Native protocol
+    :return: The instance of the ClickHouse Type
+    """
     ch_type = type_cache.get(name, None)
     if not ch_type:
         base, name, type_def = parse_name(name)

@@ -10,6 +10,9 @@ from clickhouse_connect.driver.parser import parse_callable
 
 
 class Cursor:
+    """
+    See :ref:`https://peps.python.org/pep-0249/`
+    """
     def __init__(self, client: BaseClient):
         self.client = client
         self.arraysize = 1

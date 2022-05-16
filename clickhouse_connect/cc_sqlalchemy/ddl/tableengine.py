@@ -9,6 +9,12 @@ engine_map: dict[str, Type['TableEngine']] = {}
 
 
 def tuple_expr(expr_name, value):
+    """
+    Create a table parameter with a tuple or list correctly formatted
+    :param expr_name: parameter
+    :param value: string or tuple of strings to format
+    :return: formatted parameter string
+    """
     if value is None:
         return ''
     v = f' {expr_name} '
@@ -18,6 +24,9 @@ def tuple_expr(expr_name, value):
 
 
 class TableEngine(SchemaEventTarget, Visitable):
+    """
+    SqlAlchemy Schema element to support ClickHouse table engines
+    """
     arg_str = None
 
     def __init_subclass__(cls, **kwargs):
@@ -43,6 +52,10 @@ class TableEngine(SchemaEventTarget, Visitable):
 
 
 class MergeTree(TableEngine):
+    """
+    ClickHouse MergeTree engine with required/optional parameters
+    """
+
     def __init__(self, order_by=None, primary_key=None, **kwargs):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
@@ -62,6 +75,10 @@ class MergeTree(TableEngine):
 
 
 class ReplicatedMergeTree(MergeTree):
+    """
+    ClickHouse ReplicatedMergeTree engine with required/optional parameters
+    """
+
     def __init__(self, order_by=None, primary_key=None, **kwargs):
         super().__init__(order_by, primary_key, **kwargs)
         self.zk_path = kwargs.pop('zk_path', None)
@@ -74,6 +91,13 @@ class ReplicatedMergeTree(MergeTree):
 
 
 def build_engine(name: str, *args, **kwargs):
+    """
+    Factory function to create TableEngine class from name and parameters
+    :param name: Engine class name
+    :param args: Engine arguments
+    :param kwargs: Engine keyword arguments
+    :return:
+    """
     if not name:
         return None
     try:

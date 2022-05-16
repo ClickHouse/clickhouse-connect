@@ -11,6 +11,14 @@ ch_col_args = ('default_type', 'codec_expression', 'ttl_expression')
 
 
 def get_columns(connection, table_name, schema=None, **_kwargs):
+    """
+    Build SQLAlchemy column dictionary (see
+    :param connection: SQLAlchemy connection
+    :param table_name: ClickHouse table
+    :param schema: ClickHouse database name
+    :param _kwargs: Ignored
+    :return:
+    """
     table_id = full_table(table_name, schema)
     result_set = connection.execute(f'DESCRIBE TABLE {table_id}')
     if not result_set:

@@ -12,6 +12,10 @@ type_mapping = (
 
 
 def configure_types():
+    """
+    Monkey patch the Superset generic_type onto the clickhouse type, also set defaults for certain type formatting to be
+    better compatible with superset
+    """
     fixed_string_format('string', 'utf8')
     uint64_format('signed')
     ip_format('string')

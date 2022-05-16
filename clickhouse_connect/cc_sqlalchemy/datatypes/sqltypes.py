@@ -86,6 +86,12 @@ class Decimal(ChSqlaType, Numeric):
     dec_size = 0
 
     def __init__(self, precision: int = 0, scale: int = 0, type_def: TypeDef = None):
+        """
+        Construct either with precision and scale (for DDL), or a TypeDef with those values (by name)
+        :param precision:  Number of digits the Decimal
+        :param scale: Digits after the decimal point
+        :param type_def: Parsed type def from ClickHouse arguments
+        """
         if type_def:
             if self.dec_size:
                 precision = decimal_prec[self.dec_size]
@@ -123,13 +129,21 @@ class Enum(ChSqlaType, UserDefinedType):
 
     def __init__(self, enum: Type[PyEnum] = None, keys: Sequence[str] = None, values: Sequence[int] = None,
                  type_def: TypeDef = None):
+        """
+        Construct a ClickHouse enum either from a Python Enum or parallel lists of keys and value.  Note that
+        Python enums do not support empty strings as keys, so the alternate keys/values must be used in that case
+        :param enum: Python enum to convert
+        :param keys: List of string keys
+        :param values: List of integer values
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             if enum:
                 keys = [e.name for e in enum]
                 values = [e.value for e in enum]
             self._validate(keys, values)
             if self.__class__.__name__ == 'Enum':
-                if max(values) <= 127 and min(values) >= -128 :
+                if max(values) <= 127 and min(values) >= -128:
                     self._ch_type_cls = ChEnum8
                 else:
                     self._ch_type_cls = ChEnum16
@@ -194,6 +208,11 @@ class Date32(ChSqlaType, SqlaDate):
 
 class DateTime(ChSqlaType, SqlaDateTime):
     def __init__(self, tz: str = None, type_def: TypeDef = None):
+        """
+        Date time constructor with optional ClickHouse timezone parameter if not constructed with TypeDef
+        :param tz: Timezone string as defined in pytz
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             if tz:
                 pytz.timezone(tz)
@@ -206,6 +225,12 @@ class DateTime(ChSqlaType, SqlaDateTime):
 
 class DateTime64(ChSqlaType, SqlaDateTime):
     def __init__(self, precision: int = None, tz: str = None, type_def: TypeDef = None):
+        """
+        Date time constructor with precision and timezone parameters if not constructed with TypeDef
+        :param precision:   Usually 3/6/9 for mill/micro/nansecond precision on ClickHouse side
+        :param tz: Timezone string as defined in pytz
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             if tz:
                 pytz.timezone(tz)
@@ -220,7 +245,18 @@ class DateTime64(ChSqlaType, SqlaDateTime):
 
 
 class Nullable:
+    """
+    Class "wrapper" to use in DDL construction.  It is never actually initialized but instead creates the "wrapped"
+    type with a Nullable wrapper
+    """
+
     def __new__(cls, element: Union[ChSqlaType, Type[ChSqlaType]]):
+        """
+        Actually returns an instance of the enclosed type with a Nullable wrapper.  If element is an instance,
+        constructs a new instance with a copied TypeDef plus the Nullable wrapper.  If element is just a type,
+        constructs a new element of that type with only the Nullable wrapper.
+        :param element: ChSqlaType instance or class to wrap
+        """
         if callable(element):
             return element(type_def=NULLABLE_TYPE_DEF)
         if element.low_card:
@@ -231,7 +267,18 @@ class Nullable:
 
 
 class LowCardinality:
+    """
+    Class "wrapper" to use in DDL construction.  It is never actually instantiated but instead creates the "wrapped"
+    type with a LowCardinality wrapper
+    """
+
     def __new__(cls, element: Union[ChSqlaType, Type[ChSqlaType]]):
+        """
+       Actually returns an instance of the enclosed type with a LowCardinality wrapper.  If element is an instance,
+       constructs a new instance with a copied TypeDef plus the LowCardinality wrapper.  If element is just a type,
+       constructs a new element of that type with only the LowCardinality wrapper.
+       :param element: ChSqlaType instance or class to wrap
+       """
         if callable(element):
             return element(type_def=LC_TYPE_DEF)
         orig = element.type_def
@@ -243,6 +290,11 @@ class Array(ChSqlaType, UserDefinedType):
     python_type = list
 
     def __init__(self, element: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
+        """
+        Array constructor that can take a wrapped Array type if not constructed from a TypeDef
+        :param element: ChSqlaType instance or class to wrap
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             if callable(element):
                 element = element()
@@ -255,6 +307,12 @@ class Map(ChSqlaType, UserDefinedType):
 
     def __init__(self, key_type: Union[ChSqlaType, Type[ChSqlaType]] = None,
                  value_type: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
+        """
+        Map constructor that can take a wrapped key/values types if not constructed from a TypeDef
+        :param key_type: ChSqlaType instance or class to use as keys for the Map
+        :param value_type: ChSqlaType instance or class to use as values for the Map
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             if callable(key_type):
                 key_type = key_type()
@@ -268,6 +326,11 @@ class Tuple(ChSqlaType, UserDefinedType):
     python_type = tuple
 
     def __init__(self, elements: Sequence[Union[ChSqlaType, Type[ChSqlaType]]] = None, type_def: TypeDef = None):
+        """
+       Tuple constructor that can take a list of element types if not constructed from a TypeDef
+       :param elements: sequence of ChSqlaType instance or class to use as tuple element types
+       :param type_def: TypeDef from parse_name function
+       """
         if not type_def:
             values = [et() if callable(et) else et for et in elements]
             type_def = TypeDef(values=tuple(v.name for v in values))
@@ -275,14 +338,23 @@ class Tuple(ChSqlaType, UserDefinedType):
 
 
 class JSON(ChSqlaType, UserDefinedType):
+    """
+    Note this isn't currently supported for insert/select, only table definitions
+    """
     python_type = None
 
 
 class Nested(ChSqlaType, UserDefinedType):
+    """
+    Note this isn't currently supported for insert/select, only table definitions
+    """
     python_type = None
 
 
 class Object(ChSqlaType, UserDefinedType):
+    """
+    Note this isn't currently supported for insert/select, only table definitions
+    """
     python_type = None
 
     def __init__(self, fmt: str = None, type_def: TypeDef = None):
@@ -294,18 +366,33 @@ class Object(ChSqlaType, UserDefinedType):
 class SimpleAggregateFunction(ChSqlaType, UserDefinedType):
     python_type = None
 
-    def __init__(self, element: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
+    def __init__(self, name: str, element: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
+        """
+        Constructor that can take the SimpleAggregateFunction name and wrapped typeif not constructed from a TypeDef
+        :param name: Aggregate function name
+        :param element: ChSqlaType instance or class which the function aggregates
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             if callable(element):
                 element = element()
-            type_def = TypeDef(values=(element.name,))
+            type_def = TypeDef(values=(name, element.name,))
         super().__init__(type_def)
 
 
 class AggregateFunction(ChSqlaType, UserDefinedType):
+    """
+    Note this isn't currently supported for insert/select, only table definitions
+    """
     python_type = None
 
     def __init__(self, *params, type_def: TypeDef = None):
+        """
+        Simple wraps the parameters for AggregateFunction for DDL, unless the TypeDef is specified.  Callables or actual types are
+        converted to their names
+        :param params: AggregateFunction parameters
+        :param type_def: TypeDef from parse_name function
+        """
         if not type_def:
             values = ()
             for x in params:

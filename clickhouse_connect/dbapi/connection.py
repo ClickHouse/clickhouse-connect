@@ -8,6 +8,9 @@ from clickhouse_connect.driver.query import QueryResult
 
 
 class Connection:
+    """
+    See :ref:`https://peps.python.org/pep-0249/`
+    """
     def __init__(self, dsn: str = None, username: str = None, password: str = None, host: str = None,
                  database: str = None, interface: str = None, port: int = 0, **kwargs):
         settings = kwargs.copy()

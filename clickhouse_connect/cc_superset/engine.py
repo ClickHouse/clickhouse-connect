@@ -37,6 +37,10 @@ class ClickHouseParametersSchema(Schema):
 
 
 class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
+    """
+    See :py:class:`superset.db_engine_specs.base.BaseEngineSpec`
+    """
+
     engine = driver_name
     engine_name = 'ClickHouse Connect'
 

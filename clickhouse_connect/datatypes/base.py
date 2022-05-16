@@ -9,6 +9,9 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 
 
 class TypeDef(NamedTuple):
+    """
+    Immutable tuple that contains all additional information needed to construct a particular ClickHouseType
+    """
     wrappers: tuple = ()
     keys: tuple = ()
     values: tuple = ()
@@ -20,6 +23,9 @@ class TypeDef(NamedTuple):
 
 
 class ClickHouseType(ABC):
+    """
+    Base class for all ClickHouseType objects.
+    """
     __slots__ = 'nullable', 'low_card', 'wrappers', 'format', 'type_def', '__dict__'
     _ch_name = None
     _name_suffix = ''
@@ -37,6 +43,11 @@ class ClickHouseType(ABC):
         return cls(type_def)
 
     def __init__(self, type_def: TypeDef):
+        """
+        Base class constructor that sets Nullable and LowCardinality wrappers and currently assigns the row_binary conversion
+        functions
+        :param type_def:  ClickHouseType base configuration parameters
+        """
         self.type_def = type_def
         self.wrappers = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
@@ -64,20 +75,50 @@ class ClickHouseType(ABC):
         return name
 
     def write_native_prefix(self, dest: MutableSequence):
+        """
+        This is something of a hack, as the only "prefix" currently used is for the LowCardinality version.  Because of the
+        way the ClickHouse C++ code is written, this must be done before any data is written even if the LowCardinality column
+        is within a container
+        :param dest: The native protocol binary write buffer
+        """
         if self.low_card:
             write_uint64(low_card_version, dest)
 
     def read_native_prefix(self, source: Sequence, loc: int):
+        """
+        Read the low cardinality version.  Like the write, this has to happen immediately for container classes
+        :param source: The native protocol binary read buffer
+        :param loc: Moving location pointer for the read buffer
+        :return: updated read pointer
+        """
         if self.low_card:
             v, loc = read_uint64(source, loc)
             assert v == low_card_version
         return loc
 
-    def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs):
+    def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:
+        """
+        Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that the LowCardinality version
+        is read for the contained types
+        :param source: Native protocol binary read buffer
+        :param loc: Moving location for the read buffer
+        :param num_rows: Number of rows expected in the column
+        :param kwargs: Pass any extra keyword arguments to the main read_native_data function
+        :return: The decoded column data as a sequence and the updated location pointer
+        """
         loc = self.read_native_prefix(source, loc)
         return self.read_native_data(source, loc, num_rows, **kwargs)
 
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True):
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True) -> Tuple[Sequence, int]:
+        """
+        Public read method for all ClickHouseType data type columns.
+        :param source: Native protocol binary read buffer
+        :param loc: Moving location for the read buffer
+        :param num_rows: Number of rows expected in the column
+        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise use the empty or zero type.  Allows support for
+        pandas data frames that do not support None
+        :return: The decoded column plust the updated location pointer
+        """
         if self.low_card:
             return self._read_native_low_card(source, loc, num_rows, use_none)
         if self.nullable:
@@ -96,18 +137,40 @@ class ClickHouseType(ABC):
     # These two methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
     # pylint: disable=no-self-use
-    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) -> Tuple[
-        Union[Sequence, MutableSequence], int]:
+    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) -> Tuple[Union[Sequence, MutableSequence], int]:
+        """
+        Lowest level read method for ClickHouseType native data columns
+        :param _source: Native protocol binary read buffer
+        :param _loc: Read pointer in the binary read buffer
+        :param _num_rows: Expected number of rows in the column
+        :return: Decoded column plus updated read buffer
+        """
         return [], 0
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        pass
+        """
+        Lowest level write method for ClickHouseType data columns
+        :param column: Python data column
+        :param dest: Native protocol write buffer
+        """
 
     def write_native_column(self, column: Sequence, dest: MutableSequence):
+        """
+        Wrapping write method for ClickHouseTypes.  Only overridden for container types that so that the write_native_prefix is
+        done at the right time for contained types
+        :param column: Column/sequence of Python values to write
+        :param dest: Native binary write buffer
+        """
         self.write_native_prefix(dest)
         self.write_native_data(column, dest)
 
     def write_native_data(self, column: Sequence, dest: MutableSequence):
+        """
+        Public native write method for ClickHouseTypes.  Delegates the actual write to either the LowCardinality write method or the
+        _write_native_binary method of the type
+        :param column: Sequence of Python data
+        :param dest: Native binary write buffer
+        """
         if self.low_card:
             self._write_native_low_card(column, dest)
         else:
@@ -207,6 +270,10 @@ type_map: Dict[str, Type[ClickHouseType]] = {}
 
 
 class ArrayType(ClickHouseType, ABC, registered=False):
+    """
+    ClickHouse type that utilizes Python array.array for fast reads and writes of binary data.  array.array can only be used for
+    ClickHouse types that can be translated into UInt64 or small integers, or Float32/64
+    """
     _signed = True
     _array_type = None
     _struct_type = None
@@ -237,6 +304,9 @@ class ArrayType(ClickHouseType, ABC, registered=False):
 
 
 class UnsupportedType(ClickHouseType, ABC, registered=False):
+    """
+    Base class for ClickHouse types that can't be serialized/deserialized into Python types.  Mostly useful just for DDL statements
+    """
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str

@@ -6,8 +6,12 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy import ischema_names, reflect, dialect_name
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 
+
 # pylint: disable-msg=too-many-public-methods
 class ClickHouseDialect(DefaultDialect):
+    """
+    See :py:class:`sqlalchemy.engine.interfaces`
+    """
     name = dialect_name
     driver = 'connect'
 
