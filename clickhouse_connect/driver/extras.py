@@ -22,6 +22,9 @@ date32_start_date = date(1925, 1, 1)
 
 
 class RandomValueDef(NamedTuple):
+    """
+    Parameter object to control the generation of random data values for testing
+    """
     null_pct: float = 0.15
     str_len: int = 200
     arr_len: int = 12
@@ -29,6 +32,13 @@ class RandomValueDef(NamedTuple):
 
 
 def random_col_data(ch_type: Union[str, ClickHouseType], cnt: int, col_def: RandomValueDef = RandomValueDef()):
+    """
+    Generate a column of random data for insert tests
+    :param ch_type: ClickHouseType or ClickHouse type name
+    :param cnt: Number of values to generate
+    :param col_def: Parameters to use for random data generation
+    :return: A tuple of length cnt of random Python data values of the requested ClickHouseType
+    """
     if isinstance(ch_type, str):
         ch_type = get_from_name(ch_type)
     gen = random_value_gen(ch_type, col_def)
@@ -40,6 +50,12 @@ def random_col_data(ch_type: Union[str, ClickHouseType], cnt: int, col_def: Rand
 
 # pylint: disable=too-many-return-statements,too-many-branches,protected-access
 def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
+    """
+    Returns a generator function of random values of the requested ClickHouseType
+    :param ch_type: ClickHouseType to generate
+    :param col_def: Parameters for the generated values
+    :return: Function or lambda that will return a random value of the requested type
+    """
     if ch_type.__class__ in gen_map:
         return gen_map[ch_type.__class__]
     if isinstance(ch_type, BigInt) or ch_type.python_type == int:

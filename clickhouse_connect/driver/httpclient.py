@@ -30,6 +30,18 @@ class HttpClient(BaseClient):
     # pylint: disable=too-many-arguments
     def __init__(self, scheme: str, host: str, port: int, username: str, password: str, database: str,
                  compress: bool = True, data_format: str = 'native', query_limit: int = 5000):
+        """
+        Create an HTTP ClickHouse Connect client
+        :param scheme: http or https
+        :param host: hostname
+        :param port: host port
+        :param username: ClickHouse user
+        :param password: ClickHouse password
+        :param database: Default database for the connection
+        :param compress: Accept compressed HTTP type from server (brotli or gzip)
+        :param data_format: Dataformat -- either 'native' or 'rb' (RowBinary)
+        :param query_limit: Default LIMIT on returned rows
+        """
         self.url = f'{scheme}://{host}:{port}'
         self.session = Session()
         self.session.auth = (username, password if password else '') if username else None
@@ -56,7 +68,7 @@ class HttpClient(BaseClient):
             self.column_inserts = False
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
 
-    def format_query(self, query: str) -> str:
+    def _format_query(self, query: str) -> str:
         if query.upper().strip().startswith('INSERT ') and 'VALUES' in query.upper():
             return query
         if not query.strip().endswith(self.read_format):
@@ -64,11 +76,14 @@ class HttpClient(BaseClient):
         return query
 
     def exec_query(self, query: str, use_none: bool = True, settings: Optional[Dict] = None) -> QueryResult:
+        """
+        See BaseClient doc_string for this method
+        """
         headers = {'Content-Type': 'text/plain'}
         params = {'database': self.database}
         if settings:
             params.update(settings)
-        response = self.raw_request(self.format_query(query), params=params, headers=headers)
+        response = self._raw_request(self._format_query(query), params=params, headers=headers)
         data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
@@ -81,23 +96,29 @@ class HttpClient(BaseClient):
 
     def data_insert(self, table: str, column_names: Sequence[str], data: Sequence[Sequence[Any]],
                     column_types: Sequence[ClickHouseType], settings: Optional[Dict] = None, column_oriented: bool = False):
+        """
+        See BaseClient doc_string for this method
+        """
         headers = {'Content-Type': 'application/octet-stream'}
         params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
                   'database': self.database}
         if settings:
             params.update(settings)
         insert_block = self.build_insert(data, column_types=column_types, column_names=column_names, column_oriented=column_oriented)
-        response = self.raw_request(insert_block, params=params, headers=headers)
+        response = self._raw_request(insert_block, params=params, headers=headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
     def exec_command(self, cmd, use_database: bool = True, settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
+        """
+        See BaseClient doc_string for this method
+        """
         headers = {'Content-Type': 'text/plain'}
         params = {'query': cmd}
         if use_database:
             params['database'] = self.database
         if settings:
             params.update(settings)
-        result = self.raw_request(params=params, headers=headers).content.decode('utf8')[:-1].split('\t')
+        result = self._raw_request(params=params, headers=headers).content.decode('utf8')[:-1].split('\t')
         if len(result) == 1:
             try:
                 return int(result[0])
@@ -105,7 +126,7 @@ class HttpClient(BaseClient):
                 return result[0]
         return result
 
-    def raw_request(self, data=None, method='POST', params: Optional[Dict] = None, headers: Optional[Dict] = None):
+    def _raw_request(self, data=None, method='POST', params: Optional[Dict] = None, headers: Optional[Dict] = None):
         try:
             response: Response = self.session.request(method, self.url,
                                                       headers=headers,
@@ -124,6 +145,9 @@ class HttpClient(BaseClient):
         raise DatabaseError(err_str)
 
     def ping(self):
+        """
+        See BaseClient doc_string for this method
+        """
         try:
             response = self.session.get(f'{self.url}/ping', timeout=3)
             return 200 <= response.status_code < 300

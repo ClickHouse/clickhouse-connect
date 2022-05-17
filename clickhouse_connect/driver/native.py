@@ -8,6 +8,12 @@ from clickhouse_connect.driver.query import DataResult
 
 # pylint: disable=too-many-locals
 def parse_response(source: Sequence, use_none: bool = True) -> DataResult:
+    """
+    Decodes the ClickHouse byte byte buffer response into rows of native Python data
+    :param source: A byte buffer or similar source
+    :param use_none: Use None values for ClickHouse NULLs (otherwise use zero/empty values)
+    :return: DataResult -- data matrix, column names, column types
+    """
     if not isinstance(source, memoryview):
         source = memoryview(source)
     loc = 0
@@ -41,6 +47,15 @@ def build_insert(data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
                  column_type_names: Sequence[str] = None,
                  column_types: Sequence[ClickHouseType] = None,
                  column_oriented: bool = False):
+    """
+    Encoding a dataset of Python sequences into native binary format
+    :param data: Matrix of rows and columns of data
+    :param column_names: Column names of the data to insert
+    :param column_type_names: Column type names of the data
+    :param column_types: Column types used to encode data in ClickHouse native format
+    :param column_oriented: If true the dataset does not need to be "pivoted"
+    :return: bytearray containing the dataset in ClickHouse native insert format
+    """
     if not column_types:
         column_types = [registry.get_from_name(name) for name in column_type_names]
     output = bytearray()

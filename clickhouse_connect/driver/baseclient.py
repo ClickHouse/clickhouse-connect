@@ -4,10 +4,13 @@ from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple, Sequence, 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, escape_query_value
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
 
 
 class ColumnDef(NamedTuple):
+    """
+    ClickHouse column definition from DESCRIBE TABLE command
+    """
     name: str
     type: str
     default_type: str
@@ -21,27 +24,19 @@ class ColumnDef(NamedTuple):
         return get_from_name(self.type)
 
 
-class TableDef(NamedTuple):
-    database: str
-    name: str
-    column_defs: Tuple[ColumnDef]
-    engine: str
-    order_by: str
-    sort_by: str
-    comment: str
-
-    @property
-    def column_names(self):
-        return (t.name for t in self.column_defs)
-
-    def column_types(self):
-        return (t.type for t in self.column_defs)
-
-
 class BaseClient(metaclass=ABCMeta):
+    """
+    Base ClickHouse Connect client
+    """
     column_inserts = False
 
     def __init__(self, database: str, query_limit: int, uri: str):
+        """
+        Shared initialization of ClickHouse Connect client
+        :param database: database name
+        :param query_limit: default LIMIT for queries
+        :param uri: uri for error messages
+        """
         self.server_version, self.server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
         if database and not database == '__default__':
@@ -50,8 +45,16 @@ class BaseClient(metaclass=ABCMeta):
         self.uri = uri
 
     def query(self, query: str, parameters=None, use_none: bool = True, settings=None) -> QueryResult:
+        """
+        Main query method for SELECT, DESCRIBE and other commands that result a result matrix
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param use_none: Use None for ClickHouse nulls instead of empty values
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: QueryResult -- data and metadata from response
+        """
         if parameters:
-            escaped = {k: escape_query_value(v, self.server_tz) for k, v in parameters.items()}
+            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
             query %= escaped
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
@@ -59,38 +62,83 @@ class BaseClient(metaclass=ABCMeta):
         return self.exec_query(query, use_none, settings)
 
     def query_np(self, query: str, parameters=None, settings: Optional[Dict] = None):
+        """
+        Query method that results the results as a numpy array
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: Numpy array representing the result set
+        """
         return np_result(self.query(query, parameters=parameters, use_none=False, settings=settings))
 
     def query_df(self, query: str, parameters=None, settings: Optional[Dict] = None):
+        """
+        Query method that results the results as a pandas dataframe
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: Numpy array representing the result set
+        """
         return to_pandas_df(self.query(query, parameters=parameters, use_none=False, settings=settings))
-
-    def insert_df(self, table: str, data_frame):
-        insert = from_pandas_df(data_frame)
-        return self.insert(table, **insert)
 
     @abstractmethod
     def exec_query(self, query: str, use_none: bool = True, settings: Optional[Dict] = None) -> QueryResult:
-        pass
+        """
+        Subclass implementation of the client query function
+        :param query: Finalized ClickHouse query statement
+        :param use_none: Use Python None for NULL or zero/empty values if not set
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: QueryResult of data and metadata returned by ClickHouse
+        """
 
     def command(self, cmd: str, parameters=None, use_database: bool = True, settings: Optional[Dict] = None) \
             -> Union[str, int, Sequence[str]]:
+        """
+        Client method that returns a single value instead of a result set
+        :param cmd: ClickHouse query/command as a python format string
+        :param parameters: Optional dictionary of key/values pairs to be formatted
+        :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database context
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
+        """
         if parameters:
-            escaped = {k: escape_query_value(v, self.server_tz) for k, v in parameters.items()}
+            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
             cmd %= escaped
         return self.exec_command(cmd, use_database, settings)
 
     @abstractmethod
     def exec_command(self, cmd, use_database: bool = True, settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
-        pass
+        """
+        Subclass implementation of the client query function
+        :param cmd: Finalized ClickHouse command/query statement
+        :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database context
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
+        """
 
     @abstractmethod
-    def ping(self):
-        pass
+    def ping(self) -> bool:
+        """
+        Validate the connection, does not throw an Exception (see debug logs)
+        :return: ClickHouse server is up and reachable
+        """
 
     # pylint: disable=too-many-arguments
     def insert(self, table: str, data: Iterable[Iterable[Any]], column_names: Union[str or Iterable[str]] = '*',
                database: str = '', column_types: Optional[Iterable[ClickHouseType]] = None,
                column_type_names: Optional[Iterable[str]] = None, column_oriented: bool = False, settings: Optional[Dict] = None):
+        """
+        Method to insert multiple rows/data matrix of native Python objects
+        :param table: Target table
+        :param data: Sequence of sequences of Python data
+        :param column_names: Ordered list of column names or '*' if column types should be retrieved from ClickHouse table definition
+        :param database: Target database -- will use client default database if not speficied
+        :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from the server
+        :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
+        :param column_oriented: If true the data is already "pivoted" in column form
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: No return, throws an exception if the insert fails
+        """
         table, database, full_table = self.normalize_table(table, database)
         if isinstance(column_names, str):
             if column_names == '*':
@@ -114,7 +162,24 @@ class BaseClient(metaclass=ABCMeta):
         assert len(column_names) == len(column_types)
         self.data_insert(full_table, column_names, data, column_types, settings, column_oriented)
 
-    def normalize_table(self, table: str, database: str) -> Tuple[str, str, str]:
+    def insert_df(self, table: str, data_frame, database: str = None):
+        """
+        Insert a pandas DataFrame into ClickHouse
+        :param table: ClickHouse table
+        :param data_frame: two-dimensional pandas dataframe
+        :param database: Optional ClickHouse database
+        :return: No return, throws an exception if the insert fails
+        """
+        pandas_params = from_pandas_df(data_frame)
+        return self.insert(table, database=database, **pandas_params)
+
+    def normalize_table(self, table: str, database: Optional[str]) -> Tuple[str, str, str]:
+        """
+        Convenience method to return the table, database, and full table name
+        :param table: table name
+        :param database: optional database
+        :return: Tuple of bare table name, bare database name, and full database.table
+        """
         split = table.split('.')
         if len(split) > 1:
             full_name = table
@@ -127,6 +192,12 @@ class BaseClient(metaclass=ABCMeta):
         return table, database, full_name
 
     def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
+        """
+        Return complete column definitions for a ClickHouse table
+        :param table: table name
+        :param database: database name
+        :return: list of ColumnDef named tuples
+        """
         column_result = self.query(f'DESCRIBE TABLE {database}.{table}')
         if not column_result.result_set:
             raise InternalError(f'No table columns found for {database}.{table}')
@@ -136,10 +207,21 @@ class BaseClient(metaclass=ABCMeta):
     def data_insert(self, table: str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
                     column_types: Iterable[ClickHouseType], settings: Optional[Dict] = None,
                     column_oriented: bool = False):
-        pass
+        """
+        Subclass implementation of the data insert
+        :param table: ClickHouse table
+        :param column_names: List of ClickHouse columns
+        :param data: Data matrix
+        :param column_types: Parallel list of ClickHouseTypes to insert
+        :param settings:  Optional dictionary of ClickHouse settings (key/string values)
+        :param column_oriented: Whether the data is already pivoted as a sequence of columns
+        :return: No return, throws an exception if the insert fails
+        """
 
     def close(self):
-        pass
+        """
+        Subclass implemention to close the connection to the server/deallocate the client
+        """
 
     def __enter__(self):
         return self

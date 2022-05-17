@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 def parse_response(source: Union[bytes, bytearray, memoryview], use_none: bool = True) -> DataResult:
+    """
+        Decodes the ClickHouse byte byte buffer response into rows of native Python data
+        :param source: A byte buffer or similar source
+        :param use_none: Use None values for ClickHouse NULLs (otherwise use zero/empty values)
+        :return: DataResult -- data matrix, column names, column types
+        """
     if not isinstance(source, memoryview):
         source = memoryview(source)
     response_size = len(source)

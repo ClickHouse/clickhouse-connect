@@ -4,6 +4,9 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 
 
 class TableColumnDef(NamedTuple):
+    """
+    Simplified ClickHouse Table Column definition for DDL
+    """
     name: str
     ch_type: ClickHouseType
     expr_type: str = None
