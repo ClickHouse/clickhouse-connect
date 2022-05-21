@@ -10,7 +10,7 @@ from typing import List
 
 import clickhouse_connect
 from clickhouse_connect import datatypes
-from clickhouse_connect.driver import BaseClient
+from clickhouse_connect.driver.client import Client
 
 columns = {
     'uint16': ('UInt16', 1),
@@ -40,7 +40,7 @@ columns = {
 standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime', 'array', 'nullable', 'enum', 'uuid']
 
 
-def create_table(client: BaseClient, col_names: List[str], rows: int):
+def create_table(client: Client, col_names: List[str], rows: int):
     if not col_names:
         col_names = columns.keys()
     col_list = ','.join([f'{cn} {columns[cn][0]}' for cn in sorted(col_names)])
@@ -50,7 +50,7 @@ def create_table(client: BaseClient, col_names: List[str], rows: int):
     client.insert('benchmark_test', (row_data,) * rows)
 
 
-def check_reads(client: BaseClient, tries: int = 100, rows: int = 10000):
+def check_reads(client: Client, tries: int = 100, rows: int = 10000):
     start_time = time.time()
     for _ in range(tries):
         result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}')
@@ -83,7 +83,7 @@ def main():
                 sys.exit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.client(compress=False, data_format=args.format)
+    client = clickhouse_connect.get_client(compress=False, data_format=args.format)
     datatypes.ip_format('string')
     datatypes.uuid_format('string')
     # datatypes.fixed_string_format('string')

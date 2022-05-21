@@ -186,10 +186,10 @@ class ClickHouseType(ABC):
     def _to_row_binary(self, value: Any, dest: MutableSequence):
         pass
 
-    def _nullable_from_row_binary(self, source, loc, use_none: bool = True) -> (Any, int):
+    def _nullable_from_row_binary(self, source, loc) -> (Any, int):
         if source[loc] == 0:
             return self._from_row_binary(source, loc + 1)
-        return None if use_none else self.python_null, loc + 1
+        return None, loc + 1
 
     def _nullable_to_row_binary(self, value, dest: bytearray):
         if value is None:

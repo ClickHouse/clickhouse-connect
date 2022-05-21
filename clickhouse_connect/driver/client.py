@@ -24,7 +24,7 @@ class ColumnDef(NamedTuple):
         return get_from_name(self.type)
 
 
-class BaseClient(metaclass=ABCMeta):
+class Client(metaclass=ABCMeta):
     """
     Base ClickHouse Connect client
     """

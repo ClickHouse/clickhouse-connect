@@ -6,28 +6,25 @@ ClickHouse HTTP interface.
 
 ### Getting Started
 
-Interaction with ClickHouse occurs through a client object:
+Basic query:
 
 ```
 import clickhouse_connect
-client = clickhouse_connect.client(host='play.clickhouse.com', port=443, username='play')
-query_result = client.query('SHOW TABLES')
+client = clickhouse_connect.get_client(host='play.clickhouse.com', port=443, username='play')
+query_result = client.query('SELECT * FROM system.tables')
 print (query_result.result_set) 
 ```
 
-Other significant client keyword parameters include the user `password`, and the default `database` 
-used for queries.  With no parameters, the client will connect to localhost on port 8123 with
-no username or password.
 
-In addition to queries, the client can execute 'commands' that do not return a result set.
+Simple 'command' that does not return a result set.
 
 ```
 import clickhouse_connect
-client = clickhouse_connect.client()
+client = clickhouse_connect.get_client()
 client.command ('CREATE TABLE test_table (key UInt16, value String) ENGINE Memory')
 ```
 
-Bulk insert of a matrix of rows and columns uses the client `insert` method.
+Bulk insert of a matrix of rows and columns.
 
 ```
 data = [[100, 'value1'], [200, 'value2']]
@@ -72,6 +69,36 @@ installed and run against the current `clickhouse/clickhouse-server` image.  The
 "fuzz" testing for reading/writing all supported datatypes with randomly generated data.  To run the
 full test suite all libraries supporting optional features (Superset and SQLAlchemy) should be available.
 To install the C/Cython libaries required for testing in the project, run `python setup.py build_ext --inplace`.  
+
+## Main Client Interface
+
+Interaction with the ClickHouse server is done through a clickhouse_connect Client instance.
+At this point only an HTTP based Client is supported.
+
+### HTTP Client constructor/initialization parameters
+
+All parameters can be passed as keyword arguments.
+
+* `interface:str` _https_ or _http_  
+  Defaults to _https_ if a recognized secure port (443 or 8443), otherwise _http_
+* `host:str` ClickHouse server hostname or ip address  
+  Defaults to _localhost_
+* `port:int` ClickHouse server port number  
+  Defaults to 8123 or 8443 (if the interface is _https_)
+* `username:str` ClickHouse user 
+* `password:str` ClickHouse password
+* `database:str` Default database to use for the client.  
+  Defaults to the default database for the ClickHouse user
+* `compress:bool` Accept compressed data from the ClickHouse server.  
+  Defaults to _True_
+* `format:str` _native_ (ClickHouse Native) or _rb_ (ClickHouse Row Binary)  
+  Native format is preferred for performance reasons
+* `query_limit:int` LIMIT value added to all queries.  
+  Defaults to 5,000 rows.  Unlimited queries are not supported to prevent crashing the driver
+* `ca_cert:str`  Private/Self-Signed Certificate Authority TLS certificate to validate ClickHouse server
+* `client_cert:str`  File path to Client Certificate for mutual TLS authentication
+* `client_cert_key:str` File path to Client Certificate private key for mutual TLS authentication
+  
 
 
 

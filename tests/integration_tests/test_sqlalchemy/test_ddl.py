@@ -68,9 +68,9 @@ def test_declarative(test_engine: Engine, test_db: str, test_table_engine: str):
     conn = test_engine.connect()
     conn.execute('DROP TABLE IF EXISTS users_test')
     table_cls = engine_map[test_table_engine]
-    Base = declarative_base(metadata=MetaData(schema=test_db))
+    base_cls = declarative_base(metadata=MetaData(schema=test_db))
 
-    class User(Base):
+    class User(base_cls):
         __tablename__ = 'users_test'
         __table_args__ = (table_cls(order_by=['id', 'name']),)
         id = db.Column(UInt32, primary_key=True)
@@ -78,6 +78,6 @@ def test_declarative(test_engine: Engine, test_db: str, test_table_engine: str):
         fullname = db.Column(String)
         nickname = db.Column(String)
 
-    Base.metadata.create_all(test_engine)
+    base_cls.metadata.create_all(test_engine)
     user = User(name='Alice')
     assert user.name == 'Alice'

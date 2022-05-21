@@ -1,7 +1,7 @@
 import random
 
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.baseclient import BaseClient
+from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
 from tests.helpers import random_data, random_columns
 
@@ -11,7 +11,7 @@ MAX_DATA_ROWS = 25
 
 
 # pylint: disable=duplicate-code
-def test_query_fuzz(test_client: BaseClient, test_table_engine: str):
+def test_query_fuzz(test_client: Client, test_table_engine: str):
     for _ in range(TEST_RUNS):
         test_client.command('DROP TABLE IF EXISTS fuzz_test')
         data_rows = random.randint(1, MAX_DATA_ROWS)

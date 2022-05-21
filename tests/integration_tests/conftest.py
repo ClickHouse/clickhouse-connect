@@ -5,7 +5,9 @@ from typing import Iterator, NamedTuple
 from time import sleep
 
 from pytest import fixture
-from clickhouse_connect.driver import BaseClient, default_port
+
+from clickhouse_connect.driver import default_port
+from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.exceptions import ClickHouseError
 
@@ -60,7 +62,7 @@ def test_table_engine_fixture(test_config:TestConfig) -> Iterator[str]:
 
 
 @fixture(scope='session', autouse=True, name='test_client')
-def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[BaseClient]:
+def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
     if test_config.use_docker:
         run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])

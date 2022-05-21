@@ -16,3 +16,5 @@ def pytest_addoption(parser):
     parser.addoption('--cleanup', default=True, action='store_true')
     parser.addoption('--no-cleanup', dest='cleanup', action='store_false')
     parser.addoption('--test-db', help='Test database, will not be cleaned up')
+    parser.addoption('--tls', default=False, action='store_true')
+    parser.addoption('--no-tls', dest='tls', action='store_false')

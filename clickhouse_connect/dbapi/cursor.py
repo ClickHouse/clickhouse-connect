@@ -5,7 +5,7 @@ from typing import Optional, Sequence
 from clickhouse_connect.datatypes.numeric import Int32
 from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver import BaseClient
+from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.parser import parse_callable
 
 
@@ -13,7 +13,7 @@ class Cursor:
     """
     See :ref:`https://peps.python.org/pep-0249/`
     """
-    def __init__(self, client: BaseClient):
+    def __init__(self, client: Client):
         self.client = client
         self.arraysize = 1
         self.data: Optional[Sequence] = None

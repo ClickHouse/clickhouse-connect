@@ -11,11 +11,12 @@ from clickhouse_connect.driver.query import DataResult
 logger = logging.getLogger(__name__)
 
 
-def parse_response(source: Union[bytes, bytearray, memoryview], use_none: bool = True) -> DataResult:
+def parse_response(source: Union[bytes, bytearray, memoryview], _use_none: bool = True) -> DataResult:
     """
-        Decodes the ClickHouse byte byte buffer response into rows of native Python data
+        Decodes the ClickHouse rowbinary format byte buffer response into rows of native Python data
         :param source: A byte buffer or similar source
-        :param use_none: Use None values for ClickHouse NULLs (otherwise use zero/empty values)
+        :param _use_none: Use None values for ClickHouse NULLs -- Using defaults is not supported by rowbinary,
+            so conversion of nulls for certain outputs (pandas/numpy arrays) will fail
         :return: DataResult -- data matrix, column names, column types
         """
     if not isinstance(source, memoryview):
@@ -39,7 +40,7 @@ def parse_response(source: Union[bytes, bytearray, memoryview], use_none: bool =
     while loc < response_size:
         row = []
         for conv in convs:
-            v, loc = conv(source, loc, use_none)
+            v, loc = conv(source, loc)
             row.append(v)
         result.append(row)
     return DataResult(result, tuple(names), tuple(col_types))

@@ -9,8 +9,8 @@ from requests.exceptions import RequestException
 from clickhouse_connect.driver import native
 from clickhouse_connect.driver import rowbinary
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver import BaseClient
-from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
+from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.query import QueryResult
 
 logger = logging.getLogger(__name__)
@@ -26,13 +26,14 @@ atexit.register(http_adapter.close)
 
 
 # pylint: disable=too-many-instance-attributes
-class HttpClient(BaseClient):
+class HttpClient(Client):
     # pylint: disable=too-many-arguments
-    def __init__(self, scheme: str, host: str, port: int, username: str, password: str, database: str,
-                 compress: bool = True, data_format: str = 'native', query_limit: int = 5000):
+    def __init__(self, interface: str, host: str, port: int, username: str, password: str, database: str,
+                 compress: bool = True, data_format: str = 'native', query_limit: int = 5000,
+                 ca_cert: Union[str, bool] = None, client_cert: str = None, client_cert_key: str = None):
         """
         Create an HTTP ClickHouse Connect client
-        :param scheme: http or https
+        :param interface: http or https
         :param host: hostname
         :param port: host port
         :param username: ClickHouse user
@@ -41,20 +42,38 @@ class HttpClient(BaseClient):
         :param compress: Accept compressed HTTP type from server (brotli or gzip)
         :param data_format: Dataformat -- either 'native' or 'rb' (RowBinary)
         :param query_limit: Default LIMIT on returned rows
+        :param ca_cert: File path to Certificate Authority root to validate ClickHouse server certificate, in .pem
+          format.  If 'False', do not verify the server certificate
+        :param client_cert: File path to a TLS Client certificate in .pem format.  This file should contain any
+          applicable intermediate certificates
+        :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
+          is not included the Client Certificate key file
         """
-        self.url = f'{scheme}://{host}:{port}'
-        self.session = Session()
-        self.session.auth = (username, password if password else '') if username else None
-        self.session.stream = False
-        self.session.max_redirects = 3
+        self.url = f'{interface}://{host}:{port}'
+        session = Session()
+        session.stream = False
+        session.max_redirects = 3
+        if client_cert:
+            if not username:
+                raise ProgrammingError('username parameter is required for Mutual TLS authentication')
+            if client_cert_key:
+                session.cert = (client_cert, client_cert_key)
+            else:
+                session.cert = client_cert
+            session.headers['X-ClickHouse-User'] = username
+            session.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
+        else:
+            session.auth = (username, password if password else '') if username else None
+        if ca_cert is not None:
+            session.verify = ca_cert
 
         # Remove the default session adapters, they are not used and this avoids issues with their connection pools
-        self.session.adapters.pop('http://').close()
-        self.session.adapters.pop('https://').close()
-        self.session.mount(self.url, adapter=http_adapter)
+        session.adapters.pop('http://').close()
+        session.adapters.pop('https://').close()
+        session.mount(self.url, adapter=http_adapter)
 
         if compress:
-            self.session.headers['Accept-Encoding'] = 'gzip, br'
+            session.headers['Accept-Encoding'] = 'gzip, br'
         if data_format == 'native':
             self.read_format = self.write_format = 'Native'
             self.build_insert = native.build_insert
@@ -66,6 +85,7 @@ class HttpClient(BaseClient):
             self.build_insert = rowbinary.build_insert
             self.parse_response = rowbinary.parse_response
             self.column_inserts = False
+        self.session = session
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
 
     def _format_query(self, query: str) -> str:
@@ -154,3 +174,12 @@ class HttpClient(BaseClient):
         except RequestException:
             logger.debug('ping failed', exc_info=True)
             return False
+
+
+def reset_connections():
+    """
+    Used for tests to force new connections
+    """
+
+    global http_adapter  # pylint: disable=global-statement
+    http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=retry)
