@@ -4,6 +4,13 @@ A suite of Python packages for connecting Python to ClickHouse, initially
 supporting Apache Superset using a minimal read only SQLAlchemy dialect.  Uses the
 ClickHouse HTTP interface.
 
+
+### Installation
+ClickHouse Connect requires Python 3.7 or higher.  The `cython` package must be installed prior to installing 
+`clickhouse_connect` to build and install the optional  Cython/C extensions used for improving read and write
+performance using the ClickHouse Native format. After installing cython if desired, clone this repository and
+run `python setup.py install`from the project directory.  
+
 ### Getting Started
 
 Basic query:
@@ -46,10 +53,12 @@ or ORM (Object Relational Mapping).  These features are in development.
 
 On installation ClickHouse Connect registers the `clickhousedb` Superset Database Engine Spec entry
 point. Using the `clickhousedb` SQLAlchemy dialect, the engine spec supports complete data exploration
-and Superset SQL Lab functionality with all standard ClickHouse data types.  ClickHouse Enum, UUID,
-and IP Address datatypes are treated as strings.  For compatibility with Superset Pandas dataframes,
+and Superset SQL Lab functionality with all standard ClickHouse data types.  See
+[Connecting Superset](./docs/superset.md) for complete instructions.  
+
+ClickHouse Enum, UUID, and IP Address datatypes are treated as strings.  For compatibility with Superset Pandas dataframes,
 unsigned UInt64 data types are interpreted as signed Int64 values.  ClickHouse CSV Upload via SuperSet 
-is not yet implemented.
+is not yet implemented. 
 
 ### Optional Features
 
@@ -60,7 +69,6 @@ automatically by setup.py if a C compiler is available.
 
 Query results can be returned as either a numpy array or a pandas DataFrame if the numpy and
 pandas libraries are available.  Use the client methods `query_np` and `query_df` respectively.
-
 
 ### Tests
 
@@ -199,16 +207,3 @@ values will be replaced in the query string using Python %s type formatting
   or the user's default database) when sending the query.  This is set to False in order to determine the
   users default database on connection.
 * `settings:Dict[str, Any]`  Optional.  Dictionary of ClickHouse settings to be applied to the insert query.
-
-`
-
-
-
-
-
-
-
-
-
-
-
