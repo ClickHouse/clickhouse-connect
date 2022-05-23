@@ -95,7 +95,7 @@ class HttpClient(Client):
             query += f' FORMAT {self.read_format}'
         return query
 
-    def exec_query(self, query: str, use_none: bool = True, settings: Optional[Dict] = None) -> QueryResult:
+    def exec_query(self, query: str, settings: Optional[Dict] = None, use_none: bool = True, ) -> QueryResult:
         """
         See BaseClient doc_string for this method
         """
@@ -178,7 +178,7 @@ class HttpClient(Client):
 
 def reset_connections():
     """
-    Used for tests to force new connections
+    Used for tests to force new connection by resetting the singleton HttpAdapter
     """
 
     global http_adapter  # pylint: disable=global-statement

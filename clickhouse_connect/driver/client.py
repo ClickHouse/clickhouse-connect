@@ -44,7 +44,7 @@ class Client(metaclass=ABCMeta):
         self.limit = query_limit
         self.uri = uri
 
-    def query(self, query: str, parameters=None, use_none: bool = True, settings=None) -> QueryResult:
+    def query(self, query: str, parameters=None, settings=None, use_none: bool = True) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other commands that result a result matrix
         :param query: Query statement/format string
@@ -59,7 +59,7 @@ class Client(metaclass=ABCMeta):
         query = query.replace('\n', ' ')
         if self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
-        return self.exec_query(query, use_none, settings)
+        return self.exec_query(query, settings, use_none)
 
     def query_np(self, query: str, parameters=None, settings: Optional[Dict] = None):
         """
@@ -82,22 +82,24 @@ class Client(metaclass=ABCMeta):
         return to_pandas_df(self.query(query, parameters=parameters, use_none=False, settings=settings))
 
     @abstractmethod
-    def exec_query(self, query: str, use_none: bool = True, settings: Optional[Dict] = None) -> QueryResult:
+    def exec_query(self, query: str, settings: Optional[Dict] = None, use_none: bool = True, ) -> QueryResult:
         """
         Subclass implementation of the client query function
         :param query: Finalized ClickHouse query statement
-        :param use_none: Use Python None for NULL or zero/empty values if not set
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_none: Use Python None for NULL or zero/empty values if not set
         :return: QueryResult of data and metadata returned by ClickHouse
         """
 
-    def command(self, cmd: str, parameters=None, use_database: bool = True, settings: Optional[Dict] = None) \
+    def command(self, cmd: str, parameters=None, use_database:bool = True, settings: Dict[str, str] = None) \
             -> Union[str, int, Sequence[str]]:
         """
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
         :param parameters: Optional dictionary of key/values pairs to be formatted
-        :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database context
+        :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database
+         context.  Otherwise, no database will be specified with the command.  This is useful for determining
+         the default user database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
         """
@@ -107,7 +109,8 @@ class Client(metaclass=ABCMeta):
         return self.exec_command(cmd, use_database, settings)
 
     @abstractmethod
-    def exec_command(self, cmd, use_database: bool = True, settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
+    def exec_command(self, cmd, use_database: bool = True, settings:Dict[str, str] = None) -> Union[
+        str, int, Sequence[str]]:
         """
         Subclass implementation of the client query function
         :param cmd: Finalized ClickHouse command/query statement
@@ -124,15 +127,15 @@ class Client(metaclass=ABCMeta):
         """
 
     # pylint: disable=too-many-arguments
-    def insert(self, table: str, data: Iterable[Iterable[Any]], column_names: Union[str or Iterable[str]] = '*',
-               database: str = '', column_types: Optional[Iterable[ClickHouseType]] = None,
-               column_type_names: Optional[Iterable[str]] = None, column_oriented: bool = False, settings: Optional[Dict] = None):
+    def insert(self, table: str, data: Iterable[Iterable[Any]], column_names: Union[str, Iterable[str]] = '*',
+               database: str = '', column_types: Iterable[ClickHouseType] = None,
+               column_type_names: Iterable[str] = None, column_oriented: bool = False, settings: Dict[str, str] = None):
         """
         Method to insert multiple rows/data matrix of native Python objects
         :param table: Target table
         :param data: Sequence of sequences of Python data
         :param column_names: Ordered list of column names or '*' if column types should be retrieved from ClickHouse table definition
-        :param database: Target database -- will use client default database if not speficied
+        :param database: Target database -- will use client default database if not specified
         :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from the server
         :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
         :param column_oriented: If true the data is already "pivoted" in column form
@@ -220,7 +223,7 @@ class Client(metaclass=ABCMeta):
 
     def close(self):
         """
-        Subclass implemention to close the connection to the server/deallocate the client
+        Subclass implementation to close the connection to the server/deallocate the client
         """
 
     def __enter__(self):

@@ -34,6 +34,7 @@ Sample xml user for clickhouse server configuration (within the <users> element 
 </cert_user>
 """
 
+
 def test_basic_tls(request):
     if not request.config.getoption('tls'):
         pytest.skip('TLS tests not enabled')
