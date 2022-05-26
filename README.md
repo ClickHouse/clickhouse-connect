@@ -104,12 +104,19 @@ Create a ClickHouse client using the `clickhouse_connect.driver.create_client(..
   Native format is preferred for performance reasons
 * `query_limit:int` LIMIT value added to all queries.  
   Defaults to 5,000 rows.  Unlimited queries are not supported to prevent crashing the driver
-* `ca_cert:str`  Private/Self-Signed Certificate Authority TLS certificate to validate ClickHouse server
+* `connect_timeout:int` HTTP connection timeout in seconds
+* `send_receive_timeout:int` HTTP read timeout in seconds
+* `client_name:str` HTTP User-Agent header.  Defaults to `clickhouse-connect`
+* `verify:bool` For HTTPS connections, validate the ClickHouse server TLS certificate, including
+  matching hostname, expiration, and signed by a trusted Certificate Authority. Defaults to True.
+* `ca_cert:str`  File path to private/Self-Signed Certificate Authority TLS certificate to validate ClickHouse server
 * `client_cert:str`  File path to Client Certificate for mutual TLS authentication (including any intermediate certificates)
 * `client_cert_key:str` File path to Client Certificate private key for mutual TLS authentication.
 This parameter is not required if the client_cert is a .pem file containing both the certificate(s) and 
 private key
 
+Any remaining keyword parameters are interpreted as 'setting' parameters to send to the ClickHouse server
+with every query/request
 ### Querying data
 
 Use the client `query` method to retrieve a QueryResult from ClickHouse.  Parameters:

@@ -86,7 +86,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         return new_exception(str(exception))
 
     @classmethod
-    def convert_dttm(cls, target_type: str, dttm: datetime, *_) -> Optional[str]:
+    def convert_dttm(cls, target_type: str, dttm: datetime, *_args, **_kwargs) -> Optional[str]:
         if target_type.upper() == 'DATE':
             return f"'{dttm.date().isoformat()}'"
         if target_type.upper() == 'DATETIME':
