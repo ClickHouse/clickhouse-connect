@@ -16,7 +16,7 @@ class Client(metaclass=ABCMeta):
     """
     column_inserts = False
 
-    def __init__(self, database: str, query_limit: int, uri: str, settings:dict[str, Any] = None):
+    def __init__(self, database: str, query_limit: int, uri: str, settings: Dict[str, Any] = None):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
@@ -34,13 +34,13 @@ class Client(metaclass=ABCMeta):
         self.uri = uri
 
     @abstractmethod
-    def _apply_settings(self, settings:dict[str, Any] = None):
+    def _apply_settings(self, settings: Dict[str, Any] = None):
         """
         Apply system level configuration settings
         :param settings: dictionary of setting name/setting value
         """
 
-    def _validate_settings(self, settings:dict[str, Any]):
+    def _validate_settings(self, settings: Dict[str, Any]):
         validated = {}
         for key, value in settings.items():
             setting_def = self.server_settings.get(key)
@@ -166,7 +166,7 @@ class Client(metaclass=ABCMeta):
             if column_type_names:
                 column_types = [get_from_name(name) for name in column_type_names]
             else:
-                column_map: dict[str: ColumnDef] = {d.name: d for d in self.table_columns(table, database)}
+                column_map: Dict[str: ColumnDef] = {d.name: d for d in self.table_columns(table, database)}
                 try:
                     column_types = [column_map[name].ch_type for name in column_names]
                 except KeyError as ex:

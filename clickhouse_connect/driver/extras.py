@@ -3,7 +3,7 @@ import uuid
 from decimal import Decimal as PyDecimal
 from ipaddress import IPv4Address, IPv6Address
 from random import random, choice
-from typing import Sequence, Union, NamedTuple, Callable, Type
+from typing import Sequence, Union, NamedTuple, Callable, Type, Dict
 from datetime import date, datetime, timedelta
 
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -151,7 +151,7 @@ def random_ipv6():
     return IPv4Address(int(random() * 2 ** 32))
 
 
-gen_map: dict[Type[ClickHouseType], Callable] = {
+gen_map: Dict[Type[ClickHouseType], Callable] = {
     Float64: random_float,
     Float32: random_float32,
     Date: lambda: epoch_date + timedelta(days=int(random() * 65536)),
