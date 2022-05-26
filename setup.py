@@ -1,3 +1,4 @@
+import os
 from distutils.errors import CCompilerError, DistutilsExecError, DistutilsPlatformError
 from setuptools import setup, find_packages, Extension
 
@@ -22,13 +23,22 @@ def run_setup(try_c: bool = True):
     else:
         kwargs = {}
 
+    project_dir = os.path.abspath(os.path.dirname(__file__))
+    with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
+        long_desc = read_me.read()
+
     setup(
         name='clickhouse-connect',
-        version='0.0.6',
+        version='0.0.7',
         author='ClickHouse Inc.',
-        author_email='clickhouse-connect@clickhouse.com',
+        author_email='geoff@clickhouse.com',
+        description='ClickHouse core driver, SqlAlchemy, and Superset libraries',
+        long_description=long_desc,
+        long_description_content_type='text/markdown',
+        url='https://github.com/ClickHouse/clickhouse-connect',
         packages=find_packages(exclude=['tests*']),
         python_requires='~=3.7',
+        license='Apache License 2.0',
         install_requires=[
             'requests',
             'pytz'
@@ -54,6 +64,7 @@ def run_setup(try_c: bool = True):
         classifiers=[
             'Development Status :: 3 - Alpha',
             'Intended Audience :: Developers',
+            'License :: OSI Approved :: Apache Software License',
             'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
