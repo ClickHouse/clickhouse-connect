@@ -27,10 +27,12 @@ atexit.register(http_adapter.close)
 
 # pylint: disable=too-many-instance-attributes
 class HttpClient(Client):
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments,too-many-locals
     def __init__(self, interface: str, host: str, port: int, username: str, password: str, database: str,
                  compress: bool = True, data_format: str = 'native', query_limit: int = 5000,
-                 ca_cert: Union[str, bool] = None, client_cert: str = None, client_cert_key: str = None):
+                 connect_timeout: int = 10, send_receive_timeout=60, client_name: str = 'clickhouse-connect',
+                 verify: bool = True, ca_cert: str = None, client_cert: str = None, client_cert_key: str = None,
+                  **kwargs):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -42,12 +44,17 @@ class HttpClient(Client):
         :param compress: Accept compressed HTTP type from server (brotli or gzip)
         :param data_format: Dataformat -- either 'native' or 'rb' (RowBinary)
         :param query_limit: Default LIMIT on returned rows
-        :param ca_cert: File path to Certificate Authority root to validate ClickHouse server certificate, in .pem
-          format.  If 'False', do not verify the server certificate
+        :param connect_timeout:  Timeout in seconds for the http connection
+        :param send_receive_timeout: Read timeout in seconds for http connection
+        :param verify: Verify the server certificate in secure/https mode
+        :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
+         certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
+         certificate is a globally trusted root as verified by the operating system
         :param client_cert: File path to a TLS Client certificate in .pem format.  This file should contain any
           applicable intermediate certificates
         :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
           is not included the Client Certificate key file
+        :param kwargs: Optional clickhouse setting values (str/value) for every connection request
         """
         self.url = f'{interface}://{host}:{port}'
         session = Session()
@@ -64,13 +71,18 @@ class HttpClient(Client):
             session.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
         else:
             session.auth = (username, password if password else '') if username else None
-        if ca_cert is not None:
-            session.verify = ca_cert
+        session.verify = False
+        if interface == 'https':
+            if verify and ca_cert:
+                session.verify = ca_cert
+            else:
+                session.verify = verify
 
         # Remove the default session adapters, they are not used and this avoids issues with their connection pools
         session.adapters.pop('http://').close()
         session.adapters.pop('https://').close()
         session.mount(self.url, adapter=http_adapter)
+        session.headers['User-Agent'] = client_name
 
         if compress:
             session.headers['Accept-Encoding'] = 'gzip, br'
@@ -86,7 +98,18 @@ class HttpClient(Client):
             self.parse_response = rowbinary.parse_response
             self.column_inserts = False
         self.session = session
-        super().__init__(database=database, query_limit=query_limit, uri=self.url)
+        self.connect_timeout = connect_timeout
+        self.read_timeout = send_receive_timeout
+        self.common_settings = {}
+        super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=kwargs)
+
+    def _apply_settings(self, settings:dict[str, Any] = None):
+        valid_settings = self._validate_settings(settings)
+        for key, value in valid_settings.items():
+            if isinstance(value, bool):
+                self.common_settings[key] = '1' if value else '0'
+            else:
+                self.common_settings[key] = str(value)
 
     def _format_query(self, query: str) -> str:
         if query.upper().strip().startswith('INSERT ') and 'VALUES' in query.upper():
@@ -100,7 +123,8 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {'Content-Type': 'text/plain'}
-        params = {'database': self.database}
+        params = self.common_settings.copy()
+        params['database'] = self.database
         if settings:
             params.update(settings)
         response = self._raw_request(self._format_query(query), params=params, headers=headers)
@@ -120,8 +144,9 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {'Content-Type': 'application/octet-stream'}
-        params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
-                  'database': self.database}
+        params = self.common_settings.copy()
+        params['query'] = f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}"
+        params['database'] = self.database
         if settings:
             params.update(settings)
         insert_block = self.build_insert(data, column_types=column_types, column_names=column_names, column_oriented=column_oriented)
@@ -133,7 +158,8 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {'Content-Type': 'text/plain'}
-        params = {'query': cmd}
+        params = self.common_settings.copy()
+        params['query'] = cmd
         if use_database:
             params['database'] = self.database
         if settings:
@@ -150,7 +176,7 @@ class HttpClient(Client):
         try:
             response: Response = self.session.request(method, self.url,
                                                       headers=headers,
-                                                      timeout=(10, 60),
+                                                      timeout=(self.connect_timeout, self.read_timeout),
                                                       data=data,
                                                       params=params)
         except RequestException as ex:

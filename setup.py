@@ -29,7 +29,7 @@ def run_setup(try_c: bool = True):
 
     setup(
         name='clickhouse-connect',
-        version='0.0.7',
+        version='0.0.8',
         author='ClickHouse Inc.',
         author_email='geoff@clickhouse.com',
         description='ClickHouse core driver, SqlAlchemy, and Superset libraries',
