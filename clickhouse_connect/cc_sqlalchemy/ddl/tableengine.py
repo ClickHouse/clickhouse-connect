@@ -1,11 +1,11 @@
 import logging
-from typing import Type, Sequence, Optional
+from typing import Type, Sequence, Optional, Dict
 
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.visitors import Visitable
 
-engine_map: dict[str, Type['TableEngine']] = {}
+engine_map: Dict[str, Type['TableEngine']] = {}
 
 
 def tuple_expr(expr_name, value):
