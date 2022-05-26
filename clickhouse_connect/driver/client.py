@@ -1,27 +1,13 @@
+import logging
+
 from abc import ABCMeta, abstractmethod
-from typing import Iterable, Tuple, Optional, Any, Union, NamedTuple, Sequence, Dict
+from typing import Iterable, Tuple, Optional, Any, Union, Sequence, Dict
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
+from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
-
-
-class ColumnDef(NamedTuple):
-    """
-    ClickHouse column definition from DESCRIBE TABLE command
-    """
-    name: str
-    type: str
-    default_type: str
-    default_expression: str
-    comment: str
-    codec_expression: str
-    ttl_expression: str
-
-    @property
-    def ch_type(self):
-        return get_from_name(self.type)
 
 
 class Client(metaclass=ABCMeta):
@@ -30,19 +16,42 @@ class Client(metaclass=ABCMeta):
     """
     column_inserts = False
 
-    def __init__(self, database: str, query_limit: int, uri: str):
+    def __init__(self, database: str, query_limit: int, uri: str, settings:dict[str, Any] = None):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
         :param query_limit: default LIMIT for queries
         :param uri: uri for error messages
         """
+        self.limit = query_limit
         self.server_version, self.server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
+        server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
+        self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
+        self._apply_settings(settings)
         if database and not database == '__default__':
             self.database = database
-        self.limit = query_limit
         self.uri = uri
+
+    @abstractmethod
+    def _apply_settings(self, settings:dict[str, Any] = None):
+        """
+        Apply system level configuration settings
+        :param settings: dictionary of setting name/setting value
+        """
+
+    def _validate_settings(self, settings:dict[str, Any]):
+        validated = {}
+        for key, value in settings.items():
+            setting_def = self.server_settings.get(key)
+            if setting_def is None:
+                logging.warning('Setting %s is not valid, ignoring', key)
+                continue
+            if setting_def.readonly:
+                logging.warning('Setting %s is read only, ignoring', key)
+                continue
+            validated[key] = value
+        return validated
 
     def query(self, query: str, parameters=None, settings=None, use_none: bool = True) -> QueryResult:
         """

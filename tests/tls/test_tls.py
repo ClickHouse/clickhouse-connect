@@ -39,7 +39,7 @@ def test_basic_tls(request):
     if not request.config.getoption('tls'):
         pytest.skip('TLS tests not enabled')
     reset_connections()
-    client = get_client(interface='https', host=host, port=8443, ca_cert=False)
+    client = get_client(interface='https', host=host, port=8443, verify=False)
     assert client.command("SELECT 'insecure'") == 'insecure'
 
     reset_connections()  # Otherwise, the requests connection pool reuses the "unverified" connection
@@ -50,6 +50,13 @@ def test_basic_tls(request):
     try:
         get_client(interface='https', host='localhost', port=8443, ca_cert=f'{cert_dir}ca.crt')
         pytest.fail('Expected TLS exception with different hostname')
+    except OperationalError as ex:
+        assert isinstance(ex.__cause__, SSLError)
+
+    reset_connections()
+    try:
+        get_client(interface='https', host=host, port=8443)
+        pytest.fail('Expected TLS exception with self signed cert')
     except OperationalError as ex:
         assert isinstance(ex.__cause__, SSLError)
 
