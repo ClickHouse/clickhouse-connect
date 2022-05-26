@@ -5,7 +5,6 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy import dialect_name as dn
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
-from clickhouse_connect.driver.parser import parse_callable
 
 ch_col_args = ('default_type', 'codec_expression', 'ttl_expression')
 
@@ -41,18 +40,11 @@ def get_columns(connection, table_name, schema=None, **_kwargs):
 
 def get_engine(connection, table_name, schema=None):
     result_set = connection.execute(
-        'SELECT engine_full, sorting_key, primary_key, partition_key, sampling_key, storage_policy ' +
-        f"FROM system.tables WHERE database = '{schema}' and name = '{table_name}'")
+        f"SELECT engine_full FROM system.tables WHERE database = '{schema}' and name = '{table_name}'")
     row = next(result_set, None)
     if not row:
         raise NoResultFound(f'Table {schema}.{table_name} does not exist')
-    engine, engine_args, _ = parse_callable(row.engine_full)
-    return build_engine(engine,
-                        engine_args=engine_args,
-                        primary_key=row.primary_key,
-                        order_by=row.sorting_key,
-                        sample_by=row.sampling_key,
-                        storage_policy=row.storage_policy)
+    return build_engine(row.engine_full)
 
 
 def reflect_table(connection, table, include_columns, exclude_columns, *_args, **_kwargs):

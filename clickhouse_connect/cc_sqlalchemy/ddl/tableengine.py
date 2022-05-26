@@ -1,5 +1,5 @@
 import logging
-from typing import Type, Sequence
+from typing import Type, Sequence, Optional
 
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.sql.base import SchemaEventTarget
@@ -17,29 +17,56 @@ def tuple_expr(expr_name, value):
     """
     if value is None:
         return ''
-    v = f' {expr_name} '
+    v = f'{expr_name.strip()}'
     if isinstance(value, (tuple, list)):
-        return f"{v} ({','.join(value)})"
+        return f" {v} ({','.join(value)})"
     return f'{v} {value}'
 
 
 class TableEngine(SchemaEventTarget, Visitable):
     """
-    SqlAlchemy Schema element to support ClickHouse table engines
+    SqlAlchemy Schema element to support ClickHouse table engines.  At the moment provides no real
+    functionality other than the CREATE TABLE argument string
     """
-    arg_str = None
+    arg_names = ()
+    quoted_args = set()
+    optional_args = set()
+    eng_params = ()
 
     def __init_subclass__(cls, **kwargs):
         engine_map[cls.__name__] = cls
 
-    @property
-    def name(self):
-        return self.__class__.__name__
+    def __init__(self, kwargs):
+        Visitable.__init__(self)
+        self.name = self.__class__.__name__
+        te_name = f'{self.name} Table Engine'
+        engine_args = []
+        for arg_name in self.arg_names:
+            v = kwargs.pop(arg_name, None)
+            if v is None:
+                if arg_name in self.optional_args:
+                    continue
+                raise ValueError(f'Required engine parameter {arg_name} not provided for {te_name}')
+            if arg_name in self.quoted_args:
+                engine_args.append(f"'{v}'")
+            else:
+                engine_args.append(v)
+        if engine_args:
+            self.arg_str = f'({", ".join(engine_args)})'
+        params = []
+        for param_name in self.eng_params:
+            v = kwargs.pop(param_name, None)
+            if v is not None:
+                params.append(tuple_expr(param_name.upper().replace('_', ' '), v))
+
+        self.full_engine = 'Engine ' + self.name
+        if engine_args:
+            self.full_engine += f'({", ".join(engine_args)})'
+        if params:
+            self.full_engine += ' ' + ' '.join(params)
 
     def compile(self):
-        if not self.arg_str:
-            self.arg_str = self._engine_params()
-        return f'Engine {self.name}{self.arg_str}'
+        return self.full_engine
 
     def check_primary_keys(self, primary_keys: Sequence):
         raise SQLAlchemyError(f'Table Engine {self.name} does not support primary keys')
@@ -47,62 +74,162 @@ class TableEngine(SchemaEventTarget, Visitable):
     def _set_parent(self, parent):
         parent.engine = self
 
-    def _engine_params(self):
-        raise NotImplementedError
+
+class Memory(TableEngine):
+    pass
+
+
+class Log(TableEngine):
+    pass
+
+
+class StripeLog(TableEngine):
+    pass
+
+
+class TinyLog(TableEngine):
+    pass
+
+
+class Null(TableEngine):
+    pass
+
+
+class Set(TableEngine):
+    pass
+
+
+class Dictionary(TableEngine):
+    arg_names = ['dictionary']
+
+    # pylint: disable=unused-argument
+    def __init__(self, dictionary: str = None):
+        super().__init__(locals())
+
+
+class Merge(TableEngine):
+    arg_names = ['db_name, tables_regexp']
+
+    # pylint: disable=unused-argument
+    def __init__(self, db_name: str = None, tables_regexp: str = None):
+        super().__init__(locals())
+
+
+class File(TableEngine):
+    arg_names = ['fmt']
+
+    # pylint: disable=unused-argument
+    def __init__(self, fmt: str = None):
+        super().__init__(locals())
+
+
+class Distributed(TableEngine):
+    arg_names = ['cluster', 'database', 'table', 'sharding_key', 'policy_name']
+    optional_args = {'sharding_key', 'policy_name'}
+
+    # pylint: disable=unused-argument
+    def __init__(self, cluster: str = None, database: str = None, table=None,
+                 sharding_key: str = None, policy_name: str = None):
+        super().__init__(locals())
 
 
 class MergeTree(TableEngine):
-    """
-    ClickHouse MergeTree engine with required/optional parameters
-    """
+    eng_params = ['order_by', 'partition_key', 'primary_key', 'sample_by']
 
-    def __init__(self, order_by=None, primary_key=None, **kwargs):
+    # pylint: disable=unused-argument
+    def __init__(self, order_by: str = None, primary_key: str = None,
+                 partition_by: str = None, sample_by: str = None):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
-        if primary_key and not order_by:
-            order_by = primary_key
-        self.order_by = order_by
-        self.primary_key = primary_key
-        self.args = kwargs
-        self.arg_str = None
-
-    def _engine_params(self):
-        v = tuple_expr('ORDER BY', self.order_by)
-        v += tuple_expr('PARTITION BY', self.args.get('partition_by'))
-        v += tuple_expr('PRIMARY KEY', self.primary_key)
-        v += tuple_expr('SAMPLE BY', self.args.get('sample_by'))
-        return v
+        super().__init__(locals())
 
 
-class ReplicatedMergeTree(MergeTree):
+class SummingMergeTree(MergeTree):
+    pass
+
+
+class AggregatingMergeTree(MergeTree):
+    pass
+
+
+class ReplacingMergeTree(TableEngine):
+    arg_names = ['ver']
+    optional_args = set(arg_names)
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(self, ver: str = None, order_by: str = None, primary_key: str = None,
+                 partition_by: str = None, sample_by: str = None):
+        if not order_by and not primary_key:
+            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+        super().__init__(locals())
+
+
+class CollapsingMergeTree(TableEngine):
+    arg_names = ['sign']
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(self, sign: str = None, order_by: str = None, primary_key: str = None,
+                 partition_by: str = None, sample_by: str = None):
+        if not order_by and not primary_key:
+            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+        super().__init__(locals())
+
+
+class VersionedCollapsingMergeTree(TableEngine):
+    arg_names = ['sign', 'version']
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(self, sign: str = None, version: str = None,order_by: str = None, primary_key: str = None,
+                 partition_by: str = None, sample_by: str = None):
+        if not order_by and not primary_key:
+            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+        super().__init__(locals())
+
+
+class GraphiteMergeTree(TableEngine):
+    arg_names = ['config_section']
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(self, config_section: str = None, version: str = None,order_by: str = None, primary_key: str = None,
+                 partition_by: str = None, sample_by: str = None):
+        if not order_by and not primary_key:
+            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+        super().__init__(locals())
+
+
+class ReplicatedMergeTree(TableEngine):
+    arg_names = ['zk_path', 'replica']
+    quoted_args = set(arg_names)
+    optional_args = quoted_args
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(self, zk_path: str = None, replica: str = None, order_by: str = None, primary_key: str = None,
+                 partition_by: str = None, sample_by: str = None):
+        if not order_by and not primary_key:
+            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+        super().__init__(locals())
+
+
+def build_engine(full_engine: str) -> Optional[TableEngine]:
     """
-    ClickHouse ReplicatedMergeTree engine with required/optional parameters
+    Factory function to create TableEngine class from ClickHouse full_engine expression
+    :param full_engine
+    :return: TableEngine DDL element
     """
-
-    def __init__(self, order_by=None, primary_key=None, **kwargs):
-        super().__init__(order_by, primary_key, **kwargs)
-        self.zk_path = kwargs.pop('zk_path', None)
-        self.replica = kwargs.pop('replica', None)
-
-    def _engine_params(self):
-        if self.zk_path and self.replica:
-            return f"('{self.zk_path}', '{self.replica}') " + super()._engine_params()
-        return super()._engine_params()
-
-
-def build_engine(name: str, *args, **kwargs):
-    """
-    Factory function to create TableEngine class from name and parameters
-    :param name: Engine class name
-    :param args: Engine arguments
-    :param kwargs: Engine keyword arguments
-    :return:
-    """
-    if not name:
+    if not full_engine:
         return None
+    name = full_engine.split(' ')[0]
     try:
         engine_cls = engine_map[name]
     except KeyError:
         logging.warning('Engine %s not found', name)
         return None
-    return engine_cls(*args, **kwargs)
+    engine = engine_cls.__new__(engine_cls)
+    engine.name = name
+    engine.full_engine = full_engine
+    return engine

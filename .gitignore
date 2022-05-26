@@ -18,6 +18,9 @@
 # Temporary development stuff (tests/etc)
 /dev
 
+# Python cruft
+*.pyc
+
 # C extensions
 *.so
 *.pyd
