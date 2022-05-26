@@ -103,7 +103,7 @@ class HttpClient(Client):
         self.common_settings = {}
         super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=kwargs)
 
-    def _apply_settings(self, settings:dict[str, Any] = None):
+    def _apply_settings(self, settings: Dict[str, Any] = None):
         valid_settings = self._validate_settings(settings)
         for key, value in valid_settings.items():
             if isinstance(value, bool):
