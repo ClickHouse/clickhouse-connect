@@ -26,11 +26,12 @@ nested_types = ['Array', 'Tuple', 'Map']
 terminal_types = set(all_types) - set(nested_types)
 total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
+unsupported_types = set()
 
 
 def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_perc: float = NULLABLE_PERC):
     base_type = random.choices(all_types, all_weights)[0]
-    while depth >= NESTED_DEPTH and base_type in nested_types:
+    while base_type in unsupported_types or (depth >= NESTED_DEPTH and base_type in nested_types):
         base_type = random.choices(all_types, all_weights)[0]
     if base_type in terminal_types:
         if base_type == 'FixedString':
@@ -83,18 +84,11 @@ def build_nested_type(base_type: str, depth: int):
     raise ValueError(f'Unrecognized nested type {base_type}')
 
 
-def random_columns(cnt: int = 16, col_prefix: str = 'col', unsupported_types: Sequence = None):
+def random_columns(cnt: int = 16, col_prefix: str = 'col'):
     col_names = []
     col_types = []
-    if unsupported_types is None:
-        unsupported_types = set()
-    else:
-        unsupported_types = set(unsupported_types)
-    x = 0
-    while x < cnt:
+    for x in range(cnt):
         col_type = random_type()
-        if col_type.name in unsupported_types:
-            continue
         col_types.append(col_type)
         short_name = col_type.name.lower()
         ix = short_name.find('enum')
