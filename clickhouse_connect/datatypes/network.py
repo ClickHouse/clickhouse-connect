@@ -123,6 +123,7 @@ class IPv6(ClickHouseType):
     def _read_native_ip(source: Sequence, loc: int, num_rows: int):
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
+        with_scope_id = '_scope_id' in IPv6Address.__slots__
         new_col = []
         app = new_col.append
         ifb = int.from_bytes
@@ -136,7 +137,8 @@ class IPv6(ClickHouseType):
             else:
                 ipv6 = fast_ip_v6(IPv6Address)
                 ipv6._ip = int_value
-                ipv6._scope_id = None
+                if with_scope_id:
+                    ipv6._scope_id = None
                 app(ipv6)
         return new_col, end
 
