@@ -26,11 +26,12 @@ nested_types = ['Array', 'Tuple', 'Map']
 terminal_types = set(all_types) - set(nested_types)
 total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
+unsupported_types = set()
 
 
 def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_perc: float = NULLABLE_PERC):
     base_type = random.choices(all_types, all_weights)[0]
-    while depth >= NESTED_DEPTH and base_type in nested_types:
+    while base_type in unsupported_types or (depth >= NESTED_DEPTH and base_type in nested_types):
         base_type = random.choices(all_types, all_weights)[0]
     if base_type in terminal_types:
         if base_type == 'FixedString':
@@ -86,7 +87,7 @@ def build_nested_type(base_type: str, depth: int):
 def random_columns(cnt: int = 16, col_prefix: str = 'col'):
     col_names = []
     col_types = []
-    for y in range(cnt):
+    for x in range(cnt):
         col_type = random_type()
         col_types.append(col_type)
         short_name = col_type.name.lower()
@@ -96,7 +97,8 @@ def random_columns(cnt: int = 16, col_prefix: str = 'col'):
         short_name = re.sub(r'(,|\s+|\(+|\)+)', '_', short_name)
         short_name = re.sub(r'_+', '_', short_name)
         short_name = short_name.replace('nullable', 'n').replace('lowcardinality', 'lc')
-        col_names.append(f'{col_prefix}{y}_{short_name[:24]}')
+        col_names.append(f'{col_prefix}{x}_{short_name[:24]}')
+        x += 1
     return tuple(col_names), tuple(col_types)
 
 

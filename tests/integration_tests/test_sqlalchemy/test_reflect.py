@@ -24,3 +24,9 @@ def test_full_table_reflection(test_engine: Engine, test_db: str, test_table_eng
     table = db.Table('reflect_test', metadata)
     assert table.columns.key.type.__class__ == UInt32
     assert table.engine.name == test_table_engine
+
+
+def test_table_exists(test_engine: Engine):
+    conn = test_engine.connect()
+    assert test_engine.dialect.has_table(conn, 'columns', 'system')
+    assert not test_engine.dialect.has_table(conn, 'nope', 'fake_db')
