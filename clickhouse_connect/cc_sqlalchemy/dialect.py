@@ -82,7 +82,8 @@ class ClickHouseDialect(DefaultDialect):
         return []
 
     def has_table(self, connection, table_name, schema=None):
-        return connection.execute(f'EXISTS TABLE {full_table(table_name, schema)}').next() == 1
+        row = connection.execute(f'EXISTS TABLE {full_table(table_name, schema)}').next()
+        return row.result == 1
 
     def has_sequence(self, connection, sequence_name, schema=None):
         return False
