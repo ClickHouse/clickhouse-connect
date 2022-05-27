@@ -39,7 +39,7 @@ class Cursor:
 
     def execute(self, operation:str, parameters=None):
         op_start = operation.split(' ')[0].upper()
-        if op_start in ('SELECT', 'WITH', 'SHOW', 'DESCRIBE'):
+        if op_start in ('SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'EXISTS'):
             query_result = self.client.query(operation, parameters)
             self.data = query_result.result_set
             self.names = query_result.column_names
