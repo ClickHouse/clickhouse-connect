@@ -83,11 +83,18 @@ def build_nested_type(base_type: str, depth: int):
     raise ValueError(f'Unrecognized nested type {base_type}')
 
 
-def random_columns(cnt: int = 16, col_prefix: str = 'col'):
+def random_columns(cnt: int = 16, col_prefix: str = 'col', unsupported_types: Sequence = None):
     col_names = []
     col_types = []
-    for y in range(cnt):
+    if unsupported_types is None:
+        unsupported_types = set()
+    else:
+        unsupported_types = set(unsupported_types)
+    x = 0
+    while x < cnt:
         col_type = random_type()
+        if col_type.name in unsupported_types:
+            continue
         col_types.append(col_type)
         short_name = col_type.name.lower()
         ix = short_name.find('enum')
@@ -96,7 +103,8 @@ def random_columns(cnt: int = 16, col_prefix: str = 'col'):
         short_name = re.sub(r'(,|\s+|\(+|\)+)', '_', short_name)
         short_name = re.sub(r'_+', '_', short_name)
         short_name = short_name.replace('nullable', 'n').replace('lowcardinality', 'lc')
-        col_names.append(f'{col_prefix}{y}_{short_name[:24]}')
+        col_names.append(f'{col_prefix}{x}_{short_name[:24]}')
+        x += 1
     return tuple(col_names), tuple(col_types)
 
 
