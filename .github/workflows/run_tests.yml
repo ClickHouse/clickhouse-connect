@@ -9,28 +9,28 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python:
-          - '3.8'
-          - '3.9'
-        clickhouse:
-          - '21.8'
-          - '22.3'
-          - 'latest'
+        python-version:
+          - "3.8"
+          - "3.9"
+        clickhouse-version:
+          - "21.8"
+          - "22.3"
+          - "latest"
 
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:${{ matrix.clickhouse }}
+        image: clickhouse/clickhouse-server:${{ matrix.clickhouse-version }}
         ports:
           - 8123:8123
         options: --ulimit nofile=262144:262144
 
-    name: Py=${{ matrix.python }} CH=${{ matrix.clickhouse }}
+    name: Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
     steps:
       - uses: actions/checkout@v3
-      - name: Set up Python ${{ matrix.python }}
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v3
         with:
-          python-version: ${{ matrix.python }}'
+          python-version: ${{ matrix.python-version }}'
           cache: pip setuptools wheel
       - name: Install dependencies
         run: |
