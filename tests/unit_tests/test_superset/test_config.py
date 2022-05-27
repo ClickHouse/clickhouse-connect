@@ -2,7 +2,6 @@
 from superset.app import SupersetApp
 
 
-
 def test_build_uri(superset_app: SupersetApp):
     from clickhouse_connect.cc_superset.engine import ClickHouseEngineSpec
     spec = ClickHouseEngineSpec

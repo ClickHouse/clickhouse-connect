@@ -9,11 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Excluding Python 3.7 since Superset 1.5 doesn't compile on 3.7
+        # Excluding Python 3.7 and 3.10 since Superset 1.5 doesn't install on 3.7 or 3.10.  Hopefully we can
+        # add 3.10 soon
         python-version:
           - '3.8'
           - '3.9'
-          - '3.10'
         clickhouse-version:
           - '21.8'
           - '22.3'
