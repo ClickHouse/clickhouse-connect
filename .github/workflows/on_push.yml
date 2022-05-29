@@ -1,7 +1,9 @@
-name: 'RunTests'
+name: 'Lint and Test'
 
 on:
-  - push
+  push:
+    branches-ignore:
+      - 'release_test'
 
 jobs:
   lint:
@@ -19,6 +21,8 @@ jobs:
           pip install -e .
           pip install -r tests/test_requirements.txt
           pip install pylint
+      - name: Run Pylint
+        run: |
           pylint clickhouse_connect
           pylint tests
 
@@ -59,8 +63,3 @@ jobs:
         run: python setup.py build_ext --inplace
       - name: Run tests
         run: pytest --no-docker tests
-          
-
-
-
-

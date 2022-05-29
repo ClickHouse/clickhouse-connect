@@ -1,0 +1,38 @@
+name: 'Publish Release'
+
+on:
+  release:
+  push:
+    branches:
+      - 'release_test'
+
+jobs:
+  build_source:
+    name: Build Source Distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install build dependencies
+        run: pip install setuptools
+      - name: Run Build
+        run: python3 setup.py build
+      - name: Cache Build
+        uses: actions/cache@v3
+        with:
+          path: dist/*
+          key: ${{ github.event.release.tag_name }}-source_dist
+
+  publish:
+    needs: build_source
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retrieve artifacts
+      - uses: actions/cache@v3
+        with:
+          path: dist
+          key: ${{ github.event.release.tag_name }}-source_dist
+      - name: List artificates
+        run: ls dist
+      # - name: pypi-publish
+      #  uses: pypa/gh-action-pypi-publish@v1.5.0
