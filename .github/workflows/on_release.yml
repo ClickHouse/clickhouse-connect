@@ -14,7 +14,7 @@ jobs:
     name: Build Wheels
     strategy:
       matrix:
-        python-version:
+        python:
           #- '3.7'
           #- '3.8'
           - '3.9'
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v3
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python }}
       - name: Install build dependencies
         run: pip install setuptools wheel
       - name: Build Wheel
@@ -35,7 +35,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ env.RELEASE_TAG }}-${{ runner }}-${{ python }}-wheel
+          name: ${{ env.RELEASE_TAG }}-${{ runner }}-${{ matrix.python }}-wheel
           path: dist/*
 
   publish:
