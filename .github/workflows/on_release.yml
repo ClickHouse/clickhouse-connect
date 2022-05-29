@@ -19,8 +19,8 @@ jobs:
         with:
           path: dist/*
           key: ${{ github.event.release.tag_name }}-source_dist
-      - name: Run Build
-        run: python3 setup.py build
+      - name: Run Source Distribution
+        run: python3 setup.py sdist
 
   publish:
     needs: build_source
