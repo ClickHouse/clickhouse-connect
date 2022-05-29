@@ -19,8 +19,7 @@ jobs:
           - '3.10'
         runner:
           - windows-latest
-          - macos-11
-          - macos-12
+          - macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v3
