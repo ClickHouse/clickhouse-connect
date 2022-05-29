@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install build dependencies
-        run: pip install setuptools
+        run: pip install setuptools wheel
       - name: Cache Build
         uses: actions/cache@v3
         with:
