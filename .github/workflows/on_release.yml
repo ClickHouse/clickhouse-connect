@@ -14,12 +14,13 @@ jobs:
       matrix:
         python:
           - '3.7'
-          #- '3.8'
+          - '3.8'
           - '3.9'
-          # - '3.10'
+          - '3.10'
         runner:
           - windows-latest
-          # - macos-11
+          - macos-11
+          - macos-12
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v3
@@ -58,4 +59,4 @@ jobs:
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
         run: |
           pip install twine
-          twine upload --repository testpypi dist/*
+          twine upload dist/*
