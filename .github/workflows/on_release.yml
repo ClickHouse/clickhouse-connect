@@ -17,7 +17,7 @@ jobs:
       - name: Cache Build
         uses: actions/cache@v3
         with:
-          path: dist/*
+          path: dist/*.tar
           key: ${{ github.event.release.tag_name }}-source_dist
       - name: Run Source Distribution
         run: python3 setup.py sdist
@@ -30,9 +30,8 @@ jobs:
       - name: Retrieve artifacts
         uses: actions/cache@v3
         with:
-          path: dist/*
+          path: dist
           key: ${{ github.event.release.tag_name }}-source_dist
-          restore-key: ${{ github.event.release.tag_name }}-source_dist
       - name: List artificates
         run: ls dist
       # - name: pypi-publish
