@@ -44,7 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
-        run: python setup.py sdist
+        run: |
+          rm -rf dist artifacts
+          python setup.py sdist
       - name: Retrieve wheels
         uses: actions/download-artifact@v3
         with:
