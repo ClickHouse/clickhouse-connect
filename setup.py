@@ -27,12 +27,18 @@ def run_setup(try_c: bool = True):
     with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
         long_desc = read_me.read()
 
+    version = os.environ.get('GITHUB_REF_NAME')
+    if version:
+        version = version.replace('v', '')
+    else:
+        version = 'develop'
+
     setup(
         name='clickhouse-connect',
-        version='0.0.10',
         author='ClickHouse Inc.',
-        author_email='geoff@clickhouse.com',
+        author_email='clients@clickhouse.com',
         description='ClickHouse core driver, SqlAlchemy, and Superset libraries',
+        version=version,
         long_description=long_desc,
         long_description_content_type='text/markdown',
         url='https://github.com/ClickHouse/clickhouse-connect',

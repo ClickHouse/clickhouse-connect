@@ -1,0 +1,63 @@
+name: 'Publish Release'
+
+on:
+  release:
+    types: [created]
+  push:
+    branches:
+      - 'release_test'
+
+jobs:
+  build_wheels:
+    name: Build Wheel
+    strategy:
+      matrix:
+        python:
+          - '3.7'
+          - '3.8'
+          - '3.9'
+          - '3.10'
+        runner:
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install build dependencies
+        run: pip install setuptools wheel
+      - name: Build Wheel
+        run: python3 setup.py bdist_wheel
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.runner }}-${{ matrix.python }}-wheel
+          path: dist/*
+
+  publish:
+    needs: build_wheels
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build source distribution
+        run: |
+          rm -rf dist artifacts
+          python setup.py sdist
+      - name: Retrieve wheels
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: move and list artifacts
+        run: |
+          cp -R artifacts/*/*.whl dist
+          ls -R dist
+      - name: Publish
+        env:
+          TWINE_USERNAME: '__token__'
+          TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
+        run: |
+          pip install twine
+          twine upload dist/*

@@ -14,7 +14,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
 def test_model_fixture(test_engine: Engine, test_db: str, test_table_engine:str):
     engine_cls = engine_map[test_table_engine]
 
-    Base = declarative_base(metadata=MetaData(schema=test_db))
+    Base = declarative_base(metadata=MetaData(schema=test_db)) # pylint: disable=invalid-name
 
     class Model(Base):
         __tablename__ = 'insert_model'
@@ -47,8 +47,8 @@ def test_multiple_insert(test_engine: Engine, test_model):
 
 def test_bulk_insert(test_engine:Engine, test_model):
     session = Session(test_engine)
-    model_1 = test_model(test_name='multi_1', value_1='v1', metric_2=100, description='First of Many')
-    model_2 = test_model(test_name='multi_2', value_1='v2', metric_2=100, description='Second of Many')
-    model_3 = test_model(value_1='v7', metric_2=77, description='Third of Many', test_name='odd_one')
+    model_1 = test_model(test_name='bulk_1', value_1='v1', metric_2=100, description='First of Bulk')
+    model_2 = test_model(test_name='bulk_2', value_1='v2', metric_2=100, description='Second of Bulk')
+    model_3 = test_model(value_1='vb78', metric_2=528, description='Third of Bulk', test_name='bulk')
     session.bulk_save_objects([model_1, model_2, model_3])
     session.commit()
