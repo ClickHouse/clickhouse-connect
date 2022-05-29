@@ -18,7 +18,7 @@ jobs:
           #- '3.7'
           #- '3.8'
           - '3.9'
-          #- '3.10'
+          - '3.10'
         runner:
           - windows-latest
           - macos-11
@@ -43,11 +43,14 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     steps:
-      - name: Retrieve artifacts
+      - name: Retrieve wheels
         uses: actions/download-artifact@v3
         with:
-          path: dist
-      - name: List artificats
-        run: ls -R dist
+          path: artifacts
+      - name: move and list artifacts
+        run: |
+          mkdir dist
+          mv -R artifacts/*/*.whl dist
+          ls -R dist
       # - name: pypi-publish
       #  uses: pypa/gh-action-pypi-publish@v1.5.0
