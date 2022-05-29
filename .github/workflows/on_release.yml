@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Retrieve artifacts
-      - uses: actions/cache@v3
+        uses: actions/cache@v3
         with:
           path: dist
           key: ${{ github.event.release.tag_name }}-source_dist
