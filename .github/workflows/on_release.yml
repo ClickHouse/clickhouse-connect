@@ -50,7 +50,7 @@ jobs:
       - name: move and list artifacts
         run: |
           mkdir dist
-          mv -R artifacts/*/*.whl dist
+          cp -R artifacts/*/*.whl dist
           ls -R dist
       # - name: pypi-publish
       #  uses: pypa/gh-action-pypi-publish@v1.5.0
