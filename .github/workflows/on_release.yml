@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: dist/*.tar.gz
-          key: keytest1
+          key: keytest2
       - name: Run Source Distribution
         run: python3 setup.py sdist
 
@@ -31,8 +31,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: dist/*.tar.gz
-          key: keytest1
-          restore-keys: keytest1
+          key: keytest2
       - name: List artificates
         run: ls dist
       # - name: pypi-publish
