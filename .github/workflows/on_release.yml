@@ -6,33 +6,48 @@ on:
     branches:
       - 'release_test'
 
+env:
+  RELEASE_TAG: ${{ github.events.release.tag_name || '0.0.11.dev0' }}
+
 jobs:
-  build_source:
+  build_wheels:
     name: Build Wheels
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version:
+          #- '3.7'
+          #- '3.8'
+          - '3.9'
+          #- '3.10'
+        runner:
+          - windows-latest
+          - macos-11
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v3
+      - uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Install build dependencies
         run: pip install setuptools wheel
-      - name: Cache Build
-        uses: actions/cache@v3
-        with:
-          path: dist/*.whl
-          key: keytest4
-      - name: Run Source Distribution
+      - name: Build Wheel
         run: python3 setup.py bdist_wheel
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.RELEASE_TAG }}-${{ runner }}-${{ python }}-wheel
+          path: dist/*
 
   publish:
-    needs: build_source
+    needs: build_wheels
     name: Publish to PyPI
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Retrieve artifacts
-        uses: actions/cache@v3
+        uses: actions/download-artifact@v3
         with:
-          path: dist/*.whl
-          key: keytest4
-      - name: List artificates
+          path: dist
+      - name: List artificats
         run: ls dist
       # - name: pypi-publish
       #  uses: pypa/gh-action-pypi-publish@v1.5.0
