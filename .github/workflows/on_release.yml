@@ -17,7 +17,7 @@ jobs:
       - name: Cache Build
         uses: actions/cache@v3
         with:
-          path: dist/*.tar
+          path: dist/*.tar.gz
           key: ${{ github.event.release.tag_name }}-source_dist
       - name: Run Source Distribution
         run: python3 setup.py sdist
