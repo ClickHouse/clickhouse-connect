@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: dist/*.whl
-          key: keytest3
+          key: keytest4
       - name: Run Source Distribution
         run: python3 setup.py bdist_wheel
 
@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: dist/*.whl
-          key: keytest3
+          key: keytest4
       - name: List artificates
         run: ls dist
       # - name: pypi-publish
