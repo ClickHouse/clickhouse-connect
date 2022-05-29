@@ -8,8 +8,8 @@ on:
 
 jobs:
   build_source:
-    name: Build Source Distribution
-    runs-on: ubuntu-latest
+    name: Build Wheels
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
       - name: Install build dependencies
@@ -17,10 +17,10 @@ jobs:
       - name: Cache Build
         uses: actions/cache@v3
         with:
-          path: dist/*.tar.gz
-          key: keytest2
+          path: dist/*.whl
+          key: keytest3
       - name: Run Source Distribution
-        run: python3 setup.py sdist
+        run: python3 setup.py bdist_wheel
 
   publish:
     needs: build_source
@@ -30,8 +30,8 @@ jobs:
       - name: Retrieve artifacts
         uses: actions/cache@v3
         with:
-          path: dist/*.tar.gz
-          key: keytest2
+          path: dist/*.whl
+          key: keytest3
       - name: List artificates
         run: ls dist
       # - name: pypi-publish
