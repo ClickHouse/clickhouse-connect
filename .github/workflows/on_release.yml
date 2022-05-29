@@ -2,12 +2,10 @@ name: 'Publish Release'
 
 on:
   release:
+    types: [created]
   push:
     branches:
       - 'release_test'
-
-env:
-  RELEASE_TAG: ${{ github.events.release.tag_name || '0.0.11.dev0' }}
 
 jobs:
   build_wheels:
@@ -15,7 +13,7 @@ jobs:
     strategy:
       matrix:
         python:
-          #- '3.7'
+          - '3.7'
           #- '3.8'
           - '3.9'
           # - '3.10'
@@ -35,7 +33,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ env.RELEASE_TAG }}-${{ matrix.runner }}-${{ matrix.python }}-wheel
+          name: ${{ matrix.runner }}-${{ matrix.python }}-wheel
           path: dist/*
 
   publish:

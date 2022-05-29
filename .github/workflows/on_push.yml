@@ -3,7 +3,8 @@ name: 'Lint and Test'
 on:
   push:
     branches-ignore:
-      - 'release_test'
+      - '*_test'
+      - '*_dev'
 
 jobs:
   lint:
