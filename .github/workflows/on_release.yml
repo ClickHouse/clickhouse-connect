@@ -34,7 +34,7 @@ jobs:
       - name: Update release version
         run: |
           cat setup.py
-          sed -i "s/developer_only/${TEST_REF_NAME}/g" setup.py
+          sed -i "s/developer_only/%TEST_REF_NAME%/g" setup.py
           cat setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
