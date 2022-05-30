@@ -14,7 +14,7 @@ jobs:
     outputs:
       rv: ${{ steps.parse_version.outputs.rv }}
     env:
-      CC_VERSION: ${{ $GITHUB_REF_NAME || 'v0.0.16' }}
+      CC_VERSION: ${{ (github.ref_name.startswith('v') && github.ref_name) || 'v0.0.16' }}
     steps:
       - id: parse_version
         run: echo "::set-output name=rv::${CC_VERSION/v/}"
