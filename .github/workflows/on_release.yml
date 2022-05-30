@@ -8,8 +8,6 @@ on:
       - 'release_test'
 
 jobs:
-  update
-
   build_wheels:
     name: Build Wheel
     strategy:
