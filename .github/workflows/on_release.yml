@@ -17,7 +17,7 @@ jobs:
       CC_VERSION: ${{ github.ref_name || 'v0.0.16' }}
     steps:
       - id: parse_version
-        run: echo "::set-output rv::${CC_VERSION/v/}"
+        run: echo "::set-output name=rv::${CC_VERSION/v/}"
 
   build_wheels:
     name: Build Wheels
