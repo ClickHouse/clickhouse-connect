@@ -27,11 +27,7 @@ def run_setup(try_c: bool = True):
     with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
         long_desc = read_me.read()
 
-    version = os.environ.get('GITHUB_REF_NAME')
-    if version:
-        version = version.replace('v', '')
-    else:
-        version = 'develop'
+    version = 'developer_only'
 
     setup(
         name='clickhouse-connect',

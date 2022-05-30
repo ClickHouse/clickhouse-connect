@@ -13,13 +13,13 @@ jobs:
     strategy:
       matrix:
         python:
-          - '3.7'
-          - '3.8'
+          #- '3.7'
+          #- '3.8'
           - '3.9'
-          - '3.10'
+          #- '3.10'
         runner:
           - windows-latest
-          - macos-latest
+          #- macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v3
@@ -28,6 +28,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install build dependencies
         run: pip install setuptools wheel
+      - name: Update release version
+        run: sed -i "s/developer_only/${GIT_REF_NAME/v}/" setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
       - name: Upload Artifact
@@ -44,6 +46,7 @@ jobs:
       - uses: actions/checkout@v3
       - name: Build source distribution
         run: |
+          sed -i "s/developer_only/${GIT_REF_NAME/v}/" setup.py
           rm -rf dist artifacts
           python setup.py sdist
       - name: Retrieve wheels
@@ -57,7 +60,7 @@ jobs:
       - name: Publish
         env:
           TWINE_USERNAME: '__token__'
-          TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
+          TWINE_PASSWORD:  ${{ secrets.PYPI_TEST_TOKEN }}
         run: |
           pip install twine
-          twine upload dist/*
+          twine upload --repository testpypi dist/*
