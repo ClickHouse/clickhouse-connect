@@ -8,8 +8,20 @@ on:
       - 'release_test'
 
 jobs:
+  set_version:
+    name: Set Version
+    runs-on: ubuntu-latest
+    outputs:
+      rv: ${{ steps.parse_version.outputs.rv }}
+    env:
+      CC_VERSION: ${{ github.ref_name || 'v0.0.16' }}
+    steps:
+      - id: parse_version
+        run: echo "::set-output rv::${CC_VERSION/v/}"
+
   build_wheels:
-    name: Build Wheel
+    name: Build Wheels
+    needs: set_version
     strategy:
       matrix:
         python:
@@ -19,10 +31,10 @@ jobs:
           #- '3.10'
         runner:
           - windows-latest
-          #- macos-latest
+          # - macos-latest
     runs-on: ${{ matrix.runner }}
     env:
-      TEST_REF_NAME: 0.0.15
+      CC_RELEASE: ${{ github.ref_name || 'v0.0.16' }}
 
     steps:
       - uses: actions/checkout@v3
@@ -33,9 +45,9 @@ jobs:
         run: pip install setuptools wheel
       - name: Update release version
         run: |
-          echo $env:TEST_REF_NAME
+          echo ${{ needs.set_version.outputs.rv }}     
           cat setup.py
-          sed -i "s/developer_only/$env:TEST_REF_NAME/g" setup.py
+          sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
           cat setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
@@ -46,17 +58,15 @@ jobs:
           path: dist/*
 
   publish:
-    needs: build_wheels
+    needs: [set_version, build_wheels]
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    env:
-      TEST_REF_NAME: v0.0.15
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
         run: |
           cat setup.py
-          sed -i "s/developer_only/${TEST_REF_NAME/v/}/" setup.py
+          sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
           cat setup.py
           rm -rf dist artifacts
           python setup.py sdist
