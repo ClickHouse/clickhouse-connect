@@ -8,6 +8,8 @@ on:
       - 'release_test'
 
 jobs:
+  update
+
   build_wheels:
     name: Build Wheel
     strategy:
@@ -22,7 +24,7 @@ jobs:
           #- macos-latest
     runs-on: ${{ matrix.runner }}
     env:
-      TEST_REF_NAME: 0.0.14
+      TEST_REF_NAME: 0.0.15
 
     steps:
       - uses: actions/checkout@v3
@@ -33,8 +35,9 @@ jobs:
         run: pip install setuptools wheel
       - name: Update release version
         run: |
+          echo $env:TEST_REF_NAME
           cat setup.py
-          sed -i "s/developer_only/%TEST_REF_NAME%/g" setup.py
+          sed -i "s/developer_only/$env:TEST_REF_NAME/g" setup.py
           cat setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
@@ -49,7 +52,7 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     env:
-      TEST_REF_NAME: v0.0.14
+      TEST_REF_NAME: v0.0.15
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
