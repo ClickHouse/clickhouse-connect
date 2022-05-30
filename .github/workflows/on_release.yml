@@ -31,7 +31,10 @@ jobs:
       - name: Update release version
         env:
           TEST_REF_NAME: v0.0.12
-        run: sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
+        run: |
+          cat setup.py
+          sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
+          cat setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
       - name: Upload Artifact
@@ -50,7 +53,9 @@ jobs:
         env:
           TEST_REF_NAME: v0.0.12
         run: |
+          cat setup.py
           sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
+          cat setup.py
           rm -rf dist artifacts
           python setup.py sdist
       - name: Retrieve wheels
