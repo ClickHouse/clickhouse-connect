@@ -21,6 +21,9 @@ jobs:
           - windows-latest
           #- macos-latest
     runs-on: ${{ matrix.runner }}
+    env:
+      TEST_REF_NAME: v0.0.12
+
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v3
@@ -29,8 +32,6 @@ jobs:
       - name: Install build dependencies
         run: pip install setuptools wheel
       - name: Update release version
-        env:
-          TEST_REF_NAME: v0.0.12
         run: |
           cat setup.py
           sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
@@ -47,11 +48,11 @@ jobs:
     needs: build_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
+    env:
+      TEST_REF_NAME: v0.0.12
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
-        env:
-          TEST_REF_NAME: v0.0.12
         run: |
           cat setup.py
           sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
