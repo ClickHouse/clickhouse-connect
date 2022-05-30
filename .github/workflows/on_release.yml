@@ -22,7 +22,7 @@ jobs:
           #- macos-latest
     runs-on: ${{ matrix.runner }}
     env:
-      TEST_REF_NAME: v0.0.13
+      TEST_REF_NAME: 0.0.14
 
     steps:
       - uses: actions/checkout@v3
@@ -34,7 +34,7 @@ jobs:
       - name: Update release version
         run: |
           cat setup.py
-          sed -i "s/developer_only/${TEST_REF_NAME/v/}/" setup.py
+          sed -i "s/developer_only/${TEST_REF_NAME}/g" setup.py
           cat setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
@@ -49,7 +49,7 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     env:
-      TEST_REF_NAME: v0.0.13
+      TEST_REF_NAME: v0.0.14
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
