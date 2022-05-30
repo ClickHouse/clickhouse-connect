@@ -14,7 +14,7 @@ jobs:
     outputs:
       rv: ${{ steps.parse_version.outputs.rv }}
     env:
-      CC_VERSION: ${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) || 'v0.0.16' }}
+      CC_VERSION: ${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) || 'v0.0.17' }}
     steps:
       - id: parse_version
         run: echo "::set-output name=rv::${CC_VERSION/v/}"
@@ -31,7 +31,7 @@ jobs:
           #- '3.10'
         runner:
           - windows-latest
-          # - macos-latest
+          - macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v3
@@ -40,12 +40,12 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install build dependencies
         run: pip install setuptools wheel
-      - name: Update release version
-        run: |
-          echo ${{ needs.set_version.outputs.rv }}     
-          cat setup.py
-          sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
-          cat setup.py
+      - name: Update release version (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        run: sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
+      - name: Update release version (Windows)
+        if: ${{ runner.os == 'macOS' }}
+        run: sed -i "" "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
       - name: Upload Artifact
