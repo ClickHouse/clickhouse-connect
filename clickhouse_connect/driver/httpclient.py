@@ -188,7 +188,7 @@ class HttpClient(Client):
         logger.error(err_str)
         if response.content:
             logger.error(str(response.content))
-            err_str = f':\n {str(response.content)[0:240]}'
+            err_str = f':{err_str}\n {str(response.content)[0:240]}'
         raise DatabaseError(err_str)
 
     def ping(self):
