@@ -29,7 +29,9 @@ jobs:
       - name: Install build dependencies
         run: pip install setuptools wheel
       - name: Update release version
-        run: sed -i "s/developer_only/${GIT_REF_NAME/v}/" setup.py
+        env:
+          TEST_REF_NAME: v0.0.12
+        run: sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
       - name: Build Wheel
         run: python3 setup.py bdist_wheel
       - name: Upload Artifact
@@ -45,8 +47,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
+        env:
+          TEST_REF_NAME: v0.0.12
         run: |
-          sed -i "s/developer_only/${GIT_REF_NAME/v}/" setup.py
+          sed -i "s/developer_only/${TEST_REF_NAME/v}/" setup.py
           rm -rf dist artifacts
           python setup.py sdist
       - name: Retrieve wheels
