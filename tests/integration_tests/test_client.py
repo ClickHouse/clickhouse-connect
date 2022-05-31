@@ -1,5 +1,6 @@
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
+from clickhouse_connect.driver.query import QueryResult
 
 
 def test_query(test_client: Client):
@@ -34,3 +35,8 @@ def test_pandas(test_client: Client, test_table_engine: str):
     test_client.insert_df('test_system_insert', df)
     new_df = test_client.query_df('SELECT * FROM test_system_insert')
     assert new_df.columns.all() == df.columns.all()
+
+
+def test_get_columns_only(test_client):
+    result: QueryResult = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
+    assert result.column_names == ('name', 'database')

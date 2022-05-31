@@ -1,19 +1,22 @@
 import logging
 import json
 import atexit
-from typing import Optional, Dict, Any, Sequence, Union
+import re
+from typing import Optional, Dict, Any, Sequence, Union, List
 from requests import Session, Response
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import RequestException
 
+from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver import native
 from clickhouse_connect.driver import rowbinary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.query import QueryResult
+from clickhouse_connect.driver.query import QueryResult, DataResult
 
 logger = logging.getLogger(__name__)
+columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 
 # Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
 # the client as thread safe as possible while sharing a single connection pool.  For the same reason we
@@ -112,7 +115,8 @@ class HttpClient(Client):
                 self.common_settings[key] = str(value)
 
     def _format_query(self, query: str) -> str:
-        if query.upper().strip().startswith('INSERT ') and 'VALUES' in query.upper():
+        query = query.strip()
+        if query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
             return query
         if not query.strip().endswith(self.read_format):
             query += f' FORMAT {self.read_format}'
@@ -127,8 +131,22 @@ class HttpClient(Client):
         params['database'] = self.database
         if settings:
             params.update(settings)
-        response = self._raw_request(self._format_query(query), params=params, headers=headers)
-        data_result = self.parse_response(response.content, use_none)
+        columns_only = columns_only_re.search(query)
+        if columns_only:
+            final_query = query + ' FORMAT JSON'
+        else:
+            final_query = self._format_query(query)
+        response = self._raw_request(final_query, params=params, headers=headers)
+        if columns_only:
+            json_result = json.loads(response.content)
+            names: List[str] = []
+            types: List[ClickHouseType] = []
+            for col in json_result['meta']:
+                names.append(col['name'])
+                types.append(registry.get_from_name(col['type']))
+            data_result = DataResult([], tuple(names), tuple(types))
+        else:
+            data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
