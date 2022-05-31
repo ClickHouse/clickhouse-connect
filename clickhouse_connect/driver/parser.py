@@ -4,10 +4,11 @@ from typing import Union, Tuple
 # pylint: disable=too-many-branches
 def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
     """
-    Parses a single level ClickHouse optionally 'callable' function/identifier.  The identifier is returned as the first value in
-    the response tuple.  If the expression is callable -- i.e. an identifier followed by 0 or more arguments in parentheses, the
-    second returned value is a tuple of the comma separated arguments.  Unquoted spaces in the arguments will be removed.  The third and
-    final tuple value is any text remaining after the initial expression for further parsing/processing.
+    Parses a single level ClickHouse optionally 'callable' function/identifier.  The identifier is returned as the
+    first value in the response tuple.  If the expression is callable -- i.e. an identifier followed by 0 or more
+    arguments in parentheses, the second returned value is a tuple of the comma separated arguments.  Unquoted spaces
+    in the arguments will be removed.  The third and final tuple value is any text remaining after the initial
+    expression for further parsing/processing.
 
     Examples:
       "Tuple(String, Enum('one' = 1, 'two' = 2))" will return "Tuple", ("String", "Enum('one'=1,'two'=2)"), ""
