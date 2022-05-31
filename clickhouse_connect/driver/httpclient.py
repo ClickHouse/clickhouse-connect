@@ -118,7 +118,7 @@ class HttpClient(Client):
         query = query.strip()
         if query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
             return query
-        if not query.strip().endswith(self.read_format):
+        if not query.endswith(self.read_format):
             query += f' FORMAT {self.read_format}'
         return query
 
@@ -133,12 +133,10 @@ class HttpClient(Client):
             params.update(settings)
         columns_only = columns_only_re.search(query)
         if columns_only:
-            final_query = query + ' FORMAT JSON'
-        else:
-            final_query = self._format_query(query)
-        response = self._raw_request(final_query, params=params, headers=headers)
-        if columns_only:
+            response = self._raw_request(query + ' FORMAT JSON', params=params, headers=headers)
             json_result = json.loads(response.content)
+            # ClickHouse will respond with a JSON object of meta, data, and some other objects
+            # We just grab the column names and column types from the metadata sub object
             names: List[str] = []
             types: List[ClickHouseType] = []
             for col in json_result['meta']:
@@ -146,6 +144,7 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
+            response = self._raw_request(self._format_query(query), params=params, headers=headers)
             data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
