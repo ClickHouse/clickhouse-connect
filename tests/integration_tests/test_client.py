@@ -1,5 +1,6 @@
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
+from clickhouse_connect.driver.query import QueryResult
 
 
 def test_query(test_client: Client):
@@ -30,7 +31,17 @@ def test_pandas(test_client: Client, test_table_engine: str):
         return
     df = test_client.query_df('SELECT * FROM system.tables')
     test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    test_client.command(f'CREATE TABLE test_system_insert as system.tables Engine {test_table_engine} ORDER BY (database, name)')
+    test_client.command(f'CREATE TABLE test_system_insert as system.tables Engine {test_table_engine}'
+                        f' ORDER BY (database, name)')
     test_client.insert_df('test_system_insert', df)
     new_df = test_client.query_df('SELECT * FROM test_system_insert')
     assert new_df.columns.all() == df.columns.all()
+
+
+def test_get_columns_only(test_client):
+    result: QueryResult = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
+    assert result.column_names == ('name', 'database')
+
+    result: QueryResult = test_client.query('SELECT database, engine FROM system.tables',
+                                            settings={'metadata_only': True})
+    assert result.column_names == ('database', 'engine')
