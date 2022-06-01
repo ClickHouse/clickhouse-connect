@@ -5,6 +5,8 @@ from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
 from clickhouse_connect.driver.exceptions import InternalError
 from clickhouse_connect.driver.parser import parse_enum, parse_callable
 
+logger = logging.getLogger(__name__)
+
 
 def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     """
@@ -46,7 +48,7 @@ def get_from_name(name: str) -> ClickHouseType:
             ch_type = type_map[base].build(type_def)
         except KeyError:
             err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
-            logging.error(err_str)
+            logger.error(err_str)
             raise InternalError(err_str) from None
         type_cache[name] = ch_type
     return ch_type

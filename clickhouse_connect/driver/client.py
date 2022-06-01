@@ -9,6 +9,8 @@ from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
 
+logger = logging.getLogger(__name__)
+
 
 class Client(metaclass=ABCMeta):
     """
@@ -45,10 +47,10 @@ class Client(metaclass=ABCMeta):
         for key, value in settings.items():
             setting_def = self.server_settings.get(key)
             if setting_def is None:
-                logging.warning('Setting %s is not valid, ignoring', key)
+                logger.warning('Setting %s is not valid, ignoring', key)
                 continue
             if setting_def.readonly:
-                logging.warning('Setting %s is read only, ignoring', key)
+                logger.warning('Setting %s is read only, ignoring', key)
                 continue
             validated[key] = value
         return validated
