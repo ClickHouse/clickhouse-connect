@@ -10,6 +10,8 @@ from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
 
+columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
+
 
 class Client(metaclass=ABCMeta):
     """
