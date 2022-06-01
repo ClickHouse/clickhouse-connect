@@ -131,8 +131,7 @@ class HttpClient(Client):
         params['database'] = self.database
         if settings:
             params.update(settings)
-        columns_only = columns_only_re.search(query)
-        if columns_only:
+        if columns_only_re.search(query):
             response = self._raw_request(query + ' FORMAT JSON', params=params, headers=headers)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects

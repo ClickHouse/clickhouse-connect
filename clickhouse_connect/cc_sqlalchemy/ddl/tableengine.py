@@ -5,6 +5,8 @@ from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.visitors import Visitable
 
+logger = logging.getLogger(__name__)
+
 engine_map: Dict[str, Type['TableEngine']] = {}
 
 
@@ -227,7 +229,7 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
     try:
         engine_cls = engine_map[name]
     except KeyError:
-        logging.warning('Engine %s not found', name)
+        logger.warning('Engine %s not found', name)
         return None
     engine = engine_cls.__new__(engine_cls)
     engine.name = name
