@@ -2,6 +2,7 @@ import logging
 
 from abc import ABCMeta, abstractmethod
 from typing import Iterable, Tuple, Optional, Any, Union, Sequence, Dict
+import re
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -65,7 +66,7 @@ class Client(metaclass=ABCMeta):
         if parameters:
             escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
             query %= escaped
-        query = query.replace('\n', ' ')
+        query = re.sub(r"(--.*)?\n", " ", query)
         if settings and settings.pop('metadata_only', None) and ' LIMIT ' not in query.upper():
             query += ' LIMIT 0'
         elif self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
