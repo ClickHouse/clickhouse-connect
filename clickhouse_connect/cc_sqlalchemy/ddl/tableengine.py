@@ -39,6 +39,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         engine_map[cls.__name__] = cls
 
     def __init__(self, kwargs):
+        # pylint: disable=no-value-for-parameter
         Visitable.__init__(self)
         self.name = self.__class__.__name__
         te_name = f'{self.name} Table Engine'
