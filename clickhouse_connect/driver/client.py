@@ -66,7 +66,7 @@ class Client(metaclass=ABCMeta):
         if parameters:
             escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
             query %= escaped
-        query = re.sub(r"(--.*)?\n", " ", query)
+        query = re.sub(r'(--.*)?\n', ' ', query)
         if settings and settings.pop('metadata_only', None) and ' LIMIT ' not in query.upper():
             query += ' LIMIT 0'
         elif self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
