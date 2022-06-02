@@ -10,6 +10,8 @@ import clickhouse_connect.datatypes.registry
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
+logger = logging.getLogger(__name__)
+
 # pylint: disable=protected-access
 try:
     from clickhouse_connect.driverc import creaders
@@ -18,7 +20,7 @@ try:
     dt_string.FixedString._read_native_str = creaders.read_fixed_string_str
     dt_string.FixedString._read_native_bytes = creaders.read_fixed_string_bytes
 except ImportError:
-    logging.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
+    logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
 
 
 def fixed_string_format(fmt: str, encoding: str = 'utf8'):

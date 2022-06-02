@@ -64,6 +64,7 @@ class IPv4(ArrayType):
         first = self._first_value(column)
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
+            # pylint: disable=consider-using-generator
             column = [(sum([int(b) << fixed[ix] for ix, b in enumerate(x.split('.'))])) if x else 0 for x in column]
         else:
             if self.nullable:

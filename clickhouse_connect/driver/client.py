@@ -1,4 +1,5 @@
 import logging
+import re
 
 from abc import ABCMeta, abstractmethod
 from typing import Iterable, Tuple, Optional, Any, Union, Sequence, Dict
@@ -8,6 +9,9 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
+
+logger = logging.getLogger(__name__)
+limit_re = re.compile(r'\s+LIMIT[$|\s]', re.IGNORECASE)
 
 
 class Client(metaclass=ABCMeta):
@@ -45,10 +49,10 @@ class Client(metaclass=ABCMeta):
         for key, value in settings.items():
             setting_def = self.server_settings.get(key)
             if setting_def is None:
-                logging.warning('Setting %s is not valid, ignoring', key)
+                logger.warning('Setting %s is not valid, ignoring', key)
                 continue
             if setting_def.readonly:
-                logging.warning('Setting %s is read only, ignoring', key)
+                logger.warning('Setting %s is read only, ignoring', key)
                 continue
             validated[key] = value
         return validated
@@ -65,10 +69,9 @@ class Client(metaclass=ABCMeta):
         if parameters:
             escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
             query %= escaped
-        query = query.replace('\n', ' ')
-        if settings and settings.pop('metadata_only', None) and ' LIMIT ' not in query.upper():
+        if settings and settings.pop('metadata_only', None) and not limit_re.search(query):
             query += ' LIMIT 0'
-        elif self.limit and ' LIMIT ' not in query.upper() and 'SELECT ' in query.upper():
+        elif self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
             query += f' LIMIT {self.limit}'
         return self.exec_query(query, settings, use_none)
 

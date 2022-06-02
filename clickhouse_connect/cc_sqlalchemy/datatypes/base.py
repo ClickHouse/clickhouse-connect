@@ -6,6 +6,8 @@ from sqlalchemy.exc import CompileError
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, EMPTY_TYPE_DEF
 from clickhouse_connect.datatypes.registry import parse_name, type_map
 
+logger = logging.getLogger(__name__)
+
 
 class ChSqlaType:
     """
@@ -27,7 +29,7 @@ class ChSqlaType:
             try:
                 cls._ch_type_cls = type_map[base]
             except KeyError:
-                logging.warning('Attempted to register SQLAlchemy type without corresponding ClickHouse Type')
+                logger.warning('Attempted to register SQLAlchemy type without corresponding ClickHouse Type')
                 return
         schema_types.append(base)
         sqla_type_map[base] = cls
@@ -108,6 +110,6 @@ def sqla_type_from_name(name: str) -> ChSqlaType:
         type_cls = sqla_type_map[base]
     except KeyError:
         err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
-        logging.error(err_str)
+        logger.error(err_str)
         raise CompileError(err_str) from KeyError
     return type_cls.build(type_def)

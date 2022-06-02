@@ -23,11 +23,11 @@ def test_table_def():
     table = db.Table('replicated_mt_test', metadata, db.Column('key', UInt64),
                      ReplicatedMergeTree(order_by='key', zk_path='/clickhouse/tables/repl_mt_test',
                                          replica='{replica}'))
-    ddl = CreateTable(table).compile('', dialect=dialect).__str__()
+    ddl = str(CreateTable(table).compile('', dialect=dialect))
     assert ddl == replicated_mt_ddl
 
     table = db.Table('replacing_mt_test', metadata, db.Column('key', UInt32), db.Column('date', DateTime),
                      ReplacingMergeTree(ver='date', order_by='key'))
 
-    ddl = CreateTable(table).compile('', dialect=dialect).__str__()
+    ddl = str(CreateTable(table).compile('', dialect=dialect))
     assert ddl == replacing_mt_ddl

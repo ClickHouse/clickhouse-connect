@@ -8,6 +8,8 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.parser import parse_callable
 
+logger = logging.getLogger(__name__)
+
 
 class Cursor:
     """
@@ -91,7 +93,7 @@ class Cursor:
                 self.data.extend(query_result.result_set)
                 if self.names or self.types:
                     if query_result.column_names != self.names:
-                        logging.warning('Inconsistent column names %s : %s for operation %s in cursor executemany',
+                        logger.warning('Inconsistent column names %s : %s for operation %s in cursor executemany',
                                         self.names, query_result.column_names, operation)
                 else:
                     self.names = query_result.column_names
