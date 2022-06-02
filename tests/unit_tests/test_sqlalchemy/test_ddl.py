@@ -29,5 +29,5 @@ def test_table_def():
     table = db.Table('replacing_mt_test', metadata, db.Column('key', UInt32), db.Column('date', DateTime),
                      ReplacingMergeTree(ver='date', order_by='key'))
 
-    ddl = CreateTable(table).compile('', dialect=dialect).__str__()
+    ddl = str(CreateTable(table).compile('', dialect=dialect))
     assert ddl == replacing_mt_ddl
