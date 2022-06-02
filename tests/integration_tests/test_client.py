@@ -45,3 +45,30 @@ def test_get_columns_only(test_client):
     result: QueryResult = test_client.query('SELECT database, engine FROM system.tables',
                                             settings={'metadata_only': True})
     assert result.column_names == ('database', 'engine')
+
+
+def test_multiline_query(test_client: Client):
+    result = test_client.query("""
+    SELECT *
+    FROM system.tables
+    """)
+    assert len(result.result_set) > 0
+
+
+def test_query_with_inline_comment(test_client: Client):
+    result = test_client.query("""
+    SELECT *
+    -- This is just a comment
+    FROM system.tables
+    """)
+    assert len(result.result_set) > 0
+
+
+def test_query_with_comment(test_client: Client):
+    result = test_client.query("""
+    SELECT *
+    /* This is:
+    a multiline comment */
+    FROM system.tables
+    """)
+    assert len(result.result_set) > 0

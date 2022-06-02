@@ -136,6 +136,7 @@ class ClickHouseType(ABC):
 
     # These two methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
+
     # pylint: disable=no-self-use
     def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) -> Tuple[Union[Sequence, MutableSequence], int]:
         """

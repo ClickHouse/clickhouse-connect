@@ -5,6 +5,8 @@ from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.visitors import Visitable
 
+logger = logging.getLogger(__name__)
+
 engine_map: Dict[str, Type['TableEngine']] = {}
 
 
@@ -37,6 +39,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         engine_map[cls.__name__] = cls
 
     def __init__(self, kwargs):
+        # pylint: disable=no-value-for-parameter
         Visitable.__init__(self)
         self.name = self.__class__.__name__
         te_name = f'{self.name} Table Engine'
@@ -227,7 +230,7 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
     try:
         engine_cls = engine_map[name]
     except KeyError:
-        logging.warning('Engine %s not found', name)
+        logger.warning('Engine %s not found', name)
         return None
     engine = engine_cls.__new__(engine_cls)
     engine.name = name
