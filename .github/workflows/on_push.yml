@@ -22,7 +22,7 @@ jobs:
           pip install setuptools wheel
           pip install -e .
           pip install -r tests/test_requirements.txt
-          pip install pylint
+          pip install pylint==2.14
       - name: Run Pylint
         run: |
           pylint clickhouse_connect
