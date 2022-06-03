@@ -1,5 +1,5 @@
 import array
-from typing import Dict, Sequence, MutableSequence, Any
+from typing import Dict, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap
@@ -199,12 +199,11 @@ class Map(ClickHouseType):
 
 
 class Nested(UnsupportedType):
-    __slots__ = 'elements',
+    __slots__ = ('elements',)
     python_type = list
 
     def __init__(self, type_def):
         super().__init__(type_def)
-
         self.elements = [get_from_name(x) for x in type_def.values]
         self._name_suffix = type_def.arg_str
 
