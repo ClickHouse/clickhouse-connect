@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
 from clickhouse_connect.driver.query import QueryResult
@@ -18,6 +20,16 @@ def test_insert(test_client: Client, test_table_engine: str):
     test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
     tables_result = test_client.query('SELECT * from system.tables')
     test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
+
+
+def test_decimal_conv(test_client: Client, test_table_engine: str):
+    test_client.command('DROP TABLE IF EXISTS test_number_conv')
+    test_client.command('CREATE TABLE test_num_conv (col1 UInt64, col2 Int32, f1 Float64)' +
+                        f' Engine {test_table_engine} ORDER BY col1')
+    data = [[Decimal(5), Decimal(-182), Decimal(55.2)], [Decimal(57238478234), Decimal(77), Decimal(-29.5773)]]
+    test_client.insert('test_num_conv', data)
+    result = test_client.query('SELECT * FROM test_num_conv').result_set
+    assert result == [(5, -182, 55.2), (57238478234, 77, -29.5773)]
 
 
 def test_numpy(test_client: Client):

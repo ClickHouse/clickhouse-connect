@@ -22,7 +22,7 @@ columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 # the client as thread safe as possible while sharing a single connection pool.  For the same reason we
 # don't call the Session.close() method from the client so the connection pool remains available
 retry = Retry(total=2, status_forcelist=[429, 503, 504],
-              method_whitelist=['HEAD', 'GET', 'OPTIONS', 'POST'],
+              allowed_methods=['HEAD', 'GET', 'OPTIONS', 'POST'],
               backoff_factor=1.5)
 http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=retry)
 atexit.register(http_adapter.close)
