@@ -116,9 +116,10 @@ class HttpClient(Client):
 
     def _format_query(self, query: str) -> str:
         query = query.strip()
-        if query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
+        upper_query = query.upper()
+        if upper_query.startswith('INSERT ') and 'VALUES' in query.upper():
             return query
-        if not query.endswith(self.read_format):
+        if not query.endswith(self.read_format) and 'FORMAT' not in upper_query:
             query += f' FORMAT {self.read_format}'
         return query
 

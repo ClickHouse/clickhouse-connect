@@ -4,6 +4,14 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
 from clickhouse_connect.driver.query import QueryResult
 
+CSV_CONTENT = """abc,1,1
+abc,1,0
+def,1,0
+hij,1,1
+hij,1,
+klm,1,0
+klm,1,"""
+
 
 def test_query(test_client: Client):
     result = test_client.query('SELECT * FROM system.tables')
@@ -20,6 +28,18 @@ def test_insert(test_client: Client, test_table_engine: str):
     test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
     tables_result = test_client.query('SELECT * from system.tables')
     test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
+
+
+def test_insert_csv_format(test_client: Client, test_table_engine: str):
+    test_client.command('DROP TABLE IF EXISTS test_csv')
+    test_client.command(
+        'CREATE TABLE test_csv ("key" String, "val1" Int32, "val2" Int32) engine=MergeTree() ORDER BY (tuple())')
+    test_client.query(f'INSERT INTO test_csv ("key", "val1", "val2") format CSV {CSV_CONTENT}')
+    result = test_client.query('SELECT * from test_csv')
+    compare_rows = lambda r1, r2: all([c1 == c2 for c1, c2 in zip(r1, r2)])
+    assert len(result.result_set) == 7
+    assert compare_rows(result.result_set[0], ['abc', 1, 1])
+    assert compare_rows(result.result_set[4], ['hij', 1, 0])
 
 
 def test_decimal_conv(test_client: Client, test_table_engine: str):
