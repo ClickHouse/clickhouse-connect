@@ -75,7 +75,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
     while True:
         tries += 1
         try:
-            driver = create_client(interface=test_config.interface,
+            client = create_client(interface=test_config.interface,
                                    host=test_config.host,
                                    port=test_config.port,
                                    username=test_config.username,
@@ -86,9 +86,9 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
             sleep(1)
     if test_db != 'default':
-        driver.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
-        driver.database = test_db
-    yield driver
+        client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
+        client.database = test_db
+    yield client
     if test_config.use_docker:
         down_result = run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:

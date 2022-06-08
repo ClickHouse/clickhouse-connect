@@ -86,6 +86,7 @@ class HttpClient(Client):
         session.adapters.pop('https://').close()
         session.mount(self.url, adapter=http_adapter)
         session.headers['User-Agent'] = client_name
+        session.params = {}
 
         if compress:
             session.headers['Accept-Encoding'] = 'gzip, br'
@@ -103,16 +104,15 @@ class HttpClient(Client):
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
-        self.common_settings = {}
         super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=kwargs)
 
     def _apply_settings(self, settings: Dict[str, Any] = None):
         valid_settings = self._validate_settings(settings)
         for key, value in valid_settings.items():
             if isinstance(value, bool):
-                self.common_settings[key] = '1' if value else '0'
+                self.session.params[key] = '1' if value else '0'
             else:
-                self.common_settings[key] = str(value)
+                self.session.params[key] = str(value)
 
     def _format_query(self, query: str) -> str:
         query = query.strip()
@@ -127,8 +127,7 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {'Content-Type': 'text/plain'}
-        params = self.common_settings.copy()
-        params['database'] = self.database
+        params = {'database': self.database }
         if settings:
             params.update(settings)
         if columns_only_re.search(query):
@@ -160,9 +159,8 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {'Content-Type': 'application/octet-stream'}
-        params = self.common_settings.copy()
-        params['query'] = f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}"
-        params['database'] = self.database
+        params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
+                  'database': self.database}
         if settings:
             params.update(settings)
         insert_block = self.build_insert(data, column_types=column_types, column_names=column_names, column_oriented=column_oriented)
@@ -174,8 +172,7 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {'Content-Type': 'text/plain'}
-        params = self.common_settings.copy()
-        params['query'] = cmd
+        params = {'query': cmd}
         if use_database:
             params['database'] = self.database
         if settings:

@@ -47,13 +47,11 @@ class Client(metaclass=ABCMeta):
     def _validate_settings(self, settings: Dict[str, Any]):
         validated = {}
         for key, value in settings.items():
-            setting_def = self.server_settings.get(key)
-            if setting_def is None:
-                logger.warning('Setting %s is not valid, ignoring', key)
-                continue
-            if setting_def.readonly:
-                logger.warning('Setting %s is read only, ignoring', key)
-                continue
+            if 'session' not in key:
+                setting_def = self.server_settings.get(key)
+                if setting_def is None or setting_def.readonly:
+                    logger.warning('Setting %s is not valid or read only, ignoring', key)
+                    continue
             validated[key] = value
         return validated
 
@@ -80,7 +78,7 @@ class Client(metaclass=ABCMeta):
         Query method that results the results as a numpy array
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param settings: Optional dictionary` of ClickHouse settings (key/string values)
         :return: Numpy array representing the result set
         """
         return np_result(self.query(query, parameters=parameters, use_none=False, settings=settings))
@@ -105,7 +103,7 @@ class Client(metaclass=ABCMeta):
         :return: QueryResult of data and metadata returned by ClickHouse
         """
 
-    def command(self, cmd: str, parameters=None, use_database:bool = True, settings: Dict[str, str] = None) \
+    def command(self, cmd: str, parameters=None, use_database: bool = True, settings: Dict[str, str] = None) \
             -> Union[str, int, Sequence[str]]:
         """
         Client method that returns a single value instead of a result set
@@ -123,7 +121,7 @@ class Client(metaclass=ABCMeta):
         return self.exec_command(cmd, use_database, settings)
 
     @abstractmethod
-    def exec_command(self, cmd, use_database: bool = True, settings:Dict[str, str] = None) -> Union[
+    def exec_command(self, cmd, use_database: bool = True, settings: Dict[str, str] = None) -> Union[
         str, int, Sequence[str]]:
         """
         Subclass implementation of the client query function
