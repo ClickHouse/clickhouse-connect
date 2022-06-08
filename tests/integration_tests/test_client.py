@@ -49,11 +49,11 @@ def test_session_params(test_config: TestConfig):
         sleep(10)  # Allow the log entries to flush to tables
         result = client.exec_query(
             "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
-            "event_time > now() - 30").result_set
+            'event_time > now() - 30').result_set
         assert result[0] == ('TEST_SESSION_ID', test_config.username)
         result = client.exec_query(
             "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
-            "event_time > now() - 30").result_set
+            'event_time > now() - 30').result_set
         assert result[0] == ('test_session_params', test_config.username)
 
 
