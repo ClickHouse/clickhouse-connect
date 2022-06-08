@@ -45,7 +45,7 @@ def test_session_params(test_config: TestConfig):
     result = client.exec_query('SELECT number FROM system.numbers LIMIT 5',
                                settings={'query_id': 'test_session_params'}).result_set
     assert len(result) == 5
-    if not test_config.use_docker:
+    if test_config.local:
         sleep(10)  # Allow the log entries to flush to tables
         result = client.exec_query(
             "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +

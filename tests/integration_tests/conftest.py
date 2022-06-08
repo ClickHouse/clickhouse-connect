@@ -21,6 +21,7 @@ class TestConfig(NamedTuple):
     use_docker: bool
     test_database: str
     cleanup: bool
+    local: bool
 
     @property
     def cloud(self):
@@ -43,12 +44,13 @@ def test_config_fixture(request) -> Iterator[TestConfig]:
     username = request.config.getoption('username')
     password = request.config.getoption('password')
     cleanup = request.config.getoption('cleanup')
+    local = request.config.getoption('local')
     test_database = request.config.getoption('test_db', None)
     if test_database:
         cleanup = False
     else:
         test_database = 'cc_test'
-    yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup)
+    yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup, local)
 
 
 @fixture(scope='session', name='test_db')
