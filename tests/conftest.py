@@ -18,3 +18,4 @@ def pytest_addoption(parser):
     parser.addoption('--test-db', help='Test database, will not be cleaned up')
     parser.addoption('--tls', default=False, action='store_true')
     parser.addoption('--no-tls', dest='tls', action='store_false')
+    parser.addoption('--local', default=False, action='store_true')
