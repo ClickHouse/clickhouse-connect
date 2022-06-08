@@ -86,7 +86,6 @@ class HttpClient(Client):
         session.adapters.pop('https://').close()
         session.mount(self.url, adapter=http_adapter)
         session.headers['User-Agent'] = client_name
-        session.params = {}
 
         if compress:
             session.headers['Accept-Encoding'] = 'gzip, br'

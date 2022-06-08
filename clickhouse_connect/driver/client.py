@@ -78,7 +78,7 @@ class Client(metaclass=ABCMeta):
         Query method that results the results as a numpy array
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
-        :param settings: Optional dictionary` of ClickHouse settings (key/string values)
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Numpy array representing the result set
         """
         return np_result(self.query(query, parameters=parameters, use_none=False, settings=settings))
