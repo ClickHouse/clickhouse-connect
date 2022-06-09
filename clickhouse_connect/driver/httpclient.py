@@ -172,17 +172,27 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         headers = {}
+        params = {}
+        payload = None
         if isinstance(data, str):
             headers['Content-Type'] = 'text/plain; charset=utf-8'
-            data = data.encode()
+            payload = data.encode()
         elif isinstance(data, bytes):
             headers['Content-Type'] = 'application/octet-stream'
-        params = {'query': cmd}
+            payload = data
+        if payload is None:
+            if not cmd:
+                raise ProgrammingError('Command sent without query or recognized data')
+            payload = cmd
+        elif cmd:
+            params['query'] = cmd
         if use_database:
             params['database'] = self.database
         if settings:
             params.update(settings)
-        result = self._raw_request(data=data, params=params, headers=headers).content.decode('utf8')[:-1].split('\t')
+        method = 'POST' if payload else 'GET'
+        response = self._raw_request(data=payload, params=params, headers=headers, method=method)
+        result = response.content.decode('utf8')[:-1].split('\t')
         if len(result) == 1:
             try:
                 return int(result[0])

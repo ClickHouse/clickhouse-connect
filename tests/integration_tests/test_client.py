@@ -124,7 +124,8 @@ def test_insert_csv_format(test_client: Client, test_table_engine: str):
     test_client.command(
         'CREATE TABLE test_csv ("key" String, "val1" Int32, "val2" Int32) ' +
         f'ENGINE {test_table_engine} ORDER BY tuple()')
-    test_client.command('INSERT INTO test_csv ("key", "val1", "val2") FORMAT CSV', data=CSV_CONTENT)
+    sql = f'INSERT INTO test_csv ("key", "val1", "val2") FORMAT CSV {CSV_CONTENT}'
+    test_client.command(sql)
     result = test_client.query('SELECT * from test_csv')
 
     def compare_rows(row_1, row_2):
