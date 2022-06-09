@@ -103,12 +103,13 @@ class Client(metaclass=ABCMeta):
         :return: QueryResult of data and metadata returned by ClickHouse
         """
 
-    def command(self, cmd: str, parameters=None, use_database: bool = True, settings: Dict[str, str] = None) \
-            -> Union[str, int, Sequence[str]]:
+    def command(self, cmd: str, parameters=None, data:Union[str, bytes] = None, use_database: bool = True,
+                settings: Dict[str, str] = None) -> Union[str, int, Sequence[str]]:
         """
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
         :param parameters: Optional dictionary of key/values pairs to be formatted
+        :param data: 'data' for the command (for INSERT INTO in particular)
         :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database
          context.  Otherwise, no database will be specified with the command.  This is useful for determining
          the default user database
@@ -118,14 +119,15 @@ class Client(metaclass=ABCMeta):
         if parameters:
             escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
             cmd %= escaped
-        return self.exec_command(cmd, use_database, settings)
+        return self.exec_command(cmd, data, use_database, settings)
 
     @abstractmethod
-    def exec_command(self, cmd, use_database: bool = True, settings: Dict[str, str] = None) -> Union[
-        str, int, Sequence[str]]:
+    def exec_command(self, cmd, data:Union[str, bytes] = None, use_database: bool = True,
+                     settings: Dict[str, str] = None) -> Union[str, int, Sequence[str]]:
         """
         Subclass implementation of the client query function
         :param cmd: Finalized ClickHouse command/query statement
+        :param data: data for the command
         :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database context
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
