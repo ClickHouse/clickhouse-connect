@@ -166,17 +166,23 @@ class HttpClient(Client):
         response = self._raw_request(insert_block, params=params, headers=headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
-    def exec_command(self, cmd, use_database: bool = True, settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
+    def exec_command(self, cmd, data:Union[str, bytes] = None, use_database: bool = True,
+                     settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
         """
         See BaseClient doc_string for this method
         """
-        headers = {'Content-Type': 'text/plain'}
+        headers = {}
+        if isinstance(data, str):
+            headers['Content-Type'] = 'text/plain; charset=utf-8'
+            data = data.encode()
+        elif isinstance(data, bytes):
+            headers['Content-Type'] = 'application/octet-stream'
         params = {'query': cmd}
         if use_database:
             params['database'] = self.database
         if settings:
             params.update(settings)
-        result = self._raw_request(params=params, headers=headers).content.decode('utf8')[:-1].split('\t')
+        result = self._raw_request(data=data, params=params, headers=headers).content.decode('utf8')[:-1].split('\t')
         if len(result) == 1:
             try:
                 return int(result[0])
