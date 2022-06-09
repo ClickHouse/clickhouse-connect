@@ -157,8 +157,8 @@ class ClickHouseType(ABC):
 
     def write_native_column(self, column: Sequence, dest: MutableSequence):
         """
-        Wrapping write method for ClickHouseTypes.  Only overridden for container types that so that the write_native_prefix is
-        done at the right time for contained types
+        Wrapping write method for ClickHouseTypes.  Only overridden for container types that so that
+        the write_native_prefix is done at the right time for contained types
         :param column: Column/sequence of Python values to write
         :param dest: Native binary write buffer
         """
@@ -167,8 +167,8 @@ class ClickHouseType(ABC):
 
     def write_native_data(self, column: Sequence, dest: MutableSequence):
         """
-        Public native write method for ClickHouseTypes.  Delegates the actual write to either the LowCardinality write method or the
-        _write_native_binary method of the type
+        Public native write method for ClickHouseTypes.  Delegates the actual write to either the LowCardinality
+        write method or the _write_native_binary method of the type
         :param column: Sequence of Python data
         :param dest: Native binary write buffer
         """

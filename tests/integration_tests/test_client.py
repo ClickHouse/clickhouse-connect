@@ -7,6 +7,14 @@ from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
 from clickhouse_connect.driver.query import QueryResult
 from tests.integration_tests.conftest import TestConfig
 
+CSV_CONTENT = """abc,1,1
+abc,1,0
+def,1,0
+hij,1,1
+hij,1,
+klm,1,0
+klm,1,"""
+
 
 def test_query(test_client: Client):
     result = test_client.query('SELECT * FROM system.tables')
@@ -109,3 +117,20 @@ def test_query_with_comment(test_client: Client):
     FROM system.tables
     """)
     assert len(result.result_set) > 0
+
+
+def test_insert_csv_format(test_client: Client, test_table_engine: str):
+    test_client.command('DROP TABLE IF EXISTS test_csv')
+    test_client.command(
+        'CREATE TABLE test_csv ("key" String, "val1" Int32, "val2" Int32) ' +
+        f'ENGINE {test_table_engine} ORDER BY tuple()')
+    sql = f'INSERT INTO test_csv ("key", "val1", "val2") FORMAT CSV {CSV_CONTENT}'
+    test_client.command(sql)
+    result = test_client.query('SELECT * from test_csv')
+
+    def compare_rows(row_1, row_2):
+        return all(c1 == c2 for c1, c2 in zip(row_1, row_2))
+
+    assert len(result.result_set) == 7
+    assert compare_rows(result.result_set[0], ['abc', 1, 1])
+    assert compare_rows(result.result_set[4], ['hij', 1, 0])
