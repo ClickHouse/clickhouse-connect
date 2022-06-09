@@ -123,9 +123,12 @@ def test_insert_csv_format(test_client: Client, test_table_engine: str):
     test_client.command('DROP TABLE IF EXISTS test_csv')
     test_client.command(
         'CREATE TABLE test_csv ("key" String, "val1" Int32, "val2" Int32) engine=MergeTree() ORDER BY (tuple())')
-    test_client.command(f'INSERT INTO test_csv ("key", "val1", "val2") FORMAT CSV', data=CSV_CONTENT)
+    test_client.command('INSERT INTO test_csv ("key", "val1", "val2") FORMAT CSV', data=CSV_CONTENT)
     result = test_client.query('SELECT * from test_csv')
-    compare_rows = lambda r1, r2: all([c1 == c2 for c1, c2 in zip(r1, r2)])
+
+    def compare_rows(r1, r2):
+        return all([c1 == c2 for c1, c2 in zip(r1, r2)])
+
     assert len(result.result_set) == 7
     assert compare_rows(result.result_set[0], ['abc', 1, 1])
     assert compare_rows(result.result_set[4], ['hij', 1, 0])
