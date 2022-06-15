@@ -205,7 +205,7 @@ class HttpClient(Client):
             response: Response = self.session.request(method, self.url,
                                                       headers=headers,
                                                       timeout=(self.connect_timeout, self.read_timeout),
-                                                      data=data,
+                                                      data=data.encode(),
                                                       params=params)
         except RequestException as ex:
             logger.exception('Unexpected Http Driver Exception')
