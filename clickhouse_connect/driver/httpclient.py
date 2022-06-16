@@ -2,9 +2,10 @@ import logging
 import json
 import atexit
 import re
+import http as PyHttp
 from typing import Optional, Dict, Any, Sequence, Union, List
 from requests import Session, Response
-from requests.adapters import HTTPAdapter, Retry
+from requests.adapters import HTTPAdapter
 from requests.exceptions import RequestException
 
 from clickhouse_connect.datatypes import registry
@@ -21,21 +22,21 @@ columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 # Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
 # the client as thread safe as possible while sharing a single connection pool.  For the same reason we
 # don't call the Session.close() method from the client so the connection pool remains available
-retry = Retry(total=2, status_forcelist=[429, 503, 504],
-              allowed_methods=['HEAD', 'GET', 'OPTIONS', 'POST'],
-              backoff_factor=1.5)
-http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=retry)
+http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
 atexit.register(http_adapter.close)
+
+# Increase this number just to be safe when ClickHouse is returning progress headers
+PyHttp._MAXHEADERS = 10000 # pylint: disable=protected-access
 
 
 # pylint: disable=too-many-instance-attributes
 class HttpClient(Client):
-    # pylint: disable=too-many-arguments,too-many-locals
+    # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     def __init__(self, interface: str, host: str, port: int, username: str, password: str, database: str,
                  compress: bool = True, data_format: str = 'native', query_limit: int = 5000,
                  connect_timeout: int = 10, send_receive_timeout=60, client_name: str = 'clickhouse-connect',
-                 verify: bool = True, ca_cert: str = None, client_cert: str = None, client_cert_key: str = None,
-                  **kwargs):
+                 send_progress: bool = True, verify: bool = True, ca_cert: str = None,
+                 client_cert: str = None, client_cert_key: str = None, **kwargs):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -103,6 +104,14 @@ class HttpClient(Client):
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
+        if send_progress:
+            self.session.params['send_progress_in_http_headers'] = '1'
+            self.session.params['wait_end_of_query'] = '1'
+            if self.read_timeout > 10:
+                progress_interval = (self.read_timeout - 2) * 1000
+            else:
+                progress_interval = 120000  # Two minutes
+            self.session.params['http_headers_progress_interval_ms'] = str(progress_interval)
         super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=kwargs)
 
     def _apply_settings(self, settings: Dict[str, Any] = None):
@@ -125,12 +134,12 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        headers = {'Content-Type': 'text/plain'}
-        params = {'database': self.database }
+        headers = {'Content-Type': 'text/plain; charset=utf-8'}
+        params = {'database': self.database}
         if settings:
             params.update(settings)
         if columns_only_re.search(query):
-            response = self._raw_request(query + ' FORMAT JSON', params=params, headers=headers)
+            response = self._raw_request(query + ' FORMAT JSON', params=params, headers=headers, retries=2)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -141,7 +150,7 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._format_query(query), params=params, headers=headers)
+            response = self._raw_request(self._format_query(query), params=params, headers=headers, retries=2)
             data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
@@ -153,7 +162,8 @@ class HttpClient(Client):
                            response.headers.get('X-ClickHouse-Query-Id'), summary)
 
     def data_insert(self, table: str, column_names: Sequence[str], data: Sequence[Sequence[Any]],
-                    column_types: Sequence[ClickHouseType], settings: Optional[Dict] = None, column_oriented: bool = False):
+                    column_types: Sequence[ClickHouseType], settings: Optional[Dict] = None,
+                    column_oriented: bool = False):
         """
         See BaseClient doc_string for this method
         """
@@ -162,11 +172,12 @@ class HttpClient(Client):
                   'database': self.database}
         if settings:
             params.update(settings)
-        insert_block = self.build_insert(data, column_types=column_types, column_names=column_names, column_oriented=column_oriented)
+        insert_block = self.build_insert(data, column_types=column_types, column_names=column_names,
+                                         column_oriented=column_oriented)
         response = self._raw_request(insert_block, params=params, headers=headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
-    def exec_command(self, cmd, data:Union[str, bytes] = None, use_database: bool = True,
+    def exec_command(self, cmd, data: Union[str, bytes] = None, use_database: bool = True,
                      settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
         """
         See BaseClient doc_string for this method
@@ -200,24 +211,33 @@ class HttpClient(Client):
                 return result[0]
         return result
 
-    def _raw_request(self, data=None, method='POST', params: Optional[Dict] = None, headers: Optional[Dict] = None):
-        try:
-            response: Response = self.session.request(method, self.url,
-                                                      headers=headers,
-                                                      timeout=(self.connect_timeout, self.read_timeout),
-                                                      data=data,
-                                                      params=params)
-        except RequestException as ex:
-            logger.exception('Unexpected Http Driver Exception')
-            raise OperationalError(f'Error executing HTTP request {self.url}') from ex
-        if 200 <= response.status_code < 300:
-            return response
-        err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
-        logger.error(err_str)
-        if response.content:
-            logger.error(str(response.content))
-            err_str = f':{err_str}\n {str(response.content)[0:240]}'
-        raise DatabaseError(err_str)
+    def _raw_request(self, data=None, method='POST', params: Optional[Dict] = None, headers: Optional[Dict] = None,
+                     retries: int = 0):
+        if isinstance(data, str):
+            data = data.encode()
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                response: Response = self.session.request(method, self.url,
+                                                          headers=headers,
+                                                          timeout=(self.connect_timeout, self.read_timeout),
+                                                          data=data,
+                                                          params=params)
+            except RequestException as ex:
+                logger.exception('Unexpected Http Driver Exception')
+                if attempts > retries:
+                    raise OperationalError(f'Error executing HTTP request {self.url}') from ex
+                continue
+            if 200 <= response.status_code < 300:
+                return response
+            err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
+            logger.error(err_str)
+            if response.content:
+                logger.error(str(response.content))
+                err_str = f':{err_str}\n {str(response.content)[0:240]}'
+            if attempts > retries or response.status_code not in (429, 503, 504):
+                raise DatabaseError(err_str)
 
     def ping(self):
         """
@@ -237,4 +257,4 @@ def reset_connections():
     """
 
     global http_adapter  # pylint: disable=global-statement
-    http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=retry)
+    http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)

@@ -134,3 +134,8 @@ def test_insert_csv_format(test_client: Client, test_table_engine: str):
     assert len(result.result_set) == 7
     assert compare_rows(result.result_set[0], ['abc', 1, 1])
     assert compare_rows(result.result_set[4], ['hij', 1, 0])
+
+
+def test_non_latin_query(test_client: Client):
+    result = test_client.query("SELECT database, name FROM system.tables WHERE engine_full IN ('空')")
+    assert len(result.result_set) == 0
