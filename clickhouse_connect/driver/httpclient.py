@@ -134,7 +134,7 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        headers = {'Content-Type': 'text/plain'}
+        headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
         if settings:
             params.update(settings)
@@ -213,6 +213,8 @@ class HttpClient(Client):
 
     def _raw_request(self, data=None, method='POST', params: Optional[Dict] = None, headers: Optional[Dict] = None,
                      retries: int = 0):
+        if isinstance(data, str):
+            data = data.encode()
         attempts = 0
         while True:
             attempts += 1
