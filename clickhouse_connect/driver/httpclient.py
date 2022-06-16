@@ -26,12 +26,12 @@ http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
 atexit.register(http_adapter.close)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
-PyHttp._MAXHEADERS = 10000
+PyHttp._MAXHEADERS = 10000 # pylint: disable=protected-access
 
 
 # pylint: disable=too-many-instance-attributes
 class HttpClient(Client):
-    # pylint: disable=too-many-arguments,too-many-locals
+    # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     def __init__(self, interface: str, host: str, port: int, username: str, password: str, database: str,
                  compress: bool = True, data_format: str = 'native', query_limit: int = 5000,
                  connect_timeout: int = 10, send_receive_timeout=60, client_name: str = 'clickhouse-connect',
@@ -257,4 +257,4 @@ def reset_connections():
     """
 
     global http_adapter  # pylint: disable=global-statement
-    http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=retry)
+    http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
