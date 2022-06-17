@@ -3,8 +3,9 @@ import json
 import atexit
 import re
 import http as PyHttp
+
 from typing import Optional, Dict, Any, Sequence, Union, List
-from requests import Session, Response
+from requests import Session, Response, get as req_get
 from requests.adapters import HTTPAdapter
 from requests.exceptions import RequestException
 
@@ -26,7 +27,7 @@ http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
 atexit.register(http_adapter.close)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
-PyHttp._MAXHEADERS = 10000 # pylint: disable=protected-access
+PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
 
 
 # pylint: disable=too-many-instance-attributes
@@ -90,8 +91,6 @@ class HttpClient(Client):
         session.mount(self.url, adapter=http_adapter)
         session.headers['User-Agent'] = client_name
 
-        if compress:
-            session.headers['Accept-Encoding'] = 'gzip, br'
         if data_format == 'native':
             self.read_format = self.write_format = 'Native'
             self.build_insert = native.build_insert
@@ -106,16 +105,21 @@ class HttpClient(Client):
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
+        settings = kwargs.copy()
         if send_progress:
-            self.session.params['send_progress_in_http_headers'] = '1'
-            self.session.params['wait_end_of_query'] = '1'
+            settings['send_progress_in_http_headers'] = '1'
+            settings['wait_end_of_query'] = '1'
             if self.read_timeout > 10:
                 progress_interval = (self.read_timeout - 2) * 1000
             else:
                 progress_interval = 120000  # Two minutes
-            self.session.params['http_headers_progress_interval_ms'] = str(progress_interval)
-        super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=kwargs)
+            settings['http_headers_progress_interval_ms'] = str(progress_interval)
+        if compress:
+            session.headers['Accept-Encoding'] = 'gzip'
+            settings['enable_http_compression'] = '1'
+        super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=settings)
 
+    # Note that this will stop any "readonly" settings from blowing up even if we set them in the constructor
     def _apply_settings(self, settings: Dict[str, Any] = None):
         valid_settings = self._validate_settings(settings)
         for key, value in valid_settings.items():
@@ -247,7 +251,7 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         try:
-            response = self.session.get(f'{self.url}/ping', timeout=3)
+            response = req_get(f'{self.url}/ping', timeout=3)
             return 200 <= response.status_code < 300
         except RequestException:
             logger.debug('ping failed', exc_info=True)
