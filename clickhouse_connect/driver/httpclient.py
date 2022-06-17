@@ -37,7 +37,7 @@ class HttpClient(Client):
                  compress: bool = True, data_format: str = 'native', query_limit: int = 5000,
                  connect_timeout: int = 10, send_receive_timeout=60, client_name: str = 'clickhouse-connect',
                  send_progress: bool = True, verify: bool = True, ca_cert: str = None,
-                 client_cert: str = None, client_cert_key: str = None, **settings):
+                 client_cert: str = None, client_cert_key: str = None, **kwargs):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -105,6 +105,7 @@ class HttpClient(Client):
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
+        settings = kwargs.copy()
         if send_progress:
             settings['send_progress_in_http_headers'] = '1'
             settings['wait_end_of_query'] = '1'
