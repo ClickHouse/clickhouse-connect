@@ -3,6 +3,7 @@ from time import sleep
 
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.exceptions import DatabaseError
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
 from clickhouse_connect.driver.query import QueryResult
 from tests.integration_tests.conftest import TestConfig
@@ -139,3 +140,10 @@ def test_insert_csv_format(test_client: Client, test_table_engine: str):
 def test_non_latin_query(test_client: Client):
     result = test_client.query("SELECT database, name FROM system.tables WHERE engine_full IN ('空')")
     assert len(result.result_set) == 0
+
+
+def test_error_decode(test_client: Client):
+    try:
+        test_client.query("SELECT database, name FROM system.tables WHERE has_own_data = '空'")
+    except DatabaseError as ex:
+        assert '空' in str(ex)

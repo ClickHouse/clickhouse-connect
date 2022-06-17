@@ -50,6 +50,8 @@ class HttpClient(Client):
         :param query_limit: Default LIMIT on returned rows
         :param connect_timeout:  Timeout in seconds for the http connection
         :param send_receive_timeout: Read timeout in seconds for http connection
+        :param client_name: Http user agent header value
+        :param send_progress: Ask ClickHouse to send progress headers.  Used for summary and keep alive
         :param verify: Verify the server certificate in secure/https mode
         :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
          certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
@@ -234,8 +236,9 @@ class HttpClient(Client):
             err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
             logger.error(err_str)
             if response.content:
-                logger.error(str(response.content))
-                err_str = f':{err_str}\n {str(response.content)[0:240]}'
+                err_msg = response.content.decode(errors='backslashreplace')
+                logger.error(str(err_msg))
+                err_str = f':{err_str}\n {err_msg[0:240]}'
             if attempts > retries or response.status_code not in (429, 503, 504):
                 raise DatabaseError(err_str)
 
