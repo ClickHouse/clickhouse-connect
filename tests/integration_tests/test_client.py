@@ -35,7 +35,7 @@ def test_insert(test_client: Client, test_table_engine: str):
 
 
 def test_decimal_conv(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS test_number_conv')
+    test_client.command('DROP TABLE IF EXISTS test_num_conv')
     test_client.command('CREATE TABLE test_num_conv (col1 UInt64, col2 Int32, f1 Float64)' +
                         f' Engine {test_table_engine} ORDER BY col1')
     data = [[Decimal(5), Decimal(-182), Decimal(55.2)], [Decimal(57238478234), Decimal(77), Decimal(-29.5773)]]

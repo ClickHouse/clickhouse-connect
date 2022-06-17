@@ -50,7 +50,7 @@ class Client(metaclass=ABCMeta):
             if 'session' not in key:
                 setting_def = self.server_settings.get(key)
                 if setting_def is None or setting_def.readonly:
-                    logger.warning('Setting %s is not valid or read only, ignoring', key)
+                    logger.debug('Setting %s is not valid or read only, ignoring', key)
                     continue
             validated[key] = value
         return validated
