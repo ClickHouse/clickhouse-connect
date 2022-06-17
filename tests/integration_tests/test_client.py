@@ -147,4 +147,3 @@ def test_error_decode(test_client: Client):
         test_client.query("SELECT database, name FROM system.tables WHERE has_own_data = '空'")
     except DatabaseError as ex:
         assert '空' in str(ex)
-
