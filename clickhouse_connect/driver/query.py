@@ -7,13 +7,16 @@ from datetime import date, datetime
 from pytz import UTC
 
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy
+from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy, HAS_ARROW, check_arrow
 
 if HAS_PANDAS:
     import pandas as pa
 
 if HAS_NUMPY:
     import numpy as np
+
+if HAS_ARROW:
+    import pyarrow
 
 
 class QueryResult():
@@ -108,3 +111,10 @@ def from_pandas_df(df: 'pa.DataFrame'):
     """
     check_pandas()
     return {'column_names': df.columns, 'data': df.to_numpy()}
+
+
+def to_arrow(content: bytes):
+    check_arrow()
+    buf = pyarrow.BufferReader(content)
+    schema = pyarrow.read_schema(buf)
+    return schema, pyarrow.read_record_batch(buf, schema)

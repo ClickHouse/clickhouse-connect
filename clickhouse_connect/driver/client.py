@@ -8,7 +8,8 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value, \
+    to_arrow
 
 logger = logging.getLogger(__name__)
 limit_re = re.compile(r'\s+LIMIT[$|\s]', re.IGNORECASE)
@@ -44,16 +45,28 @@ class Client(metaclass=ABCMeta):
         :param settings: dictionary of setting name/setting value
         """
 
-    def _validate_settings(self, settings: Dict[str, Any]):
+    def _validate_settings(self, settings: Optional[Dict[str, Any]]):
         validated = {}
-        for key, value in settings.items():
-            if 'session' not in key:
-                setting_def = self.server_settings.get(key)
-                if setting_def is None or setting_def.readonly:
-                    logger.debug('Setting %s is not valid or read only, ignoring', key)
-                    continue
-            validated[key] = value
+        if settings:
+            for key, value in settings.items():
+                if 'session' not in key:
+                    setting_def = self.server_settings.get(key)
+                    if setting_def is None or setting_def.readonly:
+                        logger.debug('Setting %s is not valid or read only, ignoring', key)
+                        continue
+                validated[key] = value
         return validated
+
+    def _prep_query(self, query: str, parameters=None, settings: Dict[str, any]=None):
+        query_settings = self._validate_settings(settings)
+        if parameters:
+            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
+            query %= escaped
+        if settings and settings.pop('metadata_only', None) and not limit_re.search(query):
+            query += ' LIMIT 0'
+        elif self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
+            query += f' LIMIT {self.limit}'
+        return query, query_settings
 
     def query(self, query: str, parameters=None, settings=None, use_none: bool = True) -> QueryResult:
         """
@@ -64,14 +77,19 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: QueryResult -- data and metadata from response
         """
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            query %= escaped
-        if settings and settings.pop('metadata_only', None) and not limit_re.search(query):
-            query += ' LIMIT 0'
-        elif self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
-            query += f' LIMIT {self.limit}'
-        return self.exec_query(query, settings, use_none)
+        final_query, final_settings = self._prep_query(query, parameters, settings)
+        return self.exec_query(final_query, final_settings, use_none)
+
+    @abstractmethod
+    def raw_query(self, query: str, parameters=None, settings=None, format: str=None) -> bytes:
+        """
+        Query method that simply returns the raw ClickHouse format bytes
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param format: ClickHouse output format
+        :return: bytes representing raw ClickHouse return value based on format
+        """
 
     def query_np(self, query: str, parameters=None, settings: Optional[Dict] = None):
         """
@@ -81,7 +99,8 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Numpy array representing the result set
         """
-        return np_result(self.query(query, parameters=parameters, use_none=False, settings=settings))
+        final_query, final_settings = self._prep_query(query, parameters, settings)
+        return np_result(self.exec_query(final_query, final_settings, False))
 
     def query_df(self, query: str, parameters=None, settings: Optional[Dict] = None):
         """
@@ -91,7 +110,15 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Numpy array representing the result set
         """
-        return to_pandas_df(self.query(query, parameters=parameters, use_none=False, settings=settings))
+        final_query, final_settings = self._prep_query(query, parameters, settings)
+        return to_pandas_df(self.exec_query(final_query, final_settings, False))
+
+    def query_arrow(self, query: str, parameters=None, settings: Optional[Dict] = None,
+                    use_strings: bool = True):
+        arrow_settings = {} if not settings else settings.copy()
+        if 'output_format_arrow_string_as_string' not in arrow_settings:
+            arrow_settings['output_format_arrow_string_as_string'] = '1' if use_strings else '0'
+        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'ArrowStream'))
 
     @abstractmethod
     def exec_query(self, query: str, settings: Optional[Dict] = None, use_none: bool = True, ) -> QueryResult:
@@ -103,7 +130,7 @@ class Client(metaclass=ABCMeta):
         :return: QueryResult of data and metadata returned by ClickHouse
         """
 
-    def command(self, cmd: str, parameters=None, data:Union[str, bytes] = None, use_database: bool = True,
+    def command(self, cmd: str, parameters=None, data: Union[str, bytes] = None, use_database: bool = True,
                 settings: Dict[str, str] = None) -> Union[str, int, Sequence[str]]:
         """
         Client method that returns a single value instead of a result set
@@ -122,7 +149,7 @@ class Client(metaclass=ABCMeta):
         return self.exec_command(cmd, data, use_database, settings)
 
     @abstractmethod
-    def exec_command(self, cmd, data:Union[str, bytes] = None, use_database: bool = True,
+    def exec_command(self, cmd, data: Union[str, bytes] = None, use_database: bool = True,
                      settings: Dict[str, str] = None) -> Union[str, int, Sequence[str]]:
         """
         Subclass implementation of the client query function

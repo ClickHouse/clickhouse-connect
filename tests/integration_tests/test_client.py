@@ -4,7 +4,6 @@ from time import sleep
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
-from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS
 from clickhouse_connect.driver.query import QueryResult
 from tests.integration_tests.conftest import TestConfig
 
@@ -64,24 +63,6 @@ def test_session_params(test_config: TestConfig):
             "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
             'event_time > now() - 30').result_set
         assert result[0] == ('test_session_params', test_config.username)
-
-
-def test_numpy(test_client: Client):
-    if HAS_NUMPY:
-        np_array = test_client.query_np('SELECT * FROM system.tables')
-        assert len(np_array['database']) > 10
-
-
-def test_pandas(test_client: Client, test_table_engine: str):
-    if not HAS_PANDAS:
-        return
-    df = test_client.query_df('SELECT * FROM system.tables')
-    test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    test_client.command(f'CREATE TABLE test_system_insert as system.tables Engine {test_table_engine}'
-                        f' ORDER BY (database, name)')
-    test_client.insert_df('test_system_insert', df)
-    new_df = test_client.query_df('SELECT * FROM test_system_insert')
-    assert new_df.columns.all() == df.columns.all()
 
 
 def test_get_columns_only(test_client):
