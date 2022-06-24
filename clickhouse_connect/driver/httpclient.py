@@ -257,10 +257,10 @@ class HttpClient(Client):
             logger.debug('ping failed', exc_info=True)
             return False
 
-    def raw_query(self, query: str, parameters=None, settings: Optional[Dict] = None, format:str = None):
+    def raw_query(self, query: str, parameters=None, settings: Optional[Dict] = None, fmt:str = None):
         final_query, final_settings = self._prep_query(query, parameters, settings)
-        if format and ' FORMAT ' not in query.upper():
-            final_query += f' FORMAT {format}'
+        if fmt and ' FORMAT ' not in query.upper():
+            final_query += f' FORMAT {fmt}'
         return self._raw_request(final_query, params=final_settings).content
 
 

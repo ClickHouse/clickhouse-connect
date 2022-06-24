@@ -81,13 +81,13 @@ class Client(metaclass=ABCMeta):
         return self.exec_query(final_query, final_settings, use_none)
 
     @abstractmethod
-    def raw_query(self, query: str, parameters=None, settings=None, format: str=None) -> bytes:
+    def raw_query(self, query: str, parameters=None, settings=None, fmt: str=None) -> bytes:
         """
         Query method that simply returns the raw ClickHouse format bytes
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param format: ClickHouse output format
+        :param fmt: ClickHouse output format
         :return: bytes representing raw ClickHouse return value based on format
         """
 
