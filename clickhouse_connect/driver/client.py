@@ -20,6 +20,7 @@ class Client(metaclass=ABCMeta):
     Base ClickHouse Connect client
     """
     column_inserts = False
+    valid_transport_settings = set()
 
     def __init__(self, database: str, query_limit: int, uri: str, settings: Dict[str, Any] = None):
         """
@@ -49,7 +50,7 @@ class Client(metaclass=ABCMeta):
         validated = {}
         if settings:
             for key, value in settings.items():
-                if 'session' not in key:
+                if key not in self.valid_transport_settings:
                     setting_def = self.server_settings.get(key)
                     if setting_def is None or setting_def.readonly:
                         logger.debug('Setting %s is not valid or read only, ignoring', key)
