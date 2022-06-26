@@ -6,7 +6,6 @@ import http as PyHttp
 
 from typing import Optional, Dict, Any, Sequence, Union, List
 from requests import Session, Response, get as req_get
-from requests.adapters import HTTPAdapter
 from requests.exceptions import RequestException
 
 from clickhouse_connect.datatypes import registry
@@ -15,6 +14,7 @@ from clickhouse_connect.driver import rowbinary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
+from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.query import QueryResult, DataResult
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 # Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
 # the client as thread safe as possible while sharing a single connection pool.  For the same reason we
 # don't call the Session.close() method from the client so the connection pool remains available
-http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
+http_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
 atexit.register(http_adapter.close)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
@@ -110,7 +110,7 @@ class HttpClient(Client):
             settings['send_progress_in_http_headers'] = '1'
             settings['wait_end_of_query'] = '1'
             if self.read_timeout > 10:
-                progress_interval = (self.read_timeout - 2) * 1000
+                progress_interval = (self.read_timeout - 5) * 1000
             else:
                 progress_interval = 120000  # Two minutes
             settings['http_headers_progress_interval_ms'] = str(progress_interval)
@@ -232,9 +232,7 @@ class HttpClient(Client):
                                                           params=params)
             except RequestException as ex:
                 logger.exception('Unexpected Http Driver Exception')
-                if attempts > retries:
-                    raise OperationalError(f'Error executing HTTP request {self.url}') from ex
-                continue
+                raise OperationalError(f'Error executing HTTP request {self.url}') from ex
             if 200 <= response.status_code < 300:
                 return response
             err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
@@ -264,4 +262,4 @@ def reset_connections():
     """
 
     global http_adapter  # pylint: disable=global-statement
-    http_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
+    http_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)

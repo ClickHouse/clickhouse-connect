@@ -47,7 +47,7 @@ class Client(metaclass=ABCMeta):
     def _validate_settings(self, settings: Dict[str, Any]):
         validated = {}
         for key, value in settings.items():
-            if 'session' not in key:
+            if 'session' not in key and key not in ('database', 'buffer_size'):
                 setting_def = self.server_settings.get(key)
                 if setting_def is None or setting_def.readonly:
                     logger.debug('Setting %s is not valid or read only, ignoring', key)
