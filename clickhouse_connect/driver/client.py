@@ -131,12 +131,12 @@ class Client(metaclass=ABCMeta):
                     settings: Optional[Dict[str, Any]] = None,
                     use_strings: bool = True):
         """
-        Query method that results the results as a tuple of an arrow_schema and arrow recordset
+        Query method using the ClickHouse ArrowStream format to return a PyArrow result
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
-        :return: Numpy array representing the result set
+        :return: Tuple of the PyArrow schema and a single record batch
         """
         arrow_settings = {} if not settings else settings.copy()
         if 'output_format_arrow_string_as_string' not in arrow_settings:
