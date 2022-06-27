@@ -8,7 +8,8 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value, \
+    to_arrow
 
 logger = logging.getLogger(__name__)
 limit_re = re.compile(r'\s+LIMIT[$|\s]', re.IGNORECASE)
@@ -21,7 +22,7 @@ class Client(metaclass=ABCMeta):
     column_inserts = False
     valid_transport_settings = set()
 
-    def __init__(self, database: str, query_limit: int, uri: str, settings: Dict[str, Any] = None):
+    def __init__(self, database: str, query_limit: int, uri: str):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
@@ -33,48 +34,75 @@ class Client(metaclass=ABCMeta):
             tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
         server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
-        self._apply_settings(settings)
         if database and not database == '__default__':
             self.database = database
         self.uri = uri
 
-    @abstractmethod
-    def _apply_settings(self, settings: Dict[str, Any] = None):
+    def _validate_settings(self, settings: Optional[Dict[str, Any]], stringify: bool = False) -> Dict[str, Any]:
         """
-        Apply system level configuration settings
-        :param settings: dictionary of setting name/setting value
+        This strips any ClickHouse settings that are not recognized or are read only
+        :param settings:  Dictionary of setting name and values
+        :param stringify:  Return the result dictionary values as strings
+        :return:
         """
-
-    def _validate_settings(self, settings: Dict[str, Any]):
         validated = {}
-        for key, value in settings.items():
-            if key not in self.valid_transport_settings:
-                setting_def = self.server_settings.get(key)
-                if setting_def is None or setting_def.readonly:
-                    logger.debug('Setting %s is not valid or read only, ignoring', key)
-                    continue
-            validated[key] = value
+        if settings:
+            for key, value in settings.items():
+                if key not in self.valid_transport_settings:
+                    setting_def = self.server_settings.get(key)
+                    if setting_def is None or setting_def.readonly:
+                        logger.debug('Setting %s is not valid or read only, ignoring', key)
+                        continue
+                if stringify:
+                    if isinstance(value, bool):
+                        value = '1' if value else '0'
+                    else:
+                        value = str(value)
+                validated[key] = value
         return validated
 
-    def query(self, query: str, parameters=None, settings=None, use_none: bool = True) -> QueryResult:
+    def _prep_query(self, query: str, parameters: Optional[Dict[str, Any]] = None):
+        if parameters:
+            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
+            query %= escaped
+        if self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
+            query += f' LIMIT {self.limit}'
+        return query
+
+    @abstractmethod
+    def query(self,
+              query: str,
+              parameters: Optional[Dict[str, Any]] = None,
+              settings: Optional[Dict[str, Any]] = None,
+              use_none: bool = True) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other commands that result a result matrix
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
-        :param use_none: Use None for ClickHouse nulls instead of empty values
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_none: Use None for ClickHouse nulls instead of empty values
         :return: QueryResult -- data and metadata from response
         """
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            query %= escaped
-        if settings and settings.pop('metadata_only', None) and not limit_re.search(query):
-            query += ' LIMIT 0'
-        elif self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
-            query += f' LIMIT {self.limit}'
-        return self.exec_query(query, settings, use_none)
 
-    def query_np(self, query: str, parameters=None, settings: Optional[Dict] = None):
+    @abstractmethod
+    def raw_query(self,
+                  query: str,
+                  parameters: Optional[Dict[str, Any]] = None,
+                  settings: Optional[Dict[str, Any]] = None,
+                  fmt: str = None) -> bytes:
+        """
+        Query method that simply returns the raw ClickHouse format bytes
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param fmt: ClickHouse output format
+        :return: bytes representing raw ClickHouse return value based on format
+        """
+
+    def query_np(self,
+                 query: str,
+                 parameters: Optional[Dict[str, Any]] = None,
+                 settings: Optional[Dict[str, Any]] = None):
         """
         Query method that results the results as a numpy array
         :param query: Query statement/format string
@@ -82,9 +110,12 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Numpy array representing the result set
         """
-        return np_result(self.query(query, parameters=parameters, use_none=False, settings=settings))
+        return np_result(self.query(query, parameters, settings, use_none=False))
 
-    def query_df(self, query: str, parameters=None, settings: Optional[Dict] = None):
+    def query_df(self,
+                 query: str,
+                 parameters: Optional[Dict[str, Any]] = None,
+                 settings: Optional[Dict[str, Any]] = None):
         """
         Query method that results the results as a pandas dataframe
         :param query: Query statement/format string
@@ -92,45 +123,42 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Numpy array representing the result set
         """
-        return to_pandas_df(self.query(query, parameters=parameters, use_none=False, settings=settings))
+        return to_pandas_df(self.query(query, parameters, settings, use_none=False))
+
+    def query_arrow(self,
+                    query: str,
+                    parameters: Optional[Dict[str, Any]] = None,
+                    settings: Optional[Dict[str, Any]] = None,
+                    use_strings: bool = True):
+        """
+        Query method using the ClickHouse ArrowStream format to return a PyArrow result
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
+        :return: Tuple of the PyArrow schema and a single record batch
+        """
+        arrow_settings = {} if not settings else settings.copy()
+        if 'output_format_arrow_string_as_string' not in arrow_settings:
+            arrow_settings['output_format_arrow_string_as_string'] = '1' if use_strings else '0'
+        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'ArrowStream'))
 
     @abstractmethod
-    def exec_query(self, query: str, settings: Optional[Dict] = None, use_none: bool = True, ) -> QueryResult:
-        """
-        Subclass implementation of the client query function
-        :param query: Finalized ClickHouse query statement
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param use_none: Use Python None for NULL or zero/empty values if not set
-        :return: QueryResult of data and metadata returned by ClickHouse
-        """
-
-    def command(self, cmd: str, parameters=None, data:Union[str, bytes] = None, use_database: bool = True,
-                settings: Dict[str, str] = None) -> Union[str, int, Sequence[str]]:
+    def command(self,
+                cmd: str,
+                parameters: Optional[Dict[str, Any]] = None,
+                data: Union[str, bytes] = None,
+                settings: Dict[str, Any] = None,
+                use_database: bool = True) -> Union[str, int, Sequence[str]]:
         """
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
         :param parameters: Optional dictionary of key/values pairs to be formatted
-        :param data: 'data' for the command (for INSERT INTO in particular)
+        :param data: Optional 'data' for the command (for INSERT INTO in particular)
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database
          context.  Otherwise, no database will be specified with the command.  This is useful for determining
          the default user database
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
-        """
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            cmd %= escaped
-        return self.exec_command(cmd, data, use_database, settings)
-
-    @abstractmethod
-    def exec_command(self, cmd, data:Union[str, bytes] = None, use_database: bool = True,
-                     settings: Dict[str, str] = None) -> Union[str, int, Sequence[str]]:
-        """
-        Subclass implementation of the client query function
-        :param cmd: Finalized ClickHouse command/query statement
-        :param data: data for the command
-        :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database context
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
         """
 
@@ -142,9 +170,15 @@ class Client(metaclass=ABCMeta):
         """
 
     # pylint: disable=too-many-arguments
-    def insert(self, table: str, data: Iterable[Iterable[Any]], column_names: Union[str, Iterable[str]] = '*',
-               database: str = '', column_types: Iterable[ClickHouseType] = None,
-               column_type_names: Iterable[str] = None, column_oriented: bool = False, settings: Dict[str, str] = None):
+    def insert(self,
+               table: str,
+               data: Iterable[Iterable[Any]],
+               column_names: Union[str, Iterable[str]] = '*',
+               database: str = '',
+               column_types: Iterable[ClickHouseType] = None,
+               column_type_names: Iterable[str] = None,
+               column_oriented: bool = False,
+               settings: Optional[Dict[str, Any]] = None):
         """
         Method to insert multiple rows/data matrix of native Python objects
         :param table: Target table
@@ -188,8 +222,7 @@ class Client(metaclass=ABCMeta):
         :param database: Optional ClickHouse database
         :return: No return, throws an exception if the insert fails
         """
-        pandas_params = from_pandas_df(data_frame)
-        return self.insert(table, database=database, **pandas_params)
+        return self.insert(table, database=database, **from_pandas_df(data_frame))
 
     def normalize_table(self, table: str, database: Optional[str]) -> Tuple[str, str, str]:
         """
@@ -222,8 +255,12 @@ class Client(metaclass=ABCMeta):
         return tuple(ColumnDef(**row) for row in column_result.named_results())
 
     @abstractmethod
-    def data_insert(self, table: str, column_names: Iterable[str], data: Iterable[Iterable[Any]],
-                    column_types: Iterable[ClickHouseType], settings: Optional[Dict] = None,
+    def data_insert(self,
+                    table: str,
+                    column_names: Iterable[str],
+                    data: Iterable[Iterable[Any]],
+                    column_types: Iterable[ClickHouseType],
+                    settings: Optional[Dict] = None,
                     column_oriented: bool = False):
         """
         Subclass implementation of the data insert
