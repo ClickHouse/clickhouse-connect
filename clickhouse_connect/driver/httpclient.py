@@ -15,7 +15,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
-from clickhouse_connect.driver.query import QueryResult, DataResult
+from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -36,11 +36,25 @@ class HttpClient(Client):
                                 'session_timeout', 'session_check', 'query_id', 'quota_key'}
 
     # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
-    def __init__(self, interface: str, host: str, port: int, username: str, password: str, database: str,
-                 compress: bool = True, data_format: str = 'native', query_limit: int = 5000,
-                 connect_timeout: int = 10, send_receive_timeout=60, client_name: str = 'clickhouse-connect',
-                 send_progress: bool = True, verify: bool = True, ca_cert: str = None,
-                 client_cert: str = None, client_cert_key: str = None, **kwargs):
+    def __init__(self,
+                 interface: str,
+                 host: str,
+                 port: int,
+                 username: str,
+                 password: str,
+                 database: str,
+                 compress: bool = True,
+                 data_format: str = 'native',
+                 query_limit: int = 5000,
+                 connect_timeout: int = 10,
+                 send_receive_timeout=60,
+                 client_name: str = 'clickhouse-connect',
+                 send_progress: bool = True,
+                 verify: bool = True,
+                 ca_cert: str = None,
+                 client_cert: str = None,
+                 client_cert_key: str = None,
+                 **kwargs):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -120,16 +134,8 @@ class HttpClient(Client):
         if compress:
             session.headers['Accept-Encoding'] = 'gzip'
             settings['enable_http_compression'] = '1'
-        super().__init__(database=database, query_limit=query_limit, uri=self.url, settings=settings)
-
-    # Note that this will stop any "readonly" settings from blowing up even if we set them in the constructor
-    def _apply_settings(self, settings: Dict[str, Any] = None):
-        valid_settings = self._validate_settings(settings)
-        for key, value in valid_settings.items():
-            if isinstance(value, bool):
-                self.session.params[key] = '1' if value else '0'
-            else:
-                self.session.params[key] = str(value)
+        super().__init__(database=database, query_limit=query_limit, uri=self.url)
+        self.session.params = self._validate_settings(settings, True)
 
     def _format_query(self, query: str) -> str:
         query = query.strip()
@@ -139,16 +145,19 @@ class HttpClient(Client):
             query += f' FORMAT {self.read_format}'
         return query
 
-    def exec_query(self, query: str, settings: Optional[Dict] = None, use_none: bool = True, ) -> QueryResult:
+    def query(self, query: str,
+              parameters: Optional[Dict[str, Any]] = None,
+              settings: Dict[str, Any] = None,
+              use_none: bool = True) -> QueryResult:
         """
         See BaseClient doc_string for this method
         """
+        final_query = self._prep_query(query, parameters)
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
-        if settings:
-            params.update(settings)
+        params.update(self._validate_settings(settings, True))
         if columns_only_re.search(query):
-            response = self._raw_request(query + ' FORMAT JSON', params=params, headers=headers, retries=2)
+            response = self._raw_request(final_query + ' FORMAT JSON', params, headers, retries=2)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -159,7 +168,7 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._format_query(query), params=params, headers=headers, retries=2)
+            response = self._raw_request(self._format_query(final_query), params, headers, retries=2)
             data_result = self.parse_response(response.content, use_none)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
@@ -170,8 +179,12 @@ class HttpClient(Client):
         return QueryResult(data_result.result, data_result.column_names, data_result.column_types,
                            response.headers.get('X-ClickHouse-Query-Id'), summary)
 
-    def data_insert(self, table: str, column_names: Sequence[str], data: Sequence[Sequence[Any]],
-                    column_types: Sequence[ClickHouseType], settings: Optional[Dict] = None,
+    def data_insert(self,
+                    table: str,
+                    column_names: Sequence[str],
+                    data: Sequence[Sequence[Any]],
+                    column_types: Sequence[ClickHouseType],
+                    settings: Optional[Dict[str, Any]] = None,
                     column_oriented: bool = False):
         """
         See BaseClient doc_string for this method
@@ -179,18 +192,24 @@ class HttpClient(Client):
         headers = {'Content-Type': 'application/octet-stream'}
         params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
                   'database': self.database}
-        if settings:
-            params.update(settings)
+        params.update(self._validate_settings(settings, True))
         insert_block = self.build_insert(data, column_types=column_types, column_names=column_names,
                                          column_oriented=column_oriented)
-        response = self._raw_request(insert_block, params=params, headers=headers)
+        response = self._raw_request(insert_block, params, headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
-    def exec_command(self, cmd, data: Union[str, bytes] = None, use_database: bool = True,
-                     settings: Optional[Dict] = None) -> Union[str, int, Sequence[str]]:
+    def command(self,
+                cmd,
+                parameters: Optional[Dict[str, Any]] = None,
+                data: Union[str, bytes] = None,
+                settings: Optional[Dict] = None,
+                use_database: int = True) -> Union[str, int, Sequence[str]]:
         """
         See BaseClient doc_string for this method
         """
+        if parameters:
+            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
+            cmd %= escaped
         headers = {}
         params = {}
         payload = None
@@ -208,10 +227,9 @@ class HttpClient(Client):
             params['query'] = cmd
         if use_database:
             params['database'] = self.database
-        if settings:
-            params.update(settings)
+        params.update(self._validate_settings(settings, True))
         method = 'POST' if payload else 'GET'
-        response = self._raw_request(data=payload, params=params, headers=headers, method=method)
+        response = self._raw_request(payload, params, headers, method)
         result = response.content.decode('utf8')[:-1].split('\t')
         if len(result) == 1:
             try:
@@ -220,8 +238,12 @@ class HttpClient(Client):
                 return result[0]
         return result
 
-    def _raw_request(self, data=None, method='POST', params: Optional[Dict] = None, headers: Optional[Dict] = None,
-                     retries: int = 0):
+    def _raw_request(self,
+                     data,
+                     params: Dict[str, Any],
+                     headers: Optional[Dict[str, Any]] = None,
+                     method: str = 'POST',
+                     retries: int = 0) -> Response:
         if isinstance(data, str):
             data = data.encode()
         attempts = 0
@@ -258,11 +280,18 @@ class HttpClient(Client):
             logger.debug('ping failed', exc_info=True)
             return False
 
-    def raw_query(self, query: str, parameters=None, settings: Optional[Dict] = None, fmt:str = None):
-        final_query, final_settings = self._prep_query(query, parameters, settings)
+    def raw_query(self,
+                  query: str,
+                  parameters: Optional[Dict[str, Any]] = None,
+                  settings: Optional[Dict[str, Any]] = None,
+                  fmt: str = None):
+        """
+        See BaseClient doc_string for this method
+        """
+        final_query = self._prep_query(query, parameters)
         if fmt and ' FORMAT ' not in query.upper():
             final_query += f' FORMAT {fmt}'
-        return self._raw_request(final_query, params=final_settings).content
+        return self._raw_request(final_query, self._validate_settings(settings, True)).content
 
 
 def reset_connections():
