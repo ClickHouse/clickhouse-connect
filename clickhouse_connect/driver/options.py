@@ -3,6 +3,7 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 
 HAS_NUMPY = True
 HAS_PANDAS = True
+HAS_ARROW = True
 
 
 try:
@@ -15,6 +16,11 @@ try:
 except ImportError:
     HAS_PANDAS = False
 
+try:
+    import pyarrow as arrow
+except ImportError:
+    HAS_ARROW = False
+
 
 def check_numpy():
     if not HAS_NUMPY:
@@ -24,3 +30,8 @@ def check_numpy():
 def check_pandas():
     if not HAS_PANDAS:
         raise NotSupportedError("Pandas package is not installed")
+
+
+def check_arrow():
+    if not HAS_ARROW:
+        raise NotSupportedError("PyArrow package is not installed")
