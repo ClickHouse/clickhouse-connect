@@ -154,7 +154,7 @@ class Client(metaclass=ABCMeta):
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
         :param parameters: Optional dictionary of key/values pairs to be formatted
-        :param Optional data: 'data' for the command (for INSERT INTO in particular)
+        :param data: Optional 'data' for the command (for INSERT INTO in particular)
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database
          context.  Otherwise, no database will be specified with the command.  This is useful for determining
