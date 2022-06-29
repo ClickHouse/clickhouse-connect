@@ -52,6 +52,22 @@ LOW_CARD_MAP = """
     799f 431d a9e1 93ca ccff c652
 """
 
+NESTED = """
+    0201 036b 6579 0549 6e74 3332 3200 0000  
+    066e 6573 7465 6421 4e65 7374 6564 2873  
+    7472 3120 5374 7269 6e67 2c20 696e 7433  
+    3220 5549 6e74 3332 2902 0000 0000 0000  
+    0005 7468 7265 6504 6669 7665 0500 0000  
+    4d00 0000 0203 036b 6579 0549 6e74 3332  
+    0100 0000 7b00 0000 7b00 0000 066e 6573  
+    7465 6421 4e65 7374 6564 2873 7472 3120  
+    5374 7269 6e67 2c20 696e 7433 3220 5549  
+    6e74 3332 2900 0000 0000 0000 0002 0000  
+    0000 0000 0004 0000 0000 0000 0003 6f6e  
+    6503 7477 6f03 6f6e 6503 7477 6f05 0000  
+    0037 0000 0005 0000 0037 0000 00 
+"""
+
 
 def check_result(result, expected, row_num=0, col_num=0):
     result_set = result[0]
@@ -89,3 +105,8 @@ def test_ip():
     ipv4_type.write_native_column(ips, dest)
     python, _ = ipv4_type.read_native_column(dest, 0, 3)
     assert python == [IPv4Address(ip) for ip in ips]
+
+
+def test_nested():
+    result = parse_response(to_bytes(NESTED))
+    # assert result == 'dummy'

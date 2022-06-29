@@ -198,14 +198,28 @@ class Map(ClickHouseType):
         self.value_type.write_native_data(values, dest)
 
 
-class Nested(UnsupportedType):
-    __slots__ = ('elements',)
-    python_type = list
+class Nested(ClickHouseType):
+    __slots__ = 'tuple_array', 'tuple_names'
+    python_type = Sequence[dict]
 
     def __init__(self, type_def):
         super().__init__(type_def)
-        self.elements = [get_from_name(x) for x in type_def.values]
-        self._name_suffix = type_def.arg_str
+        self.tuple_names = type_def.keys
+        self.tuple_array = get_from_name(f"Array(Tuple({','.join(type_def.values)}))")
+        inner_types = self.tuple_array.element_type.element_types
+        cols = [f'{x[0]} {x[1].name}' for x in zip(type_def.keys, inner_types)]
+        self._name_suffix = f"({', '.join(cols)})"
+
+    def _to_row_binary(self, value: dict, dest: MutableSequence):
+        pass
+
+    def _from_row_binary(self, source: Sequence, loc: int):
+        data, loc = self.tuple_array.from_row_binary(source, loc)
+        return data, loc
+
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
+        data, loc = self.tuple_array.read_native_data(source, loc, num_rows, use_none)
+        return data, loc
 
 
 class Object(UnsupportedType):
