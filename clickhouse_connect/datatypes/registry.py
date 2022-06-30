@@ -3,17 +3,19 @@ import logging
 from typing import Tuple, Dict
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
 from clickhouse_connect.driver.exceptions import InternalError
-from clickhouse_connect.driver.parser import parse_enum, parse_callable
+from clickhouse_connect.driver.parser import parse_enum, parse_callable, parse_columns
 
 logger = logging.getLogger(__name__)
+type_cache: Dict[str, ClickHouseType] = {}
 
 
 def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     """
-    Converts a ClickHouse type name into the base class and the definition (TypeDef) needed for any additional instantiation
+    Converts a ClickHouse type name into the base class and the definition (TypeDef) needed for any
+    additional instantiation
     :param name: ClickHouse type name as returned by clickhouse
-    :return: The original base name (before arguments), the full name as passed in, and the TypeDef object that captures any additional
-    arguments
+    :return: The original base name (before arguments), the full name as passed in and the TypeDef object that
+     captures any additional arguments
     """
     base = name
     wrappers = []
@@ -27,6 +29,9 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     if base.startswith('Enum'):
         keys, values = parse_enum(base)
         base = base[:base.find('(')]
+    elif base.startswith('Nested'):
+        keys, values = parse_columns(base[6:])
+        base = 'Nested'
     else:
         try:
             base, values, _ = parse_callable(base)
@@ -52,6 +57,3 @@ def get_from_name(name: str) -> ClickHouseType:
             raise InternalError(err_str) from None
         type_cache[name] = ch_type
     return ch_type
-
-
-type_cache: Dict[str, ClickHouseType] = {}

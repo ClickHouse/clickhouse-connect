@@ -6,12 +6,11 @@ def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
     """
     Parses a single level ClickHouse optionally 'callable' function/identifier.  The identifier is returned as the
     first value in the response tuple.  If the expression is callable -- i.e. an identifier followed by 0 or more
-    arguments in parentheses, the second returned value is a tuple of the comma separated arguments.  Unquoted spaces
-    in the arguments will be removed.  The third and final tuple value is any text remaining after the initial
-    expression for further parsing/processing.
+    arguments in parentheses, the second returned value is a tuple of the comma separated arguments.  The third and
+    final tuple value is any text remaining after the initial expression for further parsing/processing.
 
     Examples:
-      "Tuple(String, Enum('one' = 1, 'two' = 2))" will return "Tuple", ("String", "Enum('one'=1,'two'=2)"), ""
+      "Tuple(String, Enum('one' = 1, 'two' = 2))" will return "Tuple", ("String", "Enum('one' = 1,'two' = 2)"), ""
       "MergeTree() PARTITION BY key" will return "MergeTree", (), "PARTITION BY key"
 
     :param expr:  ClickHouse DDL or Column Name expression
@@ -48,10 +47,16 @@ def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
                 value += expr[pos]
                 pos += 1
         else:
-            if not level:
-                while char == ' ':
-                    char = expr[pos]
-                    pos += 1
+            if level == 0:
+                if char == ' ':
+                    space = pos
+                    temp_char = expr[space]
+                    while temp_char == ' ':
+                        space += 1
+                        temp_char = expr[space]
+                    if not value or temp_char in "()',=><0":
+                        char = temp_char
+                        pos = space + 1
                 if char == ',':
                     add_value()
                     value = ''
@@ -80,31 +85,83 @@ def parse_enum(expr) -> Tuple[Tuple[str], Tuple[int]]:
     values = []
     pos = expr.find('(') + 1
     in_key = False
-    key = ''
-    value = ''
+    key = []
+    value = []
     while True:
         char = expr[pos]
         pos += 1
         if in_key:
             if char == "'":
-                keys.append(key)
-                key = ''
+                keys.append(''.join(key))
+                key = []
                 in_key = False
             elif char == '\\' and expr[pos] == "'" and expr[pos:pos + 4] != "' = " and expr[pos:] != "')":
-                key += expr[pos]
+                key.append(expr[pos])
                 pos += 1
             else:
-                key += char
+                key.append(char)
         elif char not in (' ', '='):
             if char == ',':
-                values.append(int(value))
-                value = ''
+                values.append(int(''.join(value)))
+                value = []
             elif char == ')':
-                values.append(int(value))
+                values.append(int(''.join(value)))
                 break
             elif char == "'" and not value:
                 in_key = True
             else:
-                value += char
+                value.append(char)
     values, keys = zip(*sorted(zip(values, keys)))
     return tuple(keys), tuple(values)
+
+
+def parse_columns(expr: str):
+    """
+    Parse a ClickHouse column list of the form (col1 String, col2 Array(Tuple(String, Int32)))
+    :param expr: ClickHouse enum expression/arguments
+    :return: Parallel tuples of column types and column types (strings)
+    """
+    names = []
+    columns = []
+    pos = 1
+    in_column = False
+    level = 0
+    name = []
+    column = ''
+    in_str = False
+    while True:
+        char = expr[pos]
+        pos += 1
+        if in_column:
+            if in_str:
+                column += ''
+                if "'" == char:
+                    in_str = False
+                elif char == '\\' and expr[pos] == "'" and expr[pos:pos + 4] != "' = " and expr[pos:pos + 2] != "')":
+                    column += expr[pos]
+                    pos += 1
+            else:
+                if level == 0:
+                    if char == ',':
+                        columns.append(column)
+                        column = ''
+                        in_column = False
+                        continue
+                    if char == ')':
+                        columns.append(column)
+                        break
+                if char == "'" and (not column or 'Enum' in column):
+                    in_str = True
+                if char == '(':
+                    level += 1
+                elif char == ')':
+                    level -= 1
+            column += char
+        elif char == ' ':
+            if name:
+                names.append(''.join(name))
+                name = []
+                in_column = True
+        else:
+            name.append(char)
+    return tuple(names), tuple(columns)

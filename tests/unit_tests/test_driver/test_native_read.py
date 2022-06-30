@@ -4,6 +4,7 @@ from uuid import UUID
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.native import parse_response
 from tests.helpers import to_bytes
+from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 UINT16_NULLS = """
     0104 0969 6e74 5f76 616c 7565 104e 756c
@@ -89,3 +90,8 @@ def test_ip():
     ipv4_type.write_native_column(ips, dest)
     python, _ = ipv4_type.read_native_column(dest, 0, 3)
     assert python == [IPv4Address(ip) for ip in ips]
+
+
+def test_nested():
+    result = parse_response(to_bytes(NESTED_BINARY))
+    check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)
