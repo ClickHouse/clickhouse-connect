@@ -26,7 +26,7 @@ def test_query_fuzz(test_client: Client, test_table_engine: str):
 
         col_defs = [TableColumnDef(name, ch_type) for name, ch_type in zip(col_names, col_types)]
         create_stmt = create_table('fuzz_test', col_defs, test_table_engine, {'order by': 'row_id'})
-        test_client.command(create_stmt)
+        test_client.command(create_stmt, settings={'flatten_nested': 0})
         test_client.insert('fuzz_test', data, col_names)
 
         data_result = test_client.query('SELECT * FROM fuzz_test')

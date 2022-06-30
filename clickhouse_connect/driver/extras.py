@@ -7,7 +7,7 @@ from typing import Sequence, Union, NamedTuple, Callable, Type, Dict
 from datetime import date, datetime, timedelta
 
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.container import Array, Tuple, Map
+from clickhouse_connect.datatypes.container import Array, Tuple, Map, Nested
 from clickhouse_connect.datatypes.network import IPv4, IPv6
 from clickhouse_connect.datatypes.numeric import BigInt, Float32, Float64, Enum, Bool, Boolean, Decimal
 from clickhouse_connect.datatypes.registry import get_from_name
@@ -80,6 +80,8 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
     if isinstance(ch_type, Enum):
         keys = list(ch_type._name_map.keys())
         return lambda: choice(keys)
+    if isinstance(ch_type, Nested):
+        return lambda: random_nested(ch_type.element_names, ch_type.element_types, col_def)
     if isinstance(ch_type, String):
         if col_def.ascii_only:
             return lambda: random_ascii_str(col_def.str_len)
@@ -149,6 +151,17 @@ def random_ipv6():
                     int(random() * 4294967296) << 32) | ( int(random() * 4294967296) << 64)
         return IPv6Address(ip_int)
     return IPv4Address(int(random() * 2 ** 32))
+
+
+def random_nested(keys: Sequence[str], types: Sequence[ClickHouseType], col_def: RandomValueDef):
+    sz = int(random() * col_def.arr_len) // 2
+    row = []
+    for _ in range(sz):
+        nested_element = {}
+        for name, col_type in zip(keys, types):
+            nested_element[name] = random_value_gen(col_type, col_def)()
+        row.append(nested_element)
+    return row
 
 
 gen_map: Dict[Type[ClickHouseType], Callable] = {
