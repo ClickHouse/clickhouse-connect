@@ -1,6 +1,7 @@
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.native import build_insert
 from tests.helpers import to_bytes
+from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 LOW_CARD_OUTPUT = """
 0101 0576 616c 7565 204c 6f77 4361 7264
@@ -50,3 +51,13 @@ def test_tuple_three():
     types = [get_from_name('Tuple(String)')]
     output = build_insert(data, column_names=names, column_types=types)
     assert bytes(output) == bytes.fromhex(TUPLE_THREE_OUTPUT)
+
+
+def test_nested():
+    data = [([],),
+            ([{'str1': 'three', 'int32': 5}, {'str1': 'five', 'int32': 77}],),
+            ([{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}],),
+            ([{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}],)]
+    types = [get_from_name('Nested(str1 String, int32 UInt32)')]
+    output = build_insert(data, column_names=['nested'], column_types=types)
+    assert bytes(output) == bytes.fromhex(NESTED_BINARY)

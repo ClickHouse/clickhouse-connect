@@ -1,4 +1,5 @@
 # pylint: disable=protected-access
+from clickhouse_connect.datatypes.container import Nested
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
 
 
@@ -23,3 +24,15 @@ def test_names():
         "Array(Enum8(\'user_name\' = 1, \'ip_address\' = -2, \'forwarded_ip_address\' = 3, \'client_key\' = 4))")
     assert array_type.name == (
         "Array(Enum8('ip_address' = -2, 'user_name' = 1, 'forwarded_ip_address' = 3, 'client_key' = 4))")
+
+
+def test_nested_parse():
+    nested_type = gfn('Nested(str1 String, int32 UInt32)')
+    assert nested_type.name == 'Nested(str1 String, int32 UInt32)'
+    assert isinstance(nested_type, Nested)
+    nested_type = gfn('Nested(id Int64, data Nested(inner_key String, inner_map Map(String, UUID)))')
+    assert nested_type.name == 'Nested(id Int64, data Nested(inner_key String, inner_map Map(String, UUID)))'
+    nest = "key_0 Enum16('[m(X*' = -18773, '_9as' = 11854, '&e$LE' = 27685), key_1 Nullable(Decimal(62, 38))"
+    nested_name = f'Nested({nest})'
+    nested_type = gfn(nested_name)
+    assert nested_type.name == nested_name
