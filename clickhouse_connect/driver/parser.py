@@ -165,4 +165,3 @@ def parse_columns(expr: str):
         else:
             name.append(char)
     return tuple(names), tuple(columns)
-

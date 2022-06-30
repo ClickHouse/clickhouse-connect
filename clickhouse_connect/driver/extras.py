@@ -157,7 +157,7 @@ def random_nested(keys: Sequence[str], types: Sequence[ClickHouseType], col_def:
     sz = int(random() * col_def.arr_len) // 2
     row = []
     for _ in range(sz):
-        nested_element = dict()
+        nested_element = {}
         for name, col_type in zip(keys, types):
             nested_element[name] = random_value_gen(col_type, col_def)()
         row.append(nested_element)
