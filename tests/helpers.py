@@ -20,9 +20,9 @@ weighted_types = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int3
                   ('UInt64', 2), ('Int128', 1), ('UInt128', 1), ('Int256', 1), ('UInt256', 1), ('String', 8),
                   ('FixedString', 4), ('Float32', 2), ('Float64', 2), ('Enum8', 2), ('Decimal', 4), ('Enum16', 2),
                   ('Bool', 1), ('UUID', 2), ('Date', 2), ('Date32', 1), ('DateTime', 4), ('DateTime64', 2), ('IPv4', 2),
-                  ('IPv6', 2), ('Array', 16), ('Tuple', 10), ('Map', 10))
+                  ('IPv6', 2), ('Array', 16), ('Tuple', 10), ('Map', 10), ('Nested', 4))
 all_types, all_weights = tuple(zip(*weighted_types))
-nested_types = ['Array', 'Tuple', 'Map']
+nested_types = ['Array', 'Tuple', 'Map', 'Nested']
 terminal_types = set(all_types) - set(nested_types)
 total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
@@ -81,6 +81,10 @@ def build_nested_type(base_type: str, depth: int):
         while value.python_type not in (int, str, list):
             value = random_type(depth + 1)
         return get_from_name(f'Map({key.name}, {value.name})')
+    if base_type == 'Nested':
+        elements = [random_type(depth + 1) for _ in range(random.randint(1, TUPLE_MAX))]
+        cols = [f'key_{ix} {element.name}' for ix, element in enumerate(elements)]
+        return get_from_name(f"Nested({', '.join(cols)})")
     raise ValueError(f'Unrecognized nested type {base_type}')
 
 

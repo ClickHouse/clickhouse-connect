@@ -26,41 +26,40 @@ def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
     name = expr[:pos]
     pos += 1  # Skip first paren
     values = []
-    value = []
+    value = ''
     in_str = False
     level = 0
 
     def add_value():
-        str_value = ''.join(value)
         try:
-            values.append(int(str_value))
+            values.append(int(value))
         except ValueError:
-            values.append(str_value)
+            values.append(value)
 
     while True:
         char = expr[pos]
         pos += 1
         if in_str:
-            value.append(char)
+            value += char
             if char == "'":
                 in_str = False
             elif char == '\\' and expr[pos] == "'" and expr[pos:pos + 4] != "' = " and expr[pos:pos + 2] != "')":
-                value.append(expr[pos])
+                value += expr[pos]
                 pos += 1
         else:
-            if not level:
+            if level == 0:
                 if char == ' ':
                     space = pos
                     temp_char = expr[space]
                     while temp_char == ' ':
                         space += 1
                         temp_char = expr[space]
-                    if not value or temp_char in "()',=><0123456789":
+                    if not value or temp_char in "()',=><0":
                         char = temp_char
                         pos = space + 1
                 if char == ',':
                     add_value()
-                    value = []
+                    value = ''
                     continue
                 if char == ')':
                     break
@@ -70,7 +69,7 @@ def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
                 level += 1
             elif char == ')' and level:
                 level -= 1
-            value.append(char)
+            value += char
     if value != '':
         add_value()
     return name, tuple(values), expr[pos:].strip()
@@ -128,25 +127,36 @@ def parse_columns(expr: str):
     in_column = False
     level = 0
     name = []
-    column = []
+    column = ''
+    in_str = False
     while True:
         char = expr[pos]
         pos += 1
         if in_column:
-            if level == 0:
-                if char == ',':
-                    columns.append(''.join(column))
-                    column = []
-                    in_column = False
-                    continue
+            if in_str:
+                column += ''
+                if "'" == char:
+                    in_str = False
+                elif char == '\\' and expr[pos] == "'" and expr[pos:pos + 4] != "' = " and expr[pos:pos + 2] != "')":
+                    column += expr[pos]
+                    pos += 1
+            else:
+                if level == 0:
+                    if char == ',':
+                        columns.append(column)
+                        column = ''
+                        in_column = False
+                        continue
+                    if char == ')':
+                        columns.append(column)
+                        break
+                if char == "'" and (not column or 'Enum' in column):
+                    in_str = True
+                if char == '(':
+                    level += 1
                 elif char == ')':
-                    columns.append(''.join(column))
-                    break
-            if char == '(':
-                level += 1
-            elif char == ')':
-                level -= 1
-            column.append(char)
+                    level -= 1
+            column += char
         elif char == ' ':
             if name:
                 names.append(''.join(name))
@@ -154,5 +164,5 @@ def parse_columns(expr: str):
                 in_column = True
         else:
             name.append(char)
-    return names, columns
+    return tuple(names), tuple(columns)
 

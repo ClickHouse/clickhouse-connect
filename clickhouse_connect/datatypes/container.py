@@ -199,27 +199,40 @@ class Map(ClickHouseType):
 
 
 class Nested(ClickHouseType):
-    __slots__ = 'tuple_array', 'tuple_names'
+    __slots__ = 'tuple_array', 'element_names', 'element_types'
     python_type = Sequence[dict]
 
     def __init__(self, type_def):
         super().__init__(type_def)
-        self.tuple_names = type_def.keys
+        self.element_names = type_def.keys
         self.tuple_array = get_from_name(f"Array(Tuple({','.join(type_def.values)}))")
-        inner_types = self.tuple_array.element_type.element_types
-        cols = [f'{x[0]} {x[1].name}' for x in zip(type_def.keys, inner_types)]
+        self.element_types = self.tuple_array.element_type.element_types
+        cols = [f'{x[0]} {x[1].name}' for x in zip(type_def.keys, self.element_types)]
         self._name_suffix = f"({', '.join(cols)})"
 
     def _to_row_binary(self, value: dict, dest: MutableSequence):
-        pass
+        self.tuple_array.write_native_data([tuple(sub_row[key] for key in self.element_names) for sub_row in value],
+                                           dest)
 
     def _from_row_binary(self, source: Sequence, loc: int):
         data, loc = self.tuple_array.from_row_binary(source, loc)
-        return data, loc
+        return [dict(zip(self.element_names, x)) for x in data], loc
+
+    def read_native_prefix(self, source: Sequence, loc: int):
+        return self.tuple_array.read_native_prefix(source, loc)
 
     def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
+        keys = self.element_names
         data, loc = self.tuple_array.read_native_data(source, loc, num_rows, use_none)
-        return data, loc
+        return [[dict(zip(keys, x)) for x in row] for row in data], loc
+
+    def write_native_prefix(self, dest: MutableSequence):
+        self.tuple_array.write_native_prefix(dest)
+
+    def write_native_data(self, column: Sequence, dest: MutableSequence):
+        keys = self.element_names
+        data = [[tuple(sub_row[key] for key in keys) for sub_row in row] for row in column]
+        self.tuple_array.write_native_data(data, dest)
 
 
 class Object(UnsupportedType):

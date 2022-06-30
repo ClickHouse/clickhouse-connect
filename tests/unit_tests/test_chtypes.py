@@ -32,3 +32,8 @@ def test_nested_parse():
     assert isinstance(nested_type, Nested)
     nested_type = gfn('Nested(id Int64, data Nested(inner_key String, inner_map Map(String, UUID)))')
     assert nested_type.name == 'Nested(id Int64, data Nested(inner_key String, inner_map Map(String, UUID)))'
+    nest = "key_0 Enum16('[m(X*' = -18773, '_9as' = 11854, '&e$LE' = 27685), key_1 Nullable(Decimal(62, 38))"
+    nested_name = f'Nested({nest})'
+    nested_type = gfn(nested_name)
+    assert nested_type.name == nested_name
+
