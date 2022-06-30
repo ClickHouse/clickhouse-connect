@@ -4,6 +4,7 @@ from uuid import UUID
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.native import parse_response
 from tests.helpers import to_bytes
+from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 UINT16_NULLS = """
     0104 0969 6e74 5f76 616c 7565 104e 756c
@@ -52,17 +53,6 @@ LOW_CARD_MAP = """
     799f 431d a9e1 93ca ccff c652
 """
 
-NESTED = """
-0104 066e 6573 7465 6421 4e65 7374 6564  
-2873 7472 3120 5374 7269 6e67 2c20 696e  
-7433 3220 5549 6e74 3332 2900 0000 0000 
-0000 0002 0000 0000 0000 0004 0000 0000  
-0000 0006 0000 0000 0000 0005 7468 7265  
-6504 6669 7665 036f 6e65 0374 776f 036f  
-6e65 0374 776f 0500 0000 4d00 0000 0500  
-0000 3700 0000 0500 0000 3700 0000  
-"""
-
 
 def check_result(result, expected, row_num=0, col_num=0):
     result_set = result[0]
@@ -103,5 +93,5 @@ def test_ip():
 
 
 def test_nested():
-    result = parse_response(to_bytes(NESTED))
-    check_result(result, [{"str1": "one", "int32": 5}, {"str1": "two", "int32": 55}], 2, 0)
+    result = parse_response(to_bytes(NESTED_BINARY))
+    check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)
