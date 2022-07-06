@@ -64,7 +64,7 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_p
             low_card_ok = False
         if random.random() < nullable_perc:
             base_type = f'Nullable({base_type})'
-        if base_type in ('Int256', 'Int128'):
+        if base_type in ('Int256', 'Int128', 'UInt256', 'UInt128'):
             low_card_ok = False
         if low_card_ok and random.random() < low_card_perc:
             base_type = f'LowCardinality({base_type})'
