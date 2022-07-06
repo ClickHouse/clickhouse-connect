@@ -1,4 +1,10 @@
-### ClickHouse release 0.1.6, 2022-07-06
+## ClickHouse Connect ChangeLog
+
+### Release 0.1.6, 2022-07-06
+
+#### Improvements
+
+* Support Nested data types
 
 #### Bug Fixes
 
