@@ -65,6 +65,8 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,
                 base_type += f"'{key}' = {value},"
             base_type = base_type[:-1] + ')'
             low_card_ok = False
+        if 'Int256' in base_type or 'Int128' in base_type:
+            low_card_ok = False
         if random.random() < nullable_perc:
             base_type = f'Nullable({base_type})'
         if low_card_ok and random.random() < low_card_perc:
