@@ -29,10 +29,13 @@ all_weights = [x / total_weight for x in all_weights]
 unsupported_types = set()
 
 
-def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_perc: float = NULLABLE_PERC):
+def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,
+                nullable_perc: float = NULLABLE_PERC, parent_type: str = None):
     base_type = random.choices(all_types, all_weights)[0]
     low_card_ok = True
-    while base_type in unsupported_types or (depth >= NESTED_DEPTH and base_type in nested_types):
+    while (base_type in unsupported_types
+           or (depth >= NESTED_DEPTH and base_type in nested_types)
+           or parent_type == 'Nested' and base_type in ('Int128', 'Int256', 'UInt256', 'UInt126')):
         base_type = random.choices(all_types, all_weights)[0]
     if base_type in terminal_types:
         if base_type == 'FixedString':
@@ -64,8 +67,6 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_p
             low_card_ok = False
         if random.random() < nullable_perc:
             base_type = f'Nullable({base_type})'
-        if base_type in ('Int256', 'Int128', 'UInt256', 'UInt128'):
-            low_card_ok = False
         if low_card_ok and random.random() < low_card_perc:
             base_type = f'LowCardinality({base_type})'
         return get_from_name(base_type)
@@ -88,7 +89,7 @@ def build_nested_type(base_type: str, depth: int):
             value = random_type(depth + 1)
         return get_from_name(f'Map({key.name}, {value.name})')
     if base_type == 'Nested':
-        elements = [random_type(depth + 1) for _ in range(random.randint(1, TUPLE_MAX))]
+        elements = [random_type(depth + 1, parent_type='Nested') for _ in range(random.randint(1, TUPLE_MAX))]
         cols = [f'key_{ix} {element.name}' for ix, element in enumerate(elements)]
         return get_from_name(f"Nested({', '.join(cols)})")
     raise ValueError(f'Unrecognized nested type {base_type}')
