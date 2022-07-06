@@ -1,4 +1,5 @@
 import array
+import threading
 from abc import abstractmethod, ABC
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple
@@ -15,7 +16,6 @@ class TypeDef(NamedTuple):
     wrappers: tuple = ()
     keys: tuple = ()
     values: tuple = ()
-    format: str = None
 
     @property
     def arg_str(self):
@@ -26,7 +26,7 @@ class ClickHouseType(ABC):
     """
     Base class for all ClickHouseType objects.
     """
-    __slots__ = 'nullable', 'low_card', 'wrappers', 'format', 'type_def', '__dict__'
+    __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
     _ch_name = None
     _name_suffix = ''
     np_type = 'O'
@@ -42,6 +42,13 @@ class ClickHouseType(ABC):
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
         return cls(type_def)
 
+    @classmethod
+    def read_format(cls):
+        try:
+            return threading.local.ch_read_format(cls)
+        except AttributeError:
+            return 'native'
+
     def __init__(self, type_def: TypeDef):
         """
         Base class constructor that sets Nullable and LowCardinality wrappers and currently assigns the row_binary conversion
@@ -51,8 +58,6 @@ class ClickHouseType(ABC):
         self.type_def = type_def
         self.wrappers = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
-        if type_def.format:
-            self.format = type_def.format
         self.nullable = 'Nullable' in self.wrappers
         if self.nullable:
             self.from_row_binary = self._nullable_from_row_binary

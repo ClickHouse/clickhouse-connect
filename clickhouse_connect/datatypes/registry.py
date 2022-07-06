@@ -1,8 +1,9 @@
 import logging
+import re
 
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Sequence, Type, Optional
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
-from clickhouse_connect.driver.exceptions import InternalError
+from clickhouse_connect.driver.exceptions import InternalError, ProgrammingError
 from clickhouse_connect.driver.parser import parse_enum, parse_callable, parse_columns
 
 logger = logging.getLogger(__name__)
@@ -57,3 +58,24 @@ def get_from_name(name: str) -> ClickHouseType:
             raise InternalError(err_str) from None
         type_cache[name] = ch_type
     return ch_type
+
+
+def matching_types(fmt_map: Optional[Dict[str, str]]) -> Dict[Type[ClickHouseType], str]:
+    if not fmt_map:
+        return {}
+    matches = {}
+    for pattern, fmt in fmt_map.items():
+        if '*' in pattern:
+            re_pattern = re.compile(pattern.replace('*', '.*'), re.IGNORECASE)
+            for type_name, ch_type in type_map.items():
+                if re_pattern.match(type_name):
+                    matches[ch_type] = fmt
+        else:
+            try:
+                matches[type_map[pattern]] = fmt
+            except KeyError:
+                pass
+        if not matches:
+            raise ProgrammingError(f'Unrecognized ClickHouse type {pattern} when setting formats')
+    return matches
+
