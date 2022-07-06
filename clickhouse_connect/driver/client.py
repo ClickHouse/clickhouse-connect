@@ -172,11 +172,11 @@ class Client(metaclass=ABCMeta):
     # pylint: disable=too-many-arguments
     def insert(self,
                table: str,
-               data: Iterable[Iterable[Any]],
+               data: Sequence[Sequence[Any]],
                column_names: Union[str, Iterable[str]] = '*',
                database: str = '',
-               column_types: Iterable[ClickHouseType] = None,
-               column_type_names: Iterable[str] = None,
+               column_types: Sequence[ClickHouseType] = None,
+               column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
                settings: Optional[Dict[str, Any]] = None):
         """
@@ -191,6 +191,9 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: No return, throws an exception if the insert fails
         """
+        if len(data) == 0 or len(data[0]) == 0:
+            logger.debug('Attempted insert with no data')
+            return
         table, database, full_table = self.normalize_table(table, database)
         if isinstance(column_names, str):
             if column_names == '*':

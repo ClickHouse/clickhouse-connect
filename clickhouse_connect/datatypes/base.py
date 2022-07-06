@@ -210,7 +210,7 @@ class ClickHouseType(ABC):
             try:
                 keys[0] = None if use_none else self.python_null
             except TypeError:
-                keys = (None if use_none else self.python_null,) + keys[1:]
+                keys = (None if use_none else self.python_null,) + tuple(keys[1:])
         index_cnt, loc = read_uint64(source, loc)
         assert index_cnt == num_rows
         index, loc = array_column(array_type(index_sz, False), source, loc, num_rows)
