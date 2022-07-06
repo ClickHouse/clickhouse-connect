@@ -31,6 +31,7 @@ unsupported_types = set()
 
 def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_perc: float = NULLABLE_PERC):
     base_type = random.choices(all_types, all_weights)[0]
+    low_card_ok = True
     while base_type in unsupported_types or (depth >= NESTED_DEPTH and base_type in nested_types):
         base_type = random.choices(all_types, all_weights)[0]
     if base_type in terminal_types:
@@ -38,10 +39,12 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_p
             base_type = f'{base_type}({random.randint(1, FIXED_STR_RANGE)})'
         if base_type == 'DateTime64':
             base_type = f'{base_type}({random.randint(0, 3) * 3})'
+            low_card_ok = False
         if base_type == 'Decimal':
             prec = int(random.random() * 76) + 1
             scale = int(random.random() * prec)
             base_type = f'Decimal({prec}, {scale})'
+            low_card_ok = False
         if base_type.startswith('Enum'):
             sz = 8 if base_type == 'Enum8' else 16
             keys = set()
@@ -58,9 +61,10 @@ def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_p
                 values.add(value)
                 base_type += f"'{key}' = {value},"
             base_type = base_type[:-1] + ')'
+            low_card_ok = False
         if random.random() < nullable_perc:
             base_type = f'Nullable({base_type})'
-        if 'String' in base_type and random.random() < low_card_perc:
+        if low_card_ok and random.random() < low_card_perc:
             base_type = f'LowCardinality({base_type})'
         return get_from_name(base_type)
     return build_nested_type(base_type, depth)
@@ -75,7 +79,7 @@ def build_nested_type(base_type: str, depth: int):
         return get_from_name(f"Tuple({', '.join(x.name for x in elements)})")
     if base_type == 'Map':
         key = random_type(1000, nullable_perc=0)
-        while key.python_type not in (int, str):
+        while key.python_type not in (str, int) or (key.python_type == int and key.low_card):
             key = random_type(1000, nullable_perc=0)
         value = random_type(depth + 1)
         while value.python_type not in (int, str, list):
