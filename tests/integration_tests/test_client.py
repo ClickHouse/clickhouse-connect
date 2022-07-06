@@ -44,12 +44,13 @@ def test_decimal_conv(test_client: Client, test_table_engine: str):
 
 
 def test_session_params(test_config: TestConfig):
-    client = create_client(interface=test_config.interface,
-                           host=test_config.host,
-                           port=test_config.port,
-                           username=test_config.username,
-                           password=test_config.password,
-                           session_id='TEST_SESSION_ID')
+    client = create_client(
+        session_id='TEST_SESSION_ID',
+        interface=test_config.interface,
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password)
     result = client.query('SELECT number FROM system.numbers LIMIT 5',
                           settings={'query_id': 'test_session_params'}).result_set
     assert len(result) == 5

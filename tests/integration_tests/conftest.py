@@ -81,7 +81,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    host=test_config.host,
                                    port=test_config.port,
                                    username=test_config.username,
-                                   password=test_config.password)
+                                   password=test_config.password,
+                                   allow_suspicious_low_cardinality_types=True)
             break
         except ClickHouseError as ex:
             if tries > 15:
