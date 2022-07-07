@@ -2,7 +2,7 @@ import logging
 
 from typing import Tuple, Dict
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
-from clickhouse_connect.driver.exceptions import InternalError, ProgrammingError
+from clickhouse_connect.driver.exceptions import InternalError
 from clickhouse_connect.driver.parser import parse_enum, parse_callable, parse_columns
 
 logger = logging.getLogger(__name__)
