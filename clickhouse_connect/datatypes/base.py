@@ -8,6 +8,9 @@ from clickhouse_connect.driver.common import array_column, array_type, int_size,
     write_uint64, low_card_version
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
+ch_read_formats = {}
+ch_write_formats = {}
+
 
 class TypeDef(NamedTuple):
     """
@@ -44,10 +47,13 @@ class ClickHouseType(ABC):
 
     @classmethod
     def read_format(cls):
-        try:
-            return threading.local.ch_read_format(cls)
-        except AttributeError:
-            return 'native'
+        overrides = getattr(threading.local, 'ch_column_overrides', None)
+        if overrides and cls in overrides:
+            return overrides[cls]
+        overrides = getattr(threading.local, 'ch_query_overrides)', None)
+        if overrides and cls in overrides:
+            return overrides[cls]
+        return ch_read_formats.get(cls, 'native')
 
     def __init__(self, type_def: TypeDef):
         """
@@ -120,8 +126,8 @@ class ClickHouseType(ABC):
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column
-        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise use the empty or zero type.  Allows support for
-        pandas data frames that do not support None
+        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise use the empty or zero type.
+         Allows support for pandas data frames that do not support None
         :return: The decoded column plust the updated location pointer
         """
         if self.low_card:
@@ -143,7 +149,8 @@ class ClickHouseType(ABC):
     # delegate binary operations to their elements
 
     # pylint: disable=no-self-use
-    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) -> Tuple[Union[Sequence, MutableSequence], int]:
+    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) \
+            -> Tuple[Union[Sequence, MutableSequence], int]:
         """
         Lowest level read method for ClickHouseType native data columns
         :param _source: Native protocol binary read buffer

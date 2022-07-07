@@ -1,24 +1,15 @@
-import threading
-from typing import Any, Sequence, Dict, Union
+from typing import Any, Sequence
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
 from clickhouse_connect.driver.query import DataResult
-from clickhouse_connect.driver.transform import DataTransform
+from clickhouse_connect.driver.transform import DataTransform, QueryContext
 
 
-class NativeTransform(DataTransform)
+class NativeTransform(DataTransform):
     # pylint: disable=too-many-locals
-    def parse_response(self, source: Sequence, type_formats: Dict[str, str],
-                       column_formats:Dict[str, Union[str, Dict[str, str]]]) -> DataResult:
-        """
-        Decodes the ClickHouse byte byte buffer response into rows of native Python data
-        :param source: A byte buffer or similar source
-        :param column_formats: Use None values for ClickHouse NULLs (otherwise use zero/empty values)
-        :return: DataResult -- data matrix, column names, column types
-        """
-        threading.local.ch_read_format = self.base_format.read_format
+    def _transform_response(self, source: Sequence, context: QueryContext) -> DataResult:
         if not isinstance(source, memoryview):
             source = memoryview(source)
         loc = 0
@@ -41,31 +32,16 @@ class NativeTransform(DataTransform)
                     col_types.append(col_type)
                 else:
                     col_type = col_types[col_num]
-                col_fmt = column_formats.get(name, None)
-                if col_fmt:
-                    if isinstance()
-                else:
-                    self.base_format.read_overrides
-                column, loc = col_type.read_native_column(source, loc, num_rows)
+                column, loc = col_type.read_native_column(source, loc, num_rows, use_none=context.use_none)
                 result_block.append(column)
             block += 1
             result.extend(list(zip(*result_block)))
         return DataResult(result, tuple(names), tuple(col_types))
 
-
-    def build_insert(data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
+    def build_insert(self, data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
                      column_type_names: Sequence[str] = None,
                      column_types: Sequence[ClickHouseType] = None,
                      column_oriented: bool = False):
-        """
-        Encoding a dataset of Python sequences into native binary format
-        :param data: Matrix of rows and columns of data
-        :param column_names: Column names of the data to insert
-        :param column_type_names: Column type names of the data
-        :param column_types: Column types used to encode data in ClickHouse native format
-        :param column_oriented: If true the dataset does not need to be "pivoted"
-        :return: bytearray containing the dataset in ClickHouse native insert format
-        """
         if not column_types:
             column_types = [registry.get_from_name(name) for name in column_type_names]
         output = bytearray()
