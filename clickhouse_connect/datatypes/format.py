@@ -3,7 +3,7 @@ import re
 from typing import Dict, Type, Sequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType, type_map, ch_read_formats, ch_write_formats
-from clickhouse_connect.driver import ProgrammingError
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
 def set_default_formats(*args, **kwargs):
@@ -51,8 +51,8 @@ def _convert_arguments(*args, **kwargs) -> Dict[str, str]:
     try:
         for x in range(0, len(args), 2):
             fmt_map[args[x]] = args[x + 1]
-    except (IndexError, TypeError, ValueError):
-        raise ProgrammingError('Invalid type/format arguments for format method')
+    except (IndexError, TypeError, ValueError) as ex:
+        raise ProgrammingError('Invalid type/format arguments for format method') from ex
     fmt_map.update(kwargs)
     return fmt_map
 

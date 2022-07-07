@@ -9,7 +9,7 @@ from clickhouse_connect.driver.query import DataResult
 
 class QueryContext:
     def __init__(self, use_none: bool, type_formats: Optional[Dict[str, str]],
-                 column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]]):
+                 _column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]]):
         self.query_overrides = format_map(type_formats)
         self.use_none = use_none
 
@@ -52,7 +52,6 @@ class DataTransform(ABC):
         :param column_oriented: If true the dataset does not need to be "pivoted"
         :return: bytearray containing the dataset in the appropriate format
         """
-        pass
 
     @abstractmethod
     def _transform_response(self, source: Sequence, context: QueryContext) -> DataResult:
