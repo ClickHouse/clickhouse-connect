@@ -58,6 +58,16 @@ class ClickHouseType(ABC):
             return overrides[cls]
         return ch_read_formats.get(cls, 'native')
 
+    @classmethod
+    def write_format(cls):
+        overrides = getattr(threading.local, 'ch_column_overrides', None)
+        if overrides and cls in overrides:
+            return overrides[cls]
+        overrides = getattr(threading.local, 'ch_write_overrides)', None)
+        if overrides and cls in overrides:
+            return overrides[cls]
+        return ch_write_formats.get(cls, 'native')
+
     def __init__(self, type_def: TypeDef):
         """
         Base class constructor that sets Nullable and LowCardinality wrappers and currently assigns the row_binary conversion
@@ -108,7 +118,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             v, loc = read_uint64(source, loc)
             if v != low_card_version:
-                logger.warning(f'Unexpected low cardinality version {v} reading type {self.name}')
+                logger.warning(f'Unexpected low cardinality version %d reading type %s', v, self.name)
         return loc
 
     def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:

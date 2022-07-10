@@ -88,21 +88,22 @@ class FixedString(ClickHouseType):
             pass
         self._name_suffix = type_def.arg_str
         self._empty_bytes = bytes(b'\x00' * self._byte_size)
+        self.to_row_binary = self._to_rb_internal
 
     @property
     def python_null(self):
         return self._empty_bytes if self.read_format() == 'bytes' else ''
 
-    @property
-    def _to_row_binary(self):
-        return self._to_row_binary_bytes if self.read_format() == 'bytes' else self._to_row_binary_str
-
     def _from_row_binary(self, source: Sequence, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
 
     @staticmethod
-    def _to_row_binary_bytes(value: Sequence, dest: MutableSequence):
+    def _to_row_binary(value: Sequence, dest: MutableSequence):
         dest += value
+
+    @property
+    def _to_rb_internal(self):
+        return self._to_row_binary_str if self.write_format() == 'string' else self._to_row_binary
 
     def _to_row_binary_str(self, value, dest: bytearray):
         value = str.encode(value, self.encoding)
