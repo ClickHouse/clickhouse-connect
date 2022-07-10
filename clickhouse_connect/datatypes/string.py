@@ -97,8 +97,7 @@ class FixedString(ClickHouseType):
     def _from_row_binary(self, source: Sequence, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
 
-    @staticmethod
-    def _to_row_binary(value: Sequence, dest: MutableSequence):
+    def _to_row_binary(self, value: Sequence, dest: MutableSequence):
         dest += value
 
     @property

@@ -118,7 +118,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             v, loc = read_uint64(source, loc)
             if v != low_card_version:
-                logger.warning(f'Unexpected low cardinality version %d reading type %s', v, self.name)
+                logger.warning('Unexpected low cardinality version %d reading type %s', v, self.name)
         return loc
 
     def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:

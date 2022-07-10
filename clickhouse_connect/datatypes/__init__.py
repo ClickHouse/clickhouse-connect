@@ -20,4 +20,3 @@ try:
     dt_string.FixedString._read_native_bytes = creaders.read_fixed_string_bytes
 except ImportError:
     logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
-
