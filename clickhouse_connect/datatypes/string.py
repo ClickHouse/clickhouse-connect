@@ -78,7 +78,6 @@ class String(ClickHouseType):
 
 class FixedString(ClickHouseType):
     encoding = 'utf8'
-    format = 'bytes'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -88,18 +87,15 @@ class FixedString(ClickHouseType):
         except IndexError:
             pass
         self._name_suffix = type_def.arg_str
-        self._python_null = bytes(b'\x00' * self._byte_size)
-        if self.format == 'bytes':
-            self._to_row_binary = self._to_row_binary_bytes
-        else:
-            self._to_row_binary = self._to_row_binary_str
+        self._empty_bytes = bytes(b'\x00' * self._byte_size)
 
     @property
     def python_null(self):
-        return self._python_null if self.format == 'bytes' else ''
+        return self._empty_bytes if self.read_format() == 'bytes' else ''
 
-    def _to_row_binary(self, value, dest):
-        pass  # Overridden anyway on instance creation
+    @property
+    def _to_row_binary(self):
+        return self._to_row_binary_bytes if self.read_format() == 'bytes' else self._to_row_binary_str
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
@@ -115,7 +111,7 @@ class FixedString(ClickHouseType):
             dest += bytes((0,) * (self._byte_size - len(value)))
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        if self.format == 'string':
+        if self.read_format() == 'string':
             return self._read_native_str(source, loc, num_rows, self._byte_size, self.encoding)
         return self._read_native_bytes(source, loc, num_rows, self._byte_size)
 

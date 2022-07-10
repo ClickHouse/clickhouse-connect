@@ -9,8 +9,9 @@ empty_uuid_b = bytes(b'\x00' * 16)
 
 
 class UUID(ClickHouseType):
-    python_null = PYUUID(int=0)
-    format = 'uuid'
+    @property
+    def python_null(self):
+        return PYUUID(int=0) if self.read_format() == 'uuid' else ''
 
     def _from_row_binary(self, source: bytearray, loc: int):
         int_high, loc = read_uint64(source, loc)
@@ -26,7 +27,7 @@ class UUID(ClickHouseType):
         dest += bytes_high + bytes_low
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        if self.format == 'string':
+        if self.read_format() == 'string':
             return self._read_native_str(source, loc, num_rows)
         return self._read_native_uuid(source, loc, num_rows)
 

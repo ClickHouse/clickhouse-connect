@@ -2,30 +2,29 @@ import socket
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
-from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import write_array, array_column
-from clickhouse_connect.driver.exceptions import ProgrammingError
 
 IPV4_V6_MASK = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
 V6_NULL = bytes(b'\x00' * 16)
+V4_NULL = IPv4Address(0)
 
 
 # pylint: disable=protected-access
 class IPv4(ArrayType):
     _array_type = 'I'
-    python_null = IPv4Address(0)
-    format = 'ip'
 
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        if self.format == 'string':
-            self.python_type = str
-            self.np_type = 'U'
-        elif self.format == 'ip':
-            self.python_type = IPv4Address
-            self.np_type = 'O'
-        else:
-            raise ProgrammingError('Unrecognized output format for IP4 type')
+    @property
+    def python_type(self):
+        return str if self.read_format() == 'string' else IPv4Address
+
+    @property
+    def np_type(self):
+        return 'U' if self.read_format() == 'string' else 'O'
+
+    @property
+    def python_null(self):
+        return '' if self.read_format() == 'string' else V4_NULL
 
     def _from_row_binary(self, source: bytes, loc: int):
         ipv4 = IPv4Address.__new__(IPv4Address)
@@ -41,7 +40,7 @@ class IPv4(ArrayType):
             dest += value.to_bytes(4, 'little')
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        if self.format == 'string':
+        if self.read_format() == 'string':
             return self._from_native_str(source, loc, num_rows)
         return self._from_native_ip(source, loc, num_rows)
 
@@ -76,19 +75,14 @@ class IPv4(ArrayType):
 
 # pylint: disable=protected-access
 class IPv6(ClickHouseType):
-    python_null = IPv6Address(0)
-    format = 'ip'
 
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        if self.format == 'string':
-            self.python_type = str
-            self.np_type = 'U'
-        elif self.format == 'ip':
-            self.python_type = IPv6Address
-            self.np_type = 'O'
-        else:
-            raise ProgrammingError('Unrecognized output format for IP6 type')
+    @property
+    def python_type(self):
+        return str if self.read_format() == 'string' else IPv6Address
+
+    @property
+    def python_null(self):
+        return '' if self.read_format() == 'string' else V6_NULL
 
     def _from_row_binary(self, source: Sequence, loc: int):
         end = loc + 16
@@ -116,7 +110,7 @@ class IPv6(ClickHouseType):
             dest += value
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        if self.format == 'string':
+        if self.read_format() == 'string':
             return self._read_native_str(source, loc, num_rows)
         return self._read_native_ip(source, loc, num_rows)
 

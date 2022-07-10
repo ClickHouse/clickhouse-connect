@@ -16,6 +16,8 @@ def test_query_fuzz(test_client: Client, test_table_engine: str):
     if int(server_major) < 22:
         unsupported_types.add('Date32')
         unsupported_types.add('Bool')
+        unsupported_types.add('UInt128')
+        unsupported_types.add('UUID')
     for _ in range(TEST_RUNS):
         test_client.command('DROP TABLE IF EXISTS fuzz_test')
         data_rows = random.randint(0, MAX_DATA_ROWS)

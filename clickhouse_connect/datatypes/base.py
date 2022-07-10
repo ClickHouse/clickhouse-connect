@@ -1,5 +1,7 @@
 import array
 import threading
+import logging
+
 from abc import abstractmethod, ABC
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple
@@ -8,6 +10,7 @@ from clickhouse_connect.driver.common import array_column, array_type, int_size,
     write_uint64, low_card_version
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
+logger = logging.getLogger(__name__)
 ch_read_formats = {}
 ch_write_formats = {}
 
@@ -97,14 +100,15 @@ class ClickHouseType(ABC):
 
     def read_native_prefix(self, source: Sequence, loc: int):
         """
-        Read the low cardinality version.  Like the write, this has to happen immediately for container classes
+        Read the low cardinality version.  Like the write method, this has to happen immediately for container classes
         :param source: The native protocol binary read buffer
         :param loc: Moving location pointer for the read buffer
         :return: updated read pointer
         """
         if self.low_card:
             v, loc = read_uint64(source, loc)
-            assert v == low_card_version
+            if v != low_card_version:
+                logger.warning(f'Unexpected low cardinality version {v} reading type {self.name}')
         return loc
 
     def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:
@@ -296,7 +300,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         super().__init_subclass__(registered)
         if cls._array_type in ('i', 'I') and int_size == 2:
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
-        if cls._array_type:
+        if isinstance(cls._array_type, str) and cls._array_type:
             cls._struct_type = '<' + cls._array_type
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
@@ -318,7 +322,8 @@ class ArrayType(ClickHouseType, ABC, registered=False):
 
 class UnsupportedType(ClickHouseType, ABC, registered=False):
     """
-    Base class for ClickHouse types that can't be serialized/deserialized into Python types.  Mostly useful just for DDL statements
+    Base class for ClickHouse types that can't be serialized/deserialized into Python types.
+    Mostly useful just for DDL statements
     """
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)

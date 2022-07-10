@@ -88,18 +88,14 @@ class Int64(ArrayType):
 
 
 class UInt64(ArrayType):
-    _array_type = 'Q'
-    np_type = 'u8'
-    format = 'unsigned'
 
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        if self.format == 'unsigned':
-            self._array_type = 'Q'
-            self.np_type = 'u8'
-        else:
-            self._array_type = 'q'
-            self.np_type = 'i8'
+    @property
+    def _array_type(self):
+        return 'Q' if self.read_format() == 'unsigned' else 'q'
+
+    @property
+    def np_type(self):
+        return 'u8' if self.read_format() == 'unsigned' else 'q'
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return suf('<q', source, loc)[0], loc + 8
@@ -112,7 +108,6 @@ class UInt64(ArrayType):
 class BigInt(ClickHouseType, registered=False):
     _signed = True
     _byte_size = 0
-    format = 'int'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         signed = self._signed
@@ -121,7 +116,7 @@ class BigInt(ClickHouseType, registered=False):
         column = []
         app = column.append
         ifb = int.from_bytes
-        if self.format == 'string':
+        if self.read_format() == 'string':
             for ix in range(loc, end, sz):
                 app(str(ifb(source[ix: ix + sz], 'little', signed=signed)))
         else:
