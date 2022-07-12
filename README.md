@@ -6,10 +6,15 @@ ClickHouse HTTP interface.
 
 
 ### Installation
+
+```
+pip install clickhouse-connect
+```
+
 ClickHouse Connect requires Python 3.7 or higher.  The `cython` package must be installed prior to installing 
 `clickhouse_connect` to build and install the optional  Cython/C extensions used for improving read and write
 performance using the ClickHouse Native format. After installing cython if desired, clone this repository and
-run `python setup.py install`from the project directory.  
+run `python setup.py install`from the project directory.
 
 ### Getting Started
 
