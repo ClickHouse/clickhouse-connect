@@ -88,6 +88,7 @@ class Int64(ArrayType):
 
 
 class UInt64(ArrayType):
+    valid_formats = 'signed', 'native'
 
     @property
     def _array_type(self):
@@ -108,6 +109,7 @@ class UInt64(ArrayType):
 class BigInt(ClickHouseType, registered=False):
     _signed = True
     _byte_size = 0
+    valid_formats = 'string', 'native'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         signed = self._signed
@@ -133,7 +135,7 @@ class BigInt(ClickHouseType, registered=False):
         signed = self._signed
         empty = bytes(b'\x00' * sz)
         ext = dest.extend
-        if isinstance(first, str):
+        if isinstance(first, str) or self.write_format() == 'string':
             if self.nullable:
                 for x in column:
                     if x:

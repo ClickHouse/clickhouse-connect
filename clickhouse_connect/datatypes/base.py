@@ -35,7 +35,10 @@ class ClickHouseType(ABC):
     __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
     _ch_name = None
     _name_suffix = ''
-    np_type = 'O'
+    _encoding = 'utf8'
+    np_type = 'O'  # Default to Numpy Object type
+    valid_formats = 'native'
+
     python_null = 0
     python_type = None
 
@@ -49,24 +52,22 @@ class ClickHouseType(ABC):
         return cls(type_def)
 
     @classmethod
-    def read_format(cls):
+    def _active_format(cls, fmt_map: Dict[Type['ClickHouseType'], str]):
         overrides = getattr(threading.local, 'ch_column_overrides', None)
         if overrides and cls in overrides:
             return overrides[cls]
         overrides = getattr(threading.local, 'ch_query_overrides)', None)
         if overrides and cls in overrides:
             return overrides[cls]
-        return ch_read_formats.get(cls, 'native')
+        return fmt_map.get(cls, 'native')
+
+    @classmethod
+    def read_format(cls):
+        return cls._active_format(ch_read_formats)
 
     @classmethod
     def write_format(cls):
-        overrides = getattr(threading.local, 'ch_column_overrides', None)
-        if overrides and cls in overrides:
-            return overrides[cls]
-        overrides = getattr(threading.local, 'ch_write_overrides)', None)
-        if overrides and cls in overrides:
-            return overrides[cls]
-        return ch_write_formats.get(cls, 'native')
+        return cls._active_format(ch_write_formats)
 
     def __init__(self, type_def: TypeDef):
         """
@@ -97,6 +98,16 @@ class ClickHouseType(ABC):
         for wrapper in reversed(self.wrappers):
             name = f'{wrapper}({name})'
         return name
+
+    @property
+    def encoding(self):
+        override = getattr(threading.local, 'ch_column_encoding', None)
+        if override:
+            return override
+        override = getattr(threading.local, 'ch_query_encoding', None)
+        if override:
+            return override
+        return self._encoding
 
     def write_native_prefix(self, dest: MutableSequence):
         """
@@ -304,6 +315,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     _signed = True
     _array_type = None
     _struct_type = None
+    valid_formats = 'string', 'native'
     python_type = int
 
     def __init_subclass__(cls, registered: bool = True):
@@ -314,7 +326,10 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._struct_type = '<' + cls._array_type
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        return array_column(self._array_type, source, loc, num_rows)
+        column, loc =  array_column(self._array_type, source, loc, num_rows)
+        if self.read_format() == 'string':
+            column = [str(x) for x in column]
+        return column, loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         if column and self.nullable:

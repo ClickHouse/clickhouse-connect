@@ -6,6 +6,10 @@ from clickhouse_connect.datatypes.base import ClickHouseType, type_map, ch_read_
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
+def set_encoding(encoding: str):
+    ClickHouseType._encoding = encoding
+
+
 def set_default_formats(*args, **kwargs):
     fmt_map = format_map(_convert_arguments(*args, **kwargs))
     ch_read_formats.update(fmt_map)
@@ -23,9 +27,19 @@ def clear_default_format(pattern: str):
         ch_write_formats.pop(ch_type, None)
 
 
+def set_write_format(pattern: str, fmt: str):
+    for ch_type in _matching_types(pattern):
+        ch_write_formats[ch_type] = fmt
+
+
 def clear_write_format(pattern: str):
     for ch_type in _matching_types(pattern):
         ch_write_formats.pop(ch_type, None)
+
+
+def set_read_format(pattern: str, fmt: str):
+    for ch_type in _matching_types(pattern):
+        ch_read_formats[ch_type] = fmt
 
 
 def clear_read_format(pattern: str):
@@ -38,10 +52,7 @@ def format_map(fmt_map: Dict[str, str]) -> Dict[Type[ClickHouseType], str]:
         return {}
     final_map = {}
     for pattern, fmt in fmt_map.items():
-        matches = _matching_types(pattern)
-        if not matches:
-            raise ProgrammingError(f'Unrecognized ClickHouse type {pattern} when setting formats')
-        for ch_type in matches:
+        for ch_type in _matching_types(pattern, fmt):
             final_map[ch_type] = fmt
     return final_map
 
@@ -57,10 +68,18 @@ def _convert_arguments(*args, **kwargs) -> Dict[str, str]:
     return fmt_map
 
 
-def _matching_types(pattern: str) -> Sequence[Type[ClickHouseType]]:
+def _matching_types(pattern: str, fmt: str = None) -> Sequence[Type[ClickHouseType]]:
     if '*' in pattern:
         re_pattern = re.compile(pattern.replace('*', '.*'), re.IGNORECASE)
-        return [ch_type for type_name, ch_type in type_map.items() if re_pattern.match(type_name)]
-    if pattern in type_map:
-        return [type_map[pattern]]
-    return []
+        matches = [ch_type for type_name, ch_type in type_map.items() if re_pattern.match(type_name)]
+    elif pattern in type_map:
+        matches = [type_map[pattern]]
+    else:
+        matches = []
+    if not matches:
+        ProgrammingError(f'Unrecognized ClickHouse type {pattern} when setting formats')
+    if fmt:
+        invalid = [ch_type.__name__ for ch_type in matches if fmt not in ch_type.valid_formats]
+        if invalid:
+            raise ProgrammingError(f"{fmt} is not a valid format for ClickHouse types {','.join(invalid)}.")
+    return matches

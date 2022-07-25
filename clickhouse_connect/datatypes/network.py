@@ -13,6 +13,7 @@ V4_NULL = IPv4Address(0)
 # pylint: disable=protected-access
 class IPv4(ArrayType):
     _array_type = 'I'
+    valid_formats = 'string', 'native'
 
     @property
     def python_type(self):
@@ -75,6 +76,7 @@ class IPv4(ArrayType):
 
 # pylint: disable=protected-access
 class IPv6(ClickHouseType):
+    valid_formats = 'string', 'native'
 
     @property
     def python_type(self):

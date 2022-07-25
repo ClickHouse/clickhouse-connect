@@ -9,6 +9,8 @@ empty_uuid_b = bytes(b'\x00' * 16)
 
 
 class UUID(ClickHouseType):
+    valid_formats = 'string', 'native'
+
     @property
     def python_null(self):
         return PYUUID(int=0) if self.read_format() == 'uuid' else ''
@@ -68,7 +70,7 @@ class UUID(ClickHouseType):
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         empty = empty_uuid_b
-        if isinstance(first, str):
+        if isinstance(first, str) or self.write_format() == 'string':
             for v in column:
                 if v:
                     x = int(v, 16)

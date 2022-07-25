@@ -5,15 +5,7 @@ from clickhouse_connect.driver.common import read_leb128, to_leb128
 
 
 class String(ClickHouseType):
-    encoding = 'utf8'
     python_null = ''
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        try:
-            self.encoding = type_def.values[0]
-        except IndexError:
-            pass
 
     def _from_row_binary(self, source, loc):
         length, loc = read_leb128(source, loc)
@@ -77,22 +69,18 @@ class String(ClickHouseType):
 
 
 class FixedString(ClickHouseType):
-    encoding = 'utf8'
+    valid_formats = 'string', 'native'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._byte_size = type_def.values[0]
-        try:
-            self.encoding = type_def.values[1]
-        except IndexError:
-            pass
         self._name_suffix = type_def.arg_str
         self._empty_bytes = bytes(b'\x00' * self._byte_size)
         self.to_row_binary = self._to_rb_internal
 
     @property
     def python_null(self):
-        return self._empty_bytes if self.read_format() == 'bytes' else ''
+        return self._empty_bytes if self.read_format() == 'native' else ''
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
@@ -140,7 +128,7 @@ class FixedString(ClickHouseType):
         str_enc = str.encode
         enc = self.encoding
         first = self._first_value(column)
-        if isinstance(first, str):
+        if isinstance(first, str) or self.write_format() == 'string':
             if self.nullable:
                 for x in column:
                     if x is None:
