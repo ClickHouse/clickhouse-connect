@@ -6,8 +6,8 @@ from clickhouse_connect.datatypes.base import ClickHouseType, type_map, ch_read_
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
-def set_encoding(encoding: str):
-    ClickHouseType._encoding = encoding
+def default_encoding(encoding: str):
+    ClickHouseType._encoding = encoding  # pylint: disable=protected-access
 
 
 def set_default_formats(*args, **kwargs):

@@ -36,3 +36,8 @@ def test_nested_parse():
     nested_name = f'Nested({nest})'
     nested_type = gfn(nested_name)
     assert nested_type.name == nested_name
+
+
+def test_named_tuple():
+    pass
+

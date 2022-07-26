@@ -124,44 +124,42 @@ def parse_columns(expr: str):
     names = []
     columns = []
     pos = 1
-    in_column = False
+    named = False
     level = 0
-    name = []
-    column = ''
+    label = ''
     in_str = False
     while True:
         char = expr[pos]
         pos += 1
-        if in_column:
-            if in_str:
-                column += ''
-                if "'" == char:
-                    in_str = False
-                elif char == '\\' and expr[pos] == "'" and expr[pos:pos + 4] != "' = " and expr[pos:pos + 2] != "')":
-                    column += expr[pos]
-                    pos += 1
-            else:
-                if level == 0:
-                    if char == ',':
-                        columns.append(column)
-                        column = ''
-                        in_column = False
-                        continue
-                    if char == ')':
-                        columns.append(column)
-                        break
-                if char == "'" and (not column or 'Enum' in column):
-                    in_str = True
-                if char == '(':
-                    level += 1
-                elif char == ')':
-                    level -= 1
-            column += char
-        elif char == ' ':
-            if name:
-                names.append(''.join(name))
-                name = []
-                in_column = True
+        if in_str:
+            if "'" == char:
+                in_str = False
+            elif char == '\\' and expr[pos] == "'" and expr[pos:pos + 4] != "' = " and expr[pos:pos + 2] != "')":
+                label += expr[pos]
+                pos += 1
         else:
-            name.append(char)
+            if level == 0:
+                if char == ' ':
+                    if label:
+                        names.append(label)
+                        label = ''
+                        named = True
+                    char = ''
+                elif char == ',':
+                    columns.append(label)
+                    if not named:
+                        names.append('')
+                    named = False
+                    label = ''
+                    continue
+                elif char == ')':
+                    columns.append(label)
+                    break
+            if char == "'" and (not label or 'Enum' in label):
+                in_str = True
+            elif char == '(':
+                level += 1
+            elif char == ')':
+                level -= 1
+        label += char
     return tuple(names), tuple(columns)

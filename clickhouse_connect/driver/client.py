@@ -131,17 +131,17 @@ class Client(metaclass=ABCMeta):
                     settings: Optional[Dict[str, Any]] = None,
                     use_strings: bool = True):
         """
-        Query method using the ClickHouse ArrowStream format to return a PyArrow result
+        Query method using the ClickHouse Arrow format to return a PyArrow table
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
-        :return: Tuple of the PyArrow schema and a single record batch
+        :return: PyArrow.Table
         """
         arrow_settings = {} if not settings else settings.copy()
         if 'output_format_arrow_string_as_string' not in arrow_settings:
             arrow_settings['output_format_arrow_string_as_string'] = '1' if use_strings else '0'
-        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'ArrowStream'))
+        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'Arrow'))
 
     @abstractmethod
     def command(self,

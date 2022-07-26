@@ -115,6 +115,5 @@ def from_pandas_df(df: 'pa.DataFrame'):
 
 def to_arrow(content: bytes):
     check_arrow()
-    buf = pyarrow.BufferReader(content)
-    schema = pyarrow.read_schema(buf)
-    return schema, pyarrow.read_record_batch(buf, schema)
+    reader = pyarrow.RecordBatchFileReader(content)
+    return reader.read_all()

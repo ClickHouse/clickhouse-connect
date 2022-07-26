@@ -84,11 +84,12 @@ class Array(ClickHouseType):
 
 
 class Tuple(ClickHouseType):
-    _slots = 'element_types', 'from_rb_funcs', 'to_rb_funcs'
+    _slots = 'element_names', 'element_types', 'from_rb_funcs', 'to_rb_funcs'
     python_type = tuple
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
+        self.element_names = type_def.keys
         self.element_types = [get_from_name(name) for name in type_def.values]
         self.from_rb_funcs = tuple((t.from_row_binary for t in self.element_types))
         self.to_rb_funcs = tuple((t.to_row_binary for t in self.element_types))
