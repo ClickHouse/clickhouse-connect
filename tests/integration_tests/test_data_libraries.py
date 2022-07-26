@@ -14,7 +14,6 @@ def test_arrow(test_client: Client):
     assert arrow_schema.field(2).type.bit_width == 64
     assert arrow_table.num_rows > 20
     assert len(arrow_table.columns) == 3
-
     arrow_table = test_client.query_arrow('SELECT number from system.numbers LIMIT 500',
                                           settings={'max_block_size': 50})
     arrow_schema = arrow_table.schema

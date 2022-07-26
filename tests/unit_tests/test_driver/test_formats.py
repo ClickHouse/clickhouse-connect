@@ -13,5 +13,4 @@ def test_default_formats():
 
 def test_fixed_str_format():
     set_write_format('FixedString', 'string')
-
-
+    assert FixedString.write_format() == 'string'
