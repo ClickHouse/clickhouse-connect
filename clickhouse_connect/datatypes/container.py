@@ -93,7 +93,10 @@ class Tuple(ClickHouseType):
         self.element_types = [get_from_name(name) for name in type_def.values]
         self.from_rb_funcs = tuple((t.from_row_binary for t in self.element_types))
         self.to_rb_funcs = tuple((t.to_row_binary for t in self.element_types))
-        self._name_suffix = type_def.arg_str
+        if self.element_names:
+            self._name_suffix = f"({', '.join(k + ' ' + str(v) for k, v in zip(type_def.keys, type_def.values))})"
+        else:
+            self._name_suffix = type_def.arg_str
 
     def _from_row_binary(self, source: bytes, loc: int):
         values = []

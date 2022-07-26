@@ -117,7 +117,8 @@ def parse_enum(expr) -> Tuple[Tuple[str], Tuple[int]]:
 
 def parse_columns(expr: str):
     """
-    Parse a ClickHouse column list of the form (col1 String, col2 Array(Tuple(String, Int32)))
+    Parse a ClickHouse column list of the form (col1 String, col2 Array(Tuple(String, Int32))).  This also handles
+    unnamed columns (such as Tuple definitions).  Mixed named and unnamed columns are not currently supported.
     :param expr: ClickHouse enum expression/arguments
     :return: Parallel tuples of column types and column types (strings)
     """
@@ -140,15 +141,13 @@ def parse_columns(expr: str):
         else:
             if level == 0:
                 if char == ' ':
-                    if label:
+                    if label and not named:
                         names.append(label)
                         label = ''
                         named = True
                     char = ''
                 elif char == ',':
                     columns.append(label)
-                    if not named:
-                        names.append('')
                     named = False
                     label = ''
                     continue
