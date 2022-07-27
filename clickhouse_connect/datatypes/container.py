@@ -1,9 +1,11 @@
 import array
-from typing import Dict, Sequence, MutableSequence
+from typing import Dict, Sequence, MutableSequence, Any
 
-from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
-from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap
+from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef, EMPTY_TYPE_DEF
+from clickhouse_connect.datatypes.string import String
+from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap, write_uint64
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.json_impl import json_impl
 
 
 class Array(ClickHouseType):
@@ -116,9 +118,16 @@ class Tuple(ClickHouseType):
 
     def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
         columns = []
+        e_names = self.element_names
         for e_type in self.element_types:
             column, loc = e_type.read_native_data(source, loc, num_rows, use_none)
             columns.append(column)
+        if e_names and self.read_format != 'tuple':
+            dicts = [{} for _ in range(num_rows)]
+            for ix, x in enumerate(dicts):
+                for n, key in enumerate(e_names):
+                    x[key] = columns[n][ix]
+            return dicts, loc
         return tuple(zip(*columns)), loc
 
     def write_native_prefix(self, dest: MutableSequence):
@@ -239,13 +248,41 @@ class Nested(ClickHouseType):
         self.tuple_array.write_native_data(data, dest)
 
 
-class Object(UnsupportedType):
+class JSON(ClickHouseType):
+    python_type = dict
+
+    def _to_row_binary(self, value: Any, dest: MutableSequence):
+        value = bytes(json_impl.dumps(value))
+        dest += to_leb128(len(value)) + value
+
+    def _from_row_binary(self, source: Sequence, loc: int):
+        length, loc = read_leb128(source, loc)
+        return json_impl.loads(str(source[loc:loc + length])), loc + length
+
+    def write_native_prefix(self, dest: MutableSequence):
+        dest.append(0x01)
+
+    def write_native_data(self, column: Sequence, dest: MutableSequence):
+        app = dest.append
+        to_json = json_impl.dumps
+        for x in column:
+            v = to_json(x)
+            sz = len(v)
+            while True:
+                b = sz & 0x7f
+                sz >>= 7
+                if sz == 0:
+                    app(b)
+                    break
+                app(0x80 | b)
+            dest += v
+
+
+class Object(JSON):
     python_type = dict
 
     def __init__(self, type_def):
+        if type_def.values[0].lower() != "'json'":
+            raise NotImplementedError('Only json Object type is currently supported')
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
-
-
-class JSON(UnsupportedType):
-    python_type = dict

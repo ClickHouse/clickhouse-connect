@@ -2,6 +2,9 @@ from typing import Union, Tuple
 
 
 # pylint: disable=too-many-branches
+from clickhouse_connect.driver.common import unescape_identifier
+
+
 def parse_callable(expr) -> Tuple[str, Tuple[Union[str, int], ...], str]:
     """
     Parses a single level ClickHouse optionally 'callable' function/identifier.  The identifier is returned as the
@@ -142,7 +145,7 @@ def parse_columns(expr: str):
             if level == 0:
                 if char == ' ':
                     if label and not named:
-                        names.append(label)
+                        names.append(unescape_identifier(label))
                         label = ''
                         named = True
                     char = ''

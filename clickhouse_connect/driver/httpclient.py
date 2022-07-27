@@ -47,7 +47,7 @@ class HttpClient(Client):
                  data_format: str = 'native',
                  query_limit: int = 5000,
                  connect_timeout: int = 10,
-                 send_receive_timeout=60,
+                 send_receive_timeout = 300,
                  client_name: str = 'clickhouse-connect',
                  send_progress: bool = True,
                  verify: bool = True,
@@ -143,6 +143,11 @@ class HttpClient(Client):
             query += f' FORMAT {self.read_format}'
         return query
 
+    def client_setting(self, name, value):
+        if isinstance(value, bool):
+            value = '1' if value else '0'
+        self.session.params[name] = str(value)
+
     def query(self, query: str,
               parameters: Optional[Dict[str, Any]] = None,
               settings: Dict[str, Any] = None,
@@ -192,7 +197,7 @@ class HttpClient(Client):
                   'database': self.database}
         params.update(self._validate_settings(settings, True))
         insert_block = self.transform.build_insert(data, column_types=column_types, column_names=column_names,
-                                         column_oriented=column_oriented)
+                                                   column_oriented=column_oriented)
         response = self._raw_request(insert_block, params, headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 

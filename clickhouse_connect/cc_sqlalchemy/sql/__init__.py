@@ -1,11 +1,11 @@
-import re
 from typing import Optional
 
 from sqlalchemy import Table
 from sqlalchemy.sql.compiler import RESERVED_WORDS
 
+from clickhouse_connect.driver.common import identifier_re
+
 reserved_words = RESERVED_WORDS | set('index')
-identifier_re = re.compile(r'^[a-zA-Z_][0-9a-zA-Z_]*$')
 
 
 def quote_id(v: str) -> str:

@@ -91,6 +91,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             if tries > 15:
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
             sleep(1)
+    if client.min_version('22.6.1'):
+        client.client_setting('allow_experimental_object_type', 1)
     if test_db != 'default':
         client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
         client.database = test_db

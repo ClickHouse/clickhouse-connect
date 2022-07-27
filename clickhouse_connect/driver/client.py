@@ -70,6 +70,14 @@ class Client(metaclass=ABCMeta):
         return query
 
     @abstractmethod
+    def client_setting(self, name, value):
+        """
+        Set a clickhouse setting for the client after initialization
+        :param name: Setting name
+        :param value: Setting value
+        """
+
+    @abstractmethod
     def query(self,
               query: str,
               parameters: Optional[Dict[str, Any]] = None,
@@ -244,6 +252,23 @@ class Client(metaclass=ABCMeta):
             database = database or self.database
             full_name = f'{database}.{name}'
         return table, database, full_name
+
+    def min_version(self, version_str: str) -> bool:
+        """
+        Determine whether the connected server is at least the submitted version
+        :param version_str:  Version string consisting of up to 4 integers delimited by dots
+        :return:  1 if the version_str is greater than the server_version, 0 if equal, -1 if less than
+        """
+        server_parts = [int(x) for x in self.server_version.split('.')]
+        server_parts.extend([0] * (4 - len(server_parts)))
+        version_parts = [int(x) for x in version_str.split('.')]
+        version_parts.extend([0] * (4 - len(version_parts)))
+        for x, y in zip(server_parts, version_parts):
+            if x > y:
+                return True
+            if x < y:
+                return False
+        return True
 
     def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
         """

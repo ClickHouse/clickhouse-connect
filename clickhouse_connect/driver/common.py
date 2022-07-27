@@ -1,5 +1,6 @@
 import array
 import sys
+import re
 
 from typing import Tuple, Sequence, MutableSequence
 
@@ -9,6 +10,8 @@ int_size = array.array('i').itemsize
 low_card_version = 1
 
 array_map = {1: 'b', 2: 'h', 4: 'i', 8: 'q'}
+decimal_prec = {32: 9, 64: 18, 128: 38, 256: 79}
+identifier_re = re.compile('^[a-zA-Z_][0-9a-zA-Z_]*$')
 
 if int_size == 2:
     array_map[4] = 'l'
@@ -166,4 +169,7 @@ def decimal_size(prec: int):
     return 256
 
 
-decimal_prec = {32: 9, 64: 18, 128: 38, 256: 79}
+def unescape_identifier(x: str) -> str:
+    if x.startswith('`') and x.endswith('`'):
+        return x[1:-1]
+    return x
