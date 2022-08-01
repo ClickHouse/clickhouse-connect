@@ -16,7 +16,7 @@ except ImportError:
 
 
 def _pyjson_to_json(obj: Any) -> bytes:
-    return py_json.dumps(obj).encode()
+    return py_json.dumps(obj, separators=(',', ':')).encode()
 
 
 logger = logging.getLogger(__name__)

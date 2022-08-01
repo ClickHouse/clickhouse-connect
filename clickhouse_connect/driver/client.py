@@ -81,6 +81,7 @@ class Client(metaclass=ABCMeta):
         :param value: Setting value
         """
 
+    # pylint: disable=duplicate-code
     def query(self,
               query: str = None,
               parameters: Optional[Dict[str, Any]] = None,
@@ -126,6 +127,7 @@ class Client(metaclass=ABCMeta):
         :return: bytes representing raw ClickHouse return value based on format
         """
 
+    # pylint: disable=duplicate-code
     def query_np(self,
                  query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,
@@ -134,7 +136,7 @@ class Client(metaclass=ABCMeta):
                  column_formats: Optional[Dict[str, str]] = None,
                  context: QueryContext = None):
         """
-        Query method that results the results as a numpy array
+        Query method that returns the results as a numpy array
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
@@ -151,6 +153,7 @@ class Client(metaclass=ABCMeta):
                                     False,
                                     context))
 
+    # pylint: disable=duplicate-code
     def query_df(self,
                  query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,

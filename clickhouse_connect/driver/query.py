@@ -26,6 +26,8 @@ class QueryContext:
     """
     Argument/parameter object for queries
     """
+
+    # pylint: disable=duplicate-code
     def __init__(self,
                  query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,
