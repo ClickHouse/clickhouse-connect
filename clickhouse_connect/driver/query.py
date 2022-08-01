@@ -1,5 +1,4 @@
 import ipaddress
-import threading
 import uuid
 
 from enum import Enum
@@ -11,6 +10,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
 from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy, HAS_ARROW, check_arrow
+from clickhouse_connect.driver.threads import query_settings
 
 if HAS_PANDAS:
     import pandas as pa
@@ -39,6 +39,7 @@ class QueryContext:
         self.query_formats = format_map(query_formats)
         self.column_formats = column_formats or {}
         self.use_none = use_none
+        self.thread_local = None
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -58,38 +59,36 @@ class QueryContext:
 
     def __enter__(self):
         if self.query_formats:
-            threading.local().ch_query_overrides = self.query_formats
+            query_settings.query_overrides = self.query_formats
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        t_local = threading.local()
         if self.query_formats:
-            del t_local.ch_query_overrides
+            del query_settings.query_overrides
         try:
-            del t_local.ch_column_overrides
+            del query_settings.column_overrides
         except AttributeError:
             pass
 
     def start_column(self, name: str, ch_type: ClickHouseType):
-        t_local = threading.local()
         if name in self.column_formats:
             fmts = self.column_formats[name]
             if isinstance(fmts, str):
                 if isinstance(ch_type, Array):
-                    fmt_map = {ch_type.element_type: fmts}
+                    fmt_map = {ch_type.element_type.__class__: fmts}
                 else:
-                    fmt_map = {ch_type: fmts}
+                    fmt_map = {ch_type.__class__: fmts}
             else:
                 fmt_map = format_map(fmts)
-            t_local.ch_column_overrides = fmt_map
+            query_settings.column_overrides = fmt_map
         else:
             try:
-                del t_local.ch_column_overrides
+                del query_settings.column_overrides
             except AttributeError:
                 pass
 
 
-class QueryResult():
+class QueryResult:
     """
     Wrapper class for query return values and metadata
     """

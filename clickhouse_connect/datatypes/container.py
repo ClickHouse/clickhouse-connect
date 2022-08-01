@@ -126,6 +126,9 @@ class Tuple(ClickHouseType):
             for ix, x in enumerate(dicts):
                 for y, key in enumerate(e_names):
                     x[key] = columns[y][ix]
+            if self.read_format() == 'json':
+                to_json = json_impl.any_to_json
+                return [to_json(x) for x in dicts], loc
             return dicts, loc
         return tuple(zip(*columns)), loc
 

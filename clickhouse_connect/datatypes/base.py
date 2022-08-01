@@ -1,5 +1,4 @@
 import array
-import threading
 import logging
 
 from abc import abstractmethod, ABC
@@ -9,6 +8,7 @@ from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optio
 from clickhouse_connect.driver.common import array_column, array_type, int_size, read_uint64, write_array, \
     write_uint64, low_card_version
 from clickhouse_connect.driver.exceptions import NotSupportedError
+from clickhouse_connect.driver.threads import query_settings
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -53,11 +53,10 @@ class ClickHouseType(ABC):
 
     @classmethod
     def _active_format(cls, fmt_map: Dict[Type['ClickHouseType'], str]):
-        t_local = threading.local()
-        overrides = getattr(t_local, 'ch_column_overrides', None)
+        overrides = getattr(query_settings, 'column_overrides', None)
         if overrides and cls in overrides:
             return overrides[cls]
-        overrides = getattr(t_local, 'ch_query_overrides)', None)
+        overrides = getattr(query_settings, 'query_overrides', None)
         if overrides and cls in overrides:
             return overrides[cls]
         return fmt_map.get(cls, 'native')
@@ -102,10 +101,10 @@ class ClickHouseType(ABC):
 
     @property
     def encoding(self):
-        override = getattr(threading.local(), 'ch_column_encoding', None)
+        override = getattr(query_settings, 'column_encoding', None)
         if override:
             return override
-        override = getattr(threading.local(), 'ch_query_encoding', None)
+        override = getattr(query_settings, 'query_encoding', None)
         if override:
             return override
         return self._encoding
