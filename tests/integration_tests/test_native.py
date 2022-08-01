@@ -3,7 +3,7 @@ from ipaddress import IPv4Address, IPv6Address
 
 import pytest
 
-from clickhouse_connect.datatypes.format import set_default_formats, clear_default_format
+from clickhouse_connect.datatypes.format import set_default_formats, clear_default_format, set_read_format
 from clickhouse_connect.driver import Client
 
 
@@ -39,17 +39,20 @@ def test_json(test_client: Client, test_table_engine: str):
 def test_read_formats(test_client: Client, test_table_engine: str):
     test_client.command('DROP TABLE IF EXISTS read_format_test')
     test_client.command('CREATE TABLE read_format_test (key Int32, uuid UUID, fs FixedString(10), ipv4 IPv4,' +
-                        f'str_array Array(IPv6)) Engine {test_table_engine} ORDER BY key')
+                        'ip_array Array(IPv6), tup Tuple(u1 UInt64, ip2 IPv4))' +
+                        f'Engine {test_table_engine} ORDER BY key')
     uuid1 = uuid.UUID('23E45688e89B-12D3-3273-426614174000')
     uuid2 = uuid.UUID('77AA3278-3728-12d3-5372-000377723832')
-    row1 = (1, uuid1, '530055777k', '10.251.30.50', ['2600::', '2001:4860:4860::8844'])
-    row2 = (2, uuid2, 'short str', '10.44.75.20', ['74:382::3332', '8700:5200::5782:3992'])
+    row1 = (1, uuid1, '530055777k', '10.251.30.50', ['2600::', '2001:4860:4860::8844'], (7372, '10.20.30.203'))
+    row2 = (2, uuid2, 'short str', '10.44.75.20', ['74:382::3332', '8700:5200::5782:3992'], (7320, '252.18.4.50'))
     test_client.insert('read_format_test', [row1, row2])
 
     result = test_client.query('SELECT * FROM read_format_test').result_set
     assert result[0][1] == uuid1
     assert result[1][3] == IPv4Address('10.44.75.20')
     assert result[0][2] == b'\x35\x33\x30\x30\x35\x35\x37\x37\x37\x6b'
+    assert result[0][5]['u1'] == 7372
+    assert result[0][5]['ip2'] == IPv4Address('10.20.30.203')
 
     set_default_formats('uuid', 'string', 'ip*', 'string', 'FixedString', 'string')
     result = test_client.query('SELECT * FROM read_format_test').result_set
@@ -65,16 +68,33 @@ def test_read_formats(test_client: Client, test_table_engine: str):
     assert result[0][4][1] == IPv6Address('2001:4860:4860::8844')
     assert result[0][2] == '530055777k'
 
-    result = test_client.query('SELECT * FROM read_format_test', query_formats={'IP*': 'string'}).result_set
+    # Test query formats
+    result = test_client.query('SELECT * FROM read_format_test', query_formats={'IP*': 'string',
+                               'tup': 'json'}).result_set
     assert result[1][3] == '10.44.75.20'
+    assert result[0][5] == b'{"u1":7372,"ip2":"10.20.30.203"}'
 
     # Ensure that the query format clears
     result = test_client.query('SELECT * FROM read_format_test').result_set
     assert result[1][3] == IPv4Address('10.44.75.20')
+    assert result[0][5]['ip2'] == IPv4Address('10.20.30.203')
 
-    result = test_client.query('SELECT * FROM read_format_test', column_formats={'ipv4': 'string'}).result_set
+    # Test column formats
+    result = test_client.query('SELECT * FROM read_format_test', column_formats={'ipv4': 'string',
+                               'tup': 'tuple'}).result_set
     assert result[1][3] == '10.44.75.20'
+    assert result[0][5][1] == IPv4Address('10.20.30.203')
 
     # Ensure that the column format clears
     result = test_client.query('SELECT * FROM read_format_test').result_set
     assert result[1][3] == IPv4Address('10.44.75.20')
+    assert result[0][5]['ip2'] == IPv4Address('10.20.30.203')
+
+    # Test sub column formats
+    set_read_format('tuple', 'tuple')
+    result = test_client.query('SELECT * FROM read_format_test', column_formats={'tup' : {'ip*': 'string'}}).result_set
+    assert result[0][5][1] == '10.20.30.203'
+
+    set_read_format('tuple', 'native')
+    result = test_client.query('SELECT * FROM read_format_test', column_formats={'tup': {'ip*': 'string'}}).result_set
+    assert result[0][5]['ip2'] == '10.20.30.203'

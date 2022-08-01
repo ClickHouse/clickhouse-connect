@@ -46,7 +46,7 @@ class QueryContext:
                      parameters: Optional[Dict[str, Any]] = None,
                      settings: Optional[Dict[str, Any]] = None,
                      query_formats: Optional[Dict[str, str]] = None,
-                     column_formats: Optional[Dict[str, str]] = None,
+                     column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                      use_none: Optional[bool] = None) -> 'QueryContext':
         copy = QueryContext()
         copy.query = query or self.query

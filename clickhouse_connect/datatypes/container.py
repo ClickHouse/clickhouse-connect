@@ -86,7 +86,7 @@ class Array(ClickHouseType):
 
 class Tuple(ClickHouseType):
     _slots = 'element_names', 'element_types', 'from_rb_funcs', 'to_rb_funcs'
-    python_type = tuple
+    valid_formats = 'tuple', 'json', 'native'  # native is 'tuple' for unnamed tuples, and dict for named tuples
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -98,6 +98,14 @@ class Tuple(ClickHouseType):
             self._name_suffix = f"({', '.join(k + ' ' + str(v) for k, v in zip(type_def.keys, type_def.values))})"
         else:
             self._name_suffix = type_def.arg_str
+
+    @property
+    def python_type(self):
+        if self.read_format() == 'tuple':
+            return tuple
+        if self.read_format() == 'json':
+            return str
+        return dict
 
     def _from_row_binary(self, source: bytes, loc: int):
         values = []
