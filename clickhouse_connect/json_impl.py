@@ -29,7 +29,7 @@ any_to_json = _pyjson_to_json
 
 
 def set_json_library(impl: str = None):
-    global any_to_json
+    global any_to_json # pylint: disable=global-statement
     if impl:
         func = _to_json.get(impl)
         if not func:

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Sequence, Dict, Union, Any
+from typing import Sequence, Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.query import DataResult, QueryContext
