@@ -9,7 +9,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value, \
-    to_arrow
+    to_arrow, QueryContext
 
 logger = logging.getLogger(__name__)
 limit_re = re.compile(r'\s+LIMIT[$|\s]', re.IGNORECASE)
@@ -70,6 +70,10 @@ class Client(metaclass=ABCMeta):
         return query
 
     @abstractmethod
+    def _query_with_context(self, context: QueryContext):
+        pass
+
+    @abstractmethod
     def client_setting(self, name, value):
         """
         Set a clickhouse setting for the client after initialization
@@ -77,20 +81,35 @@ class Client(metaclass=ABCMeta):
         :param value: Setting value
         """
 
-    @abstractmethod
     def query(self,
-              query: str,
+              query: str = None,
               parameters: Optional[Dict[str, Any]] = None,
               settings: Optional[Dict[str, Any]] = None,
-              use_none: bool = True) -> QueryResult:
+              query_formats: Optional[Dict[str, str]] = None,
+              column_formats: Optional[Dict[str, str]] = None,
+              use_none: bool = True,
+              context: QueryContext = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other commands that result a result matrix
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring
         :param use_none: Use None for ClickHouse nulls instead of empty values
+        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: QueryResult -- data and metadata from response
         """
+        if context:
+            query_context = context.updated_copy(query,
+                                                 parameters,
+                                                 settings,
+                                                 query_formats,
+                                                 column_formats,
+                                                 False)
+        else:
+            query_context = QueryContext(query, parameters, settings, query_formats, column_formats, use_none)
+        return self._query_with_context(query_context)
 
     @abstractmethod
     def raw_query(self,
@@ -108,30 +127,54 @@ class Client(metaclass=ABCMeta):
         """
 
     def query_np(self,
-                 query: str,
+                 query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,
-                 settings: Optional[Dict[str, Any]] = None):
+                 settings: Optional[Dict[str, Any]] = None,
+                 query_formats: Optional[Dict[str, str]] = None,
+                 column_formats: Optional[Dict[str, str]] = None,
+                 context: QueryContext = None):
         """
         Query method that results the results as a numpy array
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring.
+        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return np_result(self.query(query, parameters, settings, use_none=False))
+        return np_result(self.query(query,
+                                    parameters,
+                                    settings,
+                                    query_formats,
+                                    column_formats,
+                                    False,
+                                    context))
 
     def query_df(self,
-                 query: str,
+                 query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,
-                 settings: Optional[Dict[str, Any]] = None):
+                 settings: Optional[Dict[str, Any]] = None,
+                 query_formats: Optional[Dict[str, str]] = None,
+                 column_formats: Optional[Dict[str, str]] = None,
+                 context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring
+        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return to_pandas_df(self.query(query, parameters, settings, use_none=False))
+        return to_pandas_df(self.query(query,
+                                       parameters,
+                                       settings,
+                                       query_formats,
+                                       column_formats,
+                                       False,
+                                       context))
 
     def query_arrow(self,
                     query: str,

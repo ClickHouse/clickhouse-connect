@@ -14,7 +14,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value
+from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value, QueryContext
 from clickhouse_connect.driver.rowbinary import RowBinaryTransform
 
 logger = logging.getLogger(__name__)
@@ -148,18 +148,12 @@ class HttpClient(Client):
             value = '1' if value else '0'
         self.session.params[name] = str(value)
 
-    def query(self, query: str,
-              parameters: Optional[Dict[str, Any]] = None,
-              settings: Dict[str, Any] = None,
-              use_none: bool = True) -> QueryResult:
-        """
-        See BaseClient doc_string for this method
-        """
-        final_query = self._prep_query(query, parameters)
+    def _query_with_context(self, context: QueryContext) -> QueryResult:
+        final_query = self._prep_query(context.query, context.parameters)
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
-        params.update(self._validate_settings(settings, True))
-        if columns_only_re.search(query):
+        params.update(self._validate_settings(context.settings, True))
+        if columns_only_re.search(final_query):
             response = self._raw_request(final_query + ' FORMAT JSON', params, headers, retries=2)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
@@ -172,7 +166,7 @@ class HttpClient(Client):
             data_result = DataResult([], tuple(names), tuple(types))
         else:
             response = self._raw_request(self._format_query(final_query), params, headers, retries=2)
-            data_result = self.transform.parse_response(response.content, use_none=use_none)
+            data_result = self.transform.parse_response(response.content, context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:

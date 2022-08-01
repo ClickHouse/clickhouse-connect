@@ -53,10 +53,11 @@ class ClickHouseType(ABC):
 
     @classmethod
     def _active_format(cls, fmt_map: Dict[Type['ClickHouseType'], str]):
-        overrides = getattr(threading.local, 'ch_column_overrides', None)
+        t_local = threading.local()
+        overrides = getattr(t_local, 'ch_column_overrides', None)
         if overrides and cls in overrides:
             return overrides[cls]
-        overrides = getattr(threading.local, 'ch_query_overrides)', None)
+        overrides = getattr(t_local, 'ch_query_overrides)', None)
         if overrides and cls in overrides:
             return overrides[cls]
         return fmt_map.get(cls, 'native')
@@ -101,19 +102,19 @@ class ClickHouseType(ABC):
 
     @property
     def encoding(self):
-        override = getattr(threading.local, 'ch_column_encoding', None)
+        override = getattr(threading.local(), 'ch_column_encoding', None)
         if override:
             return override
-        override = getattr(threading.local, 'ch_query_encoding', None)
+        override = getattr(threading.local(), 'ch_query_encoding', None)
         if override:
             return override
         return self._encoding
 
     def write_native_prefix(self, dest: MutableSequence):
         """
-        This is something of a hack, as the only "prefix" currently used is for the LowCardinality version.  Because of the
-        way the ClickHouse C++ code is written, this must be done before any data is written even if the LowCardinality column
-        is within a container
+        Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
+        way the ClickHouse C++ code is written, this must be done before any data is written even if the
+        LowCardinality column is within a container.  The only recognized low cardinality version is 1
         :param dest: The native protocol binary write buffer
         """
         if self.low_card:

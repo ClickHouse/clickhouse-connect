@@ -18,6 +18,7 @@ class NativeTransform(DataTransform):
         result = []
         total_size = len(source)
         block = 0
+        use_none = context.use_none
         while loc < total_size:
             result_block = []
             num_cols, loc = read_leb128(source, loc)
@@ -32,7 +33,8 @@ class NativeTransform(DataTransform):
                     col_types.append(col_type)
                 else:
                     col_type = col_types[col_num]
-                column, loc = col_type.read_native_column(source, loc, num_rows, use_none=context.use_none)
+                context.start_column(name, col_type)
+                column, loc = col_type.read_native_column(source, loc, num_rows, use_none=use_none)
                 result_block.append(column)
             block += 1
             result.extend(list(zip(*result_block)))

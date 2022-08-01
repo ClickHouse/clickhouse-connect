@@ -36,6 +36,7 @@ class String(ClickHouseType):
             loc += length
         return column, loc
 
+    # pylint: disable=duplicate-code
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         encoding = self.encoding
         app = dest.append

@@ -1,12 +1,15 @@
 import ipaddress
+import threading
 import uuid
 
 from enum import Enum
-from typing import NamedTuple, Any, Tuple, Dict, Sequence
+from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
 from datetime import date, datetime
 from pytz import UTC
 
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.container import Array
+from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy, HAS_ARROW, check_arrow
 
 if HAS_PANDAS:
@@ -19,10 +22,78 @@ if HAS_ARROW:
     import pyarrow
 
 
+class QueryContext:
+    """
+    Argument/parameter object for queries
+    """
+    def __init__(self,
+                 query: str = None,
+                 parameters: Optional[Dict[str, Any]] = None,
+                 settings: Optional[Dict[str, Any]] = None,
+                 query_formats: Optional[Dict[str, str]] = None,
+                 column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                 use_none: bool = True):
+        self.query = query
+        self.parameters = parameters or {}
+        self.settings = settings or {}
+        self.query_formats = format_map(query_formats)
+        self.column_formats = column_formats or {}
+        self.use_none = use_none
+
+    def updated_copy(self,
+                     query: Optional[str] = None,
+                     parameters: Optional[Dict[str, Any]] = None,
+                     settings: Optional[Dict[str, Any]] = None,
+                     query_formats: Optional[Dict[str, str]] = None,
+                     column_formats: Optional[Dict[str, str]] = None,
+                     use_none: Optional[bool] = None) -> 'QueryContext':
+        copy = QueryContext()
+        copy.query = query or self.query
+        copy.parameters = self.parameters.update(parameters or {})
+        copy.settings = self.settings.update(settings or {})
+        copy.query_formats = self.query_formats.update(query_formats or {})
+        copy.column_formats = self.column_formats.update(column_formats or {})
+        copy.use_none = use_none if use_none is not None else self.use_none
+        return copy
+
+    def __enter__(self):
+        if self.query_formats:
+            threading.local().ch_query_overrides = self.query_formats
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        t_local = threading.local()
+        if self.query_formats:
+            del t_local.ch_query_overrides
+        try:
+            del t_local.ch_column_overrides
+        except AttributeError:
+            pass
+
+    def start_column(self, name: str, ch_type: ClickHouseType):
+        t_local = threading.local()
+        if name in self.column_formats:
+            fmts = self.column_formats[name]
+            if isinstance(fmts, str):
+                if isinstance(ch_type, Array):
+                    fmt_map = {ch_type.element_type: fmts}
+                else:
+                    fmt_map = {ch_type: fmts}
+            else:
+                fmt_map = format_map(fmts)
+            t_local.ch_column_overrides = fmt_map
+        else:
+            try:
+                del t_local.ch_column_overrides
+            except AttributeError:
+                pass
+
+
 class QueryResult():
     """
     Wrapper class for query return values and metadata
     """
+
     def __init__(self, result_set: Sequence[Sequence[Any]], column_names: Tuple[str, ...],
                  column_types: Tuple[ClickHouseType, ...], query_id: str = None, summary: Dict[str, Any] = None):
         self.result_set = result_set
@@ -115,5 +186,5 @@ def from_pandas_df(df: 'pa.DataFrame'):
 
 def to_arrow(content: bytes):
     check_arrow()
-    reader = pyarrow.RecordBatchFileReader(content)
+    reader = pyarrow.ipc.RecordBatchFileReader(content)
     return reader.read_all()

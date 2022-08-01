@@ -1,17 +1,44 @@
 import logging
-
-logger = logging.getLogger(__name__)
+import json as py_json
+from collections import OrderedDict
+from typing import Any
 
 try:
-    import orjson as json_impl
-    logger.info('Using orjson as the JSON implementation')
+    import orjson
+    any_to_json = orjson.dumps
 except ImportError:
-    try:
-        import ujson as json_impl
-        logger.info('Using ujson as the JSON implementation')
-    except ImportError:
-        import json as json_impl
-        logger.info('Using default JSON implementation')
+    orjson = None
+
+try:
+    import ujson
+except ImportError:
+    ujson = None
 
 
+def _pyjson_to_json(obj: Any) -> bytes:
+    return py_json.dumps(obj).encode()
 
+
+logger = logging.getLogger(__name__)
+_to_json = OrderedDict()
+_to_json['orjson'] = orjson.dumps if orjson else None
+_to_json['ujson'] = ujson.dumps if ujson else None
+_to_json['python'] = _pyjson_to_json
+
+any_to_json = _pyjson_to_json
+
+
+def set_json_library(impl: str = None):
+    global any_to_json
+    if impl:
+        func = _to_json.get(impl)
+        if not func:
+            raise NotImplementedError(f'JSON library {impl} is not supported')
+    for library, func in _to_json.items():
+        if func:
+            logger.info('Using %s library for writing JSON byte strings', library)
+            any_to_json = func
+            break
+
+
+set_json_library()
