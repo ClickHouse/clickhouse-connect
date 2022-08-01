@@ -78,5 +78,3 @@ def test_read_formats(test_client: Client, test_table_engine: str):
     # Ensure that the column format clears
     result = test_client.query('SELECT * FROM read_format_test').result_set
     assert result[1][3] == IPv4Address('10.44.75.20')
-
-
