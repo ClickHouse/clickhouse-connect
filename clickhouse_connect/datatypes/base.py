@@ -101,13 +101,8 @@ class ClickHouseType(ABC):
 
     @property
     def encoding(self):
-        override = getattr(query_settings, 'column_encoding', None)
-        if override:
-            return override
-        override = getattr(query_settings, 'query_encoding', None)
-        if override:
-            return override
-        return self._encoding
+        query_encoding = getattr(query_settings, 'query_encoding', None)
+        return query_encoding or self._encoding
 
     def write_native_prefix(self, dest: MutableSequence):
         """

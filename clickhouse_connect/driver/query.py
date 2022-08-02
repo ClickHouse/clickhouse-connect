@@ -24,7 +24,7 @@ if HAS_ARROW:
 
 class QueryContext:
     """
-    Argument/parameter object for queries
+    Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
 
     # pylint: disable=duplicate-code
@@ -35,9 +35,30 @@ class QueryContext:
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  use_none: bool = True):
+        """
+        Initializes various configuration settings for the query context
+
+        :param query:  Query string with Python style format value replacements
+        :param parameters: Optional dictionary of substitution values
+        :param settings: Optional ClickHouse settings for the query
+        :param query_formats: Optional dictionary of query formats with the key of a ClickHouse type name
+          (with * wildcards) and a value of valid query formats for those types.
+          The value 'encoding' can be sent to change the expected encoding for this query, with a value of
+          the desired encoding such as `latin-1`
+        :param column_formats: Optional dictionary of column specific formats.  The key is the column name,
+          The value is either the format for the data column (such as 'string' for a UUID column) or a
+          second level "format" dictionary of a ClickHouse type name and a value of query formats.  This
+          secondary dictionary can be used for nested column types such as Tuples or Maps
+        :param column_formats: Optional dictionary
+        :param use_none:
+        """
         self.query = query
         self.parameters = parameters or {}
         self.settings = settings or {}
+        if query_formats:
+            self.encoding = query_formats.pop('encoding', None)
+        else:
+            self.encoding = None
         self.query_formats = format_map(query_formats)
         self.column_formats = column_formats or {}
         self.use_none = use_none
@@ -50,27 +71,36 @@ class QueryContext:
                      query_formats: Optional[Dict[str, str]] = None,
                      column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                      use_none: Optional[bool] = None) -> 'QueryContext':
+        """
+        Creates
+        :param query:
+        :param parameters:
+        :param settings:
+        :param query_formats:
+        :param column_formats:
+        :param use_none:
+        :return:
+        """
         copy = QueryContext()
         copy.query = query or self.query
         copy.parameters = self.parameters.update(parameters or {})
         copy.settings = self.settings.update(settings or {})
+        if query_formats:
+            copy.encoding = self.encoding or query_formats.pop('encoding', None)
         copy.query_formats = self.query_formats.update(query_formats or {})
         copy.column_formats = self.column_formats.update(column_formats or {})
         copy.use_none = use_none if use_none is not None else self.use_none
         return copy
 
     def __enter__(self):
-        if self.query_formats:
-            query_settings.query_overrides = self.query_formats
+        query_settings.query_overrides = self.query_formats
+        query_settings.query_encoding = self.encoding
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.query_formats:
-            del query_settings.query_overrides
-        try:
-            del query_settings.column_overrides
-        except AttributeError:
-            pass
+        query_settings.query_overrides = None
+        query_settings.column_overrides = None
+        query_settings.query_encoding = None
 
     def start_column(self, name: str, ch_type: ClickHouseType):
         if name in self.column_formats:
@@ -84,10 +114,7 @@ class QueryContext:
                 fmt_map = format_map(fmts)
             query_settings.column_overrides = fmt_map
         else:
-            try:
-                del query_settings.column_overrides
-            except AttributeError:
-                pass
+            query_settings.column_overrides = None
 
 
 class QueryResult:
