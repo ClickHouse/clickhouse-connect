@@ -22,6 +22,7 @@ if HAS_ARROW:
     import pyarrow
 
 
+# pylint: disable=too-many-instance-attributes
 class QueryContext:
     """
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
