@@ -84,7 +84,8 @@ def test_query_with_inline_comment(test_client: Client):
     result = test_client.query("""
     SELECT *
     -- This is just a comment
-    FROM system.tables
+    FROM system.tables LIMIT 77
+    -- A second comment
     """)
     assert len(result.result_set) > 0
 

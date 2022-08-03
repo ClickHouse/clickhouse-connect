@@ -14,7 +14,8 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value, QueryContext
+from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value, QueryContext, \
+    remove_sql_comments
 from clickhouse_connect.driver.rowbinary import RowBinaryTransform
 
 logger = logging.getLogger(__name__)
@@ -136,11 +137,11 @@ class HttpClient(Client):
         self.session.params = self._validate_settings(settings, True)
 
     def _format_query(self, query: str) -> str:
-        query = query.strip()
-        if query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
-            return query
-        if not query.endswith(self.read_format):
-            query += f' FORMAT {self.read_format}'
+        uncommented_query = remove_sql_comments(query)
+        if uncommented_query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
+            return query  # Don't format the output of INSERT statements
+        if not uncommented_query.endswith(self.read_format):
+            query += f'\nFORMAT {self.read_format}'
         return query
 
     def client_setting(self, name, value):

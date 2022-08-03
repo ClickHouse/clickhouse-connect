@@ -1,4 +1,5 @@
 import ipaddress
+import re
 import uuid
 
 from enum import Enum
@@ -180,6 +181,28 @@ def format_query_value(value, server_tz=UTC):
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
         return f"'{value}'"
     return str(value)
+
+
+comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--\s)[^\n]*$)", re.MULTILINE | re.DOTALL)
+
+
+def remove_sql_comments(sql: str) -> str:
+    """
+    Remove SQL comments.  This is useful to determine the type of SQL query, such as SELECT or INSERT, but we
+    don't fully trust it to correctly ignore weird quoted strings, and other edge cases, so we always pass the
+    original SQL to ClickHouse (which uses a full-fledged AST/ token parser)
+    :param sql:  SQL query
+    :return: SQL Query without SQL comments
+    """
+    def replacer(match):
+        # if the 2nd group (capturing comments) is not None, it means we have captured a
+        # non-quoted, actual comment string, so return nothing to remove the comment
+        if match.group(2):
+            return ''
+        # Otherwise we've actually captured a quoted string, so return it
+        return match.group(1)
+
+    return comment_re.sub(replacer, sql)
 
 
 def np_result(result: QueryResult) -> 'np.array':
