@@ -1,5 +1,10 @@
 ## ClickHouse Connect ChangeLog
 
+### Release 0.2.1, 2022-08-04
+
+#### Bug Fix
+* Fix SQL comment problems in DBAPI cursor
+
 ### Release 0.2.0, 2022-08-04
 
 #### Deprecation warning
