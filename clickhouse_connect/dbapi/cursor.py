@@ -1,14 +1,20 @@
 import logging
+import re
 
 from typing import Optional, Sequence
 
 from clickhouse_connect.datatypes.numeric import Int32
 from clickhouse_connect.datatypes.string import String
+from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.parser import parse_callable
+from clickhouse_connect.driver.query import remove_sql_comments
 
 logger = logging.getLogger(__name__)
+
+query_re = re.compile(r'^\s*(SELECT|SHOW|DESCRIBE|WITH|EXISTS)\s', re.IGNORECASE)
+insert_re = re.compile(r'^\s*INSERT\s+INTO\s+(.*$)', re.IGNORECASE)
 
 
 class Cursor:
@@ -40,8 +46,7 @@ class Cursor:
         self.data = None
 
     def execute(self, operation:str, parameters=None):
-        op_start = operation.split(' ')[0].upper()
-        if op_start in ('SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'EXISTS'):
+        if query_re.match(remove_sql_comments(operation)):
             query_result = self.client.query(operation, parameters)
             self.data = query_result.result_set
             self.names = query_result.column_names
@@ -60,9 +65,10 @@ class Cursor:
         self._rowcount = len(self.data)
 
     def _try_bulk_insert(self, operation:str, data):
-        if not operation.upper().startswith('INSERT INTO '):
+        match = insert_re.match(remove_sql_comments(operation))
+        if not match:
             return False
-        temp = operation[11:].strip()
+        temp = match.group(1)
         table_end = min(temp.find(' '), temp.find('('))
         table = temp[:table_end].strip()
         temp = temp[table_end:].strip()
@@ -73,7 +79,7 @@ class Cursor:
         if 'VALUES' not in temp.upper():
             return False
         col_names = list(data[0].keys())
-        if op_columns and set(op_columns) != set(col_names):
+        if op_columns and {unescape_identifier(x) for x in op_columns} != set(col_names):
             return False  # Data sent in doesn't match the columns in the insert statement
         if self.client.column_inserts:
             data_values = [[row[k] for row in data] for k in col_names]
