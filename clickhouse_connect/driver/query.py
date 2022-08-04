@@ -33,7 +33,7 @@ class QueryContext:
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
 
-    # pylint: disable=duplicate-code
+    # pylint: disable=duplicate-code,too-many-arguments
     def __init__(self,
                  query: str = '',
                  parameters: Optional[Dict[str, Any]] = None,
@@ -168,10 +168,10 @@ BS = '\\'
 must_escape = (BS, '\'')
 
 
-def finalize_query(query: str, parameters: Optional[Dict[str, Any]], tz: Optional[tzinfo] = None) -> str:
+def finalize_query(query: str, parameters: Optional[Dict[str, Any]], server_tz: Optional[tzinfo] = None) -> str:
     if not parameters:
         return query
-    return query % {k: format_query_value(v, tz) for k, v in parameters.items()}
+    return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
 
 
 # pylint: disable=too-many-return-statements

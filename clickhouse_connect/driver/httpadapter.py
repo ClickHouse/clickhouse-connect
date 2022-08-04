@@ -19,6 +19,8 @@ class KeepAliveAdapter(HTTPAdapter):
     """
     Extended HTTP adapter that sets preferred keep alive options
     """
+
+    # pylint: disable=no-member
     def __init__(self, **kwargs):
         self.socket_options = core_socket_options.copy()
         interval = kwargs.pop('keep_interval', KEEP_INTERVAL)

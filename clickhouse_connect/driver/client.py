@@ -9,8 +9,7 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value, \
-    to_arrow, QueryContext
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, to_arrow, QueryContext
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +82,7 @@ class Client(metaclass=ABCMeta):
         :param value: Setting value
         """
 
-    # pylint: disable=duplicate-code
+    # pylint: disable=duplicate-code,too-many-arguments
     def query(self,
               query: str = None,
               parameters: Optional[Dict[str, Any]] = None,
