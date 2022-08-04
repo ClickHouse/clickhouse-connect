@@ -1,17 +1,10 @@
-import re
 from typing import Optional
 
 from sqlalchemy import Table
-from sqlalchemy.sql.compiler import RESERVED_WORDS
-
-reserved_words = RESERVED_WORDS | set('index')
-identifier_re = re.compile(r'^[a-zA-Z_][0-9a-zA-Z_]*$')
 
 
 def quote_id(v: str) -> str:
-    if v in reserved_words or not identifier_re.match(v):
-        return f'`{v}`'
-    return v
+    return f'`{v}`'
 
 
 def full_table(table_name: str, schema: Optional[str] = None) -> str:

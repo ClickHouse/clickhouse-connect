@@ -8,7 +8,7 @@ from sqlalchemy.ext.declarative import declarative_base
 
 from tests import helpers
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
-    FixedString, String, UInt128, UUID, DateTime, DateTime64, LowCardinality, Nullable, Array, AggregateFunction, \
+    FixedString, String, UInt64, UUID, DateTime, DateTime64, LowCardinality, Nullable, Array, AggregateFunction, \
     UInt32, IPv4
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
@@ -50,7 +50,7 @@ def test_create_table(test_engine: Engine, test_db: str, test_table_engine: str)
     table.create(conn)
     conn.execute('DROP TABLE IF EXISTS advanced_table_test')
     table = db.Table('advanced_table_test', metadata,
-                     db.Column('key_col', UInt128),
+                     db.Column('key_col', UInt64),
                      db.Column('uuid_col', UUID),
                      db.Column('dt_col', DateTime),
                      db.Column('ip_col', IPv4),

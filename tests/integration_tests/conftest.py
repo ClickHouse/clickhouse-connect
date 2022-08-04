@@ -69,6 +69,9 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
     if test_config.use_docker:
         run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         sys.stderr.write('Starting docker compose')
+        pull_result = run_cmd(['docker-compose', '-f', compose_file, 'pull'])
+        if pull_result[0]:
+            raise Exception(f'Failed to pull latest docker image(s): {pull_result[2]}')
         up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
         if up_result[0]:
             raise Exception(f'Failed to start docker: {up_result[2]}')
@@ -88,6 +91,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             if tries > 15:
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
             sleep(1)
+    if client.min_version('22.6.1'):
+        client.client_setting('allow_experimental_object_type', 1)
     if test_db != 'default':
         client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
         client.database = test_db

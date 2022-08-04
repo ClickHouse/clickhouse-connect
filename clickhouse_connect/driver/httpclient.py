@@ -9,13 +9,13 @@ from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver import native
-from clickhouse_connect.driver import rowbinary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
-from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value
+from clickhouse_connect.driver.native import NativeTransform
+from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query
+from clickhouse_connect.driver.rowbinary import RowBinaryTransform
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -47,7 +47,7 @@ class HttpClient(Client):
                  data_format: str = 'native',
                  query_limit: int = 5000,
                  connect_timeout: int = 10,
-                 send_receive_timeout=60,
+                 send_receive_timeout = 300,
                  client_name: str = 'clickhouse-connect',
                  send_progress: bool = True,
                  verify: bool = True,
@@ -110,15 +110,13 @@ class HttpClient(Client):
 
         if data_format == 'native':
             self.read_format = self.write_format = 'Native'
-            self.build_insert = native.build_insert
-            self.parse_response = native.parse_response
             self.column_inserts = True
+            self.transform = NativeTransform()
         elif data_format in ('row_binary', 'rb'):
             self.read_format = 'RowBinaryWithNamesAndTypes'
             self.write_format = 'RowBinary'
-            self.build_insert = rowbinary.build_insert
-            self.parse_response = rowbinary.parse_response
             self.column_inserts = False
+            self.transform = RowBinaryTransform()
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
@@ -137,27 +135,23 @@ class HttpClient(Client):
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
         self.session.params = self._validate_settings(settings, True)
 
-    def _format_query(self, query: str) -> str:
-        query = query.strip()
-        if query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
-            return query
-        if not query.endswith(self.read_format):
-            query += f' FORMAT {self.read_format}'
-        return query
+    def client_setting(self, name, value):
+        if isinstance(value, bool):
+            value = '1' if value else '0'
+        self.session.params[name] = str(value)
 
-    def query(self, query: str,
-              parameters: Optional[Dict[str, Any]] = None,
-              settings: Dict[str, Any] = None,
-              use_none: bool = True) -> QueryResult:
-        """
-        See BaseClient doc_string for this method
-        """
-        final_query = self._prep_query(query, parameters)
+    def _prep_query(self, context: QueryContext):
+        final_query = super()._prep_query(context)
+        if context.is_insert:
+            return final_query
+        return f'{final_query}\n FORMAT {self.write_format}'
+
+    def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
-        params.update(self._validate_settings(settings, True))
-        if columns_only_re.search(query):
-            response = self._raw_request(final_query + ' FORMAT JSON', params, headers, retries=2)
+        params.update(self._validate_settings(context.settings, True))
+        if columns_only_re.search(context.uncommented_query):
+            response = self._raw_request(f'{context.final_query}\n FORMAT JSON', params, headers, retries=2)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -168,8 +162,8 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._format_query(final_query), params, headers, retries=2)
-            data_result = self.parse_response(response.content, use_none)
+            response = self._raw_request(self._prep_query(context), params, headers, retries=2)
+            data_result = self.transform.parse_response(response.content, context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -193,8 +187,8 @@ class HttpClient(Client):
         params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
                   'database': self.database}
         params.update(self._validate_settings(settings, True))
-        insert_block = self.build_insert(data, column_types=column_types, column_names=column_names,
-                                         column_oriented=column_oriented)
+        insert_block = self.transform.build_insert(data, column_types=column_types, column_names=column_names,
+                                                   column_oriented=column_oriented)
         response = self._raw_request(insert_block, params, headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
@@ -207,9 +201,7 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            cmd %= escaped
+        cmd = finalize_query(cmd, parameters, self.server_tz)
         headers = {}
         params = {}
         payload = None
@@ -288,9 +280,9 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        final_query = self._prep_query(query, parameters)
-        if fmt and ' FORMAT ' not in query.upper():
-            final_query += f' FORMAT {fmt}'
+        final_query = finalize_query(query, parameters, self.server_tz)
+        if fmt:
+            final_query += f'\n FORMAT {fmt}'
         return self._raw_request(final_query, self._validate_settings(settings, True)).content
 
 

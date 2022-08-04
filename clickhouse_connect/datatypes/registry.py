@@ -32,6 +32,9 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     elif base.startswith('Nested'):
         keys, values = parse_columns(base[6:])
         base = 'Nested'
+    elif base.startswith('Tuple'):
+        keys, values = parse_columns(base[5:])
+        base = 'Tuple'
     else:
         try:
             base, values, _ = parse_callable(base)

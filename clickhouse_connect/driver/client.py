@@ -1,18 +1,17 @@
 import logging
-import re
+import pytz
 
 from abc import ABCMeta, abstractmethod
 from typing import Iterable, Tuple, Optional, Any, Union, Sequence, Dict
+from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, format_query_value, \
-    to_arrow
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, to_arrow, QueryContext
 
 logger = logging.getLogger(__name__)
-limit_re = re.compile(r'\s+LIMIT[$|\s]', re.IGNORECASE)
 
 
 class Client(metaclass=ABCMeta):
@@ -30,8 +29,13 @@ class Client(metaclass=ABCMeta):
         :param uri: uri for error messages
         """
         self.limit = query_limit
-        self.server_version, self.server_tz, self.database = \
+        self.server_tz = pytz.UTC
+        self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
+        try:
+            self.server_tz = pytz.timezone(server_tz)
+        except UnknownTimeZoneError:
+            logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
         if database and not database == '__default__':
@@ -61,28 +65,64 @@ class Client(metaclass=ABCMeta):
                 validated[key] = value
         return validated
 
-    def _prep_query(self, query: str, parameters: Optional[Dict[str, Any]] = None):
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            query %= escaped
-        if self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
-            query += f' LIMIT {self.limit}'
-        return query
+    def _prep_query(self, context: QueryContext):
+        if context.is_select and not context.has_limit:
+            return f'{context.final_query}\n LIMIT {self.limit}'
+        return context.final_query
 
     @abstractmethod
+    def _query_with_context(self, context: QueryContext):
+        pass
+
+    @abstractmethod
+    def client_setting(self, name, value):
+        """
+        Set a clickhouse setting for the client after initialization
+        :param name: Setting name
+        :param value: Setting value
+        """
+
+    # pylint: disable=duplicate-code,too-many-arguments
     def query(self,
-              query: str,
+              query: str = None,
               parameters: Optional[Dict[str, Any]] = None,
               settings: Optional[Dict[str, Any]] = None,
-              use_none: bool = True) -> QueryResult:
+              query_formats: Optional[Dict[str, str]] = None,
+              column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+              encoding: Optional[str] = None,
+              use_none: bool = True,
+              context: QueryContext = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other commands that result a result matrix
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring
+        :param encoding: See QueryContext __init__ docstring
         :param use_none: Use None for ClickHouse nulls instead of empty values
+        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: QueryResult -- data and metadata from response
         """
+        if context:
+            query_context = context.updated_copy(query,
+                                                 parameters,
+                                                 settings,
+                                                 query_formats,
+                                                 column_formats,
+                                                 encoding,
+                                                 self.server_tz,
+                                                 False)
+        else:
+            query_context = QueryContext(query,
+                                         parameters,
+                                         settings,
+                                         query_formats,
+                                         column_formats,
+                                         encoding,
+                                         self.server_tz,
+                                         use_none)
+        return self._query_with_context(query_context)
 
     @abstractmethod
     def raw_query(self,
@@ -99,31 +139,63 @@ class Client(metaclass=ABCMeta):
         :return: bytes representing raw ClickHouse return value based on format
         """
 
+    # pylint: disable=duplicate-code
     def query_np(self,
-                 query: str,
+                 query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,
-                 settings: Optional[Dict[str, Any]] = None):
+                 settings: Optional[Dict[str, Any]] = None,
+                 query_formats: Optional[Dict[str, str]] = None,
+                 column_formats: Optional[Dict[str, str]] = None,
+                 encoding: Optional[str] = None,
+                 context: QueryContext = None):
         """
-        Query method that results the results as a numpy array
+        Query method that returns the results as a numpy array
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring.
+        :param encoding: See QueryContext __init__ docstring
+        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return np_result(self.query(query, parameters, settings, use_none=False))
+        return np_result(self.query(query,
+                                    parameters,
+                                    settings,
+                                    query_formats,
+                                    column_formats,
+                                    encoding,
+                                    False,
+                                    context))
 
+    # pylint: disable=duplicate-code
     def query_df(self,
-                 query: str,
+                 query: str = None,
                  parameters: Optional[Dict[str, Any]] = None,
-                 settings: Optional[Dict[str, Any]] = None):
+                 settings: Optional[Dict[str, Any]] = None,
+                 query_formats: Optional[Dict[str, str]] = None,
+                 column_formats: Optional[Dict[str, str]] = None,
+                 encoding: Optional[str] = None,
+                 context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring
+        :param encoding: See QueryContext __init__ docstring
+        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return to_pandas_df(self.query(query, parameters, settings, use_none=False))
+        return to_pandas_df(self.query(query,
+                                       parameters,
+                                       settings,
+                                       query_formats,
+                                       column_formats,
+                                       encoding,
+                                       False,
+                                       context))
 
     def query_arrow(self,
                     query: str,
@@ -131,17 +203,17 @@ class Client(metaclass=ABCMeta):
                     settings: Optional[Dict[str, Any]] = None,
                     use_strings: bool = True):
         """
-        Query method using the ClickHouse ArrowStream format to return a PyArrow result
+        Query method using the ClickHouse Arrow format to return a PyArrow table
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
-        :return: Tuple of the PyArrow schema and a single record batch
+        :return: PyArrow.Table
         """
         arrow_settings = {} if not settings else settings.copy()
         if 'output_format_arrow_string_as_string' not in arrow_settings:
             arrow_settings['output_format_arrow_string_as_string'] = '1' if use_strings else '0'
-        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'ArrowStream'))
+        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'Arrow'))
 
     @abstractmethod
     def command(self,
@@ -244,6 +316,23 @@ class Client(metaclass=ABCMeta):
             database = database or self.database
             full_name = f'{database}.{name}'
         return table, database, full_name
+
+    def min_version(self, version_str: str) -> bool:
+        """
+        Determine whether the connected server is at least the submitted version
+        :param version_str:  Version string consisting of up to 4 integers delimited by dots
+        :return:  1 if the version_str is greater than the server_version, 0 if equal, -1 if less than
+        """
+        server_parts = [int(x) for x in self.server_version.split('.')]
+        server_parts.extend([0] * (4 - len(server_parts)))
+        version_parts = [int(x) for x in version_str.split('.')]
+        version_parts.extend([0] * (4 - len(version_parts)))
+        for x, y in zip(server_parts, version_parts):
+            if x > y:
+                return True
+            if x < y:
+                return False
+        return True
 
     def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
         """

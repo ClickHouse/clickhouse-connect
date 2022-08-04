@@ -1,7 +1,8 @@
 import array
-from typing import Dict, Sequence, MutableSequence
+from typing import Dict, Sequence, MutableSequence, Any
 
-from clickhouse_connect.datatypes.base import UnsupportedType, ClickHouseType, TypeDef
+from clickhouse_connect import json_impl
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
 
@@ -84,15 +85,27 @@ class Array(ClickHouseType):
 
 
 class Tuple(ClickHouseType):
-    _slots = 'element_types', 'from_rb_funcs', 'to_rb_funcs'
-    python_type = tuple
+    _slots = 'element_names', 'element_types', 'from_rb_funcs', 'to_rb_funcs'
+    valid_formats = 'tuple', 'json', 'native'  # native is 'tuple' for unnamed tuples, and dict for named tuples
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
+        self.element_names = type_def.keys
         self.element_types = [get_from_name(name) for name in type_def.values]
         self.from_rb_funcs = tuple((t.from_row_binary for t in self.element_types))
         self.to_rb_funcs = tuple((t.to_row_binary for t in self.element_types))
-        self._name_suffix = type_def.arg_str
+        if self.element_names:
+            self._name_suffix = f"({', '.join(k + ' ' + str(v) for k, v in zip(type_def.keys, type_def.values))})"
+        else:
+            self._name_suffix = type_def.arg_str
+
+    @property
+    def python_type(self):
+        if self.read_format() == 'tuple':
+            return tuple
+        if self.read_format() == 'json':
+            return str
+        return dict
 
     def _from_row_binary(self, source: bytes, loc: int):
         values = []
@@ -110,11 +123,21 @@ class Tuple(ClickHouseType):
             loc = e_type.read_native_prefix(source, loc)
         return loc
 
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True):
         columns = []
+        e_names = self.element_names
         for e_type in self.element_types:
             column, loc = e_type.read_native_data(source, loc, num_rows, use_none)
             columns.append(column)
+        if e_names and self.read_format() != 'tuple':
+            dicts = [{} for _ in range(num_rows)]
+            for ix, x in enumerate(dicts):
+                for y, key in enumerate(e_names):
+                    x[key] = columns[y][ix]
+            if self.read_format() == 'json':
+                to_json = json_impl.any_to_json
+                return [to_json(x) for x in dicts], loc
+            return dicts, loc
         return tuple(zip(*columns)), loc
 
     def write_native_prefix(self, dest: MutableSequence):
@@ -163,7 +186,7 @@ class Map(ClickHouseType):
         return loc
 
     # pylint: disable=too-many-locals
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none = True):
+    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True):
         offsets, loc = array_column('Q', source, loc, num_rows)
         total_rows = offsets[-1]
         keys, loc = self.key_type.read_native_data(source, loc, total_rows, use_none)
@@ -235,13 +258,42 @@ class Nested(ClickHouseType):
         self.tuple_array.write_native_data(data, dest)
 
 
-class Object(UnsupportedType):
+class JSON(ClickHouseType):
+    python_type = dict
+
+    def _to_row_binary(self, value: Any, dest: MutableSequence):
+        value = json_impl.any_to_json(value)
+        dest += to_leb128(len(value)) + value
+
+    def _from_row_binary(self, source: Sequence, loc: int):
+        # ClickHouse will never return JSON/Object types, just tuples
+        return None, 0
+
+    def write_native_prefix(self, dest: MutableSequence):
+        dest.append(0x01)
+
+    # pylint: disable=duplicate-code
+    def write_native_data(self, column: Sequence, dest: MutableSequence):
+        app = dest.append
+        to_json = json_impl.any_to_json
+        for x in column:
+            v = to_json(x)
+            sz = len(v)
+            while True:
+                b = sz & 0x7f
+                sz >>= 7
+                if sz == 0:
+                    app(b)
+                    break
+                app(0x80 | b)
+            dest += v
+
+
+class Object(JSON):
     python_type = dict
 
     def __init__(self, type_def):
+        if type_def.values[0].lower() != "'json'":
+            raise NotImplementedError('Only json Object type is currently supported')
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
-
-
-class JSON(UnsupportedType):
-    python_type = dict

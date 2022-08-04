@@ -36,3 +36,10 @@ def test_nested_parse():
     nested_name = f'Nested({nest})'
     nested_type = gfn(nested_name)
     assert nested_type.name == nested_name
+
+
+def test_named_tuple():
+    tuple_type = gfn('Tuple(Int64, String)')
+    assert tuple_type.name == 'Tuple(Int64, String)'
+    tuple_type = gfn('Tuple(key Int64, value String)')
+    assert tuple_type.name == 'Tuple(key Int64, value String)'

@@ -50,7 +50,8 @@ def run_setup(try_c: bool = True):
             'superset': ['apache_superset>=1.4.1', 'sqlalchemy>1.3.21, <1.4'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
-            'arrow': ['pyarrow']
+            'arrow': ['pyarrow'],
+            'orjson': ['orjson']
         },
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',
