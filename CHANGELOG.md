@@ -1,6 +1,6 @@
 ## ClickHouse Connect ChangeLog
 
-### Release 0.1.7, 2022-07-28
+### Release 0.2.0, 2022-08-04
 
 #### Improvements
 

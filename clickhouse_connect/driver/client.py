@@ -1,8 +1,9 @@
 import logging
-import re
+import pytz
 
 from abc import ABCMeta, abstractmethod
 from typing import Iterable, Tuple, Optional, Any, Union, Sequence, Dict
+from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -12,7 +13,6 @@ from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df
     to_arrow, QueryContext
 
 logger = logging.getLogger(__name__)
-limit_re = re.compile(r'\s+LIMIT[$|\s]', re.IGNORECASE)
 
 
 class Client(metaclass=ABCMeta):
@@ -30,8 +30,13 @@ class Client(metaclass=ABCMeta):
         :param uri: uri for error messages
         """
         self.limit = query_limit
-        self.server_version, self.server_tz, self.database = \
+        self.server_tz = pytz.UTC
+        self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
+        try:
+            self.server_tz = pytz.timezone(server_tz)
+        except UnknownTimeZoneError:
+            logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
         if database and not database == '__default__':
@@ -61,13 +66,10 @@ class Client(metaclass=ABCMeta):
                 validated[key] = value
         return validated
 
-    def _prep_query(self, query: str, parameters: Optional[Dict[str, Any]] = None):
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            query %= escaped
-        if self.limit and not limit_re.search(query) and 'SELECT ' in query.upper():
-            query += f' LIMIT {self.limit}'
-        return query
+    def _prep_query(self, context: QueryContext):
+        if context.is_select and not context.has_limit:
+            return f'{context.final_query}\n LIMIT {self.limit}'
+        return context.final_query
 
     @abstractmethod
     def _query_with_context(self, context: QueryContext):
@@ -88,6 +90,7 @@ class Client(metaclass=ABCMeta):
               settings: Optional[Dict[str, Any]] = None,
               query_formats: Optional[Dict[str, str]] = None,
               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+              encoding: Optional[str] = None,
               use_none: bool = True,
               context: QueryContext = None) -> QueryResult:
         """
@@ -97,6 +100,7 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
+        :param encoding: See QueryContext __init__ docstring
         :param use_none: Use None for ClickHouse nulls instead of empty values
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: QueryResult -- data and metadata from response
@@ -107,9 +111,18 @@ class Client(metaclass=ABCMeta):
                                                  settings,
                                                  query_formats,
                                                  column_formats,
+                                                 encoding,
+                                                 self.server_tz,
                                                  False)
         else:
-            query_context = QueryContext(query, parameters, settings, query_formats, column_formats, use_none)
+            query_context = QueryContext(query,
+                                         parameters,
+                                         settings,
+                                         query_formats,
+                                         column_formats,
+                                         encoding,
+                                         self.server_tz,
+                                         use_none)
         return self._query_with_context(query_context)
 
     @abstractmethod
@@ -134,6 +147,7 @@ class Client(metaclass=ABCMeta):
                  settings: Optional[Dict[str, Any]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
+                 encoding: Optional[str] = None,
                  context: QueryContext = None):
         """
         Query method that returns the results as a numpy array
@@ -142,6 +156,7 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring.
+        :param encoding: See QueryContext __init__ docstring
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
@@ -150,6 +165,7 @@ class Client(metaclass=ABCMeta):
                                     settings,
                                     query_formats,
                                     column_formats,
+                                    encoding,
                                     False,
                                     context))
 
@@ -160,6 +176,7 @@ class Client(metaclass=ABCMeta):
                  settings: Optional[Dict[str, Any]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
+                 encoding: Optional[str] = None,
                  context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe
@@ -168,6 +185,7 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
+        :param encoding: See QueryContext __init__ docstring
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
@@ -176,6 +194,7 @@ class Client(metaclass=ABCMeta):
                                        settings,
                                        query_formats,
                                        column_formats,
+                                       encoding,
                                        False,
                                        context))
 

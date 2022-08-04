@@ -1,11 +1,11 @@
 import ipaddress
 import re
 import uuid
+import pytz
 
 from enum import Enum
 from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
-from datetime import date, datetime
-from pytz import UTC
+from datetime import date, datetime, tzinfo
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
@@ -22,6 +22,10 @@ if HAS_NUMPY:
 if HAS_ARROW:
     import pyarrow
 
+limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
+select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
+insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
+
 
 # pylint: disable=too-many-instance-attributes
 class QueryContext:
@@ -31,11 +35,13 @@ class QueryContext:
 
     # pylint: disable=duplicate-code
     def __init__(self,
-                 query: str = None,
+                 query: str = '',
                  parameters: Optional[Dict[str, Any]] = None,
                  settings: Optional[Dict[str, Any]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                 encoding: Optional[str] = None,
+                 server_tz: tzinfo = pytz.UTC,
                  use_none: bool = True):
         """
         Initializes various configuration settings for the query context
@@ -51,20 +57,38 @@ class QueryContext:
           The value is either the format for the data column (such as 'string' for a UUID column) or a
           second level "format" dictionary of a ClickHouse type name and a value of query formats.  This
           secondary dictionary can be used for nested column types such as Tuples or Maps
+        :param encoding: Optional string encoding for this query, such as 'latin-1'
         :param column_formats: Optional dictionary
         :param use_none:
         """
         self.query = query
         self.parameters = parameters or {}
         self.settings = settings or {}
-        if query_formats:
-            self.encoding = query_formats.pop('encoding', None)
-        else:
-            self.encoding = None
-        self.query_formats = format_map(query_formats)
+        self.query_formats = query_formats or {}
         self.column_formats = column_formats or {}
+        self.encoding = encoding
+        self.server_tz = server_tz
         self.use_none = use_none
-        self.thread_local = None
+        self.final_query = finalize_query(query, parameters, server_tz)
+        self._uncommented_query = None
+
+    @property
+    def uncommented_query(self) -> str:
+        if not self._uncommented_query:
+            self._uncommented_query = remove_sql_comments(self.final_query)
+        return self._uncommented_query
+
+    @property
+    def is_select(self) -> bool:
+        return select_re.search(self.uncommented_query) is not None
+
+    @property
+    def has_limit(self) -> bool:
+        return limit_re.search(self.uncommented_query) is not None
+
+    @property
+    def is_insert(self) -> bool:
+        return insert_re.search(self.uncommented_query) is not None
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -72,30 +96,23 @@ class QueryContext:
                      settings: Optional[Dict[str, Any]] = None,
                      query_formats: Optional[Dict[str, str]] = None,
                      column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                     encoding: Optional[str] = None,
+                     server_tz: Optional[tzinfo] = None,
                      use_none: Optional[bool] = None) -> 'QueryContext':
         """
-        Creates
-        :param query:
-        :param parameters:
-        :param settings:
-        :param query_formats:
-        :param column_formats:
-        :param use_none:
-        :return:
+        Creates Query context copy with parameters overridden/updated as appropriate
         """
-        copy = QueryContext()
-        copy.query = query or self.query
-        copy.parameters = self.parameters.update(parameters or {})
-        copy.settings = self.settings.update(settings or {})
-        if query_formats:
-            copy.encoding = self.encoding or query_formats.pop('encoding', None)
-        copy.query_formats = self.query_formats.update(query_formats or {})
-        copy.column_formats = self.column_formats.update(column_formats or {})
-        copy.use_none = use_none if use_none is not None else self.use_none
-        return copy
+        return QueryContext(query or self.query,
+                            self.parameters.update(parameters or {}),
+                            self.settings.update(settings or {}),
+                            self.query_formats.update(query_formats or {}),
+                            self.column_formats.update(column_formats or {}),
+                            encoding if encoding else self.encoding,
+                            server_tz if server_tz else self.server_tz,
+                            use_none if use_none is not None else self.use_none)
 
     def __enter__(self):
-        query_settings.query_overrides = self.query_formats
+        query_settings.query_overrides = format_map(self.query_formats)
         query_settings.query_encoding = self.encoding
         return self
 
@@ -151,8 +168,14 @@ BS = '\\'
 must_escape = (BS, '\'')
 
 
+def finalize_query(query: str, parameters: Optional[Dict[str, Any]], tz: Optional[tzinfo] = None) -> str:
+    if not parameters:
+        return query
+    return query % {k: format_query_value(v, tz) for k, v in parameters.items()}
+
+
 # pylint: disable=too-many-return-statements
-def format_query_value(value, server_tz=UTC):
+def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     """
     Format Python values in a ClickHouse query
     :param value: Python object

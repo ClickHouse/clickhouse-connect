@@ -13,7 +13,11 @@ class UUID(ClickHouseType):
 
     @property
     def python_null(self):
-        return PYUUID(int=0) if self.read_format() == 'uuid' else ''
+        return '' if self.read_format() == 'string' else PYUUID(0)
+
+    @property
+    def np_type(self):
+        return 'U' if self.read_format() == 'string' else 'O'
 
     def _from_row_binary(self, source: bytearray, loc: int):
         int_high, loc = read_uint64(source, loc)

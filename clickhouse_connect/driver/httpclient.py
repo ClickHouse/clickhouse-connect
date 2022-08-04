@@ -14,8 +14,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, format_query_value, QueryContext, \
-    remove_sql_comments
+from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query
 from clickhouse_connect.driver.rowbinary import RowBinaryTransform
 
 logger = logging.getLogger(__name__)
@@ -136,26 +135,23 @@ class HttpClient(Client):
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
         self.session.params = self._validate_settings(settings, True)
 
-    def _format_query(self, query: str) -> str:
-        uncommented_query = remove_sql_comments(query)
-        if uncommented_query.upper().startswith('INSERT ') and 'VALUES' in query.upper():
-            return query  # Don't format the output of INSERT statements
-        if not uncommented_query.endswith(self.read_format):
-            query += f'\nFORMAT {self.read_format}'
-        return query
-
     def client_setting(self, name, value):
         if isinstance(value, bool):
             value = '1' if value else '0'
         self.session.params[name] = str(value)
 
+    def _prep_query(self, context: QueryContext):
+        final_query = super()._prep_query(context)
+        if context.is_insert:
+            return final_query
+        return f'{final_query}\n FORMAT {self.write_format}'
+
     def _query_with_context(self, context: QueryContext) -> QueryResult:
-        final_query = self._prep_query(context.query, context.parameters)
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
         params.update(self._validate_settings(context.settings, True))
-        if columns_only_re.search(final_query):
-            response = self._raw_request(final_query + ' FORMAT JSON', params, headers, retries=2)
+        if columns_only_re.search(context.uncommented_query):
+            response = self._raw_request(f'{context.final_query}\n FORMAT JSON', params, headers, retries=2)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -166,7 +162,7 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._format_query(final_query), params, headers, retries=2)
+            response = self._raw_request(self._prep_query(context), params, headers, retries=2)
             data_result = self.transform.parse_response(response.content, context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
@@ -205,9 +201,7 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        if parameters:
-            escaped = {k: format_query_value(v, self.server_tz) for k, v in parameters.items()}
-            cmd %= escaped
+        cmd = finalize_query(cmd, parameters, self.server_tz)
         headers = {}
         params = {}
         payload = None
@@ -286,9 +280,9 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        final_query = self._prep_query(query, parameters)
-        if fmt and ' FORMAT ' not in query.upper():
-            final_query += f' FORMAT {fmt}'
+        final_query = finalize_query(query, parameters, self.server_tz)
+        if fmt:
+            final_query += f'\n FORMAT {fmt}'
         return self._raw_request(final_query, self._validate_settings(settings, True)).content
 
 

@@ -83,6 +83,10 @@ class IPv6(ClickHouseType):
         return str if self.read_format() == 'string' else IPv6Address
 
     @property
+    def np_type(self):
+        return 'U' if self.read_format() == 'string' else 'O'
+
+    @property
     def python_null(self):
         return '' if self.read_format() == 'string' else V6_NULL
 
