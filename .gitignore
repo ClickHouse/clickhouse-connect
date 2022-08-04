@@ -17,6 +17,7 @@
 
 # Python cruft
 *.pyc
+.python-version
 
 # C extensions
 *.so

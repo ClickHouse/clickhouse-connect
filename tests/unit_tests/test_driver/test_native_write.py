@@ -1,5 +1,5 @@
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.native import build_insert
+from clickhouse_connect.driver.native import NativeTransform
 from tests.helpers import to_bytes
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
@@ -27,6 +27,9 @@ TUPLE_THREE_OUTPUT = """
 7472 696e 6729 0773 7472 696e 6731 0773
 7472 696e 6732 0773 7472 696e 6733
 """
+
+
+build_insert = NativeTransform().build_insert
 
 
 def test_low_card_null():

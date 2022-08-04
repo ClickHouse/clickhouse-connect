@@ -7,12 +7,19 @@ from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, HAS_ARROW
 def test_arrow(test_client: Client):
     if not HAS_ARROW:
         pytest.skip('PyArrow package not available')
-    arrow_schema, arrow_batch = test_client.query_arrow('SELECT database, name, total_rows FROM system.tables')
+    arrow_table = test_client.query_arrow('SELECT database, name, total_rows FROM system.tables', use_strings=False)
+    arrow_schema = arrow_table.schema
     assert arrow_schema.field(0).name == 'database'
-    assert arrow_schema.field(2).type.id == 8
+    assert arrow_schema.field(1).type.id == 14
     assert arrow_schema.field(2).type.bit_width == 64
-    assert arrow_batch.num_rows > 20
-    assert len(arrow_batch.columns) == 3
+    assert arrow_table.num_rows > 20
+    assert len(arrow_table.columns) == 3
+    arrow_table = test_client.query_arrow('SELECT number from system.numbers LIMIT 500',
+                                          settings={'max_block_size': 50})
+    arrow_schema = arrow_table.schema
+    assert arrow_schema.field(0).name == 'number'
+    assert arrow_schema.field(0).type.id == 8
+    assert arrow_table.num_rows == 500
 
 
 def test_numpy(test_client: Client):

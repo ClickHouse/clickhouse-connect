@@ -5,15 +5,7 @@ from clickhouse_connect.driver.common import read_leb128, to_leb128
 
 
 class String(ClickHouseType):
-    encoding = 'utf8'
     python_null = ''
-
-    def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
-        try:
-            self.encoding = type_def.values[0]
-        except IndexError:
-            pass
 
     def _from_row_binary(self, source, loc):
         length, loc = read_leb128(source, loc)
@@ -44,6 +36,7 @@ class String(ClickHouseType):
             loc += length
         return column, loc
 
+    # pylint: disable=duplicate-code
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         encoding = self.encoding
         app = dest.append
@@ -77,36 +70,28 @@ class String(ClickHouseType):
 
 
 class FixedString(ClickHouseType):
-    encoding = 'utf8'
-    format = 'bytes'
+    valid_formats = 'string', 'native'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._byte_size = type_def.values[0]
-        try:
-            self.encoding = type_def.values[1]
-        except IndexError:
-            pass
         self._name_suffix = type_def.arg_str
-        self._python_null = bytes(b'\x00' * self._byte_size)
-        if self.format == 'bytes':
-            self._to_row_binary = self._to_row_binary_bytes
-        else:
-            self._to_row_binary = self._to_row_binary_str
+        self._empty_bytes = bytes(b'\x00' * self._byte_size)
+        self.to_row_binary = self._to_rb_internal
 
     @property
     def python_null(self):
-        return self._python_null if self.format == 'bytes' else ''
-
-    def _to_row_binary(self, value, dest):
-        pass  # Overridden anyway on instance creation
+        return self._empty_bytes if self.read_format() == 'native' else ''
 
     def _from_row_binary(self, source: Sequence, loc: int):
         return bytes(source[loc:loc + self._byte_size]), loc + self._byte_size
 
-    @staticmethod
-    def _to_row_binary_bytes(value: Sequence, dest: MutableSequence):
+    def _to_row_binary(self, value: Sequence, dest: MutableSequence):
         dest += value
+
+    @property
+    def _to_rb_internal(self):
+        return self._to_row_binary_str if self.write_format() == 'string' else self._to_row_binary
 
     def _to_row_binary_str(self, value, dest: bytearray):
         value = str.encode(value, self.encoding)
@@ -115,7 +100,7 @@ class FixedString(ClickHouseType):
             dest += bytes((0,) * (self._byte_size - len(value)))
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        if self.format == 'string':
+        if self.read_format() == 'string':
             return self._read_native_str(source, loc, num_rows, self._byte_size, self.encoding)
         return self._read_native_bytes(source, loc, num_rows, self._byte_size)
 
@@ -144,7 +129,7 @@ class FixedString(ClickHouseType):
         str_enc = str.encode
         enc = self.encoding
         first = self._first_value(column)
-        if isinstance(first, str):
+        if isinstance(first, str) or self.write_format() == 'string':
             if self.nullable:
                 for x in column:
                     if x is None:

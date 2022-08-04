@@ -2,7 +2,7 @@ from ipaddress import IPv4Address
 from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver.native import parse_response
+from clickhouse_connect.driver.native import NativeTransform
 from tests.helpers import to_bytes
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
@@ -54,6 +54,9 @@ LOW_CARD_MAP = """
 """
 
 
+parse_response = NativeTransform().parse_response
+
+
 def check_result(result, expected, row_num=0, col_num=0):
     result_set = result[0]
     row = result_set[row_num]
@@ -93,5 +96,5 @@ def test_ip():
 
 
 def test_nested():
-    result = parse_response(to_bytes(NESTED_BINARY))
+    result = parse_response (to_bytes(NESTED_BINARY))
     check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)
