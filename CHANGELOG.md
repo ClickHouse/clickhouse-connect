@@ -1,15 +1,16 @@
 ## ClickHouse Connect ChangeLog
 
+### Deprecation warning
+
+* In the next minor release the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
+
+
 ### Release 0.2.1, 2022-08-04
 
 #### Bug Fix
 * Fix SQL comment problems in DBAPI cursor
 
 ### Release 0.2.0, 2022-08-04
-
-#### Deprecation warning
-
-* In the next release the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option add complexity with no corresponding benefit
 
 #### Improvements
 
@@ -21,7 +22,7 @@
 #### Bug Fixes
 * Fixed multiple issues with SQL comments that would cause some queries to fail
 * Fixed problem with SQLAlchemy literal binds that would cause an error in Superset filters
-* Fixed issue with parameter
+* Fixed issue with parameterized queries
 * Named Tuples were not supported and would result in throwing an exception.  This has been fixed.
 * The client query_arrow function would return incomplete results if the query result exceeded the ClickHouse max_block_size.  This has been fixed.  As part of the fix query_arrow method returns a PyArrow Table object.  While this is a breaking change in the API it should be easy to work around.
 
