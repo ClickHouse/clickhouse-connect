@@ -4,7 +4,6 @@ from time import sleep
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
-from clickhouse_connect.driver.query import QueryResult
 from tests.integration_tests.conftest import TestConfig
 
 CSV_CONTENT = """abc,1,1
@@ -67,9 +66,17 @@ def test_session_params(test_config: TestConfig):
 
 
 def test_get_columns_only(test_client):
-    result: QueryResult = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
+    result = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
     assert result.column_names == ('name', 'database')
     assert len(result.result_set) == 0
+
+
+def test_no_limit(test_client):
+    old_limit = test_client.limit
+    test_client.limit = 0
+    result = test_client.query('SELECT name FROM system.databases')
+    assert len(result.result_set) > 0
+    test_client.limit = old_limit
 
 
 def test_multiline_query(test_client: Client):

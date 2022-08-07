@@ -66,7 +66,7 @@ class Client(metaclass=ABCMeta):
         return validated
 
     def _prep_query(self, context: QueryContext):
-        if context.is_select and not context.has_limit:
+        if context.is_select and not context.has_limit and self.limit:
             return f'{context.final_query}\n LIMIT {self.limit}'
         return context.final_query
 
