@@ -1,7 +1,7 @@
 from sqlalchemy.sql.ddl import DDL
 from sqlalchemy.exc import ArgumentError
 
-from clickhouse_connect.cc_sqlalchemy.sql import quote_id
+from clickhouse_connect.driver.query import quote_identifier
 
 
 class CreateDatabase(DDL):
@@ -20,7 +20,7 @@ class CreateDatabase(DDL):
         """
         if engine and engine not in ('Ordinary', 'Atomic', 'Lazy', 'Replicated'):
             raise ArgumentError(f'Unrecognized engine type {engine}')
-        stmt = f'CREATE DATABASE {quote_id(name)}'
+        stmt = f'CREATE DATABASE {quote_identifier(name)}'
         if engine:
             stmt += f' Engine {engine}'
             if engine == 'Replicated':
@@ -35,4 +35,4 @@ class DropDatabase(DDL):
     Alternative DDL statement for built in SqlAlchemy DropSchema DDL class
     """
     def __init__(self, name: str):
-        super().__init__(f'DROP DATABASE {quote_id(name)}')
+        super().__init__(f'DROP DATABASE {quote_identifier(name)}')

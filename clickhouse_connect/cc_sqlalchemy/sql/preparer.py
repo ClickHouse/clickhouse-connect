@@ -1,11 +1,11 @@
 from sqlalchemy.sql.compiler import IdentifierPreparer
 
-from clickhouse_connect.cc_sqlalchemy.sql import quote_id
+from clickhouse_connect.driver.query import quote_identifier
 
 
 class ChIdentifierPreparer(IdentifierPreparer):
 
-    quote_identifier = staticmethod(quote_id)
+    quote_identifier = staticmethod(quote_identifier)
 
     def _requires_quotes(self, _value):
         return True

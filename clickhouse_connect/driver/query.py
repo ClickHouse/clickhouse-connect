@@ -167,12 +167,15 @@ local_tz = datetime.now().astimezone().tzinfo
 BS = '\\'
 must_escape = (BS, '\'')
 
+def quote_identifier(identifier: str):
+    if identifier.startswith('`'):
+        return identifier
+    return f'`{identifier}`'
 
 def finalize_query(query: str, parameters: Optional[Dict[str, Any]], server_tz: Optional[tzinfo] = None) -> str:
     if not parameters:
         return query
     return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
-
 
 # pylint: disable=too-many-return-statements
 def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
@@ -263,3 +266,11 @@ def to_arrow(content: bytes):
     check_arrow()
     reader = pyarrow.ipc.RecordBatchFileReader(content)
     return reader.read_all()
+
+
+def arrow_buffer(table: 'pyarrow.Table') -> Tuple[Sequence[str], bytes]:
+    check_arrow()
+    sink = pyarrow.BufferOutputStream()
+    with pyarrow.RecordBatchFileWriter(sink, table.schema) as writer:
+        writer.write(table)
+    return table.schema.names, sink.getvalue()
