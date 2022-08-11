@@ -27,7 +27,7 @@ def run_setup(try_c: bool = True):
     with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
         long_desc = read_me.read()
 
-    version = 'developer_only'
+    version = 'developer'
 
     setup(
         name='clickhouse-connect',
