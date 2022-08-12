@@ -1,16 +1,17 @@
 from sqlalchemy import Column
 from sqlalchemy.sql.compiler import DDLCompiler
 
-from clickhouse_connect.cc_sqlalchemy.sql import quote_id, format_table
+from clickhouse_connect.cc_sqlalchemy.sql import  format_table
+from clickhouse_connect.driver.query import quote_identifier
 
 
 class ChDDLCompiler(DDLCompiler):
 
     def visit_create_schema(self, create):
-        return f'CREATE DATABASE {quote_id(create.element)}'
+        return f'CREATE DATABASE {quote_identifier(create.element)}'
 
     def visit_drop_schema(self, drop):
-        return f'DROP DATABASE {quote_id(drop.element)}'
+        return f'DROP DATABASE {quote_identifier(drop.element)}'
 
     def visit_create_table(self, create):
         table = create.element
@@ -19,5 +20,5 @@ class ChDDLCompiler(DDLCompiler):
         return text + ') ' + table.engine.compile()
 
     def get_column_specification(self, column: Column, **_):
-        text = f'{quote_id(column.name)} {column.type.compile()}'
+        text = f'{quote_identifier(column.name)} {column.type.compile()}'
         return text

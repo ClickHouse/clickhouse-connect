@@ -168,6 +168,14 @@ BS = '\\'
 must_escape = (BS, '\'')
 
 
+def quote_identifier(identifier: str):
+    first_char = identifier[0]
+    if first_char in ('`', '"') and identifier[-1] == first_char:
+        # Identifier is already quoted, assume that it's valid
+        return identifier
+    return f'`{identifier}`'
+
+
 def finalize_query(query: str, parameters: Optional[Dict[str, Any]], server_tz: Optional[tzinfo] = None) -> str:
     if not parameters:
         return query
@@ -263,3 +271,11 @@ def to_arrow(content: bytes):
     check_arrow()
     reader = pyarrow.ipc.RecordBatchFileReader(content)
     return reader.read_all()
+
+
+def arrow_buffer(table: 'pyarrow.Table') -> Tuple[Sequence[str], bytes]:
+    check_arrow()
+    sink = pyarrow.BufferOutputStream()
+    with pyarrow.RecordBatchFileWriter(sink, table.schema) as writer:
+        writer.write(table)
+    return table.schema.names, sink.getvalue()
