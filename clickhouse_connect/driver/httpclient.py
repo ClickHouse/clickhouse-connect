@@ -14,7 +14,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query
+from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier
 from clickhouse_connect.driver.rowbinary import RowBinaryTransform
 
 logger = logging.getLogger(__name__)
@@ -183,12 +183,26 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        headers = {'Content-Type': 'application/octet-stream'}
-        params = {'query': f"INSERT INTO {table} ({', '.join(column_names)}) FORMAT {self.write_format}",
-                  'database': self.database}
-        params.update(self._validate_settings(settings, True))
         insert_block = self.transform.build_insert(data, column_types=column_types, column_names=column_names,
                                                    column_oriented=column_oriented)
+        self.raw_insert(table, column_names, insert_block, settings, self.write_format)
+
+    def raw_insert(self, table: str,
+                   column_names: Sequence[str],
+                   insert_block: Union[str, bytes],
+                   settings: Optional[Dict] = None,
+                   fmt: Optional[str] = None):
+        """
+        See BaseClient doc_string for this method
+        """
+        column_ids = [quote_identifier(x) for x in column_names]
+        write_format = fmt if fmt else self.write_format
+        headers = {'Content-Type': 'application/octet-stream'}
+        params = {'query': f"INSERT INTO {table} ({', '.join(column_ids)}) FORMAT {write_format}",
+                  'database': self.database}
+        if isinstance(insert_block, str):
+            insert_block = insert_block.encode()
+        params.update(self._validate_settings(settings, True))
         response = self._raw_request(insert_block, params, headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 

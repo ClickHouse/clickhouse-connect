@@ -9,7 +9,8 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, to_arrow, QueryContext
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, to_arrow, \
+    QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -289,15 +290,33 @@ class Client(metaclass=ABCMeta):
         assert len(column_names) == len(column_types)
         self.data_insert(full_table, column_names, data, column_types, settings, column_oriented)
 
-    def insert_df(self, table: str, data_frame, database: str = None):
+    def insert_df(self, table: str, data_frame, database: str = None, settings: Optional[Dict] = None):
         """
         Insert a pandas DataFrame into ClickHouse
         :param table: ClickHouse table
         :param data_frame: two-dimensional pandas dataframe
         :param database: Optional ClickHouse database
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: No return, throws an exception if the insert fails
         """
-        return self.insert(table, database=database, **from_pandas_df(data_frame))
+        return self.insert(table, database=database, settings=settings, **from_pandas_df(data_frame))
+
+    def insert_arrow(self,
+                     table: str,
+                     arrow_table,
+                     database: str = None,
+                     settings: Optional[Dict] = None):
+        """
+        Insert a PyArrow table DataFrame into ClickHouse using raw Arrow format
+        :param table: ClickHouse table
+        :param arrow_table: PyArrow Table object
+        :param database: Optional ClickHouse database
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :return: No return, throws an exception if the insert fails
+        """
+        _, _, full_table = self.normalize_table(table, database)
+        column_names, insert_block = arrow_buffer(arrow_table)
+        self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
 
     def normalize_table(self, table: str, database: Optional[str]) -> Tuple[str, str, str]:
         """
@@ -363,6 +382,21 @@ class Client(metaclass=ABCMeta):
         :param settings:  Optional dictionary of ClickHouse settings (key/string values)
         :param column_oriented: Whether the data is already pivoted as a sequence of columns
         :return: No return, throws an exception if the insert fails
+        """
+
+    @abstractmethod
+    def raw_insert(self, table: str,
+                   column_names: Sequence[str],
+                   insert_block: Union[str,  bytes],
+                   settings: Optional[Dict] = None,
+                   fmt: Optional[str] = None):
+        """
+        Insert data already formatted in a bytes object
+        :param table: Table name (whether or not qualified with the database name
+        :param column_names: Sequence of column names
+        :param insert_block: Binary or string data already in a recognized ClickHouse format
+        :param settings:  Optional dictionary of ClickHouse settings (key/string values)
+        :param fmt: Valid clickhouse format
         """
 
     def close(self):
