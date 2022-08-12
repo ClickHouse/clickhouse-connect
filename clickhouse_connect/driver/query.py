@@ -167,15 +167,20 @@ local_tz = datetime.now().astimezone().tzinfo
 BS = '\\'
 must_escape = (BS, '\'')
 
+
 def quote_identifier(identifier: str):
-    if identifier.startswith('`'):
+    first_char = identifier[0]
+    if first_char in ('`', '"') and identifier[-1] == first_char:
+        # Identifier is already quoted, assume that it's valid
         return identifier
     return f'`{identifier}`'
+
 
 def finalize_query(query: str, parameters: Optional[Dict[str, Any]], server_tz: Optional[tzinfo] = None) -> str:
     if not parameters:
         return query
     return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
+
 
 # pylint: disable=too-many-return-statements
 def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):

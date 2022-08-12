@@ -189,7 +189,7 @@ class HttpClient(Client):
 
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
-                   insert_block: bytes,
+                   insert_block: Union[str, bytes],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None):
         """
@@ -200,6 +200,8 @@ class HttpClient(Client):
         headers = {'Content-Type': 'application/octet-stream'}
         params = {'query': f"INSERT INTO {table} ({', '.join(column_ids)}) FORMAT {write_format}",
                   'database': self.database}
+        if isinstance(insert_block, str):
+            insert_block = insert_block.encode()
         params.update(self._validate_settings(settings, True))
         response = self._raw_request(insert_block, params, headers)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)

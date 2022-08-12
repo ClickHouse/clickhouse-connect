@@ -387,14 +387,14 @@ class Client(metaclass=ABCMeta):
     @abstractmethod
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
-                   insert_block: bytes,
+                   insert_block: Union[str,  bytes],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None):
         """
         Insert data already formatted in a bytes object
         :param table: Table name (whether or not qualified with the database name
         :param column_names: Sequence of column names
-        :param insert_block: Binary data already in a recognized ClickHouse format
+        :param insert_block: Binary or string data already in a recognized ClickHouse format
         :param settings:  Optional dictionary of ClickHouse settings (key/string values)
         :param fmt: Valid clickhouse format
         """

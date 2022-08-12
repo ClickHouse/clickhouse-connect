@@ -32,6 +32,23 @@ def test_insert(test_client: Client, test_table_engine: str):
     test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
 
 
+def test_raw_insert(test_client: Client, test_table_engine: str):
+    test_client.command('DROP TABLE IF EXISTS test_raw_insert')
+    test_client.command(f"CREATE TABLE test_raw_insert (`weir'd` String, value String) Engine {test_table_engine}" +
+                        " ORDER BY `weir'd`")
+    csv = 'value1\nvalue2'
+    test_client.raw_insert('test_raw_insert', ['"weir\'d"'], csv.encode(), fmt='CSV')
+    result = test_client.query('SELECT * FROM test_raw_insert')
+    assert result.result_set[1][0] == 'value2'
+
+    test_client.command('TRUNCATE TABLE test_raw_insert')
+    tsv = 'weird1\tvalue__`2\nweird2\tvalue77'
+    test_client.raw_insert('test_raw_insert', ["`weir'd`", 'value'], tsv, fmt='TSV')
+    result = test_client.query('SELECT * FROM test_raw_insert')
+    assert result.result_set[0][1] == 'value__`2'
+    assert result.result_set[1][1] == 'value77'
+
+
 def test_decimal_conv(test_client: Client, test_table_engine: str):
     test_client.command('DROP TABLE IF EXISTS test_num_conv')
     test_client.command('CREATE TABLE test_num_conv (col1 UInt64, col2 Int32, f1 Float64)' +
