@@ -2,7 +2,23 @@
 
 ### Deprecation warning
 
-* In the next minor release the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
+* In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
+
+
+### Release 0.2.3, 2022-08-14
+
+#### Bug Fix
+* Fix encoding insert of multibyte characters
+
+#### Improvements
+* Improve identifier handling/quoting for Clickhouse column, table, and database names
+* Add client arrow_insert method to directly insert a PyArrow Table insert ClickHouse using Arrow format
+
+
+### Release 0.2.2, 2022-08-06
+
+#### Bug Fix
+* Fix issue when query_limit set to 0
 
 
 ### Release 0.2.1, 2022-08-04
