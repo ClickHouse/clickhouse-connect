@@ -28,7 +28,7 @@ class RandomValueDef(NamedTuple):
     null_pct: float = 0.15
     str_len: int = 200
     arr_len: int = 12
-    ascii_only: bool = True
+    ascii_only: bool = False
 
 
 def random_col_data(ch_type: Union[str, ClickHouseType], cnt: int, col_def: RandomValueDef = RandomValueDef()):
@@ -130,7 +130,8 @@ def random_ascii_str(max_len: int = 200, min_len: int = 0):
 
 
 def random_utf8_str(max_len: int = 200):
-    return ''.join((chr(int(random() * 65000) + 32) for _ in range(int(random() * max_len))))
+    random_chars = [chr(int(random() * 65000) + 32) for _ in range(int(random() * max_len))]
+    return ''.join((c for c in random_chars if c.isprintable()))
 
 
 #   Only accepts precisions in multiples of 3 because others are extremely unlikely to be actually used

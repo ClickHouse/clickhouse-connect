@@ -45,7 +45,8 @@ class String(ClickHouseType):
                 if x is None:
                     app(0)
                 else:
-                    sz = len(x)
+                    y = x.encode(encoding)
+                    sz = len(y)
                     while True:
                         b = sz & 0x7f
                         sz >>= 7
@@ -53,10 +54,11 @@ class String(ClickHouseType):
                             app(b)
                             break
                         app(0x80 | b)
-                    dest += x.encode(encoding)
+                    dest += y
         else:
             for x in column:
-                sz = len(x)
+                y = x.encode(encoding)
+                sz = len(y)
                 while True:
                     b = sz & 0x7f
                     sz >>= 7
@@ -64,7 +66,7 @@ class String(ClickHouseType):
                         app(b)
                         break
                     app(0x80 | b)
-                dest += x.encode(encoding)
+                dest += y
 
     _read_native_impl = _read_native_python
 
