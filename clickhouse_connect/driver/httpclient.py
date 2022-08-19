@@ -33,7 +33,7 @@ PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
 # pylint: disable=too-many-instance-attributes
 class HttpClient(Client):
     valid_transport_settings = {'database', 'buffer_size', 'session_id', 'compress', 'decompress',
-                                'session_timeout', 'session_check', 'query_id', 'quota_key'}
+                                'session_timeout', 'session_check', 'query_id', 'quota_key', 'wait_end_of_query'}
 
     # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     def __init__(self,
