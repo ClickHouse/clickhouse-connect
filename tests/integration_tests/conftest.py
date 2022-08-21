@@ -50,7 +50,7 @@ def test_config_fixture(request) -> Iterator[TestConfig]:
     elif use_docker:
         test_database = 'ch_connect_test'
     else:
-        test_database = f'ch_connect_{random.randint(100000, 999999)}_{int(time.time())}'
+        test_database = f'ch_connect_{int(time.time())}_{random.randint(100000, 999999)}'
     yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup, local, cloud)
 
 

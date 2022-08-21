@@ -108,7 +108,7 @@ Create a ClickHouse client using the `clickhouse_connect.driver.create_client(..
 * `format:str` _native_ (ClickHouse Native) or _rb_ (ClickHouse Row Binary)  
   Native format is preferred for performance reasons
 * `query_limit:int` LIMIT value added to all queries.  
-  Defaults to 5,000 rows.  Unlimited queries are not supported to prevent crashing the driver
+  Defaults to 5,000 rows.  Setting query_limit=0 will return unlimited results, at the risk of running out of memory
 * `connect_timeout:int` HTTP connection timeout in seconds.  Default 10 seconds.
 * `send_receive_timeout:int` HTTP read timeout in seconds.  Default 300 seconds.
 * `client_name:str` HTTP User-Agent header.  Defaults to `clickhouse-connect`
