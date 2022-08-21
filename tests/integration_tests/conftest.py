@@ -1,8 +1,9 @@
 import sys
+import random
+import time
 from pathlib import Path
 from subprocess import Popen, PIPE
 from typing import Iterator, NamedTuple
-from time import sleep
 
 from pytest import fixture
 
@@ -22,10 +23,7 @@ class TestConfig(NamedTuple):
     test_database: str
     cleanup: bool
     local: bool
-
-    @property
-    def cloud(self):
-        return self.host.endswith('clickhouse.cloud')
+    cloud: bool
 
 
 @fixture(scope='session', autouse=True, name='test_config')
@@ -33,6 +31,7 @@ def test_config_fixture(request) -> Iterator[TestConfig]:
     interface = request.config.getoption('interface')
     host = request.config.getoption('host')
     port = request.config.getoption('port')
+    cloud = request.config.getoption('cloud')
     if not interface:
         interface = 'http' if host == 'localhost' else 'https'
     use_docker = request.config.getoption('docker', True) and host == 'localhost'
@@ -48,9 +47,11 @@ def test_config_fixture(request) -> Iterator[TestConfig]:
     test_database = request.config.getoption('test_db', None)
     if test_database:
         cleanup = False
+    elif use_docker:
+        test_database = 'ch_connect_test'
     else:
-        test_database = 'cc_test'
-    yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup, local)
+        test_database = f'ch_connect_{int(time.time())}_{random.randint(100000, 999999)}'
+    yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup, local, cloud)
 
 
 @fixture(scope='session', name='test_db')
@@ -59,7 +60,7 @@ def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
 
 
 @fixture(scope='session', name='test_table_engine')
-def test_table_engine_fixture(test_config:TestConfig) -> Iterator[str]:
+def test_table_engine_fixture(test_config: TestConfig) -> Iterator[str]:
     yield 'ReplicatedMergeTree' if test_config.cloud else 'MergeTree'
 
 
@@ -75,7 +76,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
         if up_result[0]:
             raise Exception(f'Failed to start docker: {up_result[2]}')
-        sleep(5)
+        time.sleep(5)
     tries = 0
     while True:
         tries += 1
@@ -90,13 +91,15 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         except ClickHouseError as ex:
             if tries > 15:
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
-            sleep(1)
+            time.sleep(2)
     if client.min_version('22.6.1'):
         client.client_setting('allow_experimental_object_type', 1)
     if test_db != 'default':
         client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
         client.database = test_db
     yield client
+    if test_config.cleanup:
+        client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
     if test_config.use_docker:
         down_result = run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:

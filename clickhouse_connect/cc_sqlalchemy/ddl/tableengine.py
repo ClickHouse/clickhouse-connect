@@ -211,8 +211,8 @@ class ReplicatedMergeTree(TableEngine):
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, zk_path: str = None, replica: str = None, order_by: str = None, primary_key: str = None,
-                 partition_by: str = None, sample_by: str = None):
+    def __init__(self, order_by: str = None, primary_key: str = None, partition_by: str = None, sample_by: str = None,
+                 zk_path: str = None, replica: str = None):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
         super().__init__(locals())
@@ -226,11 +226,12 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
     """
     if not full_engine:
         return None
-    name = full_engine.split(' ')[0]
+    name = full_engine.split(' ')[0].split('(')[0]
     try:
         engine_cls = engine_map[name]
     except KeyError:
-        logger.warning('Engine %s not found', name)
+        if not name.startswith('System'):
+            logger.warning('Engine %s not found', name)
         return None
     engine = engine_cls.__new__(engine_cls)
     engine.name = name

@@ -5,6 +5,11 @@
 * In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
 
 
+### Release 0.2.4, 2022-08-19
+
+#### Bug Fix
+* The wait_end_of_query parameter/setting was incorrectly being stripped.  This is fixed
+
 ### Release 0.2.3, 2022-08-14
 
 #### Bug Fix

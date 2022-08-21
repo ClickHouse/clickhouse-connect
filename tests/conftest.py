@@ -16,6 +16,7 @@ def clean_global_state():
 def pytest_addoption(parser):
     parser.addoption('--docker', default=True, action='store_true')
     parser.addoption('--no-docker', dest='docker', action='store_false')
+    parser.addoption('--cloud', default=False, action='store_true')
     parser.addoption('--host',  help='ClickHouse host', default='localhost')
     parser.addoption('--port', type=int, help='ClickHouse http port')
     parser.addoption('--interface', help='http or https')
