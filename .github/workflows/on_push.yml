@@ -5,6 +5,10 @@ on:
     branches-ignore:
       - '*_test'
       - '*_dev'
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
 
 jobs:
   lint:
@@ -32,14 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Excluding Python 3.7 and 3.10 since Superset 1.5 doesn't install on 3.7 or 3.10.  Hopefully we can
-        # add 3.10 soon
+        # Excluding Python 3.7 since Superset doesn't install on 3.7
         python-version:
           - '3.8'
           - '3.9'
+          - '3.10'
         clickhouse-version:
-          - '21.8'
           - '22.3'
+          - '22.8'
           - latest
 
     services:
