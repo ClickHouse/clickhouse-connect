@@ -16,12 +16,15 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
 helpers.add_test_entry_points()
 
 
-def test_create_database(test_engine: Engine, test_db: str):
+def test_create_database(test_engine: Engine, test_db: str, test_table_engine: str):
     if test_db:
         conn = test_engine.connect()
         create_db = f'{test_db}_create_db_test'
         if not test_engine.dialect.has_database(conn, create_db):
-            conn.execute(CreateDatabase(create_db, 'Atomic'))
+            if test_table_engine == 'ReplicatedMergeTree':
+                conn.execute(CreateDatabase(create_db))
+            else:
+                conn.execute(CreateDatabase(create_db, 'Atomic'))
         conn.execute(DropDatabase(create_db))
 
 
