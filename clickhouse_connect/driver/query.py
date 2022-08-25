@@ -194,12 +194,12 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
         return 'NULL'
     if isinstance(value, str):
         return f"'{''.join(f'{BS}{c}' if c in must_escape else c for c in value)}'"
-    if isinstance(value, date):
-        return f"'{value.isoformat()}'"
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
-        return f"'{value.strftime('%Y-%m-%d %H:%M:%S%')}'"
+        return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
+    if isinstance(value, date):
+        return f"'{value.isoformat()}'"
     if isinstance(value, list):
         return f"[{', '.join(format_query_value(x, server_tz) for x in value)}]"
     if isinstance(value, tuple):
