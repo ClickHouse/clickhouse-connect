@@ -86,7 +86,7 @@ class Client(metaclass=ABCMeta):
     # pylint: disable=duplicate-code,too-many-arguments
     def query(self,
               query: str = None,
-              parameters: Optional[Dict[str, Any]] = None,
+              parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
               settings: Optional[Dict[str, Any]] = None,
               query_formats: Optional[Dict[str, str]] = None,
               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
@@ -128,7 +128,7 @@ class Client(metaclass=ABCMeta):
     @abstractmethod
     def raw_query(self,
                   query: str,
-                  parameters: Optional[Dict[str, Any]] = None,
+                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
                   fmt: str = None) -> bytes:
         """
@@ -143,7 +143,7 @@ class Client(metaclass=ABCMeta):
     # pylint: disable=duplicate-code
     def query_np(self,
                  query: str = None,
-                 parameters: Optional[Dict[str, Any]] = None,
+                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                  settings: Optional[Dict[str, Any]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
@@ -172,7 +172,7 @@ class Client(metaclass=ABCMeta):
     # pylint: disable=duplicate-code
     def query_df(self,
                  query: str = None,
-                 parameters: Optional[Dict[str, Any]] = None,
+                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                  settings: Optional[Dict[str, Any]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
@@ -200,7 +200,7 @@ class Client(metaclass=ABCMeta):
 
     def query_arrow(self,
                     query: str,
-                    parameters: Optional[Dict[str, Any]] = None,
+                    parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                     settings: Optional[Dict[str, Any]] = None,
                     use_strings: bool = True):
         """
@@ -219,7 +219,7 @@ class Client(metaclass=ABCMeta):
     @abstractmethod
     def command(self,
                 cmd: str,
-                parameters: Optional[Dict[str, Any]] = None,
+                parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Dict[str, Any] = None,
                 use_database: bool = True) -> Union[str, int, Sequence[str]]:

@@ -176,10 +176,13 @@ def quote_identifier(identifier: str):
     return f'`{identifier}`'
 
 
-def finalize_query(query: str, parameters: Optional[Dict[str, Any]], server_tz: Optional[tzinfo] = None) -> str:
+def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],
+                   server_tz: Optional[tzinfo] = None) -> str:
     if not parameters:
         return query
-    return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
+    if hasattr(parameters, 'items'):
+        return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
+    return query % tuple(format_query_value(v) for v in parameters)
 
 
 # pylint: disable=too-many-return-statements
