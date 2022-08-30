@@ -5,6 +5,15 @@
 * In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
 
 
+### Release 0.2.5 2022-08-30
+
+#### Bug Fix
+* Fixed an issue where DBAPI cursors returned an invalid description object for columns.  This would cause `'property' object has no attribute 'startswith'` errors for some SqlAlchemy and SuperSet queries.  
+* Fixed an issue where datetime parameters would not be correctly rendered as ClickHouse compatible strings
+
+#### Improvement
+* The "parameters" object passed to client query methods can now be a sequence instead of a dictionary, for compatibility with query strings that contain simple format unnamed format directives, such as `'SELECT * FROM table WHERE value = %s'`
+
 ### Release 0.2.4, 2022-08-19
 
 #### Bug Fix

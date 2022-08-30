@@ -3,8 +3,7 @@ import re
 
 from typing import Optional, Sequence
 
-from clickhouse_connect.datatypes.numeric import Int32
-from clickhouse_connect.datatypes.string import String
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import Client
@@ -15,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 query_re = re.compile(r'^\s*(SELECT|SHOW|DESCRIBE|WITH|EXISTS)\s', re.IGNORECASE)
 insert_re = re.compile(r'^\s*INSERT\s+INTO\s+(.*$)', re.IGNORECASE)
+str_type = get_from_name('String')
+int_type = get_from_name('Int32')
 
 
 class Cursor:
@@ -53,12 +54,12 @@ class Cursor:
             self.types = query_result.column_types
         else:
             v = self.client.command(operation, parameters)
-            self.types = [String]
+            self.types = [str_type]
             self.names = ['response']
             if not v:
                 v = 'OK'
             elif isinstance(v, int):
-                self.types = [Int32]
+                self.types = [int_type]
             if isinstance(v, list):
                 v = '\t'.join(v)
             self.data = [[v]]

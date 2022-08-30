@@ -208,7 +208,7 @@ class HttpClient(Client):
 
     def command(self,
                 cmd,
-                parameters: Optional[Dict[str, Any]] = None,
+                parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
                 use_database: int = True) -> Union[str, int, Sequence[str]]:
@@ -288,7 +288,7 @@ class HttpClient(Client):
 
     def raw_query(self,
                   query: str,
-                  parameters: Optional[Dict[str, Any]] = None,
+                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
                   fmt: str = None):
         """
