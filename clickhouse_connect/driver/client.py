@@ -340,12 +340,17 @@ class Client(metaclass=ABCMeta):
         """
         Determine whether the connected server is at least the submitted version
         :param version_str:  Version string consisting of up to 4 integers delimited by dots
-        :return:  1 if the version_str is greater than the server_version, 0 if equal, -1 if less than
+        :return:  True version_str is greater than the server_version, False if less than
         """
-        server_parts = [int(x) for x in self.server_version.split('.')]
-        server_parts.extend([0] * (4 - len(server_parts)))
-        version_parts = [int(x) for x in version_str.split('.')]
-        version_parts.extend([0] * (4 - len(version_parts)))
+        try:
+            server_parts = [int(x) for x in self.server_version.split('.')]
+            server_parts.extend([0] * (4 - len(server_parts)))
+            version_parts = [int(x) for x in version_str.split('.')]
+            version_parts.extend([0] * (4 - len(version_parts)))
+        except ValueError:
+            logger.warning('Server %s or requested version %s does not match format of numbers separated by dots',
+                           self.server_version, version_str)
+            return False
         for x, y in zip(server_parts, version_parts):
             if x > y:
                 return True
