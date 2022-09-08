@@ -5,6 +5,11 @@
 * In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
 
 
+### Release 0.2.6 2022-09-08
+
+#### Bug Fix
+* Fixed an SQLAlchemy dialect issue with SQLAlchemy 1.4 that would cause problems in the most recent Superset version
+
 ### Release 0.2.5 2022-08-30
 
 #### Bug Fix

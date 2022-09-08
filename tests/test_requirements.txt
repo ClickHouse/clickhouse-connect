@@ -2,7 +2,7 @@ requests
 pytz
 sqlalchemy>=1.4.0
 apache_superset>=2.0.0
-flask=2.0.3
+flask==2.0.3
 MarkupSafe==2.0.1
 Jinja2==3.0.3
 werkzeug==2.0.3
