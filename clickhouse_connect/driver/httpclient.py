@@ -46,8 +46,9 @@ class HttpClient(Client):
                  compress: bool = True,
                  data_format: str = 'native',
                  query_limit: int = 5000,
+                 query_retries: int = 2,
                  connect_timeout: int = 10,
-                 send_receive_timeout = 300,
+                 send_receive_timeout: int = 300,
                  client_name: str = 'clickhouse-connect',
                  send_progress: bool = True,
                  verify: bool = True,
@@ -120,6 +121,7 @@ class HttpClient(Client):
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
+        self.query_retries = query_retries
         settings = kwargs.copy()
         if send_progress:
             settings['send_progress_in_http_headers'] = '1'
@@ -151,7 +153,8 @@ class HttpClient(Client):
         params = {'database': self.database}
         params.update(self._validate_settings(context.settings, True))
         if columns_only_re.search(context.uncommented_query):
-            response = self._raw_request(f'{context.final_query}\n FORMAT JSON', params, headers, retries=2)
+            response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
+                                         params, headers, retries=self.query_retries)
             json_result = json.loads(response.content)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -162,7 +165,7 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._prep_query(context), params, headers, retries=2)
+            response = self._raw_request(self._prep_query(context), params, headers, retries=self.query_retries)
             data_result = self.transform.parse_response(response.content, context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
