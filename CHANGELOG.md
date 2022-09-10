@@ -4,6 +4,10 @@
 
 * In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
 
+### Release 0.2.7 2022-09-10
+
+#### Improvement
+* The HTTP client now raises an OperationalError instead of a DatabaseError when the HTTP status code is 429 (too many requests), 503 (service unavailable), or 504 (gateway timeout) to make it easier to determine if it is a retryable exception
 
 ### Release 0.2.6 2022-09-08
 

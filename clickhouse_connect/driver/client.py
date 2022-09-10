@@ -397,7 +397,7 @@ class Client(metaclass=ABCMeta):
                    fmt: Optional[str] = None):
         """
         Insert data already formatted in a bytes object
-        :param table: Table name (whether or not qualified with the database name
+        :param table: Table name (whether qualified with the database name or not)
         :param column_names: Sequence of column names
         :param insert_block: Binary or string data already in a recognized ClickHouse format
         :param settings:  Optional dictionary of ClickHouse settings (key/string values)
