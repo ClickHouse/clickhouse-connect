@@ -272,8 +272,10 @@ class HttpClient(Client):
                 err_msg = response.content.decode(errors='backslashreplace')
                 logger.error(str(err_msg))
                 err_str = f':{err_str}\n {err_msg[0:240]}'
-            if attempts > retries or response.status_code not in (429, 503, 504):
+            if response.status_code not in (429, 503, 504):
                 raise DatabaseError(err_str)
+            if attempts > retries:
+                raise OperationalError(err_str)
 
     def ping(self):
         """
