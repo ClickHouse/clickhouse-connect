@@ -18,7 +18,7 @@ jobs:
         if: ${{ github.event == 'release' }}
         run: echo "${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}" > VERSION
       - name: Copy Dev Version
-        if: ${{ github.event != 'release }}
+        if: ${{ github.event != 'release' }}
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
