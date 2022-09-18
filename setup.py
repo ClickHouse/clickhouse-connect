@@ -27,7 +27,9 @@ def run_setup(try_c: bool = True):
     with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
         long_desc = read_me.read()
 
-    version = os.environ.get('CLICKHOUSE_CONNECT_BUILD_VERSION', 'developer_only')
+    version_fn = '.dev_version' if os.path.isfile('.dev_version') else 'clickhouse_connect/VERSION'
+    with open(os.path.join(project_dir, version_fn), encoding='utf-8') as version_file:
+        version = version_file.readline()
 
     setup(
         name='clickhouse-connect',
@@ -73,6 +75,6 @@ def run_setup(try_c: bool = True):
 
 try:
     run_setup()
-except (CCompilerError, DistutilsExecError, DistutilsPlatformError):
+except (CCompilerError, DistutilsExecError, DistutilsPlatformError, IOError, SystemExit) as e:
     print('Unable to compile C extensions for faster performance, will use pure Python')
     run_setup(False)

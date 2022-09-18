@@ -1,20 +1,31 @@
-name: 'Publish Release'
+name: 'Build and Publish Release'
 
 on:
   release:
     types: [created]
+  push:
+    branches:
+      - '*build*'
 
 jobs:
-  set_version:
-    name: Set Version
+  update_version:
+    name: Update Version
     runs-on: ubuntu-latest
-    outputs:
-      rv: ${{ steps.parse_version.outputs.rv }}
-    env:
-      CC_VERSION: ${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}
     steps:
-      - id: parse_version
-        run: echo "::set-output name=rv::${CC_VERSION/v/}"
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Copy Release Version
+        if: ${{ github.event == 'release' }}
+        run: echo "${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}" > VERSION
+      - name: Copy Dev Version
+        if: ${{ github.event != 'release }}
+        run: cat .dev_version > clickhouse_connect/VERSION
+      - name: Commit updated version
+        run: |
+          git config --global user.name 'Geoff Genz'
+          git config --global user.email 'geoff@clickhouse.com'
+          git commit --amend --no-edit
+          git push
 
   build_wheels:
     name: Build Wheels
@@ -31,8 +42,10 @@ jobs:
           - macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v3
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v3
         with:
           python-version: ${{ matrix.python }}
       - name: Install build dependencies
@@ -52,8 +65,9 @@ jobs:
           path: dist/*
 
   publish:
-    needs: [set_version, build_wheels]
+    needs: [update_version, build_wheels]
     name: Publish to PyPI
+    if: ${{ github.event == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3

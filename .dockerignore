@@ -1,0 +1,15 @@
+# Repo stuff not needed for docker
+tests
+docs
+test_dist
+.github
+
+
+# Temporary directories of various kinds
+dev
+dist
+cache
+build
+
+
+
