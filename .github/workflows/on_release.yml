@@ -24,7 +24,7 @@ jobs:
         run: |
           git config --global user.name 'Geoff Genz'
           git config --global user.email 'geoff@clickhouse.com'
-          git commit --amend --no-edit
+          git commit -am Update Version
           git push
 
   build_wheels:
