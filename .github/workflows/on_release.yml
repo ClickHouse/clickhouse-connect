@@ -29,7 +29,7 @@ jobs:
 
   build_wheels:
     name: Build Wheels
-    needs: set_version
+    needs: update_version
     strategy:
       matrix:
         python:
