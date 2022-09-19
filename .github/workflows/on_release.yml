@@ -27,42 +27,29 @@ jobs:
           git commit -am 'Update Version'
           git push
 
-  build_wheels:
-    name: Build Wheels
-    needs: update_version
-    strategy:
-      matrix:
-        python:
-          - '3.7'
-          - '3.8'
-          - '3.9'
-          - '3.10'
-        runner:
-          - windows-latest
-          - macos-latest
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Python
-        uses: actions/setup-python@v3
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install build dependencies
-        run: pip install setuptools wheel
-      - name: Update release version (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        run: sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
-      - name: Update release version (Mac)
-        if: ${{ runner.os == 'macOS' }}
-        run: sed -i "" "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
-      - name: Build Wheel
-        run: python3 setup.py bdist_wheel
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: ${{ matrix.runner }}-${{ matrix.python }}-wheel
-          path: dist/*
+  jobs:
+    build_wheels:
+      needs: update_version
+      name: Build wheels on ${{ matrix.os }}
+      runs-on: ${{ matrix.os }}
+      strategy:
+        matrix:
+          os:
+            - windows-latest
+            - ubuntu-22.04
+            - ubuntu-20.04
+            - macos-11
+            - macos-12
+
+      steps:
+        - uses: actions/checkout@v3
+
+        - name: Build wheels
+          uses: pypa/cibuildwheel@v2.10.1
+
+        - uses: actions/upload-artifact@v3
+          with:
+            path: ./wheelhouse/*.whl
 
   publish:
     needs: [update_version, build_wheels]
