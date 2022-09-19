@@ -27,26 +27,29 @@ jobs:
           git commit -am 'Update Version'
           git push
 
-  build_wheels:
+  build_x86_linux_wheels:
     needs: update_version
-    name: Build wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Build wheels on Linux
+    runs-on: ubuntu-latest
     env:
       CIBW_SKIP: 'cp36-* cp311-*'
-    strategy:
-      matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - macos-11
-          - macos-12
-
     steps:
       - uses: actions/checkout@v3
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.10.1
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
 
+  build_wheels_macos:
+    name: Build wheels on macos
+    runs-on: macos-12
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
+        env:
+          CIBW_ARCHS_MACOS: x86_64 arm64
       - uses: actions/upload-artifact@v3
         with:
           path: ./wheelhouse/*.whl
@@ -59,7 +62,7 @@ jobs:
       - uses: actions/checkout@v3
       - name: Build source distribution
         run: |
-          rm -rf dist artifacts
+          rm -rf dist 
           python setup.py sdist
       - name: Retrieve wheels
         uses: actions/download-artifact@v3
@@ -67,7 +70,6 @@ jobs:
           path: wheelhouse
       - name: move and list artifacts
         run: |
-          cp -R artifacts/*/*.whl dist
           cp -R wheelhouse/*.whl dist
           ls -R dist
       - name: Install Twine
