@@ -31,12 +31,13 @@ jobs:
     needs: update_version
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      CIBW_BUILD: 'cp39-*'
     strategy:
       matrix:
         os:
           - windows-latest
-          - ubuntu-22.04
-          - ubuntu-20.04
+          - ubuntu-latest
           - macos-11
           - macos-12
 
