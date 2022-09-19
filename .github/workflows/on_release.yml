@@ -7,9 +7,10 @@ on:
     branches:
       - '*build*'
 
+env:
+  CIBW_SKIP: 'cp36-* cp311-*'
+
 jobs:
-  env:
-    CIBW_SKIP: 'cp36-* cp311-*'
   update_version:
     name: Update Version
     runs-on: ubuntu-latest
