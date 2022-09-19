@@ -28,8 +28,8 @@ jobs:
           git push
 
   build_x86_linux_wheels:
-    needs: update_version
     name: Build wheels on Linux
+    needs: update_version
     runs-on: ubuntu-latest
     env:
       CIBW_SKIP: 'cp36-* cp311-*'
@@ -43,6 +43,7 @@ jobs:
 
   build_wheels_macos:
     name: Build wheels on macos
+    needs: update_version
     runs-on: macos-12
     steps:
       - uses: actions/checkout@v3
@@ -55,7 +56,7 @@ jobs:
           path: ./wheelhouse/*.whl
 
   publish:
-    needs: [update_version, build_wheels]
+    needs: [update_version, build_wheels_macos, build_x86_linux_wheels]
     name: Publish to PyPI
     runs-on: ubuntu-latest
     steps:
