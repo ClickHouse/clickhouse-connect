@@ -27,29 +27,28 @@ jobs:
           git commit -am 'Update Version'
           git push
 
-  jobs:
-    build_wheels:
-      needs: update_version
-      name: Build wheels on ${{ matrix.os }}
-      runs-on: ${{ matrix.os }}
-      strategy:
-        matrix:
-          os:
-            - windows-latest
-            - ubuntu-22.04
-            - ubuntu-20.04
-            - macos-11
-            - macos-12
+  build_wheels:
+    needs: update_version
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-22.04
+          - ubuntu-20.04
+          - macos-11
+          - macos-12
 
-      steps:
-        - uses: actions/checkout@v3
+    steps:
+      - uses: actions/checkout@v3
 
-        - name: Build wheels
-          uses: pypa/cibuildwheel@v2.10.1
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
 
-        - uses: actions/upload-artifact@v3
-          with:
-            path: ./wheelhouse/*.whl
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
 
   publish:
     needs: [update_version, build_wheels]
