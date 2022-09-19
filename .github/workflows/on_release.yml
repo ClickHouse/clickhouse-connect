@@ -32,7 +32,7 @@ jobs:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     env:
-      CIBW_BUILD: 'cp39-*'
+      CIBW_SKIP: 'cp36-* cp311-*'
     strategy:
       matrix:
         os:
@@ -54,27 +54,34 @@ jobs:
   publish:
     needs: [update_version, build_wheels]
     name: Publish to PyPI
-    if: ${{ github.event == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
         run: |
-          sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
           rm -rf dist artifacts
           python setup.py sdist
       - name: Retrieve wheels
         uses: actions/download-artifact@v3
         with:
-          path: artifacts
+          path: wheelhouse
       - name: move and list artifacts
         run: |
           cp -R artifacts/*/*.whl dist
+          cp -R wheelhouse/*.whl dist
           ls -R dist
-      - name: Publish
+      - name: Install Twine
+        run:  pip install twine
+      - name: Publish (Release)
+        if: ${{ github.event == 'release' }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
-        run: |
-          pip install twine
-          twine upload dist/*
+        run: twine upload dist/*
+      - name: Publish (Test)
+        if: ${{ github.event == 'release' }}
+        env:
+          TWINE_USERNAME: '__token__'
+          TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
+        run: twine --repository testpypi dist/*
+
