@@ -25,7 +25,9 @@ jobs:
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
+          cat VERSION
           if ! git diff-index --quiet HEAD; then
+            echo 'PROCESSING IF'
             git config --global user.name 'Geoff Genz'
             git config --global user.email 'geoff@clickhouse.com'
             git commit -m 'Update VERSION'
