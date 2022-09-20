@@ -10,6 +10,7 @@ try:
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
     C_PKG = None
 except ImportError:
+    print ('Cython Not Installed, Attempt to compile c files directly')
     cythonize = None
     C_PKG = 'clickhouse_connect/driverc'
     c_modules = [Extension('creaders', ['clickhouse_connect/driverc/creaders.c'])]
