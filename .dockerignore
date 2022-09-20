@@ -3,13 +3,10 @@ tests
 docs
 test_dist
 .github
-
+Dockerfile
 
 # Temporary directories of various kinds
 dev
 dist
 cache
 build
-
-
-

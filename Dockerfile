@@ -1,7 +1,9 @@
-FROM python:3.8-slim-buster as slim
+FROM python:3.10
 
 ADD . /
 
-RUN sed -i "s/developer_only/1.0.0/" setup.py
-RUN python setup.py install
-
+RUN pip install --upgrade pip; \
+    pip install cython; \
+    pip install -v .
+# RUN pip install -v --index-url https://test.pypi.org/simple/ clickhouse-connect
+CMD ["python", "playtest.py"]

@@ -6,11 +6,11 @@ c_modules = []
 
 try:
     from Cython.Build import cythonize
-
+    print ('Using Cython to build cython modules')
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
     C_PKG = None
 except ImportError:
-    print ('Cython Not Installed, Attempt to compile c files directly')
+    print ('Cython Not Successfully Installed, Attempt to compile c files directly')
     cythonize = None
     C_PKG = 'clickhouse_connect/driverc'
     c_modules = [Extension('creaders', ['clickhouse_connect/driverc/creaders.c'])]
@@ -45,7 +45,7 @@ def run_setup(try_c: bool = True):
         python_requires='~=3.7',
         license='Apache License 2.0',
         install_requires=[
-            'requests',
+            'requests>=2.27.1',
             'pytz'
         ],
         extras_require={
