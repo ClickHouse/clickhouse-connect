@@ -103,7 +103,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
-        if: ${{ false }}
         run: |
           rm -rf dist 
           python setup.py sdist
