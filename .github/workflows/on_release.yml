@@ -25,10 +25,12 @@ jobs:
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
-          git config --global user.name 'Geoff Genz'
-          git config --global user.email 'geoff@clickhouse.com'
-          git commit -am 'Update Version'
-          git push
+          if ! git diff-index --quiet HEAD; then
+            git config --global user.name 'Geoff Genz'
+            git config --global user.email 'geoff@clickhouse.com'
+            git commit -m 'Update VERSION'
+            git push
+          fi
 
   build_x86_linux_wheels:
     name: Build x86 wheels on Linux
