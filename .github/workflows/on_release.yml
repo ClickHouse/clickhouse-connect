@@ -44,6 +44,7 @@ jobs:
 
   build_nonx86_wheels:
     name: Build non x86 wheels
+    if: ${{ false }}
     needs: update_version
     runs-on: ubuntu-latest
     env:
@@ -62,6 +63,7 @@ jobs:
 
   build_macos_wheels:
     name: Build wheels on macos
+    if: ${{ false }}
     needs: update_version
     runs-on: macos-12
     steps:
@@ -74,11 +76,25 @@ jobs:
         with:
           path: ./wheelhouse/*.whl
 
+  build_windows_wheels:
+    name: Build x86 wheels on Windows
+    if: ${{ false }}
+    needs: update_version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
   publish:
     needs:
-      - build_macos_wheels
+      #- build_macos_wheels
+      #- build_windows_wheels
       - build_x86_linux_wheels
-      - build_nonx86_wheels
+      #- build_nonx86_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
     steps:
@@ -104,7 +120,7 @@ jobs:
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
         run: twine upload dist/*
       - name: Publish (Test)
-        if: ${{ github.event == 'release' }}
+        if: ${{ github.event != 'release' }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
