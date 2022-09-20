@@ -8,7 +8,7 @@ on:
       - '*build*'
 
 env:
-  CIBW_SKIP: 'cp36-* cp37-*'
+  CIBW_SKIP: 'cp36-* cp311-*'
 
 jobs:
   update_version:
