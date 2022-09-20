@@ -8,7 +8,8 @@ on:
       - '*build*'
 
 env:
-  CIBW_SKIP: 'cp36-* cp311-*'
+  # CIBW_SKIP: 'cp36-* cp311-*'
+  CIBW_BUILD: 'cp39-*'
 
 jobs:
   update_version:
@@ -126,5 +127,5 @@ jobs:
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
-        run: twine --repository testpypi dist/*
+        run: twine upload --repository testpypi dist/*
 
