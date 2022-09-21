@@ -19,10 +19,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Copy Release Version
-        if: ${{ github.event == 'release' }}
+        if: ${{ github.event.event_type == 'release' }}
         run: echo "${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}" > clickhouse_connect/VERSION
       - name: Copy Dev Version
-        if: ${{ github.event != 'release' }}
+        if: ${{ github.event.event_type != 'release' }}
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
