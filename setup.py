@@ -45,7 +45,7 @@ def run_setup(try_c: bool = True):
         python_requires='~=3.7',
         license='Apache License 2.0',
         install_requires=[
-            'requests>=2.27.1',
+            'requests',
             'pytz'
         ],
         extras_require={

@@ -8,7 +8,8 @@ on:
       - '*build*'
 
 env:
-  CIBW_SKIP: 'cp36-* cp311-*'
+  # CIBW_SKIP: 'cp36-* cp311-*'
+  CIBW_BUILD: 'cp310-*'
   CIBW_BEFORE_BUILD: pip install cython
 
 jobs:
@@ -34,7 +35,7 @@ jobs:
           fi
 
   build_x86_linux_wheels:
-    # if: ${{ false }}
+    if: ${{ false }}
     name: Build x86 wheels on Linux
     needs: update_version
     runs-on: ubuntu-latest
@@ -47,7 +48,7 @@ jobs:
           path: ./wheelhouse/*.whl
 
   build_nonx86_wheels:
-    # if: ${{ false }}
+    if: ${{ false }}
     name: Build non x86 wheels
     needs: update_version
     runs-on: ubuntu-latest
@@ -74,13 +75,13 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.10.1
         env:
-          CIBW_ARCHS_MACOS: x86_64
+          CIBW_ARCHS_MACOS: x86_64 arm64
       - uses: actions/upload-artifact@v3
         with:
           path: ./wheelhouse/*.whl
 
   build_windows_wheels:
-    # if: ${{ false }}
+    if: ${{ false }}
     name: Build x86 wheels on Windows
     needs: update_version
     runs-on: windows-latest
@@ -95,9 +96,9 @@ jobs:
   publish:
     needs:
       - build_macos_wheels
-      - build_windows_wheels
-      - build_x86_linux_wheels
-      - build_nonx86_wheels
+      # - build_windows_wheels
+      #- build_x86_linux_wheels
+      #- build_nonx86_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
     steps:
