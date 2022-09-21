@@ -28,10 +28,10 @@ jobs:
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
+          git remote set-head origin --auto
           if ! git diff-index --quiet HEAD; then
             git config --global user.name 'Geoff Genz'
             git config --global user.email 'geoff@clickhouse.com'
-            git remote set-head origin --auto
             git commit -am 'Update VERSION'
             git push
           fi
