@@ -9,7 +9,7 @@ on:
 
 env:
   # CIBW_SKIP: 'cp36-* cp311-*'
-  CIBW_BUILD: 'cp310-*'
+  CIBW_BUILD: 'cp311-*'
   CIBW_BEFORE_BUILD: pip install cython
 
 jobs:
