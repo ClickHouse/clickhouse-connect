@@ -18,11 +18,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - run: |
-          echo "${{ github.event.release.action }}"
       - name: Copy Release Version
-        if: ${{ github.event.release }}
-        run: echo "${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}" > clickhouse_connect/VERSION
+        if: ${{ github.event.release && startsWith(github.ref_name, 'v') }}
+        run: |
+          echo "${{ github.ref_name }}" > clickhouse_connect/VERSION
+          sed 's/v//g' clickhouse_connect/VERSION
       - name: Copy Dev Version
         if: ${{ !github.event.release }}
         run: cat .dev_version > clickhouse_connect/VERSION
@@ -31,6 +31,7 @@ jobs:
           if ! git diff-index --quiet HEAD; then
             git config --global user.name 'Geoff Genz'
             git config --global user.email 'geoff@clickhouse.com'
+            git remote set-head origin --auto
             git commit -am 'Update VERSION'
             git push
           fi
@@ -116,7 +117,7 @@ jobs:
       - name: Install Twine
         run:  pip install twine
       - name: Publish (Release)
-        if: ${{ github.event.release }}
+        if: ${{ github.event.release && startsWith(github.ref_name, 'v') }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
