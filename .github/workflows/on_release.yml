@@ -12,33 +12,8 @@ env:
   CIBW_BEFORE_BUILD: pip install cython
 
 jobs:
-  update_version:
-    name: Update Version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Copy Release Version
-        if: ${{ github.event.release && startsWith(github.ref_name, 'v') }}
-        run: |
-          echo "${{ github.ref_name }}" > clickhouse_connect/VERSION
-          sed 's/v//g' clickhouse_connect/VERSION
-          git remote set-head origin main
-      - name: Copy Dev Version
-        if: ${{ !github.event.release }}
-        run: cat .dev_version > clickhouse_connect/VERSION
-      - name: Commit updated version
-        run: |
-          if ! git diff-index --quiet HEAD; then
-            git config --global user.name 'Geoff Genz'
-            git config --global user.email 'geoff@clickhouse.com'
-            git commit -am 'Update VERSION'
-            git push
-          fi
-
   build_x86_linux_wheels:
     name: Build x86 wheels on Linux
-    needs: update_version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -50,7 +25,6 @@ jobs:
 
   build_nonx86_wheels:
     name: Build non x86 wheels
-    needs: update_version
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
@@ -68,7 +42,6 @@ jobs:
 
   build_macos_wheels:
     name: Build wheels on macos
-    needs: update_version
     runs-on: macos-12
     steps:
       - uses: actions/checkout@v3
@@ -82,7 +55,6 @@ jobs:
 
   build_windows_wheels:
     name: Build x86 wheels on Windows
-    needs: update_version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
