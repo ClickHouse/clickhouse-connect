@@ -69,6 +69,7 @@ def run_setup(try_c: bool = True):
             'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10'
+            'Programming Language :: Python :: 3.11'
         ],
         **kwargs
     )
@@ -77,5 +78,5 @@ def run_setup(try_c: bool = True):
 try:
     run_setup()
 except (CCompilerError, DistutilsExecError, DistutilsPlatformError, IOError, SystemExit) as e:
-    print('Unable to compile C extensions for faster performance, will use pure Python')
+    print(f'Unable to compile C extensions for faster performance due to {e}, will use pure Python')
     run_setup(False)

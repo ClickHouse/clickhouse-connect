@@ -967,9 +967,9 @@ static const char *__pyx_filename;
 
 static const char *__pyx_f[] = {
   "clickhouse_connect/driverc/creaders.pyx",
-  "type.pxd",
-  "bool.pxd",
-  "complex.pxd",
+  "cc_venv/lib/python3.9/site-packages/Cython/Includes/cpython/type.pxd",
+  "cc_venv/lib/python3.9/site-packages/Cython/Includes/cpython/bool.pxd",
+  "cc_venv/lib/python3.9/site-packages/Cython/Includes/cpython/complex.pxd",
 };
 
 /*--- Type declarations ---*/
