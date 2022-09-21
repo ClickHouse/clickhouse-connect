@@ -23,12 +23,12 @@ jobs:
         run: |
           echo "${{ github.ref_name }}" > clickhouse_connect/VERSION
           sed 's/v//g' clickhouse_connect/VERSION
+          git remote set-head origin main
       - name: Copy Dev Version
         if: ${{ !github.event.release }}
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
-          git remote set-head origin --auto
           if ! git diff-index --quiet HEAD; then
             git config --global user.name 'Geoff Genz'
             git config --global user.email 'geoff@clickhouse.com'
