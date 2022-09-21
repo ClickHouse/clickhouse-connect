@@ -1,79 +1,127 @@
-name: 'Publish Release'
+name: 'Build and Publish Release'
 
 on:
   release:
     types: [created]
+  push:
+    branches:
+      - '*build*'
+
+env:
+  CIBW_SKIP: 'cp36-*'
+  CIBW_BEFORE_BUILD: pip install cython
 
 jobs:
-  set_version:
-    name: Set Version
+  update_version:
+    name: Update Version
     runs-on: ubuntu-latest
-    outputs:
-      rv: ${{ steps.parse_version.outputs.rv }}
-    env:
-      CC_VERSION: ${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}
     steps:
-      - id: parse_version
-        run: echo "::set-output name=rv::${CC_VERSION/v/}"
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Copy Release Version
+        if: ${{ github.event == 'release' }}
+        run: echo "${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}" > clickhouse_connect/VERSION
+      - name: Copy Dev Version
+        if: ${{ github.event != 'release' }}
+        run: cat .dev_version > clickhouse_connect/VERSION
+      - name: Commit updated version
+        run: |
+          if ! git diff-index --quiet HEAD; then
+            git config --global user.name 'Geoff Genz'
+            git config --global user.email 'geoff@clickhouse.com'
+            git commit -am 'Update VERSION'
+            git push
+          fi
 
-  build_wheels:
-    name: Build Wheels
-    needs: set_version
-    strategy:
-      matrix:
-        python:
-          - '3.7'
-          - '3.8'
-          - '3.9'
-          - '3.10'
-        runner:
-          - windows-latest
-          - macos-latest
-    runs-on: ${{ matrix.runner }}
+  build_x86_linux_wheels:
+    name: Build x86 wheels on Linux
+    needs: update_version
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
+      - uses: actions/upload-artifact@v3
         with:
-          python-version: ${{ matrix.python }}
-      - name: Install build dependencies
-        run: pip install setuptools wheel
-      - name: Update release version (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        run: sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
-      - name: Update release version (Mac)
-        if: ${{ runner.os == 'macOS' }}
-        run: sed -i "" "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
-      - name: Build Wheel
-        run: python3 setup.py bdist_wheel
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+          path: ./wheelhouse/*.whl
+
+  build_nonx86_wheels:
+    name: Build non x86 wheels
+    needs: update_version
+    runs-on: ubuntu-latest
+    env:
+      CIBW_ARCHS_LINUX: aarch64
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
         with:
-          name: ${{ matrix.runner }}-${{ matrix.python }}-wheel
-          path: dist/*
+          platforms: all
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_macos_wheels:
+    name: Build wheels on macos
+    needs: update_version
+    runs-on: macos-12
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
+        env:
+          CIBW_ARCHS_MACOS: x86_64 arm64
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_windows_wheels:
+    name: Build x86 wheels on Windows
+    needs: update_version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.1
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
 
   publish:
-    needs: [set_version, build_wheels]
+    needs:
+      - build_macos_wheels
+      - build_windows_wheels
+      - build_x86_linux_wheels
+      - build_nonx86_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
         run: |
-          sed -i "s/developer_only/${{ needs.set_version.outputs.rv }}/" setup.py
-          rm -rf dist artifacts
+          rm -rf dist 
           python setup.py sdist
       - name: Retrieve wheels
         uses: actions/download-artifact@v3
         with:
-          path: artifacts
+          path: wheelhouse
       - name: move and list artifacts
         run: |
-          cp -R artifacts/*/*.whl dist
+          cp -R wheelhouse/*/*.whl dist
           ls -R dist
-      - name: Publish
+      - name: Install Twine
+        run:  pip install twine
+      - name: Publish (Release)
+        if: ${{ github.event == 'release' }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
-        run: |
-          pip install twine
-          twine upload dist/*
+        run: twine upload dist/*
+      - name: Publish (Test)
+        if: ${{ github.event != 'release' }}
+        env:
+          TWINE_USERNAME: '__token__'
+          TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
+        run: twine upload --repository testpypi dist/*

@@ -6,10 +6,11 @@ c_modules = []
 
 try:
     from Cython.Build import cythonize
-
+    print ('Using Cython to build cython modules')
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
     C_PKG = None
 except ImportError:
+    print ('Cython Not Successfully Installed, Attempt to compile c files directly')
     cythonize = None
     C_PKG = 'clickhouse_connect/driverc'
     c_modules = [Extension('creaders', ['clickhouse_connect/driverc/creaders.c'])]
@@ -27,7 +28,9 @@ def run_setup(try_c: bool = True):
     with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
         long_desc = read_me.read()
 
-    version = os.environ.get('CLICKHOUSE_CONNECT_BUILD_VERSION', 'developer_only')
+    version_fn = '.dev_version' if os.path.isfile('.dev_version') else 'clickhouse_connect/VERSION'
+    with open(os.path.join(project_dir, version_fn), encoding='utf-8') as version_file:
+        version = version_file.readline()
 
     setup(
         name='clickhouse-connect',
@@ -66,6 +69,7 @@ def run_setup(try_c: bool = True):
             'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10'
+            'Programming Language :: Python :: 3.11'
         ],
         **kwargs
     )
@@ -73,6 +77,6 @@ def run_setup(try_c: bool = True):
 
 try:
     run_setup()
-except (CCompilerError, DistutilsExecError, DistutilsPlatformError):
-    print('Unable to compile C extensions for faster performance, will use pure Python')
+except (CCompilerError, DistutilsExecError, DistutilsPlatformError, IOError, SystemExit) as e:
+    print(f'Unable to compile C extensions for faster performance due to {e}, will use pure Python')
     run_setup(False)

@@ -3,11 +3,13 @@ name: 'Lint and Test'
 on:
   push:
     branches-ignore:
-      - '*_test'
-      - '*_dev'
+      - '*test*'
+      - '*dev*'
+      - '*build*'
     paths-ignore:
       - 'README.md'
       - 'CHANGELOG.md'
+      - 'VERSION'
       - 'LICENSE'
 
 jobs:
