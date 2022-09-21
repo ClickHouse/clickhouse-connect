@@ -19,13 +19,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - run: |
-          echo "${{ github.event.event_type }}" 
-          echo "${{ github.event }}"
+          echo "${{ github.event.release.action }}"
       - name: Copy Release Version
-        if: ${{ github.event.event_type == 'ReleaseEvent' }}
+        if: ${{ github.event.release }}
         run: echo "${{ ( startsWith(github.ref_name, 'v') && github.ref_name ) }}" > clickhouse_connect/VERSION
       - name: Copy Dev Version
-        if: ${{ github.event.event_type != 'ReleaseEvent' }}
+        if: ${{ !github.event.release }}
         run: cat .dev_version > clickhouse_connect/VERSION
       - name: Commit updated version
         run: |
@@ -117,13 +116,13 @@ jobs:
       - name: Install Twine
         run:  pip install twine
       - name: Publish (Release)
-        if: ${{ github.event.event_type == 'ReleaseEvent' }}
+        if: ${{ github.event.release }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
         run: twine upload dist/*
       - name: Publish (Test)
-        if: ${{ github.event.event_type != 'ReleaseEvent' }}
+        if: ${{ !github.event.release }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
