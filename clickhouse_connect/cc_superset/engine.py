@@ -176,7 +176,9 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
                 ErrorLevel.ERROR,
                 {'invalid': ['host']},
             )]
-        port = parameters.get('port', default_port('http', parameters.get('encryption', False)))
+        port = parameters.get('port')
+        if port is None:
+            port = default_port('http', parameters.get('encryption', False))
         try:
             port = int(port)
         except (ValueError, TypeError):
