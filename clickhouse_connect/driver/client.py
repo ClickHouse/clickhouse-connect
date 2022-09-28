@@ -94,7 +94,7 @@ class Client(metaclass=ABCMeta):
               use_none: bool = True,
               context: QueryContext = None) -> QueryResult:
         """
-        Main query method for SELECT, DESCRIBE and other commands that result a result matrix
+        Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
