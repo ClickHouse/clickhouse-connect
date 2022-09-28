@@ -4,6 +4,17 @@
 
 * In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
 
+### Release 0.2.10 2022-09-28
+
+#### Bug Fix
+* Add single retry for HTTP RemoteDisconnected errors from the ClickHouse Server.  This prevents exception spam when requests (in particular inserts) are sent at approximately the same time as the ClickHouse server closes a keep alive connection.
+
+### Release 0.2.9 2022-09-24
+
+#### Bug Fix
+* Fix incorrect validation errors in the Superset connection dialog
+
+
 ### Release 0.2.8 2022-09-21
 
 #### Improvements

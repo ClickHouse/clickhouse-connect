@@ -3,6 +3,7 @@ import json
 import atexit
 import re
 import http as PyHttp
+from http.client import RemoteDisconnected
 
 from typing import Optional, Dict, Any, Sequence, Union, List
 from requests import Session, Response, get as req_get
@@ -265,6 +266,17 @@ class HttpClient(Client):
                                                           data=data,
                                                           params=params)
             except RequestException as ex:
+                rex_context = ex.__context__
+                if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):
+                    # See https://github.com/psf/requests/issues/4664
+                    # The server closed the connection and it is probably because the Keep Alive has expired
+                    # We should be safe to retry, as ClickHouse should not have processed anything on a connection
+                    # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
+                    # related to the Keep Alive settings
+                    if attempts == 1:
+                        logger.debug('Retrying remotely closed connection')
+                        attempts = 0
+                        continue
                 logger.exception('Unexpected Http Driver Exception')
                 raise OperationalError(f'Error executing HTTP request {self.url}') from ex
             if 200 <= response.status_code < 300:
