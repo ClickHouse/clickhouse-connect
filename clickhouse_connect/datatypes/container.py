@@ -16,20 +16,6 @@ class Array(ClickHouseType):
         self.element_type = get_from_name(type_def.values[0])
         self._name_suffix = f'({self.element_type.name})'
 
-    def _from_row_binary(self, source: bytearray, loc: int):
-        size, loc = read_leb128(source, loc)
-        values = []
-        for _ in range(size):
-            value, loc = self.element_type.from_row_binary(source, loc)
-            values.append(value)
-        return values, loc
-
-    def _to_row_binary(self, value: Sequence, dest: MutableSequence):
-        dest += to_leb128(len(value))
-        conv = self.element_type.to_row_binary
-        for x in value:
-            conv(x, dest)
-
     def read_native_prefix(self, source: Sequence, loc: int):
         return self.element_type.read_native_prefix(source, loc)
 
@@ -85,15 +71,13 @@ class Array(ClickHouseType):
 
 
 class Tuple(ClickHouseType):
-    _slots = 'element_names', 'element_types', 'from_rb_funcs', 'to_rb_funcs'
+    _slots = 'element_names', 'element_types'
     valid_formats = 'tuple', 'json', 'native'  # native is 'tuple' for unnamed tuples, and dict for named tuples
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.element_names = type_def.keys
         self.element_types = [get_from_name(name) for name in type_def.values]
-        self.from_rb_funcs = tuple((t.from_row_binary for t in self.element_types))
-        self.to_rb_funcs = tuple((t.to_row_binary for t in self.element_types))
         if self.element_names:
             self._name_suffix = f"({', '.join(k + ' ' + str(v) for k, v in zip(type_def.keys, type_def.values))})"
         else:
@@ -106,17 +90,6 @@ class Tuple(ClickHouseType):
         if self.read_format() == 'json':
             return str
         return dict
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        values = []
-        for conv in self.from_rb_funcs:
-            value, loc = conv(source, loc)
-            values.append(value)
-        return tuple(values), loc
-
-    def _to_row_binary(self, value: Sequence, dest: MutableSequence):
-        for x, conv in zip(value, self.to_rb_funcs):
-            conv(x, dest)
 
     def read_native_prefix(self, source: Sequence, loc: int):
         for e_type in self.element_types:
@@ -151,34 +124,14 @@ class Tuple(ClickHouseType):
 
 
 class Map(ClickHouseType):
-    _slots = 'key_type', 'value_type', 'key_from_rb', 'key_to_rb', 'value_from_rb', 'value_to_rb'
+    _slots = 'key_type', 'value_type'
     python_type = dict
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.key_type = get_from_name(type_def.values[0])
-        self.key_from_rb, self.key_to_rb = self.key_type.from_row_binary, self.key_type.to_row_binary
         self.value_type = get_from_name(type_def.values[1])
-        self.value_from_rb, self.value_to_rb = self.value_type.from_row_binary, self.value_type.to_row_binary
         self._name_suffix = type_def.arg_str
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        size, loc = read_leb128(source, loc)
-        values = {}
-        key_from = self.key_from_rb
-        value_from = self.value_from_rb
-        for _ in range(size):
-            key, loc = key_from(source, loc)
-            value, loc = value_from(source, loc)
-            values[key] = value
-        return values, loc
-
-    def _to_row_binary(self, value: Dict, dest: bytearray):
-        key_to = self.key_to_rb
-        value_to = self.value_to_rb
-        for k, v in value.items():
-            dest += key_to(k, dest)
-            dest += value_to(v, dest)
 
     def read_native_prefix(self, source: Sequence, loc: int):
         loc = self.key_type.read_native_prefix(source, loc)
@@ -233,14 +186,6 @@ class Nested(ClickHouseType):
         cols = [f'{x[0]} {x[1].name}' for x in zip(type_def.keys, self.element_types)]
         self._name_suffix = f"({', '.join(cols)})"
 
-    def _to_row_binary(self, value: dict, dest: MutableSequence):
-        self.tuple_array.write_native_data([tuple(sub_row[key] for key in self.element_names) for sub_row in value],
-                                           dest)
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        data, loc = self.tuple_array.from_row_binary(source, loc)
-        return [dict(zip(self.element_names, x)) for x in data], loc
-
     def read_native_prefix(self, source: Sequence, loc: int):
         return self.tuple_array.read_native_prefix(source, loc)
 
@@ -260,14 +205,6 @@ class Nested(ClickHouseType):
 
 class JSON(ClickHouseType):
     python_type = dict
-
-    def _to_row_binary(self, value: Any, dest: MutableSequence):
-        value = json_impl.any_to_json(value)
-        dest += to_leb128(len(value)) + value
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        # ClickHouse will never return JSON/Object types, just tuples
-        return None, 0
 
     def write_native_prefix(self, dest: MutableSequence):
         dest.append(0x01)

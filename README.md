@@ -105,8 +105,6 @@ Create a ClickHouse client using the `clickhouse_connect.driver.create_client(..
   Defaults to the default database for the ClickHouse user
 * `compress:bool` Accept compressed data from the ClickHouse server.  
   Defaults to _True_
-* `format:str` _native_ (ClickHouse Native) or _rb_ (ClickHouse Row Binary)  
-  Native format is preferred for performance reasons
 * `query_limit:int` LIMIT value added to all queries.  
   Defaults to 5,000 rows.  Setting query_limit=0 will return unlimited results, at the risk of running out of memory
 * `connect_timeout:int` HTTP connection timeout in seconds.  Default 10 seconds.
