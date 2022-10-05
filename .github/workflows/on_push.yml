@@ -3,9 +3,9 @@ name: 'Lint and Test'
 on:
   push:
     branches-ignore:
-      - '*test*'
-      - '*dev*'
-      - '*build*'
+      - '*_test'
+      - '*_dev'
+      - '*_build'
     paths-ignore:
       - 'README.md'
       - 'CHANGELOG.md'
