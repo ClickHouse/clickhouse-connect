@@ -19,7 +19,7 @@ helpers.add_test_entry_points()
 def test_create_database(test_engine: Engine, test_db: str, test_table_engine: str):
     if test_db:
         conn = test_engine.connect()
-        create_db = f'{test_db}_create_db_test'
+        create_db = f'create_db_{test_db}'
         if not test_engine.dialect.has_database(conn, create_db):
             if test_table_engine == 'ReplicatedMergeTree':
                 conn.execute(CreateDatabase(create_db))
