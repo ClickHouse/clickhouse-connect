@@ -134,7 +134,6 @@ class HttpClient(Client):
             settings['http_headers_progress_interval_ms'] = str(progress_interval)
         if compress:
             session.headers['Accept-Encoding'] = 'gzip'
-            settings['enable_http_compression'] = '1'
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
         self.session.params = self._validate_settings(settings, True)
 
