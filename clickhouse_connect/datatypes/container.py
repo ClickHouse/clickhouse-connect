@@ -1,9 +1,9 @@
 import array
-from typing import Dict, Sequence, MutableSequence, Any
+from typing import Sequence, MutableSequence
 
 from clickhouse_connect import json_impl
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
-from clickhouse_connect.driver.common import read_leb128, to_leb128, array_column, must_swap
+from clickhouse_connect.driver.common import array_column, must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
 
 

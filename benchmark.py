@@ -9,12 +9,13 @@ from ipaddress import IPv6Address
 from typing import List
 
 import clickhouse_connect
-from clickhouse_connect import datatypes
+from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.client import Client
 
 columns = {
     'uint16': ('UInt16', 1),
     'int16': ('Int16', -2),
+    'uint64': ('UInt64', 32489071615273482),
     'float32': ('Float32', 3.14),
     'str': ('String', 'hello'),
     'fstr': ('FixedString(16)', b'world numkn \nman'),
@@ -67,7 +68,6 @@ def main():
     parser.add_argument('-t', '--tries', help='Total tries for each test', type=int, default=50)
     parser.add_argument('-r', '--rows', help='Total rows in dataset', type=int, default=10000)
     parser.add_argument('-c', '--columns', help='Column types to test', type=str, nargs='+')
-    parser.add_argument('-f', '--format', help='HTTP input/output format', type=str, default='native')
 
     args = parser.parse_args()
     rows = args.rows
@@ -83,11 +83,9 @@ def main():
                 sys.exit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.get_client(compress=False, data_format=args.format)
-    datatypes.ip_format('string')
-    datatypes.uuid_format('string')
-    # datatypes.fixed_string_format('string')
-    datatypes.big_int_format('string')
+    client = clickhouse_connect.get_client(compress=False)
+
+    set_default_formats('IP*', 'native', '*Int64', 'native')
     create_table(client, col_names, rows)
     check_reads(client, tries, rows)
 
