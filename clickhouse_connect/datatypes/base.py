@@ -1,7 +1,7 @@
 import array
 import logging
 
-from abc import abstractmethod, ABC
+from abc import ABC
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple
 
@@ -71,20 +71,13 @@ class ClickHouseType(ABC):
 
     def __init__(self, type_def: TypeDef):
         """
-        Base class constructor that sets Nullable and LowCardinality wrappers and currently assigns the row_binary conversion
-        functions
+        Base class constructor that sets Nullable and LowCardinality wrappers
         :param type_def:  ClickHouseType base configuration parameters
         """
         self.type_def = type_def
         self.wrappers = type_def.wrappers
         self.low_card = 'LowCardinality' in self.wrappers
         self.nullable = 'Nullable' in self.wrappers
-        if self.nullable:
-            self.from_row_binary = self._nullable_from_row_binary
-            self.to_row_binary = self._nullable_to_row_binary
-        else:
-            self.to_row_binary = self._to_row_binary
-            self.from_row_binary = self._from_row_binary
 
     def __eq__(self, other):
         return other.__class__ == self.__class__ and self.type_def == other.type_def
@@ -211,26 +204,6 @@ class ClickHouseType(ABC):
                 dest += bytes([1 if x is None else 0 for x in column])
             self._write_native_binary(column, dest)
 
-    @abstractmethod
-    def _from_row_binary(self, source: Sequence, loc: int):
-        pass
-
-    @abstractmethod
-    def _to_row_binary(self, value: Any, dest: MutableSequence):
-        pass
-
-    def _nullable_from_row_binary(self, source, loc) -> (Any, int):
-        if source[loc] == 0:
-            return self._from_row_binary(source, loc + 1)
-        return None, loc + 1
-
-    def _nullable_to_row_binary(self, value, dest: bytearray):
-        if value is None:
-            dest += b'\x01'
-        else:
-            dest += b'\x00'
-            self._to_row_binary(value, dest)
-
     def _read_native_low_card(self, source: Sequence, loc: int, num_rows: int, use_none=True):
         if num_rows == 0:
             return tuple(), loc
@@ -348,12 +321,6 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
-
-    def _from_row_binary(self, *_args):
-        raise NotSupportedError(f'{self.name} deserialization not supported')
-
-    def _to_row_binary(self, *_args):
-        raise NotSupportedError(f'{self.name} serialization not supported')
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         raise NotSupportedError(f'{self.name} deserialization not supported')

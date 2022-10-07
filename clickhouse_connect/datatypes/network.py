@@ -27,19 +27,6 @@ class IPv4(ArrayType):
     def python_null(self):
         return '' if self.read_format() == 'string' else V4_NULL
 
-    def _from_row_binary(self, source: bytes, loc: int):
-        ipv4 = IPv4Address.__new__(IPv4Address)
-        ipv4._ip = int.from_bytes(source[loc: loc + 4], 'little')
-        return ipv4, loc + 4
-
-    def _to_row_binary(self, value: [int, IPv4Address, str], dest: bytearray):
-        if isinstance(value, IPv4Address):
-            dest += value._ip.to_bytes(4, 'little')
-        elif isinstance(value, str):
-            dest += bytes(reversed([int(b) for b in value.split('.')]))
-        else:
-            dest += value.to_bytes(4, 'little')
-
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':
             return self._from_native_str(source, loc, num_rows)
@@ -89,31 +76,6 @@ class IPv6(ClickHouseType):
     @property
     def python_null(self):
         return '' if self.read_format() == 'string' else V6_NULL
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        end = loc + 16
-        int_value = int.from_bytes(source[loc:end], 'big')
-        if int_value >> 32 == 0xFFFF:
-            ipv4 = IPv4Address.__new__(IPv4Address)
-            ipv4._ip = int_value & 0xFFFFFFFF
-            return ipv4, end
-        return IPv6Address(int_value), end
-
-    def _to_row_binary(self, value: Union[str, IPv4Address, IPv6Address, bytes, bytearray], dest: bytearray):
-        v4mask = IPV4_V6_MASK
-        if isinstance(value, str):
-            if '.' in value:
-                dest += v4mask + bytes(int(b) for b in value.split('.'))
-            else:
-                dest += socket.inet_pton(socket.AF_INET6, value)
-        elif isinstance(value, IPv4Address):
-            dest += v4mask + value._ip.to_bytes(4, 'big')
-        elif isinstance(value, IPv6Address):
-            dest += value.packed
-        elif len(value) == 4:
-            dest += IPV4_V6_MASK + value
-        else:
-            dest += value
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':

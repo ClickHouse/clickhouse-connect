@@ -49,8 +49,8 @@ def run_setup(try_c: bool = True):
             'pytz'
         ],
         extras_require={
-            'sqlalchemy': ['sqlalchemy>1.3.21, <1.4'],
-            'superset': ['apache_superset>=1.4.1', 'sqlalchemy>1.3.21, <1.4'],
+            'sqlalchemy': ['sqlalchemy>1.3.21,<2.0'],
+            'superset': ['apache_superset>=1.4.1'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
