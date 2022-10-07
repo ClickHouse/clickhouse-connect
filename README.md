@@ -20,7 +20,7 @@ run `python setup.py install`from the project directory.
 
 Basic query:
 
-```
+```python
 import clickhouse_connect
 client = clickhouse_connect.get_client(host='play.clickhouse.com', port=443, username='play')
 query_result = client.query('SELECT * FROM system.tables')
@@ -30,7 +30,7 @@ print (query_result.result_set)
 
 Simple 'command' that does not return a result set.
 
-```
+```python
 import clickhouse_connect
 client = clickhouse_connect.get_client()
 client.command ('CREATE TABLE test_table (key UInt16, value String) ENGINE Memory')
@@ -38,7 +38,7 @@ client.command ('CREATE TABLE test_table (key UInt16, value String) ENGINE Memor
 
 Bulk insert of a matrix of rows and columns.
 
-```
+```python
 data = [[100, 'value1'], [200, 'value2']]
 client.insert('test_table', data)
 print(client.query('SELECT * FROM test_table').result_set)
