@@ -1,11 +1,10 @@
 import pytz
 
 from datetime import date, timedelta, datetime
-from struct import unpack_from as suf, pack as sp
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
-from clickhouse_connect.driver.common import read_uint64, array_column, write_array
+from clickhouse_connect.driver.common import array_column, write_array
 
 epoch_start_date = date(1970, 1, 1)
 
@@ -15,12 +14,6 @@ class Date(ArrayType):
     python_null = epoch_start_date
     np_type = 'M8[D]'
     python_type = date
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return epoch_start_date + timedelta(suf('<H', source, loc)[0]), loc + 2
-
-    def _to_row_binary(self, value: date, dest: MutableSequence):
-        dest += sp('<H', (value - epoch_start_date).days, )
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -37,12 +30,6 @@ class Date(ArrayType):
 class Date32(Date):
     _array_type = 'i'
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return epoch_start_date + timedelta(suf('<i', source, loc)[0]), loc + 4
-
-    def _to_row_binary(self, value: date, dest: MutableSequence):
-        dest += (value - epoch_start_date).days.to_bytes(4, 'little', signed=True)
-
 
 from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
@@ -50,22 +37,10 @@ from_ts_tz = datetime.fromtimestamp
 
 # pylint: disable=abstract-method
 class DateTime(ArrayType):
-    __slots__ = ('_from_row_binary',)
     _array_type = 'I'
     np_type = 'M8[us]'
     python_null = from_ts_naive(0)
     python_type = datetime
-
-    def __init__(self, type_def: TypeDef):
-        if type_def.values:
-            tzinfo = pytz.timezone(type_def.values[0][1:-1])
-            self._from_row_binary = lambda source, loc: (from_ts_tz(suf('<L', source, loc)[0], tzinfo), loc + 4)
-        else:
-            self._from_row_binary = lambda source, loc: (from_ts_naive(suf('<L', source, loc)[0]), loc + 4)
-        super().__init__(type_def)
-
-    def _to_row_binary(self, value: datetime, dest: MutableSequence):
-        dest += sp('<I', int(value.timestamp()), )
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -96,17 +71,6 @@ class DateTime64(ArrayType):
         else:
             self._read_native_binary = self._read_native_naive
             self.tzinfo = None
-
-    def _from_row_binary(self, source, loc):
-        ticks, loc = read_uint64(source, loc)
-        seconds = ticks // self.prec
-        dt_sec = datetime.fromtimestamp(seconds, self.tzinfo)
-        microseconds = ((ticks - seconds * self.prec) * 1000000) // self.prec
-        return dt_sec + timedelta(microseconds=microseconds), loc
-
-    def _to_row_binary(self, value: datetime, dest: bytearray):
-        microseconds = int(value.timestamp()) * 1000000 + value.microsecond
-        dest += (int(microseconds * self.prec) // 1000000).to_bytes(8, 'little', signed=True)
 
     def _read_native_tz(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)

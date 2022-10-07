@@ -1,9 +1,9 @@
-from typing import Any, Union, Sequence, MutableSequence
+from typing import Union, Sequence, MutableSequence
 from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.common import read_uint64, array_column
+from clickhouse_connect.driver.common import array_column
 
 empty_uuid_b = bytes(b'\x00' * 16)
 
@@ -18,19 +18,6 @@ class UUID(ClickHouseType):
     @property
     def np_type(self):
         return 'U' if self.read_format() == 'string' else 'O'
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        int_high, loc = read_uint64(source, loc)
-        int_low, loc = read_uint64(source, loc)
-        byte_value = int_high.to_bytes(8, 'big') + int_low.to_bytes(8, 'big')
-        return PYUUID(bytes=byte_value), loc
-
-    def _to_row_binary(self, value: PYUUID, dest: bytearray):
-        source = value.bytes
-        bytes_high, bytes_low = bytearray(source[:8]), bytearray(source[8:])
-        bytes_high.reverse()
-        bytes_low.reverse()
-        dest += bytes_high + bytes_low
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':
@@ -111,12 +98,6 @@ class Nothing(ArrayType):
         super().__init__(type_def)
         self.nullable = True
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return None, loc + 1
-
-    def _to_row_binary(self, value: Any, dest: bytearray):
-        dest.append(0x30)
-
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         dest += bytes(0x30 for _ in range(len(column)))
 
@@ -128,12 +109,6 @@ class SimpleAggregateFunction(ClickHouseType):
         super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
-
-    def _from_row_binary(self, source, loc):
-        return self.element_type.from_row_binary(source, loc)
-
-    def _to_row_binary(self, value: Any, dest: MutableSequence):
-        dest += self.element_type.to_row_binary(value, dest)
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         return self.element_type.read_native_data(source, loc, num_rows)

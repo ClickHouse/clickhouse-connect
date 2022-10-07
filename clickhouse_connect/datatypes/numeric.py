@@ -1,6 +1,5 @@
 import decimal
-from struct import unpack_from as suf, pack as sp
-from typing import Any, Union, Type, Sequence, MutableSequence
+from typing import Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, array_column, write_array, decimal_size, decimal_prec
@@ -10,81 +9,35 @@ class Int8(ArrayType):
     _array_type = 'b'
     np_type = 'b'
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        x = source[loc]
-        return x if x < 128 else x - 128, loc + 1
-
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        if value < 128:
-            dest.append(value)
-        else:
-            dest.append(value + 128)
-
 
 class UInt8(ArrayType):
     _array_type = 'B'
     np_type = 'B'
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return source[loc], loc + 1
-
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        dest.append(value)
 
 
 class Int16(ArrayType):
     _array_type = 'h'
     np_type = 'i2'
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return suf('<h', source, loc)[0], loc + 2
-
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        dest += sp('<h', value, )
-
 
 class UInt16(ArrayType):
     _array_type = 'H'
     np_type = 'u2'
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return suf('<H', source, loc)[0], loc + 2
-
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        dest += sp('<H', value, )
 
 
 class Int32(ArrayType):
     _array_type = 'i'
     np_type = 'i4'
 
-    def _from_row_binary(self, source: bytes, loc: int):
-        return suf('<i', source, loc)[0], loc + 4
-
-    def _to_row_binary(self, value: int, dest: bytearray):
-        dest += sp('<i', value, )
-
 
 class UInt32(ArrayType):
     _array_type = 'I'
     np_type = 'u4'
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return suf('<I', source, loc)[0], loc + 4
-
-    def _to_row_binary(self, value: int, dest: bytearray):
-        dest += sp('<I', value, )
-
 
 class Int64(ArrayType):
     _array_type = 'q'
     np_type = 'i8'
-
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return suf('<q', source, loc)[0], loc + 8
-
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        dest += sp('<q', value, )
 
 
 class UInt64(ArrayType):
@@ -98,14 +51,7 @@ class UInt64(ArrayType):
     def np_type(self):
         return 'u8' if self.read_format() == 'unsigned' else 'q'
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return suf('<q', source, loc)[0], loc + 8
 
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        dest += sp('<Q', value, )
-
-
-# pylint: disable=abstract-method
 class BigInt(ClickHouseType, registered=False):
     _signed = True
     _byte_size = 0
@@ -161,44 +107,20 @@ class Int128(BigInt):
     _byte_size = 16
     _signed = True
 
-    def _from_row_binary(self, source: bytes, loc: int):
-        return int.from_bytes(source[loc: loc + 16], 'little', signed=True), loc + 16
-
-    def _to_row_binary(self, value: int, dest: bytearray):
-        dest += value.to_bytes(16, 'little')
-
 
 class UInt128(BigInt):
     _byte_size = 16
     _signed = False
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        return int.from_bytes(source[loc: loc + 16], 'little', signed=False), loc + 16
-
-    def _to_row_binary(self, value: int, dest: bytearray):
-        dest += value.to_bytes(16, 'little')
 
 
 class Int256(BigInt):
     _byte_size = 32
     _signed = True
 
-    def _from_row_binary(self, source: bytes, loc: int):
-        return int.from_bytes(source[loc: loc + 32], 'little', signed=True), loc + 32
-
-    def _to_row_binary(self, value: int, dest: bytearray):
-        dest += value.to_bytes(32, 'little')
-
 
 class UInt256(BigInt):
     _byte_size = 32
     _signed = False
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        return int.from_bytes(source[loc: loc + 32], 'little'), loc + 32
-
-    def _to_row_binary(self, value: int, dest: MutableSequence):
-        dest += value.to_bytes(32, 'little')
 
 
 class Float32(ArrayType):
@@ -206,34 +128,16 @@ class Float32(ArrayType):
     np_type = 'f4'
     python_type = float
 
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return suf('f', source, loc)[0], loc + 4
-
-    def _to_row_binary(self, value: float, dest: bytearray):
-        dest += sp('f', value, )
-
 
 class Float64(ArrayType):
     _array_type = 'd'
     np_type = 'f8'
     python_type = float
 
-    def _from_row_binary(self, source: Sequence, loc: int):
-        return suf('d', source, loc)[0], loc + 8
-
-    def _to_row_binary(self, value: float, dest: MutableSequence):
-        dest += sp('d', (value,))
-
 
 class Bool(ClickHouseType):
     np_type = '?'
     python_type = bool
-
-    def _from_row_binary(self, source: bytearray, loc: int):
-        return source[loc] > 0, loc + 1
-
-    def _to_row_binary(self, value: bool, dest: MutableSequence):
-        dest += b'\x01' if value else b'\x00'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column('B', source, loc, num_rows)
@@ -259,16 +163,6 @@ class Enum(ArrayType):
         self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
-
-    def _from_row_binary(self, source: bytes, loc: int):
-        return self._int_map[suf(self._struct_type, source, loc)[0]], loc + 2
-
-    def _to_row_binary(self, value: Union[str, int], dest: bytearray):
-        try:
-            value = self._name_map[value]
-        except KeyError:
-            value = 0
-        dest += sp(self._struct_type, value)
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -321,22 +215,6 @@ class Decimal(ClickHouseType):
         self._zeros = bytes([0] * self._byte_size)
         self._name_suffix = f'({prec}, {scale})'
         self._array_type = array_type(self._byte_size, True)
-
-    def _from_row_binary(self, source, loc):
-        end = loc + self._byte_size
-        x = int.from_bytes(source[loc:end], 'little', signed=True)
-        scale = self.scale
-        if x >= 0:
-            digits = str(x)
-            return decimal.Decimal(f'{digits[:-scale]}.{digits[-scale:]}'), end
-        digits = str(-x)
-        return decimal.Decimal(f'-{digits[:-scale]}.{digits[-scale:]}'), end
-
-    def _to_row_binary(self, value: Any, dest: bytearray):
-        if isinstance(value, (float, int)) or (isinstance(value, decimal.Decimal) and value.is_finite()):
-            dest += int(value * self._mult).to_bytes(self._byte_size, 'little')
-        else:
-            dest += self._zeros
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)

@@ -16,7 +16,6 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.native import NativeTransform
 from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier
-from clickhouse_connect.driver.rowbinary import RowBinaryTransform
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -45,7 +44,6 @@ class HttpClient(Client):
                  password: str,
                  database: str,
                  compress: bool = True,
-                 data_format: str = 'native',
                  query_limit: int = 5000,
                  query_retries: int = 2,
                  connect_timeout: int = 10,
@@ -66,7 +64,6 @@ class HttpClient(Client):
         :param password: ClickHouse password
         :param database: Default database for the connection
         :param compress: Accept compressed HTTP type from server (brotli or gzip)
-        :param data_format: Dataformat -- either 'native' or 'rb' (RowBinary)
         :param query_limit: Default LIMIT on returned rows
         :param connect_timeout:  Timeout in seconds for the http connection
         :param send_receive_timeout: Read timeout in seconds for http connection
@@ -110,15 +107,10 @@ class HttpClient(Client):
         session.mount(self.url, adapter=http_adapter)
         session.headers['User-Agent'] = client_name
 
-        if data_format == 'native':
-            self.read_format = self.write_format = 'Native'
-            self.column_inserts = True
-            self.transform = NativeTransform()
-        elif data_format in ('row_binary', 'rb'):
-            self.read_format = 'RowBinaryWithNamesAndTypes'
-            self.write_format = 'RowBinary'
-            self.column_inserts = False
-            self.transform = RowBinaryTransform()
+        self.read_format = self.write_format = 'Native'
+        self.column_inserts = True
+        self.transform = NativeTransform()
+
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
@@ -269,7 +261,7 @@ class HttpClient(Client):
                 rex_context = ex.__context__
                 if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):
                     # See https://github.com/psf/requests/issues/4664
-                    # The server closed the connection and it is probably because the Keep Alive has expired
+                    # The server closed the connection, probably because the Keep Alive has expired
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
                     # related to the Keep Alive settings
