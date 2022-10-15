@@ -18,6 +18,7 @@ def configure_types():
     """
     set_default_formats(FixedString='string',
                         IPv4='string',
+                        IPv6='string',
                         UInt64='signed',
                         UUID='string')
     compiled = [(re.compile(pattern, re.IGNORECASE), gen_type) for pattern, gen_type in type_mapping]
