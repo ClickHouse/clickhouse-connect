@@ -1,8 +1,13 @@
 ## ClickHouse Connect ChangeLog
 
-### Deprecation warning
+### Release 0.3.0 2022-10-15
 
-* In the next minor release (0.3.0) the row_binary option for ClickHouse serialization will be removed.  The performance is significantly lower than Native format and maintaining the option adds complexity with no corresponding benefit
+#### Row Binary Removed
+The row_binary option for ClickHouse serialization has been removed.  The performance is significantly lower than Native format and maintaining the option added complexity with no corresponding benefit
+
+#### Bug Fixes
+* The Database Connection dialog was broken in the latest Superset development builds.  This has been fixed
+* IPv6 Addresses fixed for default Superset configuration
 
 ### Release 0.2.10 2022-09-28
 
