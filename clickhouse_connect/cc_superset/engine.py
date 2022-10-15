@@ -160,7 +160,10 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
             encryption=encryption)
 
     @classmethod
-    def validate_parameters(cls, parameters: BasicParametersType) -> List[SupersetError]:
+    def validate_parameters(cls, properties) -> List[SupersetError]:
+        # The newest versions of superset send a "properties" object with a parameters key, instead of just
+        # the parameters, so we hack to be compatible with both variants
+        parameters = properties.get('parameters', properties)
         host = parameters.get('host', None)
         if not host:
             return [SupersetError(
