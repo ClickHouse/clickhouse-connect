@@ -1,13 +1,13 @@
 import logging
 import json
-import atexit
 import re
-import http as PyHttp
 from http.client import RemoteDisconnected
 
+from httpx import Timeout as HttpxTimeout, RequestError
+from httpx import Client as HttpxClient
+from httpx import Response as HttpxResponse
+
 from typing import Optional, Dict, Any, Sequence, Union, List
-from requests import Session, Response, get as req_get
-from requests.exceptions import RequestException
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -19,15 +19,6 @@ from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContex
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
-
-# Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
-# the client as thread safe as possible while sharing a single connection pool.  For the same reason we
-# don't call the Session.close() method from the client so the connection pool remains available
-http_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
-atexit.register(http_adapter.close)
-
-# Increase this number just to be safe when ClickHouse is returning progress headers
-PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
 
 
 # pylint: disable=too-many-instance-attributes
@@ -80,41 +71,36 @@ class HttpClient(Client):
         :param kwargs: Optional clickhouse setting values (str/value) for every connection request
         """
         self.url = f'{interface}://{host}:{port}'
-        session = Session()
-        session.stream = False
-        session.max_redirects = 3
+        client = HttpxClient(follow_redirects=True, max_redirects=3)
         if client_cert:
             if not username:
                 raise ProgrammingError('username parameter is required for Mutual TLS authentication')
             if client_cert_key:
-                session.cert = (client_cert, client_cert_key)
+                client.cert = (client_cert, client_cert_key)
             else:
-                session.cert = client_cert
-            session.headers['X-ClickHouse-User'] = username
-            session.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
+                client.cert = client_cert
+            client.headers['X-ClickHouse-User'] = username
+            client.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
         else:
-            session.auth = (username, password if password else '') if username else None
-        session.verify = False
+            client.auth = (username, password if password else '') if username else None
+        client.verify = False
         if interface == 'https':
             if verify and ca_cert:
-                session.verify = ca_cert
+                client.verify = ca_cert
             else:
-                session.verify = verify
+                client.verify = verify
 
         # Remove the default session adapters, they are not used and this avoids issues with their connection pools
-        session.adapters.pop('http://').close()
-        session.adapters.pop('https://').close()
-        session.mount(self.url, adapter=http_adapter)
-        session.headers['User-Agent'] = client_name
+        client.headers['User-Agent'] = client_name
 
-        self.read_format = self.write_format = 'Native'
+        self.write_format = 'Native'
         self.column_inserts = True
         self.transform = NativeTransform()
-
-        self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
+        self._timeouts = HttpxTimeout(connect_timeout, read=send_receive_timeout)
         self.query_retries = query_retries
+        self.http_client = client
         settings = kwargs.copy()
         if send_progress:
             settings['send_progress_in_http_headers'] = '1'
@@ -125,15 +111,15 @@ class HttpClient(Client):
                 progress_interval = 120000  # Two minutes
             settings['http_headers_progress_interval_ms'] = str(progress_interval)
         if compress:
-            session.headers['Accept-Encoding'] = 'gzip'
+            client.headers['Accept-Encoding'] = 'gzip'
             settings['enable_http_compression'] = '1'
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
-        self.session.params = self._validate_settings(settings, True)
+        self.http_client.params = self._validate_settings(settings, True)
 
     def client_setting(self, name, value):
         if isinstance(value, bool):
             value = '1' if value else '0'
-        self.session.params[name] = str(value)
+        self.http_client.params = self.http_client.params.set(name, str(value))
 
     def _prep_query(self, context: QueryContext):
         final_query = super()._prep_query(context)
@@ -158,7 +144,11 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._prep_query(context), params, headers, retries=self.query_retries)
+            response = self._raw_request(self._prep_query(context),
+                                         params,
+                                         headers,
+                                         stream=True,
+                                         retries=self.query_retries)
             data_result = self.transform.parse_response(response.content, context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
@@ -245,19 +235,20 @@ class HttpClient(Client):
                      params: Dict[str, Any],
                      headers: Optional[Dict[str, Any]] = None,
                      method: str = 'POST',
-                     retries: int = 0) -> Response:
+                     stream: bool = False,
+                     retries: int = 0) -> HttpxResponse:
         if isinstance(data, str):
             data = data.encode()
         attempts = 0
         while True:
             attempts += 1
             try:
-                response: Response = self.session.request(method, self.url,
-                                                          headers=headers,
-                                                          timeout=(self.connect_timeout, self.read_timeout),
-                                                          data=data,
-                                                          params=params)
-            except RequestException as ex:
+                response = self.http_client.request(method, self.url,
+                                                    headers=headers,
+                                                    timeout=self._timeouts,
+                                                    content=data,
+                                                    params=params)
+            except RequestError as ex:
                 rex_context = ex.__context__
                 if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):
                     # See https://github.com/psf/requests/issues/4664
@@ -289,9 +280,9 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         try:
-            response = req_get(f'{self.url}/ping', timeout=3)
+            response = self.http_client.get(f'{self.url}/ping', timeout=3)
             return 200 <= response.status_code < 300
-        except RequestException:
+        except RequestError:
             logger.debug('ping failed', exc_info=True)
             return False
 
@@ -307,6 +298,9 @@ class HttpClient(Client):
         if fmt:
             final_query += f'\n FORMAT {fmt}'
         return self._raw_request(final_query, self._validate_settings(settings, True)).content
+
+    def close(self):
+        self.http_client.close()
 
 
 def reset_connections():
