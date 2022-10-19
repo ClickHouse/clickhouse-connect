@@ -3,8 +3,8 @@
 ### Release 0.3.1 2022-10-19
 
 #### Bug Fixes
-* UInt64 types were incorrectly returns as signed Python ints even outside of superset.  This has been fixed
-* Superset Engine will now format (U)Int256 and (U)Int128 types as strings to avoid throwing a conversion exception
+* UInt64 types were incorrectly returned as signed Python ints even outside of Superset.  This has been fixed
+* Superset Engine Spec will now format (U)Int256 and (U)Int128 types as strings to avoid throwing a conversion exception
 
 ### Release 0.3.0 2022-10-15
 
