@@ -16,11 +16,12 @@ def configure_types():
     Monkey patch the Superset generic_type onto the clickhouse type, also set defaults for certain type formatting to be
     better compatible with superset
     """
-    set_default_formats(FixedString='string',
-                        IPv4='string',
-                        IPv6='string',
-                        UInt64='signed',
-                        UUID='string')
+    set_default_formats('FixedString', 'string',
+                        'IPv*', 'string',
+                        'UInt64', 'signed',
+                        'UUID', 'string',
+                        '*Int256', 'string',
+                        '*Int128', 'string')
     compiled = [(re.compile(pattern, re.IGNORECASE), gen_type) for pattern, gen_type in type_mapping]
     for name, sqla_type in sqla_type_map.items():
         for pattern, gen_type in compiled:

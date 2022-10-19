@@ -45,11 +45,11 @@ class UInt64(ArrayType):
 
     @property
     def _array_type(self):
-        return 'Q' if self.read_format() == 'unsigned' else 'q'
+        return 'q' if self.read_format() == 'signed' else 'Q'
 
     @property
     def np_type(self):
-        return 'u8' if self.read_format() == 'unsigned' else 'q'
+        return 'q' if self.read_format() == 'signed' else 'u8'
 
 
 class BigInt(ClickHouseType, registered=False):
