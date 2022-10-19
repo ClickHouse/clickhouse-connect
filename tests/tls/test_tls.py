@@ -25,7 +25,7 @@ Sample openSSL section for clickhouse server configuration using the certificate
     </server>
 </openSSL>
 
-Sample xml user for clickhouse server configuration (within the <users> element in users.xml
+Sample xml user for clickhouse server configuration (within the <users> element in users.xml)
 <cert_user>
     <ssl_certificates>
         <common_name>client.clickhouseconnect.test</common_name>
