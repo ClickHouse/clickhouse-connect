@@ -10,5 +10,6 @@ WTForms==2.3.3
 cython
 pytest
 pytest-mock
+pytest-dotenv
 numpy
 pandas

@@ -12,7 +12,6 @@ from clickhouse_connect.driver.query import remove_sql_comments
 
 logger = logging.getLogger(__name__)
 
-query_re = re.compile(r'^\s*(SELECT|SHOW|DESCRIBE|WITH|EXISTS)\s', re.IGNORECASE)
 insert_re = re.compile(r'^\s*INSERT\s+INTO\s+(.*$)', re.IGNORECASE)
 str_type = get_from_name('String')
 int_type = get_from_name('Int32')
@@ -22,6 +21,7 @@ class Cursor:
     """
     See :ref:`https://peps.python.org/pep-0249/`
     """
+
     def __init__(self, client: Client):
         self.client = client
         self.arraysize = 1
@@ -37,7 +37,7 @@ class Cursor:
 
     @property
     def description(self):
-        return [(n, t.name, None, None, None, None, True) for n, t in zip(self.names, self.types)]
+        return [(n, t, None, None, None, None, True) for n, t in zip(self.names, self.types)]
 
     @property
     def rowcount(self):
@@ -46,26 +46,18 @@ class Cursor:
     def close(self):
         self.data = None
 
-    def execute(self, operation:str, parameters=None):
-        if query_re.match(remove_sql_comments(operation)):
-            query_result = self.client.query(operation, parameters)
-            self.data = query_result.result_set
-            self.names = query_result.column_names
-            self.types = query_result.column_types
-        else:
-            v = self.client.command(operation, parameters)
-            self.types = [str_type]
-            self.names = ['response']
-            if not v:
-                v = 'OK'
-            elif isinstance(v, int):
-                self.types = [int_type]
-            if isinstance(v, list):
-                v = '\t'.join(v)
-            self.data = [[v]]
+    def execute(self, operation: str, parameters=None):
+        query_result = self.client.query(operation, parameters)
+        self.data = query_result.result_set
         self._rowcount = len(self.data)
+        if query_result.column_names:
+            self.names = query_result.column_names
+            self.types = [x.name for x in query_result.column_types]
+        elif self.data:
+            self.names = [f'col_{x}' for x in range(len(self.data[0]))]
+            self.types = [x.__class__ for x in self.data[0]]
 
-    def _try_bulk_insert(self, operation:str, data):
+    def _try_bulk_insert(self, operation: str, data):
         match = insert_re.match(remove_sql_comments(operation))
         if not match:
             return False
@@ -101,7 +93,7 @@ class Cursor:
                 if self.names or self.types:
                     if query_result.column_names != self.names:
                         logger.warning('Inconsistent column names %s : %s for operation %s in cursor executemany',
-                                        self.names, query_result.column_names, operation)
+                                       self.names, query_result.column_names, operation)
                 else:
                     self.names = query_result.column_names
                     self.types = query_result.column_types

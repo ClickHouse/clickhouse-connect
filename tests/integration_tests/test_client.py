@@ -62,7 +62,6 @@ def test_decimal_conv(test_client: Client, test_table_engine: str):
 def test_session_params(test_config: TestConfig):
     client = create_client(
         session_id='TEST_SESSION_ID',
-        interface=test_config.interface,
         host=test_config.host,
         port=test_config.port,
         username=test_config.username,
@@ -70,16 +69,17 @@ def test_session_params(test_config: TestConfig):
     result = client.query('SELECT number FROM system.numbers LIMIT 5',
                           settings={'query_id': 'test_session_params'}).result_set
     assert len(result) == 5
-    if test_config.local:
-        sleep(10)  # Allow the log entries to flush to tables
-        result = client.query(
-            "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
-            'event_time > now() - 30').result_set
-        assert result[0] == ('TEST_SESSION_ID', test_config.username)
-        result = client.query(
-            "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
-            'event_time > now() - 30').result_set
-        assert result[0] == ('test_session_params', test_config.username)
+    if test_config.host != 'localhost':
+        return  # By default, the session log isn't enabled, so we only validate in environments we control
+    sleep(10)  # Allow the log entries to flush to tables
+    result = client.query(
+        "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
+        'event_time > now() - 30').result_set
+    assert result[0] == ('TEST_SESSION_ID', test_config.username)
+    result = client.query(
+        "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
+        'event_time > now() - 30').result_set
+    assert result[0] == ('test_session_params', test_config.username)
 
 
 def test_get_columns_only(test_client):
@@ -151,3 +151,8 @@ def test_error_decode(test_client: Client):
         test_client.query("SELECT database, name FROM system.tables WHERE has_own_data = '空'")
     except DatabaseError as ex:
         assert '空' in str(ex)
+
+
+def test_command_as_query(test_client: Client):
+    result = test_client.query("SET count_distinct_implementation = 'uniq'")
+    assert result.result_set[0][0] == ''

@@ -1,4 +1,5 @@
 import sys
+import os
 import random
 import time
 from pathlib import Path
@@ -7,51 +8,34 @@ from typing import Iterator, NamedTuple
 
 from pytest import fixture
 
-from clickhouse_connect.driver import default_port
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.exceptions import ClickHouseError
 
 
 class TestConfig(NamedTuple):
-    interface: str
     host: str
     port: int
     username: str
     password: str
-    use_docker: bool
+    docker: bool
     test_database: str
-    cleanup: bool
-    local: bool
     cloud: bool
 
 
 @fixture(scope='session', autouse=True, name='test_config')
-def test_config_fixture(request) -> Iterator[TestConfig]:
-    interface = request.config.getoption('interface')
-    host = request.config.getoption('host')
-    port = request.config.getoption('port')
-    cloud = request.config.getoption('cloud')
-    if not interface:
-        interface = 'http' if host == 'localhost' else 'https'
-    use_docker = request.config.getoption('docker', True) and host == 'localhost'
+def test_config_fixture() -> Iterator[TestConfig]:
+    host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
+    docker = host == 'localhost' and \
+        os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
+    port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
-        if use_docker:
-            port = 10723
-        else:
-            port = default_port(interface, secure=interface == 'https')
-    username = request.config.getoption('username')
-    password = request.config.getoption('password')
-    cleanup = request.config.getoption('cleanup')
-    local = request.config.getoption('local')
-    test_database = request.config.getoption('test_db', None)
-    if test_database:
-        cleanup = False
-    elif use_docker:
-        test_database = 'ch_connect_test'
-    else:
-        test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
-    yield TestConfig(interface, host, port, username, password, use_docker, test_database, cleanup, local, cloud)
+        port = 10723 if docker else 8123
+    cloud = os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'True').lower() in ('true', '1', 'y', 'yes')
+    username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
+    password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
+    test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
+    yield TestConfig(host, port, username, password, docker, test_database, cloud)
 
 
 @fixture(scope='session', name='test_db')
@@ -60,14 +44,14 @@ def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
 
 
 @fixture(scope='session', name='test_table_engine')
-def test_table_engine_fixture(test_config: TestConfig) -> Iterator[str]:
-    yield 'ReplicatedMergeTree' if test_config.cloud else 'MergeTree'
+def test_table_engine_fixture() -> Iterator[str]:
+    yield 'MergeTree'
 
 
 @fixture(scope='session', autouse=True, name='test_client')
 def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
-    if test_config.use_docker:
+    if test_config.docker:
         run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         sys.stderr.write('Starting docker compose')
         pull_result = run_cmd(['docker-compose', '-f', compose_file, 'pull'])
@@ -81,8 +65,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
     while True:
         tries += 1
         try:
-            client = create_client(interface=test_config.interface,
-                                   host=test_config.host,
+            client = create_client(host=test_config.host,
                                    port=test_config.port,
                                    username=test_config.username,
                                    password=test_config.password,
@@ -94,13 +77,12 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             time.sleep(2)
     if client.min_version('22.6.1'):
         client.client_setting('allow_experimental_object_type', 1)
-    if test_db != 'default':
-        client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
-        client.database = test_db
+    client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
+    client.database = test_db
     yield client
-    if test_config.cleanup:
-        client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
-    if test_config.use_docker:
+
+    client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
+    if test_config.docker:
         down_result = run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:
             sys.stderr.write(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')
