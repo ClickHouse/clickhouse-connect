@@ -154,5 +154,5 @@ def test_error_decode(test_client: Client):
 
 
 def test_command_as_query(test_client: Client):
-    result = test_client.query('SET input_format_csv_use_best_effort_in_schema_inference=0')
+    result = test_client.query("SET count_distinct_implementation = 'uniq'")
     assert result.result_set[0][0] == ''
