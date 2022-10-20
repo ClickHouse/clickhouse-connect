@@ -49,6 +49,8 @@ jobs:
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Run ClickHouse Container
         run: docker run
           -d
@@ -58,8 +60,6 @@ jobs:
           -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
           --ulimit nofile=262144:262144
           clickhouse/clickhouse-server:${{ matrix.clickhouse-version }}
-      - name: Checkout
-        uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
