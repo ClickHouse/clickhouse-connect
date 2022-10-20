@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python (3.9)
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
         with:
           python-version: 3.9
       - name: Install dependencies
@@ -47,18 +47,21 @@ jobs:
           - '22.8'
           - latest
 
-    services:
-      clickhouse:
-        image: clickhouse/clickhouse-server:${{ matrix.clickhouse-version }}
-        ports:
-          - 8123:8123
-        options: --ulimit nofile=262144:262144
-
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
     steps:
-      - uses: actions/checkout@v3
+      - name: Run ClickHouse Container
+        run: docker run
+          -d
+          -p 8123:8123
+          --name clickhouse
+          -v /var/lib/clickhouse
+          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
+          --ulimit nofile=262144:262144
+          clickhouse/clickhouse-server:${{ matrix.clickhouse-version }}
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -68,7 +71,9 @@ jobs:
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: Run tests
-        run: pytest --no-docker tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
+        run: pytest tests
 
   cloud-tests:
     runs-on: ubuntu-latest
@@ -82,9 +87,10 @@ jobs:
           - '3.9'
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -94,9 +100,8 @@ jobs:
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: Run tests
-        run: >
-          pytest
-          --cloud
-          --host ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
-          --password ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
-          tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
+          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
+          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
+        run: pytest tests

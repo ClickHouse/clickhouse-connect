@@ -6,7 +6,9 @@ services:
     ports:
       - "10723:8123"
       - "10743:8443"
-      - "10900:9000"
     volumes:
       - /var/lib/clickhouse
+      - type: bind
+        source: ./test_config.xml
+        target: /etc/clickhouse-server/conf.d/test_config.xml
 

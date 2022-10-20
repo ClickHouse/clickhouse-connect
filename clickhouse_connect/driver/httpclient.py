@@ -2,10 +2,12 @@ import logging
 import json
 import atexit
 import re
+import uuid
 import http as PyHttp
 from http.client import RemoteDisconnected
 
 from typing import Optional, Dict, Any, Sequence, Union, List
+
 from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
 
@@ -127,6 +129,8 @@ class HttpClient(Client):
         if compress:
             session.headers['Accept-Encoding'] = 'gzip'
             settings['enable_http_compression'] = '1'
+        if 'session_id' not in settings and self.generate_session_id:
+            settings['session_id'] = str(uuid.uuid1())
         super().__init__(database=database, query_limit=query_limit, uri=self.url)
         self.session.params = self._validate_settings(settings, True)
 

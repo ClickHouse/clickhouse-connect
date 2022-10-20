@@ -20,6 +20,7 @@ class Client(metaclass=ABCMeta):
     Base ClickHouse Connect client
     """
     column_inserts = False
+    generate_session_id = True
     valid_transport_settings = set()
 
     def __init__(self, database: str, query_limit: int, uri: str):
@@ -123,6 +124,9 @@ class Client(metaclass=ABCMeta):
                                          encoding,
                                          self.server_tz,
                                          use_none)
+        if query_context.is_command:
+            response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
+            return QueryResult([response] if isinstance(response, list) else [[response]], (), ())
         return self._query_with_context(query_context)
 
     @abstractmethod
