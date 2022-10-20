@@ -14,6 +14,7 @@
 
 # Temporary development stuff (Manual tests, etc.)
 /dev
+test.env
 
 # Python cruft
 *.pyc

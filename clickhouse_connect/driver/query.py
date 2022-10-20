@@ -22,9 +22,13 @@ if HAS_NUMPY:
 if HAS_ARROW:
     import pyarrow
 
+commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|EXISTS|KILL|' +\
+           'OPTIMIZE|SET|RENAME|TRUNCATE|USE|EXPLAIN'
+
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
 select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
 insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
+command_re = re.compile(r'(^|\s)(' + commands + r')\s', re.IGNORECASE)
 
 
 # pylint: disable=too-many-instance-attributes
@@ -89,6 +93,10 @@ class QueryContext:
     @property
     def is_insert(self) -> bool:
         return insert_re.search(self.uncommented_query) is not None
+
+    @property
+    def is_command(self) -> bool:
+        return command_re.search(self.uncommented_query) is not None
 
     def updated_copy(self,
                      query: Optional[str] = None,

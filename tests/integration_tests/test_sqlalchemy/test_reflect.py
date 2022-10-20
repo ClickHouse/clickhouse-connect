@@ -23,7 +23,7 @@ def test_full_table_reflection(test_engine: Engine, test_db: str, test_table_eng
     metadata = db.MetaData(bind=test_engine, reflect=True, schema=test_db)
     table = db.Table('reflect_test', metadata)
     assert table.columns.key.type.__class__ == UInt32
-    assert table.engine.name == test_table_engine
+    assert 'MergeTree' in table.engine.name
 
 
 def test_table_exists(test_engine: Engine):

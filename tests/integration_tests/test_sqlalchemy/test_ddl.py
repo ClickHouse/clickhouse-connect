@@ -7,6 +7,7 @@ from sqlalchemy.engine.base import Engine
 from sqlalchemy.ext.declarative import declarative_base
 
 from tests import helpers
+from tests.integration_tests.conftest import TestConfig
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
     FixedString, String, UInt64, UUID, DateTime, DateTime64, LowCardinality, Nullable, Array, AggregateFunction, \
     UInt32, IPv4
@@ -16,15 +17,15 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
 helpers.add_test_entry_points()
 
 
-def test_create_database(test_engine: Engine, test_db: str, test_table_engine: str):
+def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: str):
     if test_db:
         conn = test_engine.connect()
         create_db = f'create_db_{test_db}'
         if not test_engine.dialect.has_database(conn, create_db):
-            if test_table_engine == 'ReplicatedMergeTree':
-                conn.execute(CreateDatabase(create_db))
-            else:
+            if test_config.host == 'localhost':
                 conn.execute(CreateDatabase(create_db, 'Atomic'))
+            else:
+                conn.execute(CreateDatabase(create_db))
         conn.execute(DropDatabase(create_db))
 
 
