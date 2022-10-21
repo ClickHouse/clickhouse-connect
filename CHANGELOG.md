@@ -1,5 +1,11 @@
 ## ClickHouse Connect ChangeLog
 
+### Release 0.3.3 2022-10-21
+
+#### Bug fix
+* Fix 'SHOW CREATE' issue.  https://github.com/ClickHouse/clickhouse-connect/issues/61
+
+
 ### Release 0.3.2 2022-10-20
 
 #### Bug fix
