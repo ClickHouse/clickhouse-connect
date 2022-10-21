@@ -28,7 +28,7 @@ commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|EXISTS|KIL
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
 select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
 insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
-command_re = re.compile(r'(^|\s)(' + commands + r')\s', re.IGNORECASE)
+command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
 
 
 # pylint: disable=too-many-instance-attributes
