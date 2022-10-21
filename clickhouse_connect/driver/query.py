@@ -22,8 +22,8 @@ if HAS_NUMPY:
 if HAS_ARROW:
     import pyarrow
 
-commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|EXISTS|KILL|' +\
-           'OPTIMIZE|SET|RENAME|TRUNCATE|USE|EXPLAIN'
+commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' +\
+           'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
 
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
 select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
