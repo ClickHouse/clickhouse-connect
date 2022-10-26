@@ -63,7 +63,7 @@ def test_multiple_insert(test_engine: Engine, test_model):
                          value_1='v2',
                          metric_2=100,
                          description='Second of Many',
-                         json_stuff={'stuff_1': 'fred', 'stuff2': uuid.uuid1()})
+                         json_stuff={'stuff_1': 'fred', 'stuff2': str(uuid.uuid1())})
     model_3 = test_model(value_1='v7',
                          metric_2=77,
                          description='Third of Many',
