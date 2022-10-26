@@ -1,6 +1,7 @@
 import time
 import uuid
 
+import pytest
 from pytest import fixture
 
 import sqlalchemy as db
@@ -11,10 +12,14 @@ from sqlalchemy.orm import Session
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import LowCardinality, String, UInt64, JSON
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
+from clickhouse_connect.driver import Client
 
 
 @fixture(scope='module', autouse=True, name='test_model')
-def test_model_fixture(test_engine: Engine, test_db: str, test_table_engine:str):
+def test_model_fixture(test_client: Client, test_engine: Engine, test_db: str, test_table_engine:str):
+    if not test_client.min_version('22.6.1'):
+        yield None
+        return
     engine_cls = engine_map[test_table_engine]
 
     Base = declarative_base(metadata=MetaData(schema=test_db)) # pylint: disable=invalid-name
@@ -34,6 +39,8 @@ def test_model_fixture(test_engine: Engine, test_db: str, test_table_engine:str)
 
 
 def test_single_insert(test_engine: Engine, test_model):
+    if not test_model:
+        pytest.skip('Could not create test model - probably no JSON support in ClickHouse version')
     conn = test_engine.connect()
     conn.execute(db.insert(test_model).values(test_name='single_insert',
                                               value_1='v1',
@@ -44,6 +51,8 @@ def test_single_insert(test_engine: Engine, test_model):
 
 
 def test_multiple_insert(test_engine: Engine, test_model):
+    if not test_model:
+        pytest.skip('Could not create test model - probably no JSON support in ClickHouse version')
     session = Session(test_engine)
     model_1 = test_model(test_name='multi_1',
                          value_1='v1',
@@ -67,6 +76,8 @@ def test_multiple_insert(test_engine: Engine, test_model):
 
 
 def test_bulk_insert(test_engine:Engine, test_model):
+    if not test_model:
+        pytest.skip('Could not create test model - probably no JSON support in ClickHouse version')
     session = Session(test_engine)
     model_1 = test_model(test_name='bulk_1',
                          value_1='v1',

@@ -2,7 +2,7 @@ version: '3'
 
 services:
   ch_server:
-    image: ${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server}:${CLICKHOUSE_VERSION:-latest}
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION:-latest}
     ports:
       - "10723:8123"
       - "10743:8443"
