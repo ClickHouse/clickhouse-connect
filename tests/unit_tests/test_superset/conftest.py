@@ -1,5 +1,6 @@
 import os
 import pathlib
+import sys
 
 from typing import Iterator
 
@@ -11,6 +12,9 @@ from sqlalchemy.orm import sessionmaker
 
 from superset.app import SupersetApp
 from superset.initialization import SupersetAppInitializer
+
+if sys.version_info[1] not in (8, 9):
+    collect_ignore_glob = ['test*.py']
 
 
 @fixture(scope='session', autouse=True)

@@ -21,6 +21,7 @@ class TestConfig(NamedTuple):
     docker: bool
     test_database: str
     cloud: bool
+    __test__ = False
 
 
 @fixture(scope='session', autouse=True, name='test_config')

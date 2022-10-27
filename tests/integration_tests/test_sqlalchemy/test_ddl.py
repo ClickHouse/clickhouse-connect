@@ -29,7 +29,7 @@ def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: 
         conn.execute(DropDatabase(create_db))
 
 
-class TestEnum(PyEnum):
+class ColorEnum(PyEnum):
     RED = 1
     BLUE = 2
     TEAL = -4
@@ -45,7 +45,7 @@ def test_create_table(test_engine: Engine, test_db: str, test_table_engine: str)
                      db.Column('key_col', Int8),
                      db.Column('uint_col', UInt16),
                      db.Column('dec_col', Decimal(40, 5)),
-                     db.Column('enum_col', Enum16(TestEnum)),
+                     db.Column('enum_col', Enum16(ColorEnum)),
                      db.Column('float_col', Float64),
                      db.Column('str_col', String),
                      db.Column('fstr_col', FixedString(17)),
