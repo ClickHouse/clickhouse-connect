@@ -27,6 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install setuptools wheel
           pip install -r tests/test_requirements.txt
+          pip install -r tests/superset_requirements.txt
           pip install pylint==2.14
           python setup.py build_ext --inplace
       - name: Run Pylint
@@ -39,13 +40,16 @@ jobs:
     needs: lint
     strategy:
       matrix:
-        # Excluding Python 3.7 and 3.10 since Superset doesn't currently support those Python versions
         python-version:
+          - '3.7'
           - '3.8'
           - '3.9'
+          - '3.10'
+          - '3.11'
         clickhouse-version:
           - '22.3'
           - '22.8'
+          - '22.9'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
@@ -65,10 +69,13 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r tests/test_requirements.txt
+      - name: Install Superset dependencies
+        if: contains(fromJson('["3.8", "3.9"]'), matrix.python-version)
+        run: pip install -r tests/superset_requirements.txt
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: Run tests
@@ -83,10 +90,9 @@ jobs:
 
     strategy:
       matrix:
-        # Excluding Python 3.7 and 3.10 since Superset doesn't currently support those Python versions
         python-version:
-          - '3.8'
           - '3.9'
+          - '3.10'
 
     steps:
       - name: Checkout
@@ -107,4 +113,4 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
           CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
           CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
-        run: pytest tests
+        run: pytest tests/integration_tests

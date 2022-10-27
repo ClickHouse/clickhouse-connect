@@ -1,5 +1,6 @@
 import os
 import pathlib
+import sys
 
 from typing import Iterator
 
@@ -9,8 +10,8 @@ from pytest import fixture
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from superset.app import SupersetApp
-from superset.initialization import SupersetAppInitializer
+if sys.version_info[1] not in (8, 9):
+    collect_ignore_glob = ['test*.py']
 
 
 @fixture(scope='session', autouse=True)
@@ -21,7 +22,11 @@ def mock_settings_env_vars() -> Iterator[None]:
 
 
 @fixture(scope='session')
+# pylint: disable=import-outside-toplevel
 def superset_app(session_mocker: MockFixture) -> Iterator[None]:
+    from superset.app import SupersetApp
+    from superset.initialization import SupersetAppInitializer
+
     session = sessionmaker(bind=create_engine('sqlite://'))()
     session.remove = lambda: None
 
