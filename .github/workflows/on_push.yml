@@ -16,6 +16,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     name: PyLint
+    if: 0
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python (3.9)
@@ -74,7 +75,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r tests/test_requirements.txt
       - name: Install Superset dependencies
-        if: contains(fromJson('["3.8", "3.9"]'), ${{ matrix.python-version }})
+        if: contains(fromJson('["3.8", "3.9"]'), matrix.python-version)
         run: pip install -r tests/superset_requirements.txt
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
