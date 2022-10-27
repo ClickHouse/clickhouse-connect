@@ -1,7 +1,7 @@
 import array
 from typing import Sequence, MutableSequence
 
-from clickhouse_connect import json_impl
+from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import array_column, must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
@@ -108,7 +108,7 @@ class Tuple(ClickHouseType):
                 for y, key in enumerate(e_names):
                     x[key] = columns[y][ix]
             if self.read_format() == 'json':
-                to_json = json_impl.any_to_json
+                to_json = any_to_json
                 return [to_json(x) for x in dicts], loc
             return dicts, loc
         return tuple(zip(*columns)), loc
@@ -212,7 +212,7 @@ class JSON(ClickHouseType):
     # pylint: disable=duplicate-code
     def write_native_data(self, column: Sequence, dest: MutableSequence):
         app = dest.append
-        to_json = json_impl.any_to_json
+        to_json = any_to_json
         for x in column:
             v = to_json(x)
             sz = len(v)

@@ -36,6 +36,7 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    needs: lint
     strategy:
       matrix:
         # Excluding Python 3.7 and 3.10 since Superset doesn't currently support those Python versions
@@ -78,6 +79,7 @@ jobs:
   cloud-tests:
     runs-on: ubuntu-latest
     name: Cloud Tests Py=${{ matrix.python-version }}
+    needs: tests
 
     strategy:
       matrix:
