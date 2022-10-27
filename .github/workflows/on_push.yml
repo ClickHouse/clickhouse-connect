@@ -16,7 +16,6 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     name: PyLint
-    if: 0
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python (3.9)
@@ -38,7 +37,7 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
-    # needs: lint
+    needs: lint
     strategy:
       matrix:
         python-version:
