@@ -10,7 +10,7 @@ A suite of Python packages for connecting Python to ClickHouse:
 
 ### Complete Documentation
 The documentation for ClickHouse Connect has moved to
-[ClickHouse Docs](https://clickhouse.com/docs/en/integrations/python/intro) 
+[ClickHouse Docs](https://clickhouse.com/docs/en/integrations/language-clients/python/intro) 
 
 
 ### Installation
