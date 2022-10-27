@@ -5,6 +5,5 @@ cython
 pytest
 pytest-mock
 pytest-dotenv
-pyarrow
 numpy
 pandas
