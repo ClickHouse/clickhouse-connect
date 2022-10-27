@@ -42,14 +42,14 @@ jobs:
       matrix:
         python-version:
           - '3.7'
-          #- '3.8'
-          #- '3.9'
-          #- '3.10'
-          #- '3.11'
+          - '3.8'
+          - '3.9'
+          - '3.10'
+          - '3.11'
         clickhouse-version:
-          #- '22.3'
-          #- '22.8'
-          #- '22.9'
+          - '22.3'
+          - '22.8'
+          - '22.9'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
@@ -91,11 +91,8 @@ jobs:
     strategy:
       matrix:
         python-version:
-          - '3.7'
-          - '3.8'
           - '3.9'
           - '3.10'
-          - '3.11'
 
     steps:
       - name: Checkout
