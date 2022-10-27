@@ -7,9 +7,12 @@ from enum import Enum
 from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
 from datetime import date, datetime, tzinfo
 
+from clickhouse_connect.json_impl import any_to_json
+from clickhouse_connect.common import common_settings
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
 from clickhouse_connect.datatypes.format import format_map
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy, HAS_ARROW, check_arrow
 from clickhouse_connect.driver.threads import query_settings
 
@@ -193,6 +196,10 @@ def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, An
     return query % tuple(format_query_value(v) for v in parameters)
 
 
+def format_str(value: str):
+    return f"'{''.join(f'{BS}{c}' if c in must_escape else c for c in value)}'"
+
+
 # pylint: disable=too-many-return-statements
 def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     """
@@ -204,7 +211,7 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if value is None:
         return 'NULL'
     if isinstance(value, str):
-        return f"'{''.join(f'{BS}{c}' if c in must_escape else c for c in value)}'"
+        return format_str(value)
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
@@ -216,8 +223,13 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, tuple):
         return f"({', '.join(format_query_value(x, server_tz) for x in value)})"
     if isinstance(value, dict):
-        pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz) for k, v in value.items()]
-        return f"{{{', '.join(pairs)}}}"
+        dict_format = common_settings.get('dict_parameter_format', 'json')
+        if dict_format.lower() == 'json':
+            return format_str(any_to_json(value).decode())
+        if dict_format.lower() == 'map':
+            pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz) for k, v in value.items()]
+            return f"{{{', '.join(pairs)}}}"
+        raise ProgrammingError("Unrecognized 'dict_parameter_format' in global settings")
     if isinstance(value, Enum):
         return format_query_value(value.value, server_tz)
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):

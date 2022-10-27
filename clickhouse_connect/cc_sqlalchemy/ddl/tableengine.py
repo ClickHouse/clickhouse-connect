@@ -74,7 +74,7 @@ class TableEngine(SchemaEventTarget, Visitable):
     def check_primary_keys(self, primary_keys: Sequence):
         raise SQLAlchemyError(f'Table Engine {self.name} does not support primary keys')
 
-    def _set_parent(self, parent):
+    def _set_parent(self, parent, **_kwargs):
         parent.engine = self
 
 

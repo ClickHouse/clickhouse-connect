@@ -1,5 +1,12 @@
 ## ClickHouse Connect ChangeLog
 
+### Release 0.3.4 2022-10-26
+
+#### Bug fixes
+* Correctly handle insert into JSON/Object('json') column via SQLAlchemy
+* Fix some incompatibilities with SQLAlchemy 1.4
+
+
 ### Release 0.3.3 2022-10-21
 
 #### Bug fix
