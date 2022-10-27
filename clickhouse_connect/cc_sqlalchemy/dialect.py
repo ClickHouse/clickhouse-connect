@@ -1,9 +1,10 @@
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import dbapi
+from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
-from clickhouse_connect.cc_sqlalchemy import ischema_names, reflect, dialect_name
+from clickhouse_connect.cc_sqlalchemy import ischema_names, dialect_name
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 
 
@@ -25,6 +26,7 @@ class ClickHouseDialect(DefaultDialect):
     description_encoding = None
     max_identifier_length = 127
     ischema_names = ischema_names
+    inspector = ChInspector
 
     # pylint: disable=method-hidden
     @classmethod
@@ -47,9 +49,6 @@ class ClickHouseDialect(DefaultDialect):
         if schema:
             cmd += ' FROM ' + schema
         return [row.name for row in connection.execute(cmd)]
-
-    get_columns = staticmethod(reflect.get_columns)
-    reflecttable = staticmethod(reflect.reflect_table)
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
@@ -81,12 +80,12 @@ class ClickHouseDialect(DefaultDialect):
     def get_check_constraints(self, connection, table_name, schema=None, **kw):
         return []
 
-    def has_table(self, connection, table_name, schema=None):
+    def has_table(self, connection, table_name, schema=None, **_kw):
         result = connection.execute(f'EXISTS TABLE {full_table(table_name, schema)}')
         row = result.fetchone()
         return row[0] == 1
 
-    def has_sequence(self, connection, sequence_name, schema=None):
+    def has_sequence(self, connection, sequence_name, schema=None, **_kw):
         return False
 
     def do_begin_twophase(self, connection, xid):
