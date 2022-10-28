@@ -1,5 +1,11 @@
 ## ClickHouse Connect ChangeLog
 
+### Release 0.3.5 2022-10-28
+
+#### Improvement
+* Build Python 3.11 Wheels
+
+
 ### Release 0.3.4 2022-10-26
 
 #### Bug fixes
