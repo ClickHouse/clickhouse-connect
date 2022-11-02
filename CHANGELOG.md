@@ -1,5 +1,13 @@
 ## ClickHouse Connect ChangeLog
 
+
+### Release 0.3.6 2022-11-02
+
+#### Bug Fix
+* Update QueryContext.updated_copy method to preserve settings, parameters, etc.  https://github.com/ClickHouse/clickhouse-connect/issues/65
+
+
+
 ### Release 0.3.5 2022-10-28
 
 #### Improvement
