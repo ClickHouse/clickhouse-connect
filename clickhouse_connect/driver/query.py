@@ -7,6 +7,7 @@ from enum import Enum
 from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
 from datetime import date, datetime, tzinfo
 
+from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.common import common_settings
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -114,10 +115,10 @@ class QueryContext:
         Creates Query context copy with parameters overridden/updated as appropriate
         """
         return QueryContext(query or self.query,
-                            self.parameters.update(parameters or {}),
-                            self.settings.update(settings or {}),
-                            self.query_formats.update(query_formats or {}),
-                            self.column_formats.update(column_formats or {}),
+                            dict_copy(self.parameters, parameters),
+                            dict_copy(self.settings, settings),
+                            dict_copy(self.query_formats, query_formats),
+                            dict_copy(self.column_formats, column_formats),
                             encoding if encoding else self.encoding,
                             server_tz if server_tz else self.server_tz,
                             use_none if use_none is not None else self.use_none)

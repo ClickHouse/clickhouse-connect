@@ -34,6 +34,7 @@ jobs:
         run: |
           pylint clickhouse_connect
           pylint tests
+          pylint examples
 
   tests:
     runs-on: ubuntu-latest

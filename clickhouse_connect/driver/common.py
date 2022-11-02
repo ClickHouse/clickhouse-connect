@@ -1,7 +1,7 @@
 import array
 import sys
 
-from typing import Tuple, Sequence, MutableSequence
+from typing import Tuple, Sequence, MutableSequence, Dict, Optional
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
@@ -171,3 +171,10 @@ def unescape_identifier(x: str) -> str:
     if x.startswith('`') and x.endswith('`'):
         return x[1:-1]
     return x
+
+
+def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
+    copy = source.copy() if source else {}
+    if update:
+        copy.update(update)
+    return copy
