@@ -7,6 +7,7 @@ from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import array_column, write_array
 
 epoch_start_date = date(1970, 1, 1)
+epoch_start_datetime = datetime(1970, 1, 1)
 
 
 class Date(ArrayType):
@@ -20,7 +21,11 @@ class Date(ArrayType):
         return [epoch_start_date + timedelta(days) for days in column], loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        esd = epoch_start_date
+        first = self._first_value(column)
+        if isinstance(first, datetime):
+            esd = epoch_start_datetime
+        else:
+            esd = epoch_start_date
         if self.nullable:
             write_array(self._array_type, [0 if x is None else (x - esd).days for x in column], dest)
         else:

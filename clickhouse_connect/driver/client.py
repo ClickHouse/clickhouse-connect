@@ -20,17 +20,18 @@ class Client(metaclass=ABCMeta):
     Base ClickHouse Connect client
     """
     column_inserts = False
+    compression = None
     generate_session_id = True
     valid_transport_settings = set()
 
-    def __init__(self, database: str, query_limit: int, uri: str):
+    def __init__(self, database: str, query_limit: int, uri: str, compression: Optional[str]):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
         :param query_limit: default LIMIT for queries
         :param uri: uri for error messages
         """
-        self.limit = query_limit
+        self.query_limit = query_limit
         self.server_tz = pytz.UTC
         self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), database()', use_database=False))
@@ -40,6 +41,8 @@ class Client(metaclass=ABCMeta):
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
+        if compression and self.server_settings.get('enable_http_compression', False):
+            self.compression = compression
         if database and not database == '__default__':
             self.database = database
         self.uri = uri
@@ -68,8 +71,8 @@ class Client(metaclass=ABCMeta):
         return validated
 
     def _prep_query(self, context: QueryContext):
-        if context.is_select and not context.has_limit and self.limit:
-            return f'{context.final_query}\n LIMIT {self.limit}'
+        if context.is_select and not context.has_limit and self.query_limit:
+            return f'{context.final_query}\n LIMIT {self.query_limit}'
         return context.final_query
 
     @abstractmethod
@@ -255,7 +258,7 @@ class Client(metaclass=ABCMeta):
                column_types: Sequence[ClickHouseType] = None,
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
-               settings: Optional[Dict[str, Any]] = None):
+               settings: Optional[Dict[str, Any]] = None) -> None:
         """
         Method to insert multiple rows/data matrix of native Python objects
         :param table: Target table
@@ -294,7 +297,7 @@ class Client(metaclass=ABCMeta):
         assert len(column_names) == len(column_types)
         self.data_insert(full_table, column_names, data, column_types, settings, column_oriented)
 
-    def insert_df(self, table: str, data_frame, database: str = None, settings: Optional[Dict] = None):
+    def insert_df(self, table: str, data_frame, database: str = None, settings: Optional[Dict] = None) -> None:
         """
         Insert a pandas DataFrame into ClickHouse
         :param table: ClickHouse table
@@ -303,7 +306,7 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: No return, throws an exception if the insert fails
         """
-        return self.insert(table, database=database, settings=settings, **from_pandas_df(data_frame))
+        self.insert(table, database=database, settings=settings, **from_pandas_df(data_frame), column_oriented=True)
 
     def insert_arrow(self,
                      table: str,

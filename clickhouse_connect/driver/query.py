@@ -288,7 +288,18 @@ def from_pandas_df(df: 'pa.DataFrame'):
     :return: Simple dictionary to use for client insert function keywords
     """
     check_pandas()
-    return {'column_names': df.columns, 'data': df.to_numpy()}
+    data = []
+    for x in df.columns:
+        np_array = df[[x]].values
+        array_type = str(np_array.dtype)
+        if 'datetime64[ns]' == array_type:
+            # This is messy as a result of https://github.com/numpy/numpy/issues/19782
+            data.append([datetime.utcfromtimestamp(x / 1e9) for x in np_array.astype(int).flatten()])
+        elif 'datetime' in array_type:
+            data.append(np_array.astype(datetime).flatten())
+        else:
+            data.append(np_array.flatten())
+    return {'column_names': df.columns, 'data': data}
 
 
 def to_arrow(content: bytes):

@@ -1,6 +1,5 @@
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.native import NativeTransform
-from tests.helpers import to_bytes
+from tests.helpers import to_bytes, native_insert_block
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 LOW_CARD_OUTPUT = """
@@ -29,14 +28,11 @@ TUPLE_THREE_OUTPUT = """
 """
 
 
-build_insert = NativeTransform().build_insert
-
-
 def test_low_card_null():
     data = [['three']]
     names = ['value']
     types = [get_from_name('LowCardinality(Nullable(String))')]
-    output = build_insert(data, column_names=names, column_types=types)
+    output = native_insert_block(data, names, types)
     assert bytes(output) == to_bytes(LOW_CARD_OUTPUT)
 
 
@@ -44,7 +40,7 @@ def test_tuple_one():
     data = [[('string1', 3.22, None)]]
     names = ['value']
     types = [get_from_name('Tuple(String, Float32, LowCardinality(Nullable(String)))')]
-    output = build_insert(data, column_names=names, column_types=types)
+    output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(TUPLE_ONE_OUTPUT)
 
 
@@ -52,7 +48,7 @@ def test_tuple_three():
     data = [[('string1',)], [('string2',)], [('string3',)]]
     names = ['value']
     types = [get_from_name('Tuple(String)')]
-    output = build_insert(data, column_names=names, column_types=types)
+    output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(TUPLE_THREE_OUTPUT)
 
 
@@ -62,5 +58,5 @@ def test_nested():
             ([{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}],),
             ([{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}],)]
     types = [get_from_name('Nested(str1 String, int32 UInt32)')]
-    output = build_insert(data, column_names=['nested'], column_types=types)
+    output = native_insert_block(data, ['nested'], types)
     assert bytes(output) == bytes.fromhex(NESTED_BINARY)

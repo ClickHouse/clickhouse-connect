@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Sequence, Any
+from typing import Sequence, Any, Optional
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.query import DataResult, QueryContext
@@ -24,7 +24,8 @@ class DataTransform(ABC):
     def build_insert(self, data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
                      column_type_names: Sequence[str] = None,
                      column_types: Sequence[ClickHouseType] = None,
-                     column_oriented: bool = False):
+                     column_oriented: bool = False,
+                     compression: Optional[str] = None):
         """
         Encodes a dataset of Python sequences into a ClickHouse format
         :param data: Matrix of rows and columns of data
@@ -32,6 +33,7 @@ class DataTransform(ABC):
         :param column_type_names: Column type names of the data
         :param column_types: Column types used to encode data in ClickHouse native format
         :param column_oriented: If true the dataset does not need to be "pivoted"
+        :param compression: Optional ompression type (only gzip currently supported
         :return: bytearray containing the dataset in the appropriate format
         """
 

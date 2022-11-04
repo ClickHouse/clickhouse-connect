@@ -58,7 +58,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
     :param column: Column of native Python values
     :param dest: Destination byte buffer
     """
-    if column and not isinstance(column[0], (int, float)):
+    if len(column) and not isinstance(column[0], (int, float)):
         if code in ('f', 'F', 'd', 'D'):
             column = [float(x) for x in column]
         else:
