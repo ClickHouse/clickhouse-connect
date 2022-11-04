@@ -83,7 +83,7 @@ def main():
                 sys.exit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.get_client(compress=False)
+    client = clickhouse_connect.get_client(compress='gzip')
 
     set_default_formats('IP*', 'native', '*Int64', 'native')
     create_table(client, col_names, rows)

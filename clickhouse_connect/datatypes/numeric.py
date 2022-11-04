@@ -275,10 +275,10 @@ class BigDecimal(Decimal, registered=False):
             if self.nullable:
                 v = self._zeros
                 for x in column:
-                    dest += v if not x else itb(int(x * mult), sz, 'little', signed=True)
+                    dest += v if not x else itb(int(decimal.Decimal(x) * mult), sz, 'little', signed=True)
             else:
                 for x in column:
-                    dest += itb(int(x * mult), sz, 'little', signed=True)
+                    dest += itb(int(decimal.Decimal(x) * mult), sz, 'little', signed=True)
 
 
 class Decimal32(Decimal):
@@ -289,9 +289,9 @@ class Decimal64(Decimal):
     dec_size = 64
 
 
-class Decimal128(Decimal):
+class Decimal128(BigDecimal):
     dec_size = 128
 
 
-class Decimal256(Decimal):
+class Decimal256(BigDecimal):
     dec_size = 256

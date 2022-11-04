@@ -1,6 +1,20 @@
 ## ClickHouse Connect ChangeLog
 
 
+### Release 0.3.7 2022-11-03
+
+#### Improvement
+* Insert performance and memory usage for large inserts has been significantly improved
+  * Insert blocks now use chunked transfer encoding (by sending a generator instead of a bytearray to the requests POST method)
+  * If the client is initialized with compress = True, gzip compression is now enabled for inserts
+* Pandas DataFrame inserts have been optimized by keep the data in columnar format during the entire insert process
+
+#### Bug Fixes
+* Fix inserts for date and datetime columns from Pandas dataframes.
+* Fix serialization issues for Decimal128 and Decimal256 types
+
+
+
 ### Release 0.3.6 2022-11-02
 
 #### Bug Fix
