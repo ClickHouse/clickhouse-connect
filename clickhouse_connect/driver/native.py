@@ -93,7 +93,7 @@ class NativeTransform(DataTransform):
                     block_rows = min(row_count, block_size)
                     output = bytearray()
                     write_leb128(col_count, output)
-                    write_leb128(row_count, output)
+                    write_leb128(block_rows, output)
                     source = data[block_start:block_start + block_rows]
                     columns = tuple(zip(*source))
                     for ix in range(col_count):
