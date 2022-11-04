@@ -7,6 +7,7 @@ import pkg_resources
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
+from clickhouse_connect.driver.native import NativeTransform
 
 LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2
@@ -27,6 +28,7 @@ terminal_types = set(all_types) - set(nested_types)
 total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
 unsupported_types = set()
+native_transform = NativeTransform()
 
 
 def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,
@@ -141,3 +143,10 @@ def add_test_entry_points():
     entry_map['sqlalchemy.dialects'] = {'clickhousedb.connect': ep1, 'clickhousedb': ep2}
     pkg_resources.working_set.add(dist)
     print('test eps added to distribution')
+
+
+def native_insert_block(data, column_names, column_types):
+    output = bytearray()
+    for chunk in native_transform.build_insert(data, column_names=column_names, column_types=column_types):
+        output.extend(chunk)
+    return output

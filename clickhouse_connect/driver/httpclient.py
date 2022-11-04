@@ -45,7 +45,7 @@ class HttpClient(Client):
                  username: str,
                  password: str,
                  database: str,
-                 compress: bool = True,
+                 compress: Union[bool, str] = True,
                  query_limit: int = 5000,
                  query_retries: int = 2,
                  connect_timeout: int = 10,
@@ -126,12 +126,13 @@ class HttpClient(Client):
             else:
                 progress_interval = 120000  # Two minutes
             settings['http_headers_progress_interval_ms'] = str(progress_interval)
-        if compress:
-            session.headers['Accept-Encoding'] = 'gzip'
+        compression = 'gzip' if compress is True else compress
+        if compression:
+            session.headers['Accept-Encoding'] = 'compression'
             settings['enable_http_compression'] = '1'
         if 'session_id' not in settings and self.generate_session_id:
             settings['session_id'] = str(uuid.uuid1())
-        super().__init__(database=database, query_limit=query_limit, uri=self.url)
+        super().__init__(database=database, query_limit=query_limit, uri=self.url, compression=compression)
         self.session.params = self._validate_settings(settings, True)
 
     def client_setting(self, name, value):
@@ -184,20 +185,23 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         insert_block = self.transform.build_insert(data, column_types=column_types, column_names=column_names,
-                                                   column_oriented=column_oriented)
-        self.raw_insert(table, column_names, insert_block, settings, self.write_format)
+                                                   column_oriented=column_oriented, compression=self.compression)
+        self.raw_insert(table, column_names, insert_block, settings, self.write_format, self.compression)
 
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
                    insert_block: Union[str, bytes],
                    settings: Optional[Dict] = None,
-                   fmt: Optional[str] = None):
+                   fmt: Optional[str] = None,
+                   compression: Optional[str] = None):
         """
         See BaseClient doc_string for this method
         """
         column_ids = [quote_identifier(x) for x in column_names]
         write_format = fmt if fmt else self.write_format
         headers = {'Content-Type': 'application/octet-stream'}
+        if compression:
+            headers['Content-Encoding'] = compression
         params = {'query': f"INSERT INTO {table} ({', '.join(column_ids)}) FORMAT {write_format}",
                   'database': self.database}
         if isinstance(insert_block, str):

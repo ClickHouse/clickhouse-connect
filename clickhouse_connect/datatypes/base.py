@@ -264,7 +264,7 @@ class ClickHouseType(ABC):
     def _first_value(self, column: Sequence) -> Optional[Any]:
         if self.nullable:
             return next((x for x in column if x is not None), None)
-        if column:
+        if len(column):
             return column[0]
         return None
 
@@ -300,7 +300,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         return column, loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        if column and self.nullable:
+        if len(column) and self.nullable:
             first = column[0]
             try:
                 column[0] = None

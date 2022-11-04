@@ -58,7 +58,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
     :param column: Column of native Python values
     :param dest: Destination byte buffer
     """
-    if column and not isinstance(column[0], (int, float)):
+    if len(column) and not isinstance(column[0], (int, float)):
         if code in ('f', 'F', 'd', 'D'):
             column = [float(x) for x in column]
         else:
@@ -178,3 +178,47 @@ def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
     if update:
         copy.update(update)
     return copy
+
+
+class SliceView(Sequence):
+    """
+    Provides a view into a sequence rather than copying.  Borrows liberally from
+    https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1
+    Also see the discussion on SO: https://stackoverflow.com/questions/3485475/can-i-create-a-view-on-a-python-list
+    """
+    def __init__(self, source: Sequence, source_slice: Optional[slice] = None):
+        if isinstance(source, SliceView):
+            self._source = source._source
+            self._range = source._range[source_slice]
+        else:
+            self._source = source
+            if source_slice is None:
+                self._range = range(len(source))
+            else:
+                self._range = range(len(source))[source_slice]
+
+    def __len__(self):
+        return len(self._range)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return SliceView(self._source, i)
+        return self._source[self._range[i]]
+
+    def __str__(self):
+        r = self._range
+        return str(self._source[slice(r.start, r.stop, r.step)])
+
+    def __repr__(self):
+        r = self._range
+        return f'SliceView({self._source[slice(r.start, r.stop, r.step)]})'
+
+    def __eq__(self, other):
+        if self is other:
+            return True
+        if len(self) != len(other):
+            return False
+        for v, w in zip(self, other):
+            if v != w:
+                return False
+        return True
