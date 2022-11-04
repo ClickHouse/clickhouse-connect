@@ -128,7 +128,7 @@ class HttpClient(Client):
             settings['http_headers_progress_interval_ms'] = str(progress_interval)
         compression = 'gzip' if compress is True else compress
         if compression:
-            session.headers['Accept-Encoding'] = 'compression'
+            session.headers['Accept-Encoding'] = compression
             settings['enable_http_compression'] = '1'
         if 'session_id' not in settings and self.generate_session_id:
             settings['session_id'] = str(uuid.uuid1())

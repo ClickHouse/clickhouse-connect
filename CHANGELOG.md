@@ -1,6 +1,12 @@
 ## ClickHouse Connect ChangeLog
 
 
+### Release 0.3.8 2022-11-03
+
+#### Bug Fixes
+* Fix read compression typo
+
+
 ### Release 0.3.7 2022-11-03
 
 #### Improvement
