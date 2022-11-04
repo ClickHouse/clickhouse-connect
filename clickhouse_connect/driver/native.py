@@ -48,11 +48,10 @@ class NativeTransform(DataTransform):
                      column_type_names: Sequence[str] = None,
                      column_types: Sequence[ClickHouseType] = None,
                      column_oriented: bool = False, compression: Optional[str] = None):
+        # pylint: disable=too-many-statements
         if not column_types:
             column_types = [registry.get_from_name(name) for name in column_type_names]
-
         zlib_obj = zlib.compressobj(6, zlib.DEFLATED, 31)
-
         if column_oriented:
             def gen():
                 columns = data
@@ -108,5 +107,4 @@ class NativeTransform(DataTransform):
                         output = zlib_obj.compress(output)
                     yield output
                     block_start += block_size
-
         return gen()
