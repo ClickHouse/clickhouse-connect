@@ -3,7 +3,7 @@ from typing import Any, Sequence, Optional
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128, SliceView
 from clickhouse_connect.driver.query import DataResult
 from clickhouse_connect.driver.transform import DataTransform, QueryContext
 
@@ -73,7 +73,7 @@ class NativeTransform(DataTransform):
                         output += col_name.encode()
                         write_leb128(len(col_type.name), output)
                         output += col_type.name.encode()
-                        block_column = column[block_start:block_start + block_rows]
+                        block_column = SliceView(column, slice(block_start, block_start + block_rows))
                         col_type.write_native_column(block_column, output)
                     if compression == 'gzip':
                         output = zlib_obj.compress(output)
@@ -94,7 +94,7 @@ class NativeTransform(DataTransform):
                     output = bytearray()
                     write_leb128(col_count, output)
                     write_leb128(block_rows, output)
-                    source = data[block_start:block_start + block_rows]
+                    source = SliceView(data, slice(block_start, block_start + block_rows))
                     columns = tuple(zip(*source))
                     for ix in range(col_count):
                         col_name, col_type, block_column = column_names[ix], column_types[ix], columns[ix]
