@@ -68,7 +68,7 @@ class NativeTransform(DataTransform):
                     block_rows = min(row_count, block_size)
                     output = bytearray()
                     write_leb128(len(columns), output)
-                    write_leb128(row_count, output)
+                    write_leb128(block_rows, output)
                     for col_name, col_type, column in block_data:
                         write_leb128(len(col_name), output)
                         output += col_name.encode()
@@ -76,7 +76,8 @@ class NativeTransform(DataTransform):
                         output += col_type.name.encode()
                         block_column = column[block_start:block_start + block_rows]
                         col_type.write_native_column(block_column, output)
-                    output = zlib_obj.compress(output)
+                    if compression == 'gzip':
+                        output = zlib_obj.compress(output)
                     yield output
                     block_start += block_size
         else:
