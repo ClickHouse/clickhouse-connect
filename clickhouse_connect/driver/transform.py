@@ -33,7 +33,7 @@ class DataTransform(ABC):
         :param column_type_names: Column type names of the data
         :param column_types: Column types used to encode data in ClickHouse native format
         :param column_oriented: If true the dataset does not need to be "pivoted"
-        :param compression: Optional ompression type (only gzip currently supported
+        :param compression: Optional compression type (only gzip currently supported
         :return: bytearray containing the dataset in the appropriate format
         """
 
