@@ -281,11 +281,12 @@ def to_pandas_df(result: QueryResult) -> 'pa.DataFrame':
     return pa.DataFrame(np_result(result))
 
 
-def from_pandas_df(df: 'pa.DataFrame'):
+def from_pandas_df(df: 'pa.DataFrame', allow_nulls: bool = False):
     """
     Wrap a pandas dataframe in a dictionary for use as insert keyword parameters
-    :param df: Pandas data frame for insert
-    :return: Simple dictionary to use for client insert function keywords
+    :param df: Pandas DataFrame for insert
+    :param allow_nulls: Whether to process nulls as None when transforming the DataFrame
+    :return: Tuple of the dataframe column names and
     """
     check_pandas()
     data = []
@@ -299,7 +300,7 @@ def from_pandas_df(df: 'pa.DataFrame'):
             data.append(np_array.astype(datetime).flatten())
         else:
             data.append(np_array.flatten())
-    return {'column_names': df.columns, 'data': data}
+    return df.columns, data
 
 
 def to_arrow(content: bytes):

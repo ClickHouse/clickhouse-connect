@@ -16,6 +16,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
 from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier
 
@@ -174,19 +175,18 @@ class HttpClient(Client):
         return QueryResult(data_result.result, data_result.column_names, data_result.column_types,
                            response.headers.get('X-ClickHouse-Query-Id'), summary)
 
-    def data_insert(self,
-                    table: str,
-                    column_names: Sequence[str],
-                    data: Sequence[Sequence[Any]],
-                    column_types: Sequence[ClickHouseType],
-                    settings: Optional[Dict[str, Any]] = None,
-                    column_oriented: bool = False):
+    def data_insert(self, context: InsertContext):
         """
         See BaseClient doc_string for this method
         """
-        insert_block = self.transform.build_insert(data, column_types=column_types, column_names=column_names,
-                                                   column_oriented=column_oriented, compression=self.compression)
-        self.raw_insert(table, column_names, insert_block, settings, self.write_format, self.compression)
+        context.compression = self.compression
+        block_gen = self.transform.build_insert(context)
+        self.raw_insert(context.table,
+                        context.column_names,
+                        block_gen,
+                        context.settings,
+                        self.write_format,
+                        context.compression)
 
     def raw_insert(self, table: str,
                    column_names: Sequence[str],

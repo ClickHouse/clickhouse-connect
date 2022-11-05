@@ -8,6 +8,7 @@ from pytz.exceptions import UnknownTimeZoneError
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, to_arrow, \
     QueryContext, arrow_buffer
@@ -251,14 +252,15 @@ class Client(metaclass=ABCMeta):
 
     # pylint: disable=too-many-arguments
     def insert(self,
-               table: str,
-               data: Sequence[Sequence[Any]],
+               table: Optional[str] = None,
+               data: Sequence[Sequence[Any]] = None,
                column_names: Union[str, Iterable[str]] = '*',
                database: str = '',
                column_types: Sequence[ClickHouseType] = None,
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
-               settings: Optional[Dict[str, Any]] = None) -> None:
+               settings: Optional[Dict[str, Any]] = None,
+               insert_context: InsertContext = None) -> None:
         """
         Method to insert multiple rows/data matrix of native Python objects
         :param table: Target table
@@ -269,44 +271,46 @@ class Client(metaclass=ABCMeta):
         :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
         :param column_oriented: If true the data is already "pivoted" in column form
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param insert_context:
         :return: No return, throws an exception if the insert fails
         """
-        if len(data) == 0 or len(data[0]) == 0:
-            logger.debug('Attempted insert with no data')
-            return
-        table, database, full_table = self.normalize_table(table, database)
-        if isinstance(column_names, str):
-            if column_names == '*':
-                column_defs = [cd for cd in self.table_columns(table, database)
-                               if cd.default_type not in ('ALIAS', 'MATERIALIZED')]
-                column_names = [cd.name for cd in column_defs]
-                column_types = [cd.ch_type for cd in column_defs]
-            else:
-                column_names = [column_names]
-        elif len(column_names) == 0:
-            raise ValueError('Column names must be specified for insert')
-        if column_types is None:
-            if column_type_names:
-                column_types = [get_from_name(name) for name in column_type_names]
-            else:
-                column_map: Dict[str: ColumnDef] = {d.name: d for d in self.table_columns(table, database)}
-                try:
-                    column_types = [column_map[name].ch_type for name in column_names]
-                except KeyError as ex:
-                    raise ProgrammingError(f'Unrecognized column {ex} in table {table}') from None
-        assert len(column_names) == len(column_types)
-        self.data_insert(full_table, column_names, data, column_types, settings, column_oriented)
+        if insert_context:
+            pass
+        else:
+            insert_context = self.create_insert_context(table,
+                                                        data,
+                                                        column_names,
+                                                        database,
+                                                        column_types,
+                                                        column_type_names,
+                                                        column_oriented,
+                                                        settings)
+        self.data_insert(insert_context)
 
-    def insert_df(self, table: str, data_frame, database: str = None, settings: Optional[Dict] = None) -> None:
+    def insert_df(self,
+                  table: str,
+                  data_frame,
+                  database: str = None,
+                  settings: Optional[Dict] = None,
+                  allow_nulls: bool = False) -> None:
         """
         Insert a pandas DataFrame into ClickHouse
         :param table: ClickHouse table
         :param data_frame: two-dimensional pandas dataframe
         :param database: Optional ClickHouse database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param allow_nulls: Convert pd.NA and pd.NaN to ClickHouse Nulls
         :return: No return, throws an exception if the insert fails
         """
-        self.insert(table, database=database, settings=settings, **from_pandas_df(data_frame), column_oriented=True)
+        column_names, data = from_pandas_df(data_frame, allow_nulls)
+        insert_context = self.create_insert_context(table,
+                                                    data,
+                                                    column_names,
+                                                    database,
+                                                    column_oriented=True,
+                                                    settings=settings,
+                                                    allow_nulls=allow_nulls)
+        self.data_insert(insert_context)
 
     def insert_arrow(self,
                      table: str,
@@ -321,27 +325,57 @@ class Client(metaclass=ABCMeta):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: No return, throws an exception if the insert fails
         """
-        _, _, full_table = self.normalize_table(table, database)
+        full_table = table if '.' in table else f'{database or self.database}.{table}'
         column_names, insert_block = arrow_buffer(arrow_table)
         self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
 
-    def normalize_table(self, table: str, database: Optional[str]) -> Tuple[str, str, str]:
+    def create_insert_context(self,
+                              table: str,
+                              data: Sequence[Sequence[Any]],
+                              column_names: Union[str, Sequence[str]] = '*',
+                              database: str = '',
+                              column_types: Sequence[ClickHouseType] = None,
+                              column_type_names: Sequence[str] = None,
+                              column_oriented: bool = False,
+                              settings: Optional[Dict[str, Any]] = None,
+                              allow_nulls: bool = True) -> InsertContext:
+
         """
-        Convenience method to return the table, database, and full table name
-        :param table: table name
-        :param database: optional database
-        :return: Tuple of bare table name, bare database name, and full database.table
+        :param table: Target table
+        :param data: Sequence of sequences of Python data
+        :param column_names: Ordered list of column names or '*' if column types should be retrieved from ClickHouse table definition
+        :param database: Target database -- will use client default database if not specified
+        :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from the server
+        :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
+        :param column_oriented: If true the data is already "pivoted" in column form
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param allow_nulls: Allow null or None types in data
         """
-        split = table.split('.')
-        if len(split) > 1:
-            full_name = table
-            database = split[0]
-            table = split[1]
-        else:
-            name = table
-            database = database or self.database
-            full_name = f'{database}.{name}'
-        return table, database, full_name
+        full_table = table if '.' in table else f'{database or self.database}.{table}'
+        column_defs = []
+        if column_types is None:
+            describe_result = self.query(f'DESCRIBE TABLE {full_table}')
+            column_defs = [ColumnDef(**row) for row in describe_result.named_results()
+                           if row['default_type'] not in ('ALIAS', 'MATERIALIZED')]
+        if isinstance(column_names, str) and column_names == '*':
+            column_names = [cd.name for cd in column_defs]
+            column_types = [cd.ch_type for cd in column_defs]
+        elif isinstance(column_names, str) and column_names:
+            column_names = [column_names]
+        if len(column_names) == 0:
+            raise ValueError('Column names must be specified for insert')
+        if not column_types:
+            if column_type_names:
+                column_types = [get_from_name(name) for name in column_type_names]
+            else:
+                column_map = {d.name: d for d in column_defs}
+                try:
+                    column_types = [column_map[name].ch_type for name in column_names]
+                except KeyError as ex:
+                    raise ProgrammingError(f'Unrecognized column {ex} in table {table}') from None
+        if len(column_names) != len(column_types):
+            raise ProgrammingError('Column names do not match column types') from None
+        return InsertContext(data, column_names, column_types, full_table, column_oriented, allow_nulls, settings)
 
     def min_version(self, version_str: str) -> bool:
         """
@@ -365,41 +399,17 @@ class Client(metaclass=ABCMeta):
                 return False
         return True
 
-    def table_columns(self, table: str, database: str) -> Tuple[ColumnDef]:
-        """
-        Return complete column definitions for a ClickHouse table
-        :param table: table name
-        :param database: database name
-        :return: list of ColumnDef named tuples
-        """
-        column_result = self.query(f'DESCRIBE TABLE {database}.{table}')
-        if not column_result.result_set:
-            raise InternalError(f'No table columns found for {database}.{table}')
-        return tuple(ColumnDef(**row) for row in column_result.named_results())
-
     @abstractmethod
-    def data_insert(self,
-                    table: str,
-                    column_names: Iterable[str],
-                    data: Iterable[Iterable[Any]],
-                    column_types: Iterable[ClickHouseType],
-                    settings: Optional[Dict] = None,
-                    column_oriented: bool = False):
+    def data_insert(self, insert_context: InsertContext):
         """
         Subclass implementation of the data insert
-        :param table: ClickHouse table
-        :param column_names: List of ClickHouse columns
-        :param data: Data matrix
-        :param column_types: Parallel list of ClickHouseTypes to insert
-        :param settings:  Optional dictionary of ClickHouse settings (key/string values)
-        :param column_oriented: Whether the data is already pivoted as a sequence of columns
         :return: No return, throws an exception if the insert fails
         """
 
     @abstractmethod
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
-                   insert_block: Union[str,  bytes],
+                   insert_block: Union[str, bytes],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None):
         """
