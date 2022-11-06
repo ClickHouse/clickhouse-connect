@@ -1,8 +1,8 @@
 import zlib
-from typing import Any, Sequence, Optional
+from typing import Sequence
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128, SliceView
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import DataResult
 from clickhouse_connect.driver.transform import DataTransform, QueryContext
@@ -69,7 +69,8 @@ class NativeTransform(DataTransform):
 
 
 class NullCompressor:
-    def compress_block(self, block):
+    @staticmethod
+    def compress_block(block):
         return block
 
     def complete(self):

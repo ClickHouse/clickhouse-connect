@@ -14,17 +14,9 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
 from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy, HAS_ARROW, check_arrow
+from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
 from clickhouse_connect.driver.threads import query_settings
 
-if HAS_PANDAS:
-    import pandas as pa
-
-if HAS_NUMPY:
-    import numpy as np
-
-if HAS_ARROW:
-    import pyarrow
 
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' +\
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
@@ -228,7 +220,8 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
         if dict_format.lower() == 'json':
             return format_str(any_to_json(value).decode())
         if dict_format.lower() == 'map':
-            pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz) for k, v in value.items()]
+            pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz)
+                     for k, v in value.items()]
             return f"{{{', '.join(pairs)}}}"
         raise ProgrammingError("Unrecognized 'dict_parameter_format' in global settings")
     if isinstance(value, Enum):
@@ -260,57 +253,35 @@ def remove_sql_comments(sql: str) -> str:
     return comment_re.sub(replacer, sql)
 
 
-def np_result(result: QueryResult) -> 'np.array':
+def np_result(result: QueryResult):
     """
     Convert QueryResult to a numpy array
     :param result: QueryResult from driver
     :return: Two dimensional numpy array from result
     """
-    check_numpy()
+    np = check_numpy()
     np_types = [(name, ch_type.np_type) for name, ch_type in zip(result.column_names, result.column_types)]
     return np.array(result.result_set, dtype=np_types)
 
 
-def to_pandas_df(result: QueryResult) -> 'pa.DataFrame':
+def to_pandas_df(result: QueryResult):
     """
     Convert QueryResult to a pandas dataframe
     :param result: QueryResult from driver
     :return: Two dimensional pandas dataframe from result
     """
-    check_pandas()
-    return pa.DataFrame(np_result(result))
-
-
-def from_pandas_df(df: 'pa.DataFrame', allow_nulls: bool = False):
-    """
-    Wrap a pandas dataframe in a dictionary for use as insert keyword parameters
-    :param df: Pandas DataFrame for insert
-    :param allow_nulls: Whether to process nulls as None when transforming the DataFrame
-    :return: Tuple of the dataframe column names and
-    """
-    check_pandas()
-    data = []
-    for x in df.columns:
-        np_array = df[[x]].values
-        array_type = str(np_array.dtype)
-        if 'datetime64[ns]' == array_type:
-            # This is messy as a result of https://github.com/numpy/numpy/issues/19782
-            data.append([datetime.utcfromtimestamp(x / 1e9) for x in np_array.astype(int).flatten()])
-        elif 'datetime' in array_type:
-            data.append(np_array.astype(datetime).flatten())
-        else:
-            data.append(np_array.flatten())
-    return df.columns, data
+    pd = check_pandas()
+    return pd.DataFrame(result.result_set, columns=result.column_names)
 
 
 def to_arrow(content: bytes):
-    check_arrow()
+    pyarrow = check_arrow()
     reader = pyarrow.ipc.RecordBatchFileReader(content)
     return reader.read_all()
 
 
-def arrow_buffer(table: 'pyarrow.Table') -> Tuple[Sequence[str], bytes]:
-    check_arrow()
+def arrow_buffer(table) -> Tuple[Sequence[str], bytes]:
+    pyarrow = check_arrow()
     sink = pyarrow.BufferOutputStream()
     with pyarrow.RecordBatchFileWriter(sink, table.schema) as writer:
         writer.write(table)

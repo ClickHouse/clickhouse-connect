@@ -1,11 +1,11 @@
 import pytest
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, HAS_ARROW
+from clickhouse_connect.driver.options import np, pd, arrow
 
 
 def test_arrow(test_client: Client, test_table_engine: str):
-    if not HAS_ARROW:
+    if not arrow:
         pytest.skip('PyArrow package not available')
     arrow_table = test_client.query_arrow('SELECT database, name, total_rows as total_rows FROM system.tables',
                                           use_strings=False)
@@ -31,14 +31,14 @@ def test_arrow(test_client: Client, test_table_engine: str):
 
 
 def test_numpy(test_client: Client):
-    if not HAS_NUMPY:
+    if not np:
         pytest.skip('Numpy package not available')
     np_array = test_client.query_np('SELECT * FROM system.tables')
     assert len(np_array['database']) > 10
 
 
 def test_pandas(test_client: Client, test_table_engine: str):
-    if not HAS_PANDAS:
+    if not pd:
         pytest.skip('Pandas package not available')
     df = test_client.query_df('SELECT * FROM system.tables')
     test_client.command('DROP TABLE IF EXISTS test_system_insert')

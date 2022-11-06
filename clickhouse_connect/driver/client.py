@@ -1,22 +1,22 @@
 import logging
 import pytz
 
-from abc import ABCMeta, abstractmethod
-from typing import Iterable, Tuple, Optional, Any, Union, Sequence, Dict
+from abc import ABC, abstractmethod
+from typing import Iterable, Optional, Any, Union, Sequence, Dict
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.exceptions import ProgrammingError, InternalError
-from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.insert import InsertContext, from_pandas_df
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, from_pandas_df, to_arrow, \
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df,  to_arrow, \
     QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
 
 
-class Client(metaclass=ABCMeta):
+class Client(ABC):
     """
     Base ClickHouse Connect client
     """
@@ -278,45 +278,46 @@ class Client(metaclass=ABCMeta):
             pass
         else:
             insert_context = self.create_insert_context(table,
-                                                        data,
-                                                        column_names,
                                                         database,
+                                                        column_names,
                                                         column_types,
                                                         column_type_names,
                                                         column_oriented,
                                                         settings)
+        insert_context.data = data
         self.data_insert(insert_context)
 
-    def insert_df(self,
-                  table: str,
-                  data_frame,
+    def insert_df(self, table: str,
+                  df,
                   database: str = None,
                   settings: Optional[Dict] = None,
-                  allow_nulls: bool = False) -> None:
+                  insert_columns: Optional[Sequence[str]] = None) -> None:
         """
         Insert a pandas DataFrame into ClickHouse
         :param table: ClickHouse table
-        :param data_frame: two-dimensional pandas dataframe
+        :param df: two-dimensional pandas dataframe
         :param database: Optional ClickHouse database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param allow_nulls: Convert pd.NA and pd.NaN to ClickHouse Nulls
+        :param insert_columns: An optional list of ClickHouse column names.  If not set, the DataFrame column names
+           will be used
         :return: No return, throws an exception if the insert fails
         """
-        column_names, data = from_pandas_df(data_frame, allow_nulls)
+        column_names = list(df.columns)
+        if insert_columns:
+            if len(insert_columns) == len(column_names):
+                column_names = insert_columns
+            else:
+                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
         insert_context = self.create_insert_context(table,
-                                                    data,
-                                                    column_names,
                                                     database,
+                                                    column_names,
                                                     column_oriented=True,
-                                                    settings=settings,
-                                                    allow_nulls=allow_nulls)
+                                                    settings=settings)
+        insert_data = from_pandas_df(df, insert_context.column_types)
+        insert_context.data = insert_data
         self.data_insert(insert_context)
 
-    def insert_arrow(self,
-                     table: str,
-                     arrow_table,
-                     database: str = None,
-                     settings: Optional[Dict] = None):
+    def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
         """
         Insert a PyArrow table DataFrame into ClickHouse using raw Arrow format
         :param table: ClickHouse table
@@ -331,15 +332,12 @@ class Client(metaclass=ABCMeta):
 
     def create_insert_context(self,
                               table: str,
-                              data: Sequence[Sequence[Any]],
-                              column_names: Union[str, Sequence[str]] = '*',
                               database: str = '',
+                              column_names: Union[str, Sequence[str]] = '*',
                               column_types: Sequence[ClickHouseType] = None,
                               column_type_names: Sequence[str] = None,
                               column_oriented: bool = False,
-                              settings: Optional[Dict[str, Any]] = None,
-                              allow_nulls: bool = True) -> InsertContext:
-
+                              settings: Optional[Dict[str, Any]] = None) -> InsertContext:
         """
         :param table: Target table
         :param data: Sequence of sequences of Python data
@@ -357,11 +355,12 @@ class Client(metaclass=ABCMeta):
             describe_result = self.query(f'DESCRIBE TABLE {full_table}')
             column_defs = [ColumnDef(**row) for row in describe_result.named_results()
                            if row['default_type'] not in ('ALIAS', 'MATERIALIZED')]
-        if isinstance(column_names, str) and column_names == '*':
-            column_names = [cd.name for cd in column_defs]
-            column_types = [cd.ch_type for cd in column_defs]
-        elif isinstance(column_names, str) and column_names:
-            column_names = [column_names]
+        if isinstance(column_names, str):
+            if column_names == '*':
+                column_names = [cd.name for cd in column_defs]
+                column_types = [cd.ch_type for cd in column_defs]
+            elif column_names:
+                column_names = [column_names]
         if len(column_names) == 0:
             raise ValueError('Column names must be specified for insert')
         if not column_types:
@@ -375,7 +374,11 @@ class Client(metaclass=ABCMeta):
                     raise ProgrammingError(f'Unrecognized column {ex} in table {table}') from None
         if len(column_names) != len(column_types):
             raise ProgrammingError('Column names do not match column types') from None
-        return InsertContext(data, column_names, column_types, full_table, column_oriented, allow_nulls, settings)
+        return InsertContext(full_table,
+                             column_names,
+                             column_types,
+                             column_oriented=column_oriented,
+                             settings=settings)
 
     def min_version(self, version_str: str) -> bool:
         """
@@ -400,9 +403,10 @@ class Client(metaclass=ABCMeta):
         return True
 
     @abstractmethod
-    def data_insert(self, insert_context: InsertContext):
+    def data_insert(self, context: InsertContext):
         """
         Subclass implementation of the data insert
+        :context: InsertContext parameter object
         :return: No return, throws an exception if the insert fails
         """
 
