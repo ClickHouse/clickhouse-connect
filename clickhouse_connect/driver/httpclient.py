@@ -183,16 +183,20 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
+        if not context.data:
+            logger.debug('No data included in insert, skipping')
+            return
         context.compression = self.compression
         block_gen = self.transform.build_insert(context)
 
-        def status_handler(response: Response):
+        def error_handler(response: Response):
             # If we actually had a local exception when building the insert, throw that instead
             if context.insert_exception:
                 ex = context.insert_exception
                 context.insert_exception = None
-                return ex
-            return self._status_handler(response)
+                raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
+                                       'in an inserted row or column') from ex
+            self._error_handler(response)
 
         self.raw_insert(context.table,
                         context.column_names,
@@ -200,7 +204,8 @@ class HttpClient(Client):
                         context.settings,
                         self.write_format,
                         context.compression,
-                        status_handler)
+                        error_handler)
+        context.data = None
 
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
@@ -222,7 +227,7 @@ class HttpClient(Client):
         if isinstance(insert_block, str):
             insert_block = insert_block.encode()
         params.update(self._validate_settings(settings, True))
-        response = self._raw_request(insert_block, params, headers, status_handler=status_handler)
+        response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
     def command(self,
@@ -246,7 +251,7 @@ class HttpClient(Client):
             payload = data
         if payload is None:
             if not cmd:
-                raise ProgrammingError('Command sent without query or recognized data')
+                raise ProgrammingError('Command sent without query or recognized data') from None
             payload = cmd
         elif cmd:
             params['query'] = cmd
@@ -263,13 +268,13 @@ class HttpClient(Client):
                 return result[0]
         return result
 
-    def _status_handler(self, response: Response, retried: bool = False) -> Exception:
+    def _error_handler(self, response: Response = None, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status_code})'
         if response.content:
             err_msg = response.content.decode(errors='backslashreplace')
             logger.error(str(err_msg))
             err_str = f':{err_str}\n {err_msg[0:240]}'
-        return OperationalError(err_str) if retried else DatabaseError(err_str)
+        raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,
                      data,
@@ -277,7 +282,7 @@ class HttpClient(Client):
                      headers: Optional[Dict[str, Any]] = None,
                      method: str = 'POST',
                      retries: int = 0,
-                     status_handler: Callable = None) -> Response:
+                     error_handler: Callable = None) -> Response:
         if isinstance(data, str):
             data = data.encode()
         attempts = 0
@@ -307,12 +312,12 @@ class HttpClient(Client):
                 return response
             if response.status_code in (429, 503, 504):
                 if attempts > retries:
-                    raise self._status_handler(response, True)
+                    self._error_handler(response, True)
                 logger.debug('Retrying requests with status code %d', response.status_code)
             else:
-                if status_handler:
-                    raise status_handler(response)
-                raise self._status_handler(response)
+                if error_handler:
+                    error_handler(response)
+                self._error_handler(response)
 
     def ping(self):
         """

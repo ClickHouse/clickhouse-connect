@@ -4,6 +4,7 @@ from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generato
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import SliceView
 from clickhouse_connect.driver.options import check_pandas, check_numpy
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 DEFAULT_BLOCK_SIZE = 16834
 
@@ -47,9 +48,10 @@ class InsertContext:
 
     @data.setter
     def data(self, data):
-        self._data = data
         self.current_block = 0
         self.current_row = 0
+        self.row_count = 0
+        self.column_count = 0
         if data:
             if self.column_oriented:
                 self._next_block_data = self._column_block_data
@@ -63,9 +65,12 @@ class InsertContext:
                 self._block_columns = None
                 self.row_count = len(data)
                 self.column_count = len(data[0])
+        if self.row_count and self.column_count:
+            if self.column_count != len(self.column_names):
+                raise ProgrammingError('Insert data column count does not match column names')
+            self._data = data
         else:
-            self.row_count = 0
-            self.column_count = 0
+            self._data = None
 
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:

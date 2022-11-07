@@ -272,61 +272,71 @@ class Client(ABC):
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
                settings: Optional[Dict[str, Any]] = None,
-               insert_context: InsertContext = None) -> None:
+               context: InsertContext = None) -> None:
         """
-        Method to insert multiple rows/data matrix of native Python objects
+        Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
+        other than data are ignored
         :param table: Target table
         :param data: Sequence of sequences of Python data
-        :param column_names: Ordered list of column names or '*' if column types should be retrieved from ClickHouse table definition
+        :param column_names: Ordered list of column names or '*' if column types should be retrieved from the
+            ClickHouse table definition
         :param database: Target database -- will use client default database if not specified
-        :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from the server
-        :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
+        :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from
+            the server
+        :param column_type_names: ClickHouse column type names.  If set then column data does not need to be
+            retrieved from the server
         :param column_oriented: If true the data is already "pivoted" in column form
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param insert_context:
+        :param context: Optional reusable insert context to allow repeated inserts into the same table with
+            different data batches
         :return: No return, throws an exception if the insert fails
         """
-        if insert_context:
-            pass
+        if context:
+            if context:
+                if context.data is None and data is None:
+                    raise ProgrammingError('No data specified for insert') from None
         else:
-            insert_context = self.create_insert_context(table,
-                                                        database,
-                                                        column_names,
-                                                        column_types,
-                                                        column_type_names,
-                                                        column_oriented,
-                                                        settings)
-        insert_context.data = data
-        self.data_insert(insert_context)
+            context = self.create_insert_context(table,
+                                                 database,
+                                                 column_names,
+                                                 column_types,
+                                                 column_type_names,
+                                                 column_oriented,
+                                                 settings)
+        context.data = data
+        self.data_insert(context)
 
-    def insert_df(self, table: str,
-                  df,
+    def insert_df(self, table: str = None,
+                  df=None,
                   database: str = None,
                   settings: Optional[Dict] = None,
-                  insert_columns: Optional[Sequence[str]] = None) -> None:
+                  insert_columns: Optional[Sequence[str]] = None,
+                  context: InsertContext = None) -> None:
         """
-        Insert a pandas DataFrame into ClickHouse
+        Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
         :param table: ClickHouse table
         :param df: two-dimensional pandas dataframe
         :param database: Optional ClickHouse database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param insert_columns: An optional list of ClickHouse column names.  If not set, the DataFrame column names
            will be used
+        :param context: Optional reusable insert context to allow repeated inserts into the same table with
+            different data batches
         :return: No return, throws an exception if the insert fails
         """
-        column_names = list(df.columns)
-        if insert_columns:
-            if len(insert_columns) == len(column_names):
-                column_names = insert_columns
-            else:
-                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-        insert_context = self.create_insert_context(table,
-                                                    database,
-                                                    column_names,
-                                                    column_oriented=True,
-                                                    settings=settings)
-        insert_context.data = from_pandas_df(df, insert_context.column_types)
-        self.data_insert(insert_context)
+        if context:
+            if context.data is None and df is None:
+                raise ProgrammingError('No data specified for insert') from None
+        else:
+            column_names = list(df.columns)
+            if insert_columns:
+                if len(insert_columns) == len(column_names):
+                    column_names = insert_columns
+                else:
+                    raise ProgrammingError('DataFrame column count does not match insert_columns') from None
+            context = self.create_insert_context(table, database, column_names, column_oriented=True, settings=settings)
+        context.data = from_pandas_df(df, context.column_types)
+        self.data_insert(context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
         """
@@ -348,17 +358,20 @@ class Client(ABC):
                               column_types: Sequence[ClickHouseType] = None,
                               column_type_names: Sequence[str] = None,
                               column_oriented: bool = False,
-                              settings: Optional[Dict[str, Any]] = None) -> InsertContext:
+                              settings: Optional[Dict[str, Any]] = None,
+                              data: Optional[Sequence[Sequence[Any]]] = None) -> InsertContext:
         """
+        Builds a reusable insert context to hold state for a duration of an insert
         :param table: Target table
-        :param data: Sequence of sequences of Python data
+        :param database: Target database.  If not set, uses the client default database
         :param column_names: Ordered list of column names or '*' if column types should be retrieved from ClickHouse table definition
         :param database: Target database -- will use client default database if not specified
         :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from the server
         :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
         :param column_oriented: If true the data is already "pivoted" in column form
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param allow_nulls: Allow null or None types in data
+        :param data: Initial dataset for insert
+        :return Reusable insert context
         """
         full_table = table if '.' in table else f'{database or self.database}.{table}'
         column_defs = []
@@ -389,7 +402,14 @@ class Client(ABC):
                              column_names,
                              column_types,
                              column_oriented=column_oriented,
-                             settings=settings)
+                             settings=settings,
+                             data=data)
+
+    def create_pandas_insert_context(self):
+        """
+        Convenience method to create a reusable
+        :return: Return a reusable
+        """
 
     def min_version(self, version_str: str) -> bool:
         """
