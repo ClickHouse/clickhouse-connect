@@ -1,12 +1,11 @@
 import zlib
-from typing import Any, Sequence, Optional
+from typing import Sequence
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128, SliceView
+from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import DataResult
 from clickhouse_connect.driver.transform import DataTransform, QueryContext
-
 
 block_size = 16384
 
@@ -40,71 +39,66 @@ class NativeTransform(DataTransform):
                 context.start_column(name, col_type)
                 column, loc = col_type.read_native_column(source, loc, num_rows, use_none=use_none)
                 result_block.append(column)
+            if context.column_oriented:
+                if block == 0:
+                    result = [x if isinstance(x, list) else list(x) for x in result_block]
+                else:
+                    for base, added in zip(result, result_block):
+                        base.extend(added)
+            else:
+                result.extend(list(zip(*result_block)))
             block += 1
-            result.extend(list(zip(*result_block)))
-        return DataResult(result, tuple(names), tuple(col_types))
+        return DataResult(result, tuple(names), tuple(col_types), context.column_oriented)
 
-    def build_insert(self, data: Sequence[Sequence[Any]], *, column_names: Sequence[str],
-                     column_type_names: Sequence[str] = None,
-                     column_types: Sequence[ClickHouseType] = None,
-                     column_oriented: bool = False, compression: Optional[str] = None):
-        # pylint: disable=too-many-statements
-        if not column_types:
-            column_types = [registry.get_from_name(name) for name in column_type_names]
-        zlib_obj = zlib.compressobj(6, zlib.DEFLATED, 31)
-        if column_oriented:
-            def gen():
-                columns = data
-                block_data = tuple(zip(column_names, column_types, columns))
-                total_rows = len(columns[0])
-                block_start = 0
-                while True:
-                    row_count = total_rows - block_start
-                    if row_count < 0:
-                        if compression == 'gzip':
-                            yield zlib_obj.flush()
-                        return
-                    block_rows = min(row_count, block_size)
-                    output = bytearray()
-                    write_leb128(len(columns), output)
-                    write_leb128(block_rows, output)
-                    for col_name, col_type, column in block_data:
-                        write_leb128(len(col_name), output)
-                        output += col_name.encode()
-                        write_leb128(len(col_type.name), output)
-                        output += col_type.name.encode()
-                        block_column = SliceView(column, slice(block_start, block_start + block_rows))
-                        col_type.write_native_column(block_column, output)
-                    if compression == 'gzip':
-                        output = zlib_obj.compress(output)
-                    yield output
-                    block_start += block_size
+    def _build_insert(self, context: InsertContext):
+        if context.compression == 'gzip':
+            compressor = GzipCompressor()
         else:
-            def gen():
-                total_rows = len(data)
-                block_start = 0
-                col_count = len(column_names)
-                while True:
-                    row_count = total_rows - block_start
-                    if row_count < 0:
-                        if compression == 'gzip':
-                            yield zlib_obj.flush()
+            compressor = NullCompressor()
+
+        def chunk_gen():
+            for x in context.next_block():
+                output = bytearray()
+                write_leb128(x.column_count, output)
+                write_leb128(x.row_count, output)
+                for col_name, col_type, data in zip(x.column_names, x.column_types, x.column_data):
+                    write_leb128(len(col_name), output)
+                    output += col_name.encode()
+                    write_leb128(len(col_type.name), output)
+                    output += col_type.name.encode()
+                    try:
+                        col_type.write_native_column(data, output)
+                    except Exception as ex: # pylint: disable=broad-except
+                        # This is hideous, but some low level serializations can fail while streaming
+                        # the insert if the user has included bad data in the column.  We need to ensure that the
+                        # insert fails (using garbage data) to avoid a partial insert, and use the context to
+                        # propagate the correct exception to the user
+                        context.insert_exception = ex
+                        yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
                         return
-                    block_rows = min(row_count, block_size)
-                    output = bytearray()
-                    write_leb128(col_count, output)
-                    write_leb128(block_rows, output)
-                    source = SliceView(data, slice(block_start, block_start + block_rows))
-                    columns = tuple(zip(*source))
-                    for ix in range(col_count):
-                        col_name, col_type, block_column = column_names[ix], column_types[ix], columns[ix]
-                        write_leb128(len(col_name), output)
-                        output += col_name.encode()
-                        write_leb128(len(col_type.name), output)
-                        output += col_type.name.encode()
-                        col_type.write_native_column(block_column, output)
-                    if compression == 'gzip':
-                        output = zlib_obj.compress(output)
-                    yield output
-                    block_start += block_size
-        return gen()
+                yield compressor.compress_block(output)
+            footer = compressor.complete()
+            if footer:
+                yield footer
+
+        return chunk_gen()
+
+
+class NullCompressor:
+    @staticmethod
+    def compress_block(block):
+        return block
+
+    def complete(self):
+        pass
+
+
+class GzipCompressor:
+    def __init__(self, level: int = 6, wbits: int = 31):
+        self.zlib_obj = zlib.compressobj(level=level, wbits=wbits)
+
+    def compress_block(self, block):
+        return self.zlib_obj.compress(block)
+
+    def complete(self):
+        return self.zlib_obj.flush()
