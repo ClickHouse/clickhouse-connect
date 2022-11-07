@@ -14,17 +14,9 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
 from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.options import HAS_NUMPY, HAS_PANDAS, check_pandas, check_numpy, HAS_ARROW, check_arrow
+from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
 from clickhouse_connect.driver.threads import query_settings
 
-if HAS_PANDAS:
-    import pandas as pa
-
-if HAS_NUMPY:
-    import numpy as np
-
-if HAS_ARROW:
-    import pyarrow
 
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' +\
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
@@ -50,7 +42,8 @@ class QueryContext:
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  encoding: Optional[str] = None,
                  server_tz: tzinfo = pytz.UTC,
-                 use_none: bool = True):
+                 use_none: bool = True,
+                 column_oriented: bool = False):
         """
         Initializes various configuration settings for the query context
 
@@ -77,6 +70,7 @@ class QueryContext:
         self.encoding = encoding
         self.server_tz = server_tz
         self.use_none = use_none
+        self.column_oriented = column_oriented
         self.final_query = finalize_query(query, parameters, server_tz)
         self._uncommented_query = None
 
@@ -110,7 +104,8 @@ class QueryContext:
                      column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                      encoding: Optional[str] = None,
                      server_tz: Optional[tzinfo] = None,
-                     use_none: Optional[bool] = None) -> 'QueryContext':
+                     use_none: Optional[bool] = None,
+                     column_oriented: Optional[bool] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate
         """
@@ -121,7 +116,8 @@ class QueryContext:
                             dict_copy(self.column_formats, column_formats),
                             encoding if encoding else self.encoding,
                             server_tz if server_tz else self.server_tz,
-                            use_none if use_none is not None else self.use_none)
+                            self.use_none if use_none is None else use_none,
+                            self.column_oriented if column_oriented is None else column_oriented)
 
     def __enter__(self):
         query_settings.query_overrides = format_map(self.query_formats)
@@ -153,17 +149,27 @@ class QueryResult:
     Wrapper class for query return values and metadata
     """
 
-    def __init__(self, result_set: Sequence[Sequence[Any]], column_names: Tuple[str, ...],
-                 column_types: Tuple[ClickHouseType, ...], query_id: str = None, summary: Dict[str, Any] = None):
+    def __init__(self,
+                 result_set: Sequence[Sequence[Any]],
+                 column_names: Tuple[str, ...],
+                 column_types: Tuple[ClickHouseType, ...],
+                 query_id: str = None,
+                 summary: Dict[str, Any] = None,
+                 column_oriented: bool = False):
         self.result_set = result_set
         self.column_names = column_names
         self.column_types = column_types
         self.query_id = query_id
         self.summary = summary
+        self.column_oriented = column_oriented
 
     def named_results(self):
-        for row in self.result_set:
-            yield dict(zip(self.column_names, row))
+        if self.column_oriented:
+            for row in zip(*self.result_set):
+                yield dict(zip(self.column_names, row))
+        else:
+            for row in self.result_set:
+                yield dict(zip(self.column_names, row))
 
 
 class DataResult(NamedTuple):
@@ -173,6 +179,7 @@ class DataResult(NamedTuple):
     result: Sequence[Sequence[Any]]
     column_names: Tuple[str]
     column_types: Tuple[ClickHouseType]
+    column_oriented: bool = False
 
 
 local_tz = datetime.now().astimezone().tzinfo
@@ -228,7 +235,8 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
         if dict_format.lower() == 'json':
             return format_str(any_to_json(value).decode())
         if dict_format.lower() == 'map':
-            pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz) for k, v in value.items()]
+            pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz)
+                     for k, v in value.items()]
             return f"{{{', '.join(pairs)}}}"
         raise ProgrammingError("Unrecognized 'dict_parameter_format' in global settings")
     if isinstance(value, Enum):
@@ -260,56 +268,35 @@ def remove_sql_comments(sql: str) -> str:
     return comment_re.sub(replacer, sql)
 
 
-def np_result(result: QueryResult) -> 'np.array':
+def np_result(result: QueryResult):
     """
     Convert QueryResult to a numpy array
     :param result: QueryResult from driver
     :return: Two dimensional numpy array from result
     """
-    check_numpy()
+    np = check_numpy()
     np_types = [(name, ch_type.np_type) for name, ch_type in zip(result.column_names, result.column_types)]
     return np.array(result.result_set, dtype=np_types)
 
 
-def to_pandas_df(result: QueryResult) -> 'pa.DataFrame':
+def to_pandas_df(result: QueryResult):
     """
     Convert QueryResult to a pandas dataframe
     :param result: QueryResult from driver
     :return: Two dimensional pandas dataframe from result
     """
-    check_pandas()
-    return pa.DataFrame(np_result(result))
-
-
-def from_pandas_df(df: 'pa.DataFrame'):
-    """
-    Wrap a pandas dataframe in a dictionary for use as insert keyword parameters
-    :param df: Pandas data frame for insert
-    :return: Simple dictionary to use for client insert function keywords
-    """
-    check_pandas()
-    data = []
-    for x in df.columns:
-        np_array = df[[x]].values
-        array_type = str(np_array.dtype)
-        if 'datetime64[ns]' == array_type:
-            # This is messy as a result of https://github.com/numpy/numpy/issues/19782
-            data.append([datetime.utcfromtimestamp(x / 1e9) for x in np_array.astype(int).flatten()])
-        elif 'datetime' in array_type:
-            data.append(np_array.astype(datetime).flatten())
-        else:
-            data.append(np_array.flatten())
-    return {'column_names': df.columns, 'data': data}
+    pd = check_pandas()
+    return pd.DataFrame(dict(zip(result.column_names, result.result_set)), columns=result.column_names)
 
 
 def to_arrow(content: bytes):
-    check_arrow()
+    pyarrow = check_arrow()
     reader = pyarrow.ipc.RecordBatchFileReader(content)
     return reader.read_all()
 
 
-def arrow_buffer(table: 'pyarrow.Table') -> Tuple[Sequence[str], bytes]:
-    check_arrow()
+def arrow_buffer(table) -> Tuple[Sequence[str], bytes]:
+    pyarrow = check_arrow()
     sink = pyarrow.BufferOutputStream()
     with pyarrow.RecordBatchFileWriter(sink, table.schema) as writer:
         writer.write(table)

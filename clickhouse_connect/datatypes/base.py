@@ -33,7 +33,6 @@ class ClickHouseType(ABC):
     Base class for all ClickHouseType objects.
     """
     __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
-    _ch_name = None
     _name_suffix = ''
     _encoding = 'utf8'
     np_type = 'O'  # Default to Numpy Object type
@@ -41,11 +40,12 @@ class ClickHouseType(ABC):
 
     python_null = 0
     python_type = None
+    base_type = None
 
     def __init_subclass__(cls, registered: bool = True):
         if registered:
-            cls._ch_name = cls.__name__
-            type_map[cls._ch_name] = cls
+            cls.base_type = cls.__name__
+            type_map[cls.base_type] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -87,7 +87,7 @@ class ClickHouseType(ABC):
 
     @property
     def name(self):
-        name = f'{self._ch_name}{self._name_suffix}'
+        name = f'{self.base_type}{self._name_suffix}'
         for wrapper in reversed(self.wrappers):
             name = f'{wrapper}({name})'
         return name
@@ -139,9 +139,9 @@ class ClickHouseType(ABC):
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column
-        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise use the empty or zero type.
+        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise, use the empty or zero type.
          Allows support for pandas data frames that do not support None
-        :return: The decoded column plust the updated location pointer
+        :return: The decoded column plus the updated location pointer
         """
         if self.low_card:
             return self._read_native_low_card(source, loc, num_rows, use_none)
@@ -277,8 +277,9 @@ type_map: Dict[str, Type[ClickHouseType]] = {}
 
 class ArrayType(ClickHouseType, ABC, registered=False):
     """
-    ClickHouse type that utilizes Python array.array for fast reads and writes of binary data.  array.array can only be used for
-    ClickHouse types that can be translated into UInt64 or small integers, or Float32/64
+    ClickHouse type that utilizes Python array.array for fast reads and writes of binary data.
+    array.array can only be used for ClickHouse types that can be translated into UInt64 or small integers,
+    or Float32/64
     """
     _signed = True
     _array_type = None

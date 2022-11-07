@@ -7,6 +7,7 @@ import pkg_resources
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
 
 LOW_CARD_PERC = 0.4
@@ -146,7 +147,8 @@ def add_test_entry_points():
 
 
 def native_insert_block(data, column_names, column_types):
+    context = InsertContext('table', column_names, column_types, data)
     output = bytearray()
-    for chunk in native_transform.build_insert(data, column_names=column_names, column_types=column_types):
+    for chunk in native_transform.build_insert(context):
         output.extend(chunk)
     return output

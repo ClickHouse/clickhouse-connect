@@ -6,7 +6,7 @@ import uuid
 import http as PyHttp
 from http.client import RemoteDisconnected
 
-from typing import Optional, Dict, Any, Sequence, Union, List
+from typing import Optional, Dict, Any, Sequence, Union, List, Callable
 
 from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
@@ -16,6 +16,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
 from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier
 
@@ -171,29 +172,48 @@ class HttpClient(Client):
                 summary = json.loads(response.headers['X-ClickHouse-Summary'])
             except json.JSONDecodeError:
                 pass
-        return QueryResult(data_result.result, data_result.column_names, data_result.column_types,
-                           response.headers.get('X-ClickHouse-Query-Id'), summary)
+        return QueryResult(data_result.result,
+                           data_result.column_names,
+                           data_result.column_types,
+                           response.headers.get('X-ClickHouse-Query-Id'),
+                           summary,
+                           data_result.column_oriented)
 
-    def data_insert(self,
-                    table: str,
-                    column_names: Sequence[str],
-                    data: Sequence[Sequence[Any]],
-                    column_types: Sequence[ClickHouseType],
-                    settings: Optional[Dict[str, Any]] = None,
-                    column_oriented: bool = False):
+    def data_insert(self, context: InsertContext):
         """
         See BaseClient doc_string for this method
         """
-        insert_block = self.transform.build_insert(data, column_types=column_types, column_names=column_names,
-                                                   column_oriented=column_oriented, compression=self.compression)
-        self.raw_insert(table, column_names, insert_block, settings, self.write_format, self.compression)
+        if not context.data:
+            logger.debug('No data included in insert, skipping')
+            return
+        context.compression = self.compression
+        block_gen = self.transform.build_insert(context)
+
+        def error_handler(response: Response):
+            # If we actually had a local exception when building the insert, throw that instead
+            if context.insert_exception:
+                ex = context.insert_exception
+                context.insert_exception = None
+                raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
+                                       'in an inserted row or column') from ex
+            self._error_handler(response)
+
+        self.raw_insert(context.table,
+                        context.column_names,
+                        block_gen,
+                        context.settings,
+                        self.write_format,
+                        context.compression,
+                        error_handler)
+        context.data = None
 
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
                    insert_block: Union[str, bytes],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
-                   compression: Optional[str] = None):
+                   compression: Optional[str] = None,
+                   status_handler: Optional[Callable] = None):
         """
         See BaseClient doc_string for this method
         """
@@ -207,7 +227,7 @@ class HttpClient(Client):
         if isinstance(insert_block, str):
             insert_block = insert_block.encode()
         params.update(self._validate_settings(settings, True))
-        response = self._raw_request(insert_block, params, headers)
+        response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
     def command(self,
@@ -231,7 +251,7 @@ class HttpClient(Client):
             payload = data
         if payload is None:
             if not cmd:
-                raise ProgrammingError('Command sent without query or recognized data')
+                raise ProgrammingError('Command sent without query or recognized data') from None
             payload = cmd
         elif cmd:
             params['query'] = cmd
@@ -248,12 +268,21 @@ class HttpClient(Client):
                 return result[0]
         return result
 
+    def _error_handler(self, response: Response = None, retried: bool = False) -> None:
+        err_str = f'HTTPDriver for {self.url} returned response code {response.status_code})'
+        if response.content:
+            err_msg = response.content.decode(errors='backslashreplace')
+            logger.error(str(err_msg))
+            err_str = f':{err_str}\n {err_msg[0:240]}'
+        raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
+
     def _raw_request(self,
                      data,
                      params: Dict[str, Any],
                      headers: Optional[Dict[str, Any]] = None,
                      method: str = 'POST',
-                     retries: int = 0) -> Response:
+                     retries: int = 0,
+                     error_handler: Callable = None) -> Response:
         if isinstance(data, str):
             data = data.encode()
         attempts = 0
@@ -281,16 +310,14 @@ class HttpClient(Client):
                 raise OperationalError(f'Error executing HTTP request {self.url}') from ex
             if 200 <= response.status_code < 300:
                 return response
-            err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
-            logger.error(err_str)
-            if response.content:
-                err_msg = response.content.decode(errors='backslashreplace')
-                logger.error(str(err_msg))
-                err_str = f':{err_str}\n {err_msg[0:240]}'
-            if response.status_code not in (429, 503, 504):
-                raise DatabaseError(err_str)
-            if attempts > retries:
-                raise OperationalError(err_str)
+            if response.status_code in (429, 503, 504):
+                if attempts > retries:
+                    self._error_handler(response, True)
+                logger.debug('Retrying requests with status code %d', response.status_code)
+            else:
+                if error_handler:
+                    error_handler(response)
+                self._error_handler(response)
 
     def ping(self):
         """

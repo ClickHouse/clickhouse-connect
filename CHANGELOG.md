@@ -1,5 +1,22 @@
 ## ClickHouse Connect ChangeLog
 
+### Release 0.4.0 2022-11-07
+
+#### Improvements
+* The settings, table information, and insert progress used for client inserts has been centralized in a new reusable InsertContext object.  Client insert methods can now accept such objects to simplify code and reduce overhead
+* Query results can now be returned in a column oriented format.  This is useful to efficiently construct other objects (like Pandas dataframes) that use column storage internally
+* The transformation of Pandas data to Python types now bypasses Numpy.  As a result compatibility for ClickHouse date, integer, and NULL types has been significantly improved
+
+#### Bug Fixes
+* An insert using chunked transfer encode could fail in progress during serialization to ClickHouse native format.  This would "hang" the request after throwing the exception, leading to ClickHouse reporting
+"concurrent session" errors.  This has been fixed.
+* Pandas DataFrame inserts into tables with a "large" integer column would throw an exception.  This has been fixed.
+* Pandas DataFrame inserts with NaT/NA/nan values would fail, even if inserted into Nullable column types.  This has been fixed.
+
+#### Known Issues
+* Numpy inserts into large integer columns are not supported.  https://github.com/ClickHouse/clickhouse-connect/issues/69
+* Insert of Pandas timestamps with nanosecond precision will lose the nanosecond value.  https://github.com/ClickHouse/clickhouse-connect/issues/68
+
 
 ### Release 0.3.8 2022-11-03
 

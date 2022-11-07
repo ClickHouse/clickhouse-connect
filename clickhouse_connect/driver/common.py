@@ -3,6 +3,8 @@ import sys
 
 from typing import Tuple, Sequence, MutableSequence, Dict, Optional
 
+from clickhouse_connect.driver.exceptions import ProgrammingError
+
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize
@@ -63,7 +65,11 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
             column = [float(x) for x in column]
         else:
             column = [int(x) for x in column]
-    buff = array.array(code, column)
+    try:
+        buff = array.array(code, column)
+    except TypeError as ex:
+        raise ProgrammingError('Unable to create Python array.  This is usually caused by trying to insert None ' +
+                               'values into a ClickHouse column that is not Nullable') from ex
     if must_swap:
         buff.byteswap()
     dest += buff.tobytes()
