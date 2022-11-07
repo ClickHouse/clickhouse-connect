@@ -72,6 +72,14 @@ class InsertContext:
         else:
             self._data = None
 
+    @property
+    def df(self):
+        raise NotImplemented('DataFrame is read only')
+
+    @df.setter
+    def df(self, df):
+        self.data = from_pandas_df(df, self.column_types)
+
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:
             block_end = min(self.current_row + self.block_size, self.row_count)

@@ -310,7 +310,7 @@ class Client(ABC):
                   df=None,
                   database: str = None,
                   settings: Optional[Dict] = None,
-                  insert_columns: Optional[Sequence[str]] = None,
+                  column_names: Optional[Sequence[str]] = None,
                   context: InsertContext = None) -> None:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
@@ -318,7 +318,7 @@ class Client(ABC):
         :param df: two-dimensional pandas dataframe
         :param database: Optional ClickHouse database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param insert_columns: An optional list of ClickHouse column names.  If not set, the DataFrame column names
+        :param column_names: An optional list of ClickHouse column names.  If not set, the DataFrame column names
            will be used
         :param context: Optional reusable insert context to allow repeated inserts into the same table with
             different data batches
@@ -328,14 +328,8 @@ class Client(ABC):
             if context.data is None and df is None:
                 raise ProgrammingError('No data specified for insert') from None
         else:
-            column_names = list(df.columns)
-            if insert_columns:
-                if len(insert_columns) == len(column_names):
-                    column_names = insert_columns
-                else:
-                    raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-            context = self.create_insert_context(table, database, column_names, column_oriented=True, settings=settings)
-        context.data = from_pandas_df(df, context.column_types)
+            context = self.create_pandas_insert_context(table, df, database, settings, column_names)
+        context.df = df
         self.data_insert(context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
@@ -405,11 +399,31 @@ class Client(ABC):
                              settings=settings,
                              data=data)
 
-    def create_pandas_insert_context(self):
+    def create_pandas_insert_context(self,
+                                     table: str,
+                                     df=None,
+                                     database: str = '',
+                                     settings: Optional[Dict] = None,
+                                     column_names: Optional[Sequence[str]] = None) -> InsertContext:
         """
-        Convenience method to create a reusable
-        :return: Return a reusable
+        Convenience method to create a reusable insert context from a Pandas DataFrame.  It does not
+        set the context data
+        :param table: ClickHouse table
+        :param df: two-dimensional pandas dataframe
+        :param database: Optional ClickHouse database
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param column_names: An optional list of ClickHouse column names.  If not set, the DataFrame column names
+           will be used
+        :return: Reusable pandas insert context
         """
+        if df is None and not column_names:
+            raise ProgrammingError('Either a sample df or column names must be specified')
+        if column_names:
+            if df is not None and len(column_names) != len(df.columns):
+                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
+        else:
+            column_names = df.columns
+        return self.create_insert_context(table, database, column_names, column_oriented=True, settings=settings)
 
     def min_version(self, version_str: str) -> bool:
         """
