@@ -8,7 +8,7 @@ from pytz.exceptions import UnknownTimeZoneError
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.insert import InsertContext, from_pandas_df
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, to_arrow, \
     QueryContext, arrow_buffer

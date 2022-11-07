@@ -74,7 +74,7 @@ class InsertContext:
 
     @property
     def df(self):
-        raise NotImplemented('DataFrame is read only')
+        raise NotImplementedError('DataFrame is read only')
 
     @df.setter
     def df(self, df):
