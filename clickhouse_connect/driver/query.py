@@ -42,7 +42,8 @@ class QueryContext:
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  encoding: Optional[str] = None,
                  server_tz: tzinfo = pytz.UTC,
-                 use_none: bool = True):
+                 use_none: bool = True,
+                 column_oriented: bool = False):
         """
         Initializes various configuration settings for the query context
 
@@ -69,6 +70,7 @@ class QueryContext:
         self.encoding = encoding
         self.server_tz = server_tz
         self.use_none = use_none
+        self.column_oriented = column_oriented
         self.final_query = finalize_query(query, parameters, server_tz)
         self._uncommented_query = None
 
@@ -102,7 +104,8 @@ class QueryContext:
                      column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                      encoding: Optional[str] = None,
                      server_tz: Optional[tzinfo] = None,
-                     use_none: Optional[bool] = None) -> 'QueryContext':
+                     use_none: Optional[bool] = None,
+                     column_oriented: Optional[bool] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate
         """
@@ -113,7 +116,8 @@ class QueryContext:
                             dict_copy(self.column_formats, column_formats),
                             encoding if encoding else self.encoding,
                             server_tz if server_tz else self.server_tz,
-                            use_none if use_none is not None else self.use_none)
+                            self.use_none if use_none is None else use_none,
+                            self.column_oriented if column_oriented is None else column_oriented)
 
     def __enter__(self):
         query_settings.query_overrides = format_map(self.query_formats)
@@ -145,17 +149,27 @@ class QueryResult:
     Wrapper class for query return values and metadata
     """
 
-    def __init__(self, result_set: Sequence[Sequence[Any]], column_names: Tuple[str, ...],
-                 column_types: Tuple[ClickHouseType, ...], query_id: str = None, summary: Dict[str, Any] = None):
+    def __init__(self,
+                 result_set: Sequence[Sequence[Any]],
+                 column_names: Tuple[str, ...],
+                 column_types: Tuple[ClickHouseType, ...],
+                 query_id: str = None,
+                 summary: Dict[str, Any] = None,
+                 column_oriented: bool = False):
         self.result_set = result_set
         self.column_names = column_names
         self.column_types = column_types
         self.query_id = query_id
         self.summary = summary
+        self.column_oriented = column_oriented
 
     def named_results(self):
-        for row in self.result_set:
-            yield dict(zip(self.column_names, row))
+        if self.column_oriented:
+            for row in zip(*self.result_set):
+                yield dict(zip(self.column_names, row))
+        else:
+            for row in self.result_set:
+                yield dict(zip(self.column_names, row))
 
 
 class DataResult(NamedTuple):
@@ -165,6 +179,7 @@ class DataResult(NamedTuple):
     result: Sequence[Sequence[Any]]
     column_names: Tuple[str]
     column_types: Tuple[ClickHouseType]
+    column_oriented: bool = False
 
 
 local_tz = datetime.now().astimezone().tzinfo
@@ -271,7 +286,7 @@ def to_pandas_df(result: QueryResult):
     :return: Two dimensional pandas dataframe from result
     """
     pd = check_pandas()
-    return pd.DataFrame(result.result_set, columns=result.column_names)
+    return pd.DataFrame(dict(zip(result.column_names, result.result_set)), columns=result.column_names)
 
 
 def to_arrow(content: bytes):

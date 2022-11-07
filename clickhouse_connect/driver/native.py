@@ -39,9 +39,16 @@ class NativeTransform(DataTransform):
                 context.start_column(name, col_type)
                 column, loc = col_type.read_native_column(source, loc, num_rows, use_none=use_none)
                 result_block.append(column)
+            if context.column_oriented:
+                if block == 0:
+                    result = [x if isinstance(x, list) else list(x) for x in result_block]
+                else:
+                    for base, added in zip(result, result_block):
+                        base.extend(added)
+            else:
+                result.extend(list(zip(*result_block)))
             block += 1
-            result.extend(list(zip(*result_block)))
-        return DataResult(result, tuple(names), tuple(col_types))
+        return DataResult(result, tuple(names), tuple(col_types), context.column_oriented)
 
     def _build_insert(self, context: InsertContext):
         if context.compression == 'gzip':

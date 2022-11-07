@@ -172,8 +172,12 @@ class HttpClient(Client):
                 summary = json.loads(response.headers['X-ClickHouse-Summary'])
             except json.JSONDecodeError:
                 pass
-        return QueryResult(data_result.result, data_result.column_names, data_result.column_types,
-                           response.headers.get('X-ClickHouse-Query-Id'), summary)
+        return QueryResult(data_result.result,
+                           data_result.column_names,
+                           data_result.column_types,
+                           response.headers.get('X-ClickHouse-Query-Id'),
+                           summary,
+                           data_result.column_oriented)
 
     def data_insert(self, context: InsertContext):
         """

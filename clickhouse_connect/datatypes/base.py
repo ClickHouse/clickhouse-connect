@@ -139,9 +139,9 @@ class ClickHouseType(ABC):
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column
-        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise use the empty or zero type.
+        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise, use the empty or zero type.
          Allows support for pandas data frames that do not support None
-        :return: The decoded column plust the updated location pointer
+        :return: The decoded column plus the updated location pointer
         """
         if self.low_card:
             return self._read_native_low_card(source, loc, num_rows, use_none)

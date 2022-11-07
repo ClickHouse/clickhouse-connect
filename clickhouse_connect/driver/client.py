@@ -10,7 +10,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext, from_pandas_df
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df,  to_arrow, \
+from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, to_arrow, \
     QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,7 @@ class Client(ABC):
               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
               encoding: Optional[str] = None,
               use_none: bool = True,
+              column_oriented: bool = False,
               context: QueryContext = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix
@@ -107,27 +108,30 @@ class Client(ABC):
         :param column_formats: See QueryContext __init__ docstring
         :param encoding: See QueryContext __init__ docstring
         :param use_none: Use None for ClickHouse nulls instead of empty values
+        :param column_oriented: True if the result should be sequence of column values, False for rows
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: QueryResult -- data and metadata from response
         """
         if context:
-            query_context = context.updated_copy(query,
-                                                 parameters,
-                                                 settings,
-                                                 query_formats,
-                                                 column_formats,
-                                                 encoding,
-                                                 self.server_tz,
-                                                 False)
+            query_context = context.updated_copy(query=query,
+                                                 parameters=parameters,
+                                                 settings=settings,
+                                                 query_formats=query_formats,
+                                                 column_formats=column_formats,
+                                                 encoding=encoding,
+                                                 server_tz=self.server_tz,
+                                                 use_none=use_none,
+                                                 column_oriented=column_oriented)
         else:
-            query_context = QueryContext(query,
-                                         parameters,
-                                         settings,
-                                         query_formats,
-                                         column_formats,
-                                         encoding,
-                                         self.server_tz,
-                                         use_none)
+            query_context = QueryContext(query=query,
+                                         parameters=parameters,
+                                         settings=settings,
+                                         query_formats=query_formats,
+                                         column_formats=column_formats,
+                                         encoding=encoding,
+                                         server_tz=self.server_tz,
+                                         use_none=use_none,
+                                         column_oriented=column_oriented)
         if query_context.is_command:
             response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
             return QueryResult([response] if isinstance(response, list) else [[response]], (), ())
@@ -156,6 +160,7 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
+                 column_oriented: bool = False,
                  context: QueryContext = None):
         """
         Query method that returns the results as a numpy array
@@ -165,17 +170,20 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring.
         :param encoding: See QueryContext __init__ docstring
+        :param column_oriented: True if the result should be sequence of column values, False for rows
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return np_result(self.query(query,
-                                    parameters,
-                                    settings,
-                                    query_formats,
-                                    column_formats,
-                                    encoding,
-                                    False,
-                                    context))
+        if context:
+            return self.query(context=context)
+        return np_result(self.query(query=query,
+                                    parameters=parameters,
+                                    settings=settings,
+                                    query_formats=query_formats,
+                                    column_formats=column_formats,
+                                    encoding=encoding,
+                                    use_none=False,
+                                    column_oriented=column_oriented))
 
     # pylint: disable=duplicate-code
     def query_df(self,
@@ -207,6 +215,7 @@ class Client(ABC):
                                        column_formats,
                                        encoding,
                                        use_none=allow_nulls,
+                                       column_oriented=True,
                                        context=context))
 
     def query_arrow(self,

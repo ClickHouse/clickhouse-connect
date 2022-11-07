@@ -113,7 +113,7 @@ def from_pandas_df(df, column_types: Sequence[ClickHouseType]):
         elif ch_type.python_type in (datetime.datetime, datetime.date) and 'date' in d_type:
             data.append([None if pd.isnull(x) else pd.Timestamp.to_pydatetime(x) for x in df_col])
             continue
-        if ch_type.python_type != float:
+        if ch_type.nullable and ch_type.python_type != float:
             df_col.replace({np.nan: None}, inplace=True)
         data.append(df_col.tolist())
     return data
