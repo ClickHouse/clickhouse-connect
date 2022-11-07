@@ -185,6 +185,7 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
+                 allow_nulls: bool = True,
                  context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe
@@ -194,6 +195,8 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
         :param encoding: See QueryContext __init__ docstring
+        :param allow_nulls: Interpret ClickHouse nulls as NaT/NA pandas values, otherwise the DataFrame values
+           will be the default "non-null' values such as empty string or 0
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
@@ -203,8 +206,8 @@ class Client(ABC):
                                        query_formats,
                                        column_formats,
                                        encoding,
-                                       False,
-                                       context))
+                                       use_none=allow_nulls,
+                                       context=context))
 
     def query_arrow(self,
                     query: str,
@@ -313,8 +316,7 @@ class Client(ABC):
                                                     column_names,
                                                     column_oriented=True,
                                                     settings=settings)
-        insert_data = from_pandas_df(df, insert_context.column_types)
-        insert_context.data = insert_data
+        insert_context.data = from_pandas_df(df, insert_context.column_types)
         self.data_insert(insert_context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):

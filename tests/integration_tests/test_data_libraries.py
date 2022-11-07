@@ -1,7 +1,7 @@
 import pytest
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.options import np, pd, arrow
+from clickhouse_connect.driver.options import np, arrow
 
 
 def test_arrow(test_client: Client, test_table_engine: str):
@@ -35,15 +35,3 @@ def test_numpy(test_client: Client):
         pytest.skip('Numpy package not available')
     np_array = test_client.query_np('SELECT * FROM system.tables')
     assert len(np_array['database']) > 10
-
-
-def test_pandas(test_client: Client, test_table_engine: str):
-    if not pd:
-        pytest.skip('Pandas package not available')
-    df = test_client.query_df('SELECT * FROM system.tables')
-    test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    test_client.command(f'CREATE TABLE test_system_insert as system.tables Engine {test_table_engine}'
-                        f' ORDER BY (database, name)')
-    test_client.insert_df('test_system_insert', df)
-    new_df = test_client.query_df('SELECT * FROM test_system_insert')
-    assert new_df.columns.all() == df.columns.all()

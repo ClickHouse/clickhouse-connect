@@ -6,7 +6,7 @@ import uuid
 import http as PyHttp
 from http.client import RemoteDisconnected
 
-from typing import Optional, Dict, Any, Sequence, Union, List
+from typing import Optional, Dict, Any, Sequence, Union, List, Callable
 
 from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
@@ -181,19 +181,30 @@ class HttpClient(Client):
         """
         context.compression = self.compression
         block_gen = self.transform.build_insert(context)
+
+        def status_handler(response: Response):
+            # If we actually had a local exception when building the insert, throw that instead
+            if context.insert_exception:
+                ex = context.insert_exception
+                context.insert_exception = None
+                return ex
+            return self._status_handler(response)
+
         self.raw_insert(context.table,
                         context.column_names,
                         block_gen,
                         context.settings,
                         self.write_format,
-                        context.compression)
+                        context.compression,
+                        status_handler)
 
     def raw_insert(self, table: str,
                    column_names: Sequence[str],
                    insert_block: Union[str, bytes],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
-                   compression: Optional[str] = None):
+                   compression: Optional[str] = None,
+                   status_handler: Optional[Callable] = None):
         """
         See BaseClient doc_string for this method
         """
@@ -207,7 +218,7 @@ class HttpClient(Client):
         if isinstance(insert_block, str):
             insert_block = insert_block.encode()
         params.update(self._validate_settings(settings, True))
-        response = self._raw_request(insert_block, params, headers)
+        response = self._raw_request(insert_block, params, headers, status_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
     def command(self,
@@ -248,12 +259,21 @@ class HttpClient(Client):
                 return result[0]
         return result
 
+    def _status_handler(self, response: Response, retried: bool = False) -> Exception:
+        err_str = f'HTTPDriver for {self.url} returned response code {response.status_code})'
+        if response.content:
+            err_msg = response.content.decode(errors='backslashreplace')
+            logger.error(str(err_msg))
+            err_str = f':{err_str}\n {err_msg[0:240]}'
+        return OperationalError(err_str) if retried else DatabaseError(err_str)
+
     def _raw_request(self,
                      data,
                      params: Dict[str, Any],
                      headers: Optional[Dict[str, Any]] = None,
                      method: str = 'POST',
-                     retries: int = 0) -> Response:
+                     retries: int = 0,
+                     status_handler: Callable = None) -> Response:
         if isinstance(data, str):
             data = data.encode()
         attempts = 0
@@ -281,16 +301,14 @@ class HttpClient(Client):
                 raise OperationalError(f'Error executing HTTP request {self.url}') from ex
             if 200 <= response.status_code < 300:
                 return response
-            err_str = f'HTTPDriver url {self.url} returned response code {response.status_code})'
-            logger.error(err_str)
-            if response.content:
-                err_msg = response.content.decode(errors='backslashreplace')
-                logger.error(str(err_msg))
-                err_str = f':{err_str}\n {err_msg[0:240]}'
-            if response.status_code not in (429, 503, 504):
-                raise DatabaseError(err_str)
-            if attempts > retries:
-                raise OperationalError(err_str)
+            if response.status_code in (429, 503, 504):
+                if attempts > retries:
+                    raise self._status_handler(response, True)
+                logger.debug('Retrying requests with status code %d', response.status_code)
+            else:
+                if status_handler:
+                    raise status_handler(response)
+                raise self._status_handler(response)
 
     def ping(self):
         """

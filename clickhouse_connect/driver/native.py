@@ -59,7 +59,16 @@ class NativeTransform(DataTransform):
                     output += col_name.encode()
                     write_leb128(len(col_type.name), output)
                     output += col_type.name.encode()
-                    col_type.write_native_column(data, output)
+                    try:
+                        col_type.write_native_column(data, output)
+                    except Exception as ex: # pylint: disable=broad-except
+                        # This is hideous, but some low level serializations can fail while streaming
+                        # the insert if the user has included bad data in the column.  We need to ensure that the
+                        # insert fails (using garbage data) to avoid a partial insert, and use the context to
+                        # propagate the correct exception to the user
+                        context.insert_exception = ex
+                        yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
+                        return
                 yield compressor.compress_block(output)
             footer = compressor.complete()
             if footer:

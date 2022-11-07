@@ -30,7 +30,7 @@ class InsertContext:
                  column_oriented: bool = False,
                  settings: Optional[Dict[str, Any]] = None,
                  compression: Optional[str] = None,
-                 block_size:int = DEFAULT_BLOCK_SIZE):
+                 block_size: int = DEFAULT_BLOCK_SIZE):
         self.table = table
         self.column_names = column_names
         self.column_types = column_types
@@ -39,6 +39,7 @@ class InsertContext:
         self.compression = compression
         self.block_size = block_size
         self.data = data
+        self.insert_exception = None
 
     @property
     def data(self):
