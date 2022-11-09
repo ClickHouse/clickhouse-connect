@@ -268,15 +268,25 @@ def remove_sql_comments(sql: str) -> str:
     return comment_re.sub(replacer, sql)
 
 
-def np_result(result: QueryResult):
+def np_result(result: QueryResult, force_structured: bool = False, max_str_len:int = 0):
     """
     Convert QueryResult to a numpy array
-    :param result: QueryResult from driver
+    :param result: QueryResult from client query
+    :param force_structured:
     :return: Two dimensional numpy array from result
     """
     np = check_numpy()
-    np_types = [(name, ch_type.np_type) for name, ch_type in zip(result.column_names, result.column_types)]
-    return np.array(result.result_set, dtype=np_types)
+    np_types = [np.dtype(ch_type.np_type) for ch_type in result.column_types]
+    if force_structured and max_str_len:
+        str_type = np.dtype(f'U{max_str_len}')
+        np_types = [str_type if x == np.object_ else x for x in np_types]
+    dtypes = np.dtype(list(zip(result.column_names, np_types)))
+    structured = force_structured
+    if not structured:
+        structured = all(ch_type.np_type != 'O' and not ch_type.nullable for ch_type in result.column_types)
+    if structured and not result.column_oriented:
+        return np.array([tuple(row) for row in result.result_set], dtype=dtypes)
+    return np.rec.fromarrays(result.result_set, dtypes)
 
 
 def to_pandas_df(result: QueryResult):

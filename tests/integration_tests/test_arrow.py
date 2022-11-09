@@ -1,7 +1,7 @@
 import pytest
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.options import np, arrow
+from clickhouse_connect.driver.options import arrow
 
 
 def test_arrow(test_client: Client, test_table_engine: str):
@@ -28,10 +28,3 @@ def test_arrow(test_client: Client, test_table_engine: str):
     assert arrow_schema.field(0).name == 'number'
     assert arrow_schema.field(0).type.id == 8
     assert arrow_table.num_rows == 500
-
-
-def test_numpy(test_client: Client):
-    if not np:
-        pytest.skip('Numpy package not available')
-    np_array = test_client.query_np('SELECT * FROM system.tables')
-    assert len(np_array['database']) > 10

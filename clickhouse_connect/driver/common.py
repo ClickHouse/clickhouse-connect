@@ -187,6 +187,7 @@ def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
 
 
 class SliceView(Sequence):
+    slots = ('_source', '_range')
     """
     Provides a view into a sequence rather than copying.  Borrows liberally from
     https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1

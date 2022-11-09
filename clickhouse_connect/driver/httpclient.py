@@ -183,7 +183,7 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        if not context.data:
+        if context.empty:
             logger.debug('No data included in insert, skipping')
             return
         context.compression = self.compression

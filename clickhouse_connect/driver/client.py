@@ -160,7 +160,8 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 column_oriented: bool = False,
+                 force_structured: bool = False,
+                 max_str_len: int = 0,
                  context: QueryContext = None):
         """
         Query method that returns the results as a numpy array
@@ -170,12 +171,12 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring.
         :param encoding: See QueryContext __init__ docstring
-        :param column_oriented: True if the result should be sequence of column values, False for rows
+        :param force_structured: Force a structured rather than an object array even if the ClickHouse datatypes
+          are not all fixed size (such as Nullable columns or variable length Strings)
+        :param max_str_len If force_structured is True, limit returned string values to this length
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        if context:
-            return self.query(context=context)
         return np_result(self.query(query=query,
                                     parameters=parameters,
                                     settings=settings,
@@ -183,7 +184,10 @@ class Client(ABC):
                                     column_formats=column_formats,
                                     encoding=encoding,
                                     use_none=False,
-                                    column_oriented=column_oriented))
+                                    column_oriented=False,
+                                    context=context),
+                         force_structured,
+                         max_str_len)
 
     # pylint: disable=duplicate-code
     def query_df(self,
@@ -291,19 +295,20 @@ class Client(ABC):
             different data batches
         :return: No return, throws an exception if the insert fails
         """
-        if context:
-            if context:
-                if context.data is None and data is None:
-                    raise ProgrammingError('No data specified for insert') from None
-        else:
+        if (context is None or context.empty) and data is None:
+            raise ProgrammingError('No data specified for insert') from None
+        if context is None:
             context = self.create_insert_context(table,
-                                                 database,
                                                  column_names,
+                                                 database,
                                                  column_types,
                                                  column_type_names,
                                                  column_oriented,
                                                  settings)
-        context.data = data
+        if data is not None:
+            if not context.empty:
+                raise ProgrammingError('Attempting to insert new data with non-empty insert context') from None
+            context.data = data
         self.data_insert(context)
 
     def insert_df(self, table: str = None,
@@ -324,13 +329,12 @@ class Client(ABC):
             different data batches
         :return: No return, throws an exception if the insert fails
         """
-        if context:
-            if context.data is None and df is None:
-                raise ProgrammingError('No data specified for insert') from None
-        else:
-            context = self.create_pandas_insert_context(table, df, database, settings, column_names)
-        context.df = df
-        self.data_insert(context)
+        if context is None:
+            if column_names is None:
+                column_names = df.columns
+            elif len(column_names) != len(df.columns):
+                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
+        self.insert(table, df, column_names, database, settings=settings, context=context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
         """
@@ -347,8 +351,8 @@ class Client(ABC):
 
     def create_insert_context(self,
                               table: str,
+                              column_names: Optional[Union[str, Sequence[str]]] = None,
                               database: str = '',
-                              column_names: Union[str, Sequence[str]] = '*',
                               column_types: Sequence[ClickHouseType] = None,
                               column_type_names: Sequence[str] = None,
                               column_oriented: bool = False,
@@ -373,12 +377,11 @@ class Client(ABC):
             describe_result = self.query(f'DESCRIBE TABLE {full_table}')
             column_defs = [ColumnDef(**row) for row in describe_result.named_results()
                            if row['default_type'] not in ('ALIAS', 'MATERIALIZED')]
-        if isinstance(column_names, str):
-            if column_names == '*':
-                column_names = [cd.name for cd in column_defs]
-                column_types = [cd.ch_type for cd in column_defs]
-            elif column_names:
-                column_names = [column_names]
+        if column_names is None or isinstance(column_names, str) and column_names == '*':
+            column_names = [cd.name for cd in column_defs]
+            column_types = [cd.ch_type for cd in column_defs]
+        elif isinstance(column_names, str):
+            column_names = [column_names]
         if len(column_names) == 0:
             raise ValueError('Column names must be specified for insert')
         if not column_types:
@@ -398,32 +401,6 @@ class Client(ABC):
                              column_oriented=column_oriented,
                              settings=settings,
                              data=data)
-
-    def create_pandas_insert_context(self,
-                                     table: str,
-                                     df=None,
-                                     database: str = '',
-                                     settings: Optional[Dict] = None,
-                                     column_names: Optional[Sequence[str]] = None) -> InsertContext:
-        """
-        Convenience method to create a reusable insert context from a Pandas DataFrame.  It does not
-        set the context data
-        :param table: ClickHouse table
-        :param df: two-dimensional pandas dataframe
-        :param database: Optional ClickHouse database
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param column_names: An optional list of ClickHouse column names.  If not set, the DataFrame column names
-           will be used
-        :return: Reusable pandas insert context
-        """
-        if df is None and not column_names:
-            raise ProgrammingError('Either a sample df or column names must be specified')
-        if column_names:
-            if df is not None and len(column_names) != len(df.columns):
-                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-        else:
-            column_names = df.columns
-        return self.create_insert_context(table, database, column_names, column_oriented=True, settings=settings)
 
     def min_version(self, version_str: str) -> bool:
         """

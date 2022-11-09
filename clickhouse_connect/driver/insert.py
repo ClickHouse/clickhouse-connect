@@ -1,12 +1,14 @@
 import datetime
-from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator
+from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, MutableSequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import SliceView
-from clickhouse_connect.driver.options import check_pandas, check_numpy
+from clickhouse_connect.driver.options import np, pd
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 DEFAULT_BLOCK_SIZE = 16834
+uint64_type = get_from_name('UInt64')
 
 
 class InsertBlock(NamedTuple):
@@ -26,8 +28,8 @@ class InsertContext:
     def __init__(self,
                  table: str,
                  column_names: Sequence[str],
-                 column_types: Sequence[ClickHouseType],
-                 data: Sequence[Sequence[Any]] = None,
+                 column_types: MutableSequence[ClickHouseType],
+                 data: Any = None,
                  column_oriented: bool = False,
                  settings: Optional[Dict[str, Any]] = None,
                  compression: Optional[str] = None,
@@ -43,42 +45,45 @@ class InsertContext:
         self.insert_exception = None
 
     @property
+    def empty(self) -> bool:
+        return self._data is None
+
+    @property
     def data(self):
-        return self._data
+        return self._raw_data
 
     @data.setter
-    def data(self, data):
+    def data(self, data: Any):
+        self._raw_data = data
         self.current_block = 0
         self.current_row = 0
         self.row_count = 0
         self.column_count = 0
-        if data:
-            if self.column_oriented:
-                self._next_block_data = self._column_block_data
-                self._block_columns = [SliceView(column) for column in data]
-                self._block_rows = None
-                self.column_count = len(data)
-                self.row_count = len(data[0])
-            else:
-                self._next_block_data = self._row_block_data
-                self._block_rows = data
-                self._block_columns = None
-                self.row_count = len(data)
-                self.column_count = len(data[0])
+        self._data = None
+        if data is None or len(data) == 0:
+            return
+        if pd and isinstance(data, pd.DataFrame):
+            self.column_oriented = True
+            data = from_pandas_df(data, self.column_types)
+        if np and isinstance(data, np.ndarray):
+            data = from_numpy_array(data, self.column_oriented, self.column_types)
+            self.column_oriented = True
+        if self.column_oriented:
+            self._next_block_data = self._column_block_data
+            self._block_columns = [SliceView(column) for column in data]
+            self._block_rows = None
+            self.column_count = len(data)
+            self.row_count = len(data[0])
+        else:
+            self._next_block_data = self._row_block_data
+            self._block_rows = data
+            self._block_columns = None
+            self.row_count = len(data)
+            self.column_count = len(data[0])
         if self.row_count and self.column_count:
             if self.column_count != len(self.column_names):
                 raise ProgrammingError('Insert data column count does not match column names')
             self._data = data
-        else:
-            self._data = None
-
-    @property
-    def df(self):
-        raise NotImplementedError('DataFrame is read only')
-
-    @df.setter
-    def df(self, df):
-        self.data = from_pandas_df(df, self.column_types)
 
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:
@@ -112,8 +117,6 @@ def from_pandas_df(df, column_types: Sequence[ClickHouseType]):
     :param column_types: ClickHouse column types matching the data frame columns in order.  Used for transformation
     :return: Tuple of the dataframe column names and
     """
-    np = check_numpy()
-    pd = check_pandas()
     data = []
     for col_name, ch_type in zip(df.columns, column_types):
         df_col = df[col_name]
@@ -129,4 +132,19 @@ def from_pandas_df(df, column_types: Sequence[ClickHouseType]):
         if ch_type.nullable and ch_type.python_type != float:
             df_col.replace({np.nan: None}, inplace=True)
         data.append(df_col.tolist())
+    return data
+
+
+def from_numpy_array(np_array, source_is_columns: bool, column_types: MutableSequence[ClickHouseType]):
+    data = []
+    if np_array.dtype.names is not None:
+        # This is a structured array, so get views on the underlying structure
+        for field in np_array.dtype.names:
+            data.append(np_array[field])
+    else:
+        for ix, ch_type in enumerate(column_types):
+            np_data = np_array[ix, :] if source_is_columns else np_array[:, ix]
+            if ch_type.name == 'DateTime64(9)':
+                column_types[ix] = uint64_type
+            data.append(np_data)
     return data
