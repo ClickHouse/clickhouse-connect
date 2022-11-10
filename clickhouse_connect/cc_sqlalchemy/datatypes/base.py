@@ -115,7 +115,7 @@ class CaseInsensitiveDict(dict):
         return super().__getitem__(item.lower())
 
 
-sqla_type_map: CaseInsensitiveDict[str, Type[ChSqlaType]] = CaseInsensitiveDict()
+sqla_type_map: Dict[str, Type[ChSqlaType]] = CaseInsensitiveDict()
 schema_types = []
 
 
