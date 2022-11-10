@@ -107,7 +107,15 @@ class ChSqlaType:
         return self.name
 
 
-sqla_type_map: Dict[str, Type[ChSqlaType]] = {}
+class CaseInsensitiveDict(dict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key.lower(), value)
+
+    def __getitem__(self, item):
+        return super().__getitem__(item.lower())
+
+
+sqla_type_map: CaseInsensitiveDict[str, Type[ChSqlaType]] = CaseInsensitiveDict()
 schema_types = []
 
 
