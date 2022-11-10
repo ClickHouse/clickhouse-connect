@@ -30,20 +30,17 @@ def mock_settings_env_vars() -> Iterator[None]:
 
 
 @fixture(scope='session')
-# pylint: disable=import-outside-toplevel
 def superset_app(session_mocker: MockFixture) -> Iterator[None]:
-    if SupersetApp is None:
-        yield
-        return
-    session = sessionmaker(bind=create_engine('sqlite://'))()
-    session.remove = lambda: None
+    if SupersetApp:
+        session = sessionmaker(bind=create_engine('sqlite://'))()
+        session.remove = lambda: None
 
-    session_mocker.patch('superset.security.SupersetSecurityManager.get_session', return_value=session)
-    session_mocker.patch('superset.db.session', session)
+        session_mocker.patch('superset.security.SupersetSecurityManager.get_session', return_value=session)
+        session_mocker.patch('superset.db.session', session)
 
-    app = SupersetApp(__name__)
-    app.config.from_object('superset.config')
+        app = SupersetApp(__name__)
+        app.config.from_object('superset.config')
 
-    SupersetAppInitializer(app).init_app()
-    with app.app_context():
-        yield
+        SupersetAppInitializer(app).init_app()
+        with app.app_context():
+            yield

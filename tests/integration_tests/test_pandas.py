@@ -69,15 +69,13 @@ def test_pandas_large_types(test_client: Client, test_table_engine: str):
     assert result_df.iloc[1]['value'] == 30000000000000000000000000000000000
 
 
-def test_pandas_datetime64(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS test_pandas_dt64')
-    test_client.command('CREATE TABLE IF NOT EXISTS test_pandas_dt64 (key String, value DateTime64(9))' +
-                        f' Engine {test_table_engine} ORDER BY key')
-    now = datetime.now()
-    df = pd.DataFrame([['key1', now], ['key2', pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)]],
-                      columns=['key', 'value'])
-    test_client.insert_df('test_pandas_dt64', df)
-    result_df = test_client.query_df('SELECT * FROM test_pandas_dt64')
-    assert result_df.iloc[0]['value'] == now
-    # Note that nanoseconds are lost because of the Python datetime conversion
-    assert result_df.iloc[1]['value'] == datetime(1992, 11, 6, 12, 50, 40, 7420)
+def test_pandas_datetime64(test_client: Client, table_context: Callable):
+    with table_context('test_pandas_dt64', ['key String', 'value DateTime64(9)']):
+        now = datetime.now()
+        df = pd.DataFrame([['key1', now], ['key2', pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)]],
+                          columns=['key', 'value'])
+        test_client.insert_df('test_pandas_dt64', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_dt64')
+        assert result_df.iloc[0]['value'] == now
+        # Note that nanoseconds are lost because of the Python datetime conversion
+        assert result_df.iloc[1]['value'] == datetime(1992, 11, 6, 12, 50, 40, 7420)

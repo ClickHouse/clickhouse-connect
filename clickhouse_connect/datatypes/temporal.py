@@ -63,6 +63,7 @@ class DateTime(ArrayType):
 class DateTime64(ArrayType):
     __slots__ = 'prec', 'tzinfo'
     _array_type = 'Q'
+    valid_formats = 'native', 'int'
     python_null = epoch_start_date
     python_type = datetime
 
@@ -103,9 +104,10 @@ class DateTime64(ArrayType):
         return new_col, loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        prec = self.prec
-        if self.nullable:
-            column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]
-        else:
-            column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
+        if self.write_format() == 'native':
+            prec = self.prec
+            if self.nullable:
+                column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]
+            else:
+                column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
         write_array(self._array_type, column, dest)

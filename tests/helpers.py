@@ -169,8 +169,8 @@ class TableContext:
             self.column_types = []
             for col in columns:
                 ix = col.find(' ')
-                self.column_names.append(col[ix:])
-                self.column_types.append(col[:ix + 1].strip())
+                self.column_types.append(col[ix + 1:].strip())
+                self.column_names.append(col[:ix].strip())
         else:
             self.column_names = columns
             self.column_types = column_types

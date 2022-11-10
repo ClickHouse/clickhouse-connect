@@ -1,14 +1,15 @@
 import datetime
-from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, MutableSequence
+from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import SliceView
+from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.options import np, pd
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 DEFAULT_BLOCK_SIZE = 16834
-uint64_type = get_from_name('UInt64')
+dt_nano_type = get_from_name('DateTime64(9)')
 
 
 class InsertBlock(NamedTuple):
@@ -20,7 +21,7 @@ class InsertBlock(NamedTuple):
 
 
 # pylint: disable=too-many-instance-attributes
-class InsertContext:
+class InsertContext(BaseQueryContext):
     """
     Reusable Argument/parameter object for inserts.
     """
@@ -28,17 +29,19 @@ class InsertContext:
     def __init__(self,
                  table: str,
                  column_names: Sequence[str],
-                 column_types: MutableSequence[ClickHouseType],
+                 column_types: Sequence[ClickHouseType],
                  data: Any = None,
                  column_oriented: bool = False,
                  settings: Optional[Dict[str, Any]] = None,
                  compression: Optional[str] = None,
+                 query_formats: Optional[Dict[str, str]] = None,
+                 column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  block_size: int = DEFAULT_BLOCK_SIZE):
+        super().__init__(settings, query_formats, column_formats)
         self.table = table
         self.column_names = column_names
         self.column_types = column_types
         self.column_oriented = column_oriented
-        self.settings = settings
         self.compression = compression
         self.block_size = block_size
         self.data = data
@@ -63,10 +66,10 @@ class InsertContext:
         if data is None or len(data) == 0:
             return
         if pd and isinstance(data, pd.DataFrame):
+            data = self._convert_pandas(data)
             self.column_oriented = True
-            data = from_pandas_df(data, self.column_types)
         if np and isinstance(data, np.ndarray):
-            data = from_numpy_array(data, self.column_oriented, self.column_types)
+            data = self._convert_numpy(data)
             self.column_oriented = True
         if self.column_oriented:
             self._next_block_data = self._column_block_data
@@ -103,48 +106,38 @@ class InsertContext:
         column_slice = SliceView(self._block_rows[block_start: block_end])
         return tuple(zip(*column_slice))
 
-    def __enter__(self):
-        return self
+    def _convert_pandas(self, df):
+        data = []
+        for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
+            df_col = df[df_col_name]
+            d_type = str(df_col.dtype)
+            if ch_type.python_type == int:
+                if 'float' in d_type:
+                    df_col = df_col.round().astype(ch_type.base_type, copy=False)
+                else:
+                    df_col = df_col.astype(ch_type.base_type, copy=False)
+            elif ch_type == dt_nano_type and pd.core.dtypes.common.is_datetime64_ns_dtype(df_col):
+                data.append([None if pd.isnull(x) else x.value for x in df_col])
+                self.column_formats[col_name] = 'int'
+                continue
+            elif ch_type.python_type in (datetime.datetime, datetime.date) and 'date' in d_type:
+                data.append([None if pd.isnull(x) else pd.Timestamp.to_pydatetime(x) for x in df_col])
+                continue
+            if ch_type.nullable and ch_type.python_type != float:
+                df_col.replace({np.nan: None}, inplace=True)
+            data.append(df_col.tolist())
+        return data
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-
-def from_pandas_df(df, column_types: Sequence[ClickHouseType]):
-    """
-    Convert a pandas dataframe into Python native types for insert
-    :param df: Pandas DataFrame for insert
-    :param column_types: ClickHouse column types matching the data frame columns in order.  Used for transformation
-    :return: Tuple of the dataframe column names and
-    """
-    data = []
-    for col_name, ch_type in zip(df.columns, column_types):
-        df_col = df[col_name]
-        d_type = str(df_col.dtype)
-        if ch_type.python_type == int:
-            if 'float' in d_type:
-                df_col = df_col.round().astype(ch_type.base_type, copy=False)
-            else:
-                df_col = df_col.astype(ch_type.base_type, copy=False)
-        elif ch_type.python_type in (datetime.datetime, datetime.date) and 'date' in d_type:
-            data.append([None if pd.isnull(x) else pd.Timestamp.to_pydatetime(x) for x in df_col])
-            continue
-        if ch_type.nullable and ch_type.python_type != float:
-            df_col.replace({np.nan: None}, inplace=True)
-        data.append(df_col.tolist())
-    return data
-
-
-def from_numpy_array(np_array, source_is_columns: bool, column_types: MutableSequence[ClickHouseType]):
-    data = []
-    if np_array.dtype.names is not None:
-        # This is a structured array, so get views on the underlying structure
-        for field in np_array.dtype.names:
-            data.append(np_array[field])
-    else:
-        for ix, ch_type in enumerate(column_types):
-            np_data = np_array[ix, :] if source_is_columns else np_array[:, ix]
-            if ch_type.name == 'DateTime64(9)':
-                column_types[ix] = uint64_type
-            data.append(np_data)
-    return data
+    def _convert_numpy(self, np_array):
+        data = []
+        if np_array.dtype.names is not None:
+            # This is a structured array, so get column views on the underlying structure
+            for field in np_array.dtype.names:
+                data.append(np_array[field])
+        else:
+            for ix, (col_name, ch_type) in enumerate(zip(self.column_names, self.column_types)):
+                np_data = np_array[ix, :] if self.column_oriented else np_array[:, ix]
+                if ch_type == dt_nano_type:
+                    self.column_formats[col_name] = 'int'
+                data.append(np_data)
+        return data

@@ -11,12 +11,9 @@ from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.common import common_settings
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.container import Array
-from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
-from clickhouse_connect.driver.threads import query_settings
-
+from clickhouse_connect.driver.context import BaseQueryContext
 
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' +\
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
@@ -28,7 +25,7 @@ command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
 
 
 # pylint: disable=too-many-instance-attributes
-class QueryContext:
+class QueryContext(BaseQueryContext):
     """
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
@@ -62,12 +59,9 @@ class QueryContext:
         :param column_formats: Optional dictionary
         :param use_none:
         """
+        super().__init__(settings, query_formats, column_formats, encoding)
         self.query = query
         self.parameters = parameters or {}
-        self.settings = settings or {}
-        self.query_formats = query_formats or {}
-        self.column_formats = column_formats or {}
-        self.encoding = encoding
         self.server_tz = server_tz
         self.use_none = use_none
         self.column_oriented = column_oriented
@@ -119,36 +113,11 @@ class QueryContext:
                             self.use_none if use_none is None else use_none,
                             self.column_oriented if column_oriented is None else column_oriented)
 
-    def __enter__(self):
-        query_settings.query_overrides = format_map(self.query_formats)
-        query_settings.query_encoding = self.encoding
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        query_settings.query_overrides = None
-        query_settings.column_overrides = None
-        query_settings.query_encoding = None
-
-    def start_column(self, name: str, ch_type: ClickHouseType):
-        if name in self.column_formats:
-            fmts = self.column_formats[name]
-            if isinstance(fmts, str):
-                if isinstance(ch_type, Array):
-                    fmt_map = {ch_type.element_type.__class__: fmts}
-                else:
-                    fmt_map = {ch_type.__class__: fmts}
-            else:
-                fmt_map = format_map(fmts)
-            query_settings.column_overrides = fmt_map
-        else:
-            query_settings.column_overrides = None
-
 
 class QueryResult:
     """
     Wrapper class for query return values and metadata
     """
-
     def __init__(self,
                  result_set: Sequence[Sequence[Any]],
                  column_names: Tuple[str, ...],
