@@ -4,7 +4,7 @@ from datetime import date, timedelta, datetime
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
-from clickhouse_connect.driver.common import array_column, write_array
+from clickhouse_connect.driver.common import array_column, write_array, np_date_types
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
@@ -61,7 +61,7 @@ class DateTime(ArrayType):
 
 
 class DateTime64(ArrayType):
-    __slots__ = 'prec', 'tzinfo'
+    __slots__ = 'scale', 'prec', 'tzinfo'
     _array_type = 'Q'
     valid_formats = 'native', 'int'
     python_null = epoch_start_date
@@ -70,7 +70,8 @@ class DateTime64(ArrayType):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
-        self.prec = 10 ** type_def.values[0]
+        self.scale = type_def.values[0]
+        self.prec = 10 ** self.scale
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
             self._read_native_binary = self._read_native_tz
@@ -111,3 +112,8 @@ class DateTime64(ArrayType):
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
         write_array(self._array_type, column, dest)
+
+    @property
+    def np_type(self):
+        opt = np_date_types.get(self.scale)
+        return f'datetime64{opt}' if opt else 'O'

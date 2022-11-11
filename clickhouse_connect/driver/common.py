@@ -19,6 +19,7 @@ if int_size == 2:
 array_sizes = {v: k for k, v in array_map.items()}
 array_sizes['f'] = 4
 array_sizes['d'] = 8
+np_date_types = {3: '[ms]', 6: '[us]', 9: '[ns]'}
 
 
 def array_type(size: int, signed: bool):

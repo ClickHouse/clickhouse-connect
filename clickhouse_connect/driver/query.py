@@ -7,6 +7,7 @@ from enum import Enum
 from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
 from datetime import date, datetime, tzinfo
 
+from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.common import common_settings
@@ -237,22 +238,26 @@ def remove_sql_comments(sql: str) -> str:
     return comment_re.sub(replacer, sql)
 
 
-def np_result(result: QueryResult, force_structured: bool = False, max_str_len:int = 0):
+def np_result(result: QueryResult,
+              force_structured: bool = False,
+              max_str_len:int = 0):
     """
-    Convert QueryResult to a numpy array
-    :param result: QueryResult from client query
-    :param force_structured:
-    :return: Two dimensional numpy array from result
+    See doc string from client.query_np
     """
     np = check_numpy()
-    np_types = [np.dtype(ch_type.np_type) for ch_type in result.column_types]
-    if force_structured and max_str_len:
-        str_type = np.dtype(f'U{max_str_len}')
-        np_types = [str_type if x == np.object_ else x for x in np_types]
+    has_nullable = any(ch_type.nullable for ch_type in result.column_types)
+    has_object = any(ch_type.np_type == 'O' and (ch_type.__class__ != String or max_str_len == 0)
+                     for ch_type in result.column_types)
+    if has_object or (not force_structured and has_nullable):
+        np_types = [np.object_ for _ in result.column_names]
+        structured = False
+    else:
+        structured = True
+        np_types = [np.dtype(ch_type.np_type) for ch_type in result.column_types]
+        if max_str_len:
+            str_type = np.dtype(f'U{max_str_len}')
+            np_types = [str_type if x == np.object_ else x for x in np_types]
     dtypes = np.dtype(list(zip(result.column_names, np_types)))
-    structured = force_structured
-    if not structured:
-        structured = all(ch_type.np_type != 'O' and not ch_type.nullable for ch_type in result.column_types)
     if structured and not result.column_oriented:
         return np.array([tuple(row) for row in result.result_set], dtype=dtypes)
     return np.rec.fromarrays(result.result_set, dtypes)

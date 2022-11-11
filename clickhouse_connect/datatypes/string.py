@@ -75,6 +75,10 @@ class FixedString(ClickHouseType):
     def python_null(self):
         return self._empty_bytes if self.read_format() == 'native' else ''
 
+    @property
+    def np_type(self):
+        return f'<U{self._byte_size}'
+
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':
             return self._read_native_str(source, loc, num_rows, self._byte_size, self.encoding)

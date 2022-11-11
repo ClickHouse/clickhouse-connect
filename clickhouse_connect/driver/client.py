@@ -183,8 +183,8 @@ class Client(ABC):
                                     query_formats=query_formats,
                                     column_formats=column_formats,
                                     encoding=encoding,
-                                    use_none=False,
-                                    column_oriented=False,
+                                    use_none=not force_structured,
+                                    column_oriented=True,
                                     context=context),
                          force_structured,
                          max_str_len)

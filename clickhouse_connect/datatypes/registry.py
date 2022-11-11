@@ -1,7 +1,7 @@
 import logging
 
-from typing import Tuple, Dict, Type
-from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map, EMPTY_TYPE_DEF
+from typing import Tuple, Dict
+from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, type_map
 from clickhouse_connect.driver.exceptions import InternalError
 from clickhouse_connect.driver.parser import parse_enum, parse_callable, parse_columns
 
@@ -59,13 +59,4 @@ def get_from_name(name: str) -> ClickHouseType:
             logger.error(err_str)
             raise InternalError(err_str) from None
         type_cache[name] = ch_type
-    return ch_type
-
-
-def type_instance(ch_type_cls: Type[ClickHouseType]) -> ClickHouseType:
-    base = ch_type_cls.base_type
-    ch_type = type_cache.get(ch_type_cls.base_type, None)
-    if not ch_type:
-        ch_type = type_map[base].build(EMPTY_TYPE_DEF)
-        type_cache[base] = ch_type
     return ch_type

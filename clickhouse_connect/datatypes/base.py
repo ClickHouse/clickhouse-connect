@@ -295,7 +295,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._struct_type = '<' + cls._array_type
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        column, loc =  array_column(self._array_type, source, loc, num_rows)
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         if self.read_format() == 'string':
             column = [str(x) for x in column]
         return column, loc

@@ -1,3 +1,4 @@
+import math
 import random
 import re
 from typing import Sequence, Optional
@@ -153,6 +154,24 @@ def native_insert_block(data, column_names, column_types):
     for chunk in native_transform.build_insert(context):
         output.extend(chunk)
     return output
+
+
+def list_equal(a: Sequence, b: Sequence) -> bool:
+    for x, y in zip(a, b):
+        if x is y:
+            continue
+        if isinstance(x, (list, tuple)):
+            if list_equal(x, y):
+                continue
+            return False
+        if x == y:
+            continue
+        if math.isnan(x) and math.isnan(y):
+            continue
+        if math.isclose(x, y):
+            continue
+        return False
+    return True
 
 
 class TableContext:

@@ -9,7 +9,8 @@ from clickhouse_connect.driver.options import np, pd
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 DEFAULT_BLOCK_SIZE = 16834
-dt_nano_type = get_from_name('DateTime64(9)')
+ch_nano_dt_type = get_from_name('DateTime64(9)')
+np_nano_dt_type = np.dtype('datetime64[ns]') if np else None
 
 
 class InsertBlock(NamedTuple):
@@ -116,7 +117,7 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif ch_type == dt_nano_type and pd.core.dtypes.common.is_datetime64_ns_dtype(df_col):
+            elif ch_type == ch_nano_dt_type and pd.core.dtypes.common.is_datetime64_ns_dtype(df_col):
                 data.append([None if pd.isnull(x) else x.value for x in df_col])
                 self.column_formats[col_name] = 'int'
                 continue
@@ -132,12 +133,15 @@ class InsertContext(BaseQueryContext):
         data = []
         if np_array.dtype.names is not None:
             # This is a structured array, so get column views on the underlying structure
-            for field in np_array.dtype.names:
-                data.append(np_array[field])
+            for np_name, col_name, ch_type in zip(np_array.dtype.names, self.column_names, self.column_types):
+                column = np_array[np_name]
+                if column.dtype == np_nano_dt_type and ch_type == ch_nano_dt_type:
+                    self.column_formats[col_name] = 'int'
+                data.append(column)
         else:
             for ix, (col_name, ch_type) in enumerate(zip(self.column_names, self.column_types)):
                 np_data = np_array[ix, :] if self.column_oriented else np_array[:, ix]
-                if ch_type == dt_nano_type:
+                if ch_type == ch_nano_dt_type and np_data.dtype == np.np_nano_dt_type:
                     self.column_formats[col_name] = 'int'
                 data.append(np_data)
         return data
