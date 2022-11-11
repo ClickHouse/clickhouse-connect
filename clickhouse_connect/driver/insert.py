@@ -71,7 +71,6 @@ class InsertContext(BaseQueryContext):
             self.column_oriented = True
         if np and isinstance(data, np.ndarray):
             data = self._convert_numpy(data)
-            self.column_oriented = True
         if self.column_oriented:
             self._next_block_data = self._column_block_data
             self._block_columns = [SliceView(column) for column in data]
@@ -130,18 +129,14 @@ class InsertContext(BaseQueryContext):
         return data
 
     def _convert_numpy(self, np_array):
-        data = []
         if np_array.dtype.names is not None:
-            # This is a structured array, so get column views on the underlying structure
-            for np_name, col_name, ch_type in zip(np_array.dtype.names, self.column_names, self.column_types):
-                column = np_array[np_name]
-                if column.dtype == np_nano_dt_type and ch_type == ch_nano_dt_type:
+            if not set(self.column_names).issubset(set(np_array.dtype.names)):
+                data = [np_array[col_name] for col_name in self.column_names]
+            else:
+                data = [np_array[col_name] for col_name in np_array.dtype.names]
+            for np_col, col_name, col_type in zip(data, self.column_names, self.column_types):
+                if 'date' in str(np_col.dtype) and 'date' in col_type.np_type():
                     self.column_formats[col_name] = 'int'
-                data.append(column)
-        else:
-            for ix, (col_name, ch_type) in enumerate(zip(self.column_names, self.column_types)):
-                np_data = np_array[ix, :] if self.column_oriented else np_array[:, ix]
-                if ch_type == ch_nano_dt_type and np_data.dtype == np.np_nano_dt_type:
-                    self.column_formats[col_name] = 'int'
-                data.append(np_data)
-        return data
+            self.column_oriented = True
+            return data
+        return np_array

@@ -9,6 +9,9 @@ class String(ClickHouseType):
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         return self._read_native_impl(source, loc, num_rows, self.encoding)
 
+    def np_type(self, str_len: int = 0):
+        return f'<U{str_len}' if str_len else 'O'
+
     @staticmethod
     def _read_native_python(source, loc, num_rows, encoding: str):
         column = []
@@ -75,8 +78,7 @@ class FixedString(ClickHouseType):
     def python_null(self):
         return self._empty_bytes if self.read_format() == 'native' else ''
 
-    @property
-    def np_type(self):
+    def np_type(self, _str_len: int = 0):
         return f'<U{self._byte_size}'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):

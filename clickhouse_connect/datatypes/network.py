@@ -20,12 +20,11 @@ class IPv4(ArrayType):
         return str if self.read_format() == 'string' else IPv4Address
 
     @property
-    def np_type(self):
-        return 'U' if self.read_format() == 'string' else 'O'
-
-    @property
     def python_null(self):
         return '' if self.read_format() == 'string' else V4_NULL
+
+    def np_type(self, _str_len: int = 0):
+        return 'U15' if self.read_format() == 'string' else 'O'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':
@@ -69,9 +68,8 @@ class IPv6(ClickHouseType):
     def python_type(self):
         return str if self.read_format() == 'string' else IPv6Address
 
-    @property
-    def np_type(self):
-        return 'U' if self.read_format() == 'string' else 'O'
+    def np_type(self, _str_len: int = 0):
+        return 'U39' if self.read_format() == 'string' else 'O'
 
     @property
     def python_null(self):

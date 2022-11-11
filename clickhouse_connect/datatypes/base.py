@@ -35,7 +35,7 @@ class ClickHouseType(ABC):
     __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
     _name_suffix = ''
     _encoding = 'utf8'
-    np_type = 'O'  # Default to Numpy Object type
+    _np_type = 'O'  # Default to Numpy Object type
     valid_formats = 'native'
 
     python_null = 0
@@ -97,6 +97,9 @@ class ClickHouseType(ABC):
         query_encoding = getattr(query_settings, 'query_encoding', None)
         return query_encoding or self._encoding
 
+    def np_type(self, _str_len: int = 0):
+        return self._np_type
+
     def write_native_prefix(self, dest: MutableSequence):
         """
         Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
@@ -135,7 +138,7 @@ class ClickHouseType(ABC):
 
     def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True) -> Tuple[Sequence, int]:
         """
-        Public read method for all ClickHouseType data type columns.
+        Public read method for all ClickHouseType data type columns
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column

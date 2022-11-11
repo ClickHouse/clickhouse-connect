@@ -7,7 +7,6 @@ from enum import Enum
 from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
 from datetime import date, datetime, tzinfo
 
-from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.common import common_settings
@@ -16,7 +15,7 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
-commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' +\
+commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' + \
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
 
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
@@ -119,6 +118,7 @@ class QueryResult:
     """
     Wrapper class for query return values and metadata
     """
+
     def __init__(self,
                  result_set: Sequence[Sequence[Any]],
                  column_names: Tuple[str, ...],
@@ -227,6 +227,7 @@ def remove_sql_comments(sql: str) -> str:
     :param sql:  SQL query
     :return: SQL Query without SQL comments
     """
+
     def replacer(match):
         # if the 2nd group (capturing comments) is not None, it means we have captured a
         # non-quoted, actual comment string, so return nothing to remove the comment
@@ -238,32 +239,45 @@ def remove_sql_comments(sql: str) -> str:
     return comment_re.sub(replacer, sql)
 
 
-def np_result(result: QueryResult,
-              force_structured: bool = False,
-              max_str_len:int = 0):
+def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0):
     """
     See doc string from client.query_np
     """
     np = check_numpy()
-    has_nullable = any(ch_type.nullable for ch_type in result.column_types)
-    has_object = any(ch_type.np_type == 'O' and (ch_type.__class__ != String or max_str_len == 0)
-                     for ch_type in result.column_types)
-    if has_object or (not force_structured and has_nullable):
-        np_types = [np.object_ for _ in result.column_names]
-        structured = False
+    is_columns = result.column_oriented
+    np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
+    columns = []
+    if is_columns:
+        has_objects = False
+        for column, col_type, np_type in zip(result.result_set, result.column_types, np_types):
+            if np_type == 'O':
+                columns.append(column)
+                has_objects = True
+            elif use_none and col_type.nullable:
+                new_col = []
+                item_array = np.empty(1, dtype=np_type)
+                for x in column:
+                    if x is None:
+                        new_col.append(None)
+                        has_objects = True
+                    else:
+                        item_array[0] = x
+                        new_col.append(item_array[0])
+                columns.append(new_col)
+            else:
+                columns.append(column)
     else:
-        structured = True
-        np_types = [np.dtype(ch_type.np_type) for ch_type in result.column_types]
-        if max_str_len:
-            str_type = np.dtype(f'U{max_str_len}')
-            np_types = [str_type if x == np.object_ else x for x in np_types]
+        has_objects = any(col_type.nullable and not use_none for col_type in result.column_types) or any(
+            np_type == 'O' for np_type in np_types)
+    if has_objects:
+        np_types = [np.object_] * len(result.column_names)
     dtypes = np.dtype(list(zip(result.column_names, np_types)))
-    if structured and not result.column_oriented:
-        return np.array([tuple(row) for row in result.result_set], dtype=dtypes)
-    return np.rec.fromarrays(result.result_set, dtypes)
+    if is_columns:
+        return np.rec.fromarrays(columns, dtypes)
+    return np.recarray([tuple(row) for row in result.result_set], np_types)
 
 
-def to_pandas_df(result: QueryResult):
+def pandas_result(result: QueryResult):
     """
     Convert QueryResult to a pandas dataframe
     :param result: QueryResult from driver

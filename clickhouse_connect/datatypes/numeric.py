@@ -7,37 +7,37 @@ from clickhouse_connect.driver.common import array_type, array_column, write_arr
 
 class Int8(ArrayType):
     _array_type = 'b'
-    np_type = 'b'
+    _np_type = 'b'
 
 
 class UInt8(ArrayType):
     _array_type = 'B'
-    np_type = 'B'
+    _np_type = 'B'
 
 
 class Int16(ArrayType):
     _array_type = 'h'
-    np_type = 'i2'
+    _np_type = 'i2'
 
 
 class UInt16(ArrayType):
     _array_type = 'H'
-    np_type = 'u2'
+    _np_type = 'u2'
 
 
 class Int32(ArrayType):
     _array_type = 'i'
-    np_type = 'i4'
+    _np_type = 'i4'
 
 
 class UInt32(ArrayType):
     _array_type = 'I'
-    np_type = 'u4'
+    _np_type = 'u4'
 
 
 class Int64(ArrayType):
     _array_type = 'q'
-    np_type = 'i8'
+    _np_type = 'i8'
 
 
 class UInt64(ArrayType):
@@ -47,8 +47,7 @@ class UInt64(ArrayType):
     def _array_type(self):
         return 'q' if self.read_format() == 'signed' else 'Q'
 
-    @property
-    def np_type(self):
+    def np_type(self, _str_len: int = 0):
         return 'q' if self.read_format() == 'signed' else 'u8'
 
 
@@ -131,12 +130,12 @@ class Float32(ArrayType):
 
 class Float64(ArrayType):
     _array_type = 'd'
-    np_type = 'f8'
+    _np_type = 'f8'
     python_type = float
 
 
 class Bool(ClickHouseType):
-    np_type = '?'
+    _np_type = '?'
     python_type = bool
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):

@@ -7,10 +7,11 @@ from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, to_arrow, \
+from clickhouse_connect.driver.query import QueryResult, np_result, pandas_result, to_arrow, \
     QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 force_structured: bool = False,
+                 use_none: bool = False,
                  max_str_len: int = 0,
                  context: QueryContext = None):
         """
@@ -171,25 +172,26 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring.
         :param encoding: See QueryContext __init__ docstring
-        :param force_structured: Force a structured rather than an object array even if the ClickHouse datatypes
-          are not all fixed size (such as Nullable columns or variable length Strings)
-        :param max_str_len If force_structured is True, limit returned string values to this length
+        :param use_none: Interpret ClickHouse nulls as None.  This usually means the return numpy array will
+          have dtype=object since numpy arrays otherwise can't store None values.  Otherwise, ClickHouse null
+          values will be interpreted as "zero" values
+        :param max_str_len:  If force_structured is True, limit returned string values to this length
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
+        query_formats = dict_copy(query_formats, {'Date*': 'int'})
         return np_result(self.query(query=query,
                                     parameters=parameters,
                                     settings=settings,
                                     query_formats=query_formats,
                                     column_formats=column_formats,
                                     encoding=encoding,
-                                    use_none=not force_structured,
+                                    use_none=use_none,
                                     column_oriented=True,
                                     context=context),
-                         force_structured,
+                         use_none,
                          max_str_len)
 
-    # pylint: disable=duplicate-code
     def query_df(self,
                  query: str = None,
                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -197,7 +199,7 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 allow_nulls: bool = True,
+                 use_none: bool = True,
                  context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe
@@ -207,20 +209,20 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
         :param encoding: See QueryContext __init__ docstring
-        :param allow_nulls: Interpret ClickHouse nulls as NaT/NA pandas values, otherwise the DataFrame values
-           will be the default "non-null' values such as empty string or 0
+        :param use_none: Interpret ClickHouse nulls as NaT/NA pandas values, otherwise the DataFrame values
+           will be the default "non-null" values such as empty string or 0
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return to_pandas_df(self.query(query,
-                                       parameters,
-                                       settings,
-                                       query_formats,
-                                       column_formats,
-                                       encoding,
-                                       use_none=allow_nulls,
-                                       column_oriented=True,
-                                       context=context))
+        return pandas_result(self.query(query,
+                                        parameters,
+                                        settings,
+                                        query_formats,
+                                        column_formats,
+                                        encoding,
+                                        use_none=use_none,
+                                        column_oriented=True,
+                                        context=context))
 
     def query_arrow(self,
                     query: str,

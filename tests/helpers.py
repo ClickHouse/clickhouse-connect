@@ -166,10 +166,11 @@ def list_equal(a: Sequence, b: Sequence) -> bool:
             return False
         if x == y:
             continue
-        if math.isnan(x) and math.isnan(y):
-            continue
-        if math.isclose(x, y):
-            continue
+        if isinstance(x, float):
+            if math.isnan(x) and math.isnan(y):
+                continue
+            if math.isclose(x, y):
+                continue
         return False
     return True
 
