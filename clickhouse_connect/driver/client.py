@@ -175,7 +175,8 @@ class Client(ABC):
         :param use_none: Interpret ClickHouse nulls as None.  This usually means the return numpy array will
           have dtype=object since numpy arrays otherwise can't store None values.  Otherwise, ClickHouse null
           values will be interpreted as "zero" values
-        :param max_str_len:  If force_structured is True, limit returned string values to this length
+        :param max_str_len:  Limit returned ClickHouse String values to this length, which allows a Numpy
+          structured array even with ClickHouse variable length String columns
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
@@ -214,6 +215,7 @@ class Client(ABC):
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
+        query_formats = dict_copy(query_formats, {'Date*': 'int'})
         return pandas_result(self.query(query,
                                         parameters,
                                         settings,

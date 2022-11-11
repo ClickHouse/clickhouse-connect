@@ -36,6 +36,7 @@ class ClickHouseType(ABC):
     _name_suffix = ''
     _encoding = 'utf8'
     _np_type = 'O'  # Default to Numpy Object type
+    nano_divisor = 0 # Only relevant for date like objects
     valid_formats = 'native'
 
     python_null = 0

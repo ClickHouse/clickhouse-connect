@@ -133,6 +133,12 @@ class QueryResult:
         self.summary = summary
         self.column_oriented = column_oriented
 
+    @property
+    def empty(self):
+        if self.column_oriented:
+            return len(self.result_set) == 0 or len(self.result_set[0]) == 0
+        return len(self.result_set) == 0
+
     def named_results(self):
         if self.column_oriented:
             for row in zip(*self.result_set):
@@ -244,37 +250,38 @@ def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0)
     See doc string from client.query_np
     """
     np = check_numpy()
-    is_columns = result.column_oriented
+    if result.empty:
+        return np.empty(0)
+    if not result.column_oriented:
+        raise ProgrammingError('Numpy arrays should only be constructed from column oriented query results')
     np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
+    first_type = np.dtype(np_types[0])
+    if first_type != np.object_ and all(np.dtype(np_type) == first_type for np_type in np_types):
+        # Optimize the underlying "matrix" array without any additional processing
+        return np.array(result.result_set, first_type).transpose()
     columns = []
-    if is_columns:
-        has_objects = False
-        for column, col_type, np_type in zip(result.result_set, result.column_types, np_types):
-            if np_type == 'O':
-                columns.append(column)
-                has_objects = True
-            elif use_none and col_type.nullable:
-                new_col = []
-                item_array = np.empty(1, dtype=np_type)
-                for x in column:
-                    if x is None:
-                        new_col.append(None)
-                        has_objects = True
-                    else:
-                        item_array[0] = x
-                        new_col.append(item_array[0])
-                columns.append(new_col)
-            else:
-                columns.append(column)
-    else:
-        has_objects = any(col_type.nullable and not use_none for col_type in result.column_types) or any(
-            np_type == 'O' for np_type in np_types)
+    has_objects = False
+    for column, col_type, np_type in zip(result.result_set, result.column_types, np_types):
+        if np_type == 'O':
+            columns.append(column)
+            has_objects = True
+        elif use_none and col_type.nullable:
+            new_col = []
+            item_array = np.empty(1, dtype=np_type)
+            for x in column:
+                if x is None:
+                    new_col.append(None)
+                    has_objects = True
+                else:
+                    item_array[0] = x
+                    new_col.append(item_array[0])
+            columns.append(new_col)
+        else:
+            columns.append(column)
     if has_objects:
         np_types = [np.object_] * len(result.column_names)
     dtypes = np.dtype(list(zip(result.column_names, np_types)))
-    if is_columns:
-        return np.rec.fromarrays(columns, dtypes)
-    return np.recarray([tuple(row) for row in result.result_set], np_types)
+    return np.rec.fromarrays(columns, dtypes)
 
 
 def pandas_result(result: QueryResult):
@@ -284,7 +291,16 @@ def pandas_result(result: QueryResult):
     :return: Two dimensional pandas dataframe from result
     """
     pd = check_pandas()
-    return pd.DataFrame(dict(zip(result.column_names, result.result_set)), columns=result.column_names)
+    np = check_numpy()
+    if not result.column_oriented:
+        raise ProgrammingError('Pandas dataframes should only be constructed from column oriented query results')
+    raw = {}
+    for name, col_type, column in zip(result.column_names, result.column_types, result.result_set):
+        np_type = col_type.np_type()
+        if 'datetime' in np_type:
+            column = pd.to_datetime(np.array(column, dtype=np_type))
+        raw[name] = column
+    return pd.DataFrame(raw)
 
 
 def to_arrow(content: bytes):

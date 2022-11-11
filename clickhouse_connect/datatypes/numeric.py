@@ -124,7 +124,7 @@ class UInt256(BigInt):
 
 class Float32(ArrayType):
     _array_type = 'f'
-    np_type = 'f4'
+    _np_type = 'f4'
     python_type = float
 
 

@@ -12,7 +12,8 @@ epoch_start_datetime = datetime(1970, 1, 1)
 
 class Date(ArrayType):
     _array_type = 'H'
-    _np_type = 'M8[D]'
+    _np_type = 'datetime64[D]'
+    nano_divisor = 86400 * 1000000000
     valid_formats = 'native', 'int'
     python_null = epoch_start_date
     python_type = date
@@ -24,15 +25,19 @@ class Date(ArrayType):
         return [epoch_start_date + timedelta(days) for days in column], loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        first = self._first_value(column)
-        if isinstance(first, datetime):
-            esd = epoch_start_datetime
-        else:
-            esd = epoch_start_date
-        if self.nullable:
-            write_array(self._array_type, [0 if x is None else (x - esd).days for x in column], dest)
-        else:
-            write_array(self._array_type, [(x - esd).days for x in column], dest)
+        if self.write_format() == 'native':
+            first = self._first_value(column)
+            if isinstance(first, datetime):
+                esd = epoch_start_datetime
+            else:
+                esd = epoch_start_date
+            if self.nullable:
+                column = [0 if x is None else (x - esd).days for x in column]
+            else:
+                column = [(x - esd).days for x in column]
+        elif self.nullable:
+            column = [x if x else 0 for x in column]
+        write_array(self._array_type, column, dest)
 
 
 class Date32(Date):
@@ -46,10 +51,11 @@ from_ts_tz = datetime.fromtimestamp
 # pylint: disable=abstract-method
 class DateTime(ArrayType):
     _array_type = 'I'
-    _np_type = 'M8[s]'
+    _np_type = 'datetime64[s]'
     valid_formats = 'native', 'int'
     python_null = from_ts_naive(0)
     python_type = datetime
+    nano_divisor = 1000000000
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -59,10 +65,13 @@ class DateTime(ArrayType):
         return [fts(ts) for ts in column], loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        if self.nullable:
-            column = [int(x.timestamp()) if x else 0 for x in column]
-        else:
-            column = [int(x.timestamp()) for x in column]
+        if self.write_format() == 'native':
+            if self.nullable:
+                column = [int(x.timestamp()) if x else 0 for x in column]
+            else:
+                column = [int(x.timestamp()) for x in column]
+        elif self.nullable:
+            column = [x if x else 0 for x in column]
         write_array(self._array_type, column, dest)
 
 
@@ -88,6 +97,10 @@ class DateTime64(ArrayType):
     def np_type(self, _str_len: int = 0):
         opt = np_date_types.get(self.scale)
         return f'datetime64{opt}' if opt else 'O'
+
+    @property
+    def nano_divisor(self):
+        return 1000000000 // self.prec
 
     def _read_native_tz(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)

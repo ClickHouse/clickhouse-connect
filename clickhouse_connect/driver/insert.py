@@ -1,4 +1,3 @@
-import datetime
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union
 
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -116,12 +115,10 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif ch_type == ch_nano_dt_type and pd.core.dtypes.common.is_datetime64_ns_dtype(df_col):
-                data.append([None if pd.isnull(x) else x.value for x in df_col])
+            elif 'datetime' in ch_type.np_type() and np.issubdtype(df_col.dtype, np.datetime64):
+                div = ch_type.nano_divisor
+                data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'
-                continue
-            elif ch_type.python_type in (datetime.datetime, datetime.date) and 'date' in d_type:
-                data.append([None if pd.isnull(x) else pd.Timestamp.to_pydatetime(x) for x in df_col])
                 continue
             if ch_type.nullable and ch_type.python_type != float:
                 df_col.replace({np.nan: None}, inplace=True)
