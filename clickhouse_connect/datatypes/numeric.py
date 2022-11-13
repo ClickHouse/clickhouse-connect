@@ -17,27 +17,27 @@ class UInt8(ArrayType):
 
 class Int16(ArrayType):
     _array_type = 'h'
-    _np_type = 'i2'
+    _np_type = '<i2'
 
 
 class UInt16(ArrayType):
     _array_type = 'H'
-    _np_type = 'u2'
+    _np_type = '<u2'
 
 
 class Int32(ArrayType):
     _array_type = 'i'
-    _np_type = 'i4'
+    _np_type = '<i4'
 
 
 class UInt32(ArrayType):
     _array_type = 'I'
-    _np_type = 'u4'
+    _np_type = '<u4'
 
 
 class Int64(ArrayType):
     _array_type = 'q'
-    _np_type = 'i8'
+    _np_type = '<i8'
 
 
 class UInt64(ArrayType):
@@ -48,7 +48,7 @@ class UInt64(ArrayType):
         return 'q' if self.read_format() == 'signed' else 'Q'
 
     def np_type(self, _str_len: int = 0):
-        return 'q' if self.read_format() == 'signed' else 'u8'
+        return '<q' if self.read_format() == 'signed' else '<u8'
 
 
 class BigInt(ClickHouseType, registered=False):
@@ -123,13 +123,13 @@ class UInt256(BigInt):
 
 class Float32(ArrayType):
     _array_type = 'f'
-    _np_type = 'f4'
+    _np_type = '<f4'
     python_type = float
 
 
 class Float64(ArrayType):
     _array_type = 'd'
-    _np_type = 'f8'
+    _np_type = '<f8'
     python_type = float
 
 
