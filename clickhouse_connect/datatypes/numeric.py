@@ -53,12 +53,11 @@ class UInt64(ArrayType):
 
 class BigInt(ClickHouseType, registered=False):
     _signed = True
-    _byte_size = 0
     valid_formats = 'string', 'native'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         signed = self._signed
-        sz = self._byte_size
+        sz = self.byte_size
         end = loc + num_rows * sz
         column = []
         app = column.append
@@ -76,7 +75,7 @@ class BigInt(ClickHouseType, registered=False):
         first = self._first_value(column)
         if not column:
             return
-        sz = self._byte_size
+        sz = self.byte_size
         signed = self._signed
         empty = bytes(b'\x00' * sz)
         ext = dest.extend
@@ -103,22 +102,22 @@ class BigInt(ClickHouseType, registered=False):
 
 
 class Int128(BigInt):
-    _byte_size = 16
+    byte_size = 16
     _signed = True
 
 
 class UInt128(BigInt):
-    _byte_size = 16
+    byte_size = 16
     _signed = False
 
 
 class Int256(BigInt):
-    _byte_size = 32
+    byte_size = 32
     _signed = True
 
 
 class UInt256(BigInt):
-    _byte_size = 32
+    byte_size = 32
     _signed = False
 
 
@@ -188,7 +187,7 @@ class Enum16(Enum):
 
 
 class Decimal(ClickHouseType):
-    __slots__ = 'prec', 'scale', '_mult', '_zeros', '_byte_size', '_array_type'
+    __slots__ = 'prec', 'scale', '_mult', '_zeros', 'byte_size', '_array_type'
     python_type = decimal.Decimal
     dec_size = 0
 
@@ -210,10 +209,10 @@ class Decimal(ClickHouseType):
         self.prec = prec
         self.scale = scale
         self._mult = 10 ** scale
-        self._byte_size = size // 8
-        self._zeros = bytes([0] * self._byte_size)
+        self.byte_size = size // 8
+        self._zeros = bytes([0] * self.byte_size)
         self._name_suffix = f'({prec}, {scale})'
-        self._array_type = array_type(self._byte_size, True)
+        self._array_type = array_type(self.byte_size, True)
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
@@ -248,7 +247,7 @@ class BigDecimal(Decimal, registered=False):
         prec = self.prec
         column = []
         app = column.append
-        sz = self._byte_size
+        sz = self.byte_size
         end = loc + sz * num_rows
         ifb = int.from_bytes
         if scale == 0:
@@ -269,7 +268,7 @@ class BigDecimal(Decimal, registered=False):
         with decimal.localcontext() as ctx:
             ctx.prec = self.prec
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
-            sz = self._byte_size
+            sz = self.byte_size
             itb = int.to_bytes
             if self.nullable:
                 v = self._zeros

@@ -37,6 +37,7 @@ class ClickHouseType(ABC):
     _encoding = 'utf8'
     _np_type = 'O'  # Default to Numpy Object type
     nano_divisor = 0  # Only relevant for date like objects
+    byte_size = 0
     valid_formats = 'native'
 
     python_null = 0
@@ -297,6 +298,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
         if isinstance(cls._array_type, str) and cls._array_type:
             cls._struct_type = '<' + cls._array_type
+            cls.byte_size = array.array(cls._array_type).itemsize
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)

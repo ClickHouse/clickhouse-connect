@@ -276,6 +276,8 @@ def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0)
                     item_array[0] = x
                     new_col.append(item_array[0])
             columns.append(new_col)
+        elif 'date' in np_type:
+            columns.append(np.array(column, dtype=np_type))
         else:
             columns.append(column)
     if has_objects:

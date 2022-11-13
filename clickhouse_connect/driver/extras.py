@@ -60,7 +60,7 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
         return gen_map[ch_type.__class__]
     if isinstance(ch_type, BigInt) or ch_type.python_type == int:
         if isinstance(ch_type, BigInt):
-            sz = 2 ** (ch_type._byte_size * 8)
+            sz = 2 ** (ch_type.byte_size * 8)
             signed = ch_type._signed
         else:
             sz = 2 ** (array_sizes[ch_type._array_type.lower()] * 8)
@@ -87,7 +87,7 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
             return lambda: random_ascii_str(col_def.str_len)
         return lambda: random_utf8_str(col_def.str_len)
     if isinstance(ch_type, FixedString):
-        return lambda: bytes((int(random() * 256) for _ in range(ch_type._byte_size)))
+        return lambda: bytes((int(random() * 256) for _ in range(ch_type.byte_size)))
     if isinstance(ch_type, DateTime64):
         prec = ch_type.prec
         return lambda: random_datetime64(prec)

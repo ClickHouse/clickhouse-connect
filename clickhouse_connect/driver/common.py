@@ -68,7 +68,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
             column = [int(x) for x in column]
     try:
         buff = array.array(code, column)
-    except TypeError as ex:
+    except (TypeError, OverflowError) as ex:
         raise ProgrammingError('Unable to create Python array.  This is usually caused by trying to insert None ' +
                                'values into a ClickHouse column that is not Nullable') from ex
     if must_swap:

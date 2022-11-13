@@ -126,14 +126,28 @@ class InsertContext(BaseQueryContext):
         return data
 
     def _convert_numpy(self, np_array):
-        if np_array.dtype.names is not None:
-            if not set(self.column_names).issubset(set(np_array.dtype.names)):
-                data = [np_array[col_name] for col_name in self.column_names]
-            else:
-                data = [np_array[col_name] for col_name in np_array.dtype.names]
-            for np_col, col_name, col_type in zip(data, self.column_names, self.column_types):
-                if 'date' in str(np_col.dtype) and 'date' in col_type.np_type():
-                    self.column_formats[col_name] = 'int'
-            self.column_oriented = True
-            return data
-        return np_array
+        if np_array.dtype.names is None:
+            if 'date' in str(np_array.dtype):
+                for col_name, col_type in zip(self.column_names, self.column_types):
+                    if 'date' in col_type.np_type():
+                        self.column_formats[col_name] = 'int'
+                return np_array.astype('int').tolist()
+            for col_type in self.column_types:
+                if col_type.byte_size == 0 or col_type.byte_size > np_array.dtype.itemsize:
+                    return np_array.tolist()
+            return np_array
+
+        if set(self.column_names).issubset(set(np_array.dtype.names)):
+            data = [np_array[col_name] for col_name in self.column_names]
+        else:
+            # Column names don't match, so we have to assume they are in order
+            data = [np_array[col_name] for col_name in np_array.dtype.names]
+        for ix, (col_name, col_type) in enumerate(zip(self.column_names, self.column_types)):
+            d_type = data[ix].dtype
+            if 'date' in str(d_type) and 'date' in col_type.np_type():
+                self.column_formats[col_name] = 'int'
+                data[ix] = data[ix].astype(int).tolist()
+            elif col_type.byte_size == 0 or col_type.byte_size > d_type.itemsize:
+                data[ix] = data[ix].tolist()
+        self.column_oriented = True
+        return data
