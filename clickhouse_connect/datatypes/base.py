@@ -36,7 +36,7 @@ class ClickHouseType(ABC):
     _name_suffix = ''
     _encoding = 'utf8'
     _np_type = 'O'  # Default to Numpy Object type
-    nano_divisor = 0 # Only relevant for date like objects
+    nano_divisor = 0  # Only relevant for date like objects
     valid_formats = 'native'
 
     python_null = 0
@@ -126,8 +126,8 @@ class ClickHouseType(ABC):
 
     def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:
         """
-        Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that the LowCardinality version
-        is read for the contained types
+        Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that
+         the LowCardinality version is read for the contained types
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column

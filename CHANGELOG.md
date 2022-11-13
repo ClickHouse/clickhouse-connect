@@ -1,6 +1,6 @@
 ## ClickHouse Connect ChangeLog
 
-### Release 0.4.1 2022-11-08
+### Release 0.4.1 2022-11-14
 
 #### Bug Fixes
 * Numpy array read and write compatibility has been refined and performance has been improved.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/69

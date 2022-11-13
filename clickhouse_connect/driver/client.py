@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Iterable, Optional, Any, Union, Sequence, Dict
 from pytz.exceptions import UnknownTimeZoneError
 
+from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import dict_copy
@@ -113,6 +114,9 @@ class Client(ABC):
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: QueryResult -- data and metadata from response
         """
+        if query and query.lower().strip().startswith('select connect_version'):
+            return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']],
+                               ('connect_version',), (get_from_name('String'),))
         if context:
             query_context = context.updated_copy(query=query,
                                                  parameters=parameters,
