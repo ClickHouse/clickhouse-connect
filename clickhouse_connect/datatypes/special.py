@@ -15,9 +15,8 @@ class UUID(ClickHouseType):
     def python_null(self):
         return '' if self.read_format() == 'string' else PYUUID(0)
 
-    @property
-    def np_type(self):
-        return 'U' if self.read_format() == 'string' else 'O'
+    def np_type(self, _str_len: int = 0):
+        return 'U36' if self.read_format() == 'string' else 'O'
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':

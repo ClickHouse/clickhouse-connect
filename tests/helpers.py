@@ -1,11 +1,13 @@
+import math
 import random
 import re
-from typing import Sequence
+from typing import Sequence, Optional
 
 import pkg_resources
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
@@ -152,3 +154,54 @@ def native_insert_block(data, column_names, column_types):
     for chunk in native_transform.build_insert(context):
         output.extend(chunk)
     return output
+
+
+def list_equal(a: Sequence, b: Sequence) -> bool:
+    for x, y in zip(a, b):
+        if x is y:
+            continue
+        if isinstance(x, (list, tuple)):
+            if list_equal(x, y):
+                continue
+            return False
+        if x == y:
+            continue
+        if isinstance(x, float):
+            if math.isnan(x) and math.isnan(y):
+                continue
+            if math.isclose(x, y):
+                continue
+        return False
+    return True
+
+
+class TableContext:
+    def __init__(self, client: Client,
+                 name: str,
+                 columns: Sequence[str],
+                 column_types: Optional[Sequence[str]] = None,
+                 engine: str = 'MergeTree',
+                 order_by: str = None):
+        self.client = client
+        self.name = name
+        if column_types is None:
+            self.column_names = []
+            self.column_types = []
+            for col in columns:
+                ix = col.find(' ')
+                self.column_types.append(col[ix + 1:].strip())
+                self.column_names.append(col[:ix].strip())
+        else:
+            self.column_names = columns
+            self.column_types = column_types
+        self.engine = engine
+        self.order_by = self.column_names[0] if order_by is None else order_by
+
+    def __enter__(self):
+        self.client.command(f'DROP TABLE IF EXISTS {self.name}')
+        col_defs = ','.join(f'{name} {type}' for name, type in zip(self.column_names, self.column_types))
+        self.client.command(f'CREATE TABLE {self.name} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}')
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.client.command(f'DROP TABLE IF EXISTS {self.name}')

@@ -35,7 +35,9 @@ class ClickHouseType(ABC):
     __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
     _name_suffix = ''
     _encoding = 'utf8'
-    np_type = 'O'  # Default to Numpy Object type
+    _np_type = 'O'  # Default to Numpy Object type
+    nano_divisor = 0  # Only relevant for date like objects
+    byte_size = 0
     valid_formats = 'native'
 
     python_null = 0
@@ -97,6 +99,9 @@ class ClickHouseType(ABC):
         query_encoding = getattr(query_settings, 'query_encoding', None)
         return query_encoding or self._encoding
 
+    def np_type(self, _str_len: int = 0):
+        return self._np_type
+
     def write_native_prefix(self, dest: MutableSequence):
         """
         Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
@@ -122,8 +127,8 @@ class ClickHouseType(ABC):
 
     def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:
         """
-        Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that the LowCardinality version
-        is read for the contained types
+        Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that
+         the LowCardinality version is read for the contained types
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column
@@ -135,7 +140,7 @@ class ClickHouseType(ABC):
 
     def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True) -> Tuple[Sequence, int]:
         """
-        Public read method for all ClickHouseType data type columns.
+        Public read method for all ClickHouseType data type columns
         :param source: Native protocol binary read buffer
         :param loc: Moving location for the read buffer
         :param num_rows: Number of rows expected in the column
@@ -293,9 +298,10 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._array_type = 'L' if cls._array_type.isupper() else 'l'
         if isinstance(cls._array_type, str) and cls._array_type:
             cls._struct_type = '<' + cls._array_type
+            cls.byte_size = array.array(cls._array_type).itemsize
 
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        column, loc =  array_column(self._array_type, source, loc, num_rows)
+        column, loc = array_column(self._array_type, source, loc, num_rows)
         if self.read_format() == 'string':
             column = [str(x) for x in column]
         return column, loc

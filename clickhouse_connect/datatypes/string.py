@@ -9,6 +9,9 @@ class String(ClickHouseType):
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         return self._read_native_impl(source, loc, num_rows, self.encoding)
 
+    def np_type(self, str_len: int = 0):
+        return f'<U{str_len}' if str_len else 'O'
+
     @staticmethod
     def _read_native_python(source, loc, num_rows, encoding: str):
         column = []
@@ -67,18 +70,21 @@ class FixedString(ClickHouseType):
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self._byte_size = type_def.values[0]
+        self.byte_size = type_def.values[0]
         self._name_suffix = type_def.arg_str
-        self._empty_bytes = bytes(b'\x00' * self._byte_size)
+        self._empty_bytes = bytes(b'\x00' * self.byte_size)
 
     @property
     def python_null(self):
         return self._empty_bytes if self.read_format() == 'native' else ''
 
+    def np_type(self, _str_len: int = 0):
+        return f'<U{self.byte_size}'
+
     def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
         if self.read_format() == 'string':
-            return self._read_native_str(source, loc, num_rows, self._byte_size, self.encoding)
-        return self._read_native_bytes(source, loc, num_rows, self._byte_size)
+            return self._read_native_str(source, loc, num_rows, self.byte_size, self.encoding)
+        return self._read_native_bytes(source, loc, num_rows, self.byte_size)
 
     @staticmethod
     def _read_native_str_python(source: Sequence, loc: int, num_rows: int, sz: int, encoding: str):
@@ -100,7 +106,7 @@ class FixedString(ClickHouseType):
     # pylint: disable=too-many-branches
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         ext = dest.extend
-        sz = self._byte_size
+        sz = self.byte_size
         empty = bytes((0,) * sz)
         str_enc = str.encode
         enc = self.encoding

@@ -1,5 +1,14 @@
 ## ClickHouse Connect ChangeLog
 
+### Release 0.4.1 2022-11-14
+
+#### Bug Fixes
+* Numpy array read and write compatibility has been refined and performance has been improved.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/69
+* Pandas Timestamp objects are now correctly handled for all supported ClickHouse Date* types.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/68
+* SQLAlchemy datatypes are now correctly mapped to the underlying ClickHouse type regardless of case.  This fixes an issue with migrating Superset datasets and queries from
+clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://github.com/EugeneTorap)
+
+
 ### Release 0.4.0 2022-11-07
 
 #### Improvements

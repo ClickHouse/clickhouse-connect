@@ -66,6 +66,7 @@ class NativeTransform(DataTransform):
                     output += col_name.encode()
                     write_leb128(len(col_type.name), output)
                     output += col_type.name.encode()
+                    context.start_column(col_name, col_type)
                     try:
                         col_type.write_native_column(data, output)
                     except Exception as ex: # pylint: disable=broad-except

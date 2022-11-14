@@ -5,12 +5,14 @@ from abc import ABC, abstractmethod
 from typing import Iterable, Optional, Any, Union, Sequence, Dict
 from pytz.exceptions import UnknownTimeZoneError
 
+from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, to_pandas_df, to_arrow, \
+from clickhouse_connect.driver.query import QueryResult, np_result, pandas_result, to_arrow, \
     QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,9 @@ class Client(ABC):
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: QueryResult -- data and metadata from response
         """
+        if query and query.lower().strip().startswith('select connect_version'):
+            return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']],
+                               ('connect_version',), (get_from_name('String'),))
         if context:
             query_context = context.updated_copy(query=query,
                                                  parameters=parameters,
@@ -160,7 +165,8 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 column_oriented: bool = False,
+                 use_none: bool = False,
+                 max_str_len: int = 0,
                  context: QueryContext = None):
         """
         Query method that returns the results as a numpy array
@@ -170,22 +176,27 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring.
         :param encoding: See QueryContext __init__ docstring
-        :param column_oriented: True if the result should be sequence of column values, False for rows
+        :param use_none: Interpret ClickHouse nulls as None.  This usually means the return numpy array will
+          have dtype=object since numpy arrays otherwise can't store None values.  Otherwise, ClickHouse null
+          values will be interpreted as "zero" values
+        :param max_str_len:  Limit returned ClickHouse String values to this length, which allows a Numpy
+          structured array even with ClickHouse variable length String columns
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        if context:
-            return self.query(context=context)
+        query_formats = dict_copy(query_formats, {'Date*': 'int'})
         return np_result(self.query(query=query,
                                     parameters=parameters,
                                     settings=settings,
                                     query_formats=query_formats,
                                     column_formats=column_formats,
                                     encoding=encoding,
-                                    use_none=False,
-                                    column_oriented=column_oriented))
+                                    use_none=use_none,
+                                    column_oriented=True,
+                                    context=context),
+                         use_none,
+                         max_str_len)
 
-    # pylint: disable=duplicate-code
     def query_df(self,
                  query: str = None,
                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -193,7 +204,7 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 allow_nulls: bool = True,
+                 use_none: bool = True,
                  context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe
@@ -203,20 +214,21 @@ class Client(ABC):
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
         :param encoding: See QueryContext __init__ docstring
-        :param allow_nulls: Interpret ClickHouse nulls as NaT/NA pandas values, otherwise the DataFrame values
-           will be the default "non-null' values such as empty string or 0
+        :param use_none: Interpret ClickHouse nulls as NaT/NA pandas values, otherwise the DataFrame values
+           will be the default "non-null" values such as empty string or 0
         :param context An alternative QueryContext parameter object that contains some or all of the method arguments
         :return: Numpy array representing the result set
         """
-        return to_pandas_df(self.query(query,
-                                       parameters,
-                                       settings,
-                                       query_formats,
-                                       column_formats,
-                                       encoding,
-                                       use_none=allow_nulls,
-                                       column_oriented=True,
-                                       context=context))
+        query_formats = dict_copy(query_formats, {'Date*': 'int'})
+        return pandas_result(self.query(query,
+                                        parameters,
+                                        settings,
+                                        query_formats,
+                                        column_formats,
+                                        encoding,
+                                        use_none=use_none,
+                                        column_oriented=True,
+                                        context=context))
 
     def query_arrow(self,
                     query: str,
@@ -291,19 +303,20 @@ class Client(ABC):
             different data batches
         :return: No return, throws an exception if the insert fails
         """
-        if context:
-            if context:
-                if context.data is None and data is None:
-                    raise ProgrammingError('No data specified for insert') from None
-        else:
+        if (context is None or context.empty) and data is None:
+            raise ProgrammingError('No data specified for insert') from None
+        if context is None:
             context = self.create_insert_context(table,
-                                                 database,
                                                  column_names,
+                                                 database,
                                                  column_types,
                                                  column_type_names,
                                                  column_oriented,
                                                  settings)
-        context.data = data
+        if data is not None:
+            if not context.empty:
+                raise ProgrammingError('Attempting to insert new data with non-empty insert context') from None
+            context.data = data
         self.data_insert(context)
 
     def insert_df(self, table: str = None,
@@ -324,13 +337,12 @@ class Client(ABC):
             different data batches
         :return: No return, throws an exception if the insert fails
         """
-        if context:
-            if context.data is None and df is None:
-                raise ProgrammingError('No data specified for insert') from None
-        else:
-            context = self.create_pandas_insert_context(table, df, database, settings, column_names)
-        context.df = df
-        self.data_insert(context)
+        if context is None:
+            if column_names is None:
+                column_names = df.columns
+            elif len(column_names) != len(df.columns):
+                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
+        self.insert(table, df, column_names, database, settings=settings, context=context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
         """
@@ -347,8 +359,8 @@ class Client(ABC):
 
     def create_insert_context(self,
                               table: str,
+                              column_names: Optional[Union[str, Sequence[str]]] = None,
                               database: str = '',
-                              column_names: Union[str, Sequence[str]] = '*',
                               column_types: Sequence[ClickHouseType] = None,
                               column_type_names: Sequence[str] = None,
                               column_oriented: bool = False,
@@ -373,12 +385,11 @@ class Client(ABC):
             describe_result = self.query(f'DESCRIBE TABLE {full_table}')
             column_defs = [ColumnDef(**row) for row in describe_result.named_results()
                            if row['default_type'] not in ('ALIAS', 'MATERIALIZED')]
-        if isinstance(column_names, str):
-            if column_names == '*':
-                column_names = [cd.name for cd in column_defs]
-                column_types = [cd.ch_type for cd in column_defs]
-            elif column_names:
-                column_names = [column_names]
+        if column_names is None or isinstance(column_names, str) and column_names == '*':
+            column_names = [cd.name for cd in column_defs]
+            column_types = [cd.ch_type for cd in column_defs]
+        elif isinstance(column_names, str):
+            column_names = [column_names]
         if len(column_names) == 0:
             raise ValueError('Column names must be specified for insert')
         if not column_types:
@@ -398,32 +409,6 @@ class Client(ABC):
                              column_oriented=column_oriented,
                              settings=settings,
                              data=data)
-
-    def create_pandas_insert_context(self,
-                                     table: str,
-                                     df=None,
-                                     database: str = '',
-                                     settings: Optional[Dict] = None,
-                                     column_names: Optional[Sequence[str]] = None) -> InsertContext:
-        """
-        Convenience method to create a reusable insert context from a Pandas DataFrame.  It does not
-        set the context data
-        :param table: ClickHouse table
-        :param df: two-dimensional pandas dataframe
-        :param database: Optional ClickHouse database
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param column_names: An optional list of ClickHouse column names.  If not set, the DataFrame column names
-           will be used
-        :return: Reusable pandas insert context
-        """
-        if df is None and not column_names:
-            raise ProgrammingError('Either a sample df or column names must be specified')
-        if column_names:
-            if df is not None and len(column_names) != len(df.columns):
-                raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-        else:
-            column_names = df.columns
-        return self.create_insert_context(table, database, column_names, column_oriented=True, settings=settings)
 
     def min_version(self, version_str: str) -> bool:
         """

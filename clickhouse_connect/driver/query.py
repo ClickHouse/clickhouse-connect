@@ -11,14 +11,11 @@ from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.common import common_settings
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.container import Array
-from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
-from clickhouse_connect.driver.threads import query_settings
+from clickhouse_connect.driver.context import BaseQueryContext
 
-
-commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' +\
+commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' + \
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
 
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
@@ -28,7 +25,7 @@ command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
 
 
 # pylint: disable=too-many-instance-attributes
-class QueryContext:
+class QueryContext(BaseQueryContext):
     """
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
@@ -62,12 +59,9 @@ class QueryContext:
         :param column_formats: Optional dictionary
         :param use_none:
         """
+        super().__init__(settings, query_formats, column_formats, encoding)
         self.query = query
         self.parameters = parameters or {}
-        self.settings = settings or {}
-        self.query_formats = query_formats or {}
-        self.column_formats = column_formats or {}
-        self.encoding = encoding
         self.server_tz = server_tz
         self.use_none = use_none
         self.column_oriented = column_oriented
@@ -119,30 +113,6 @@ class QueryContext:
                             self.use_none if use_none is None else use_none,
                             self.column_oriented if column_oriented is None else column_oriented)
 
-    def __enter__(self):
-        query_settings.query_overrides = format_map(self.query_formats)
-        query_settings.query_encoding = self.encoding
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        query_settings.query_overrides = None
-        query_settings.column_overrides = None
-        query_settings.query_encoding = None
-
-    def start_column(self, name: str, ch_type: ClickHouseType):
-        if name in self.column_formats:
-            fmts = self.column_formats[name]
-            if isinstance(fmts, str):
-                if isinstance(ch_type, Array):
-                    fmt_map = {ch_type.element_type.__class__: fmts}
-                else:
-                    fmt_map = {ch_type.__class__: fmts}
-            else:
-                fmt_map = format_map(fmts)
-            query_settings.column_overrides = fmt_map
-        else:
-            query_settings.column_overrides = None
-
 
 class QueryResult:
     """
@@ -162,6 +132,12 @@ class QueryResult:
         self.query_id = query_id
         self.summary = summary
         self.column_oriented = column_oriented
+
+    @property
+    def empty(self):
+        if self.column_oriented:
+            return len(self.result_set) == 0 or len(self.result_set[0]) == 0
+        return len(self.result_set) == 0
 
     def named_results(self):
         if self.column_oriented:
@@ -257,6 +233,7 @@ def remove_sql_comments(sql: str) -> str:
     :param sql:  SQL query
     :return: SQL Query without SQL comments
     """
+
     def replacer(match):
         # if the 2nd group (capturing comments) is not None, it means we have captured a
         # non-quoted, actual comment string, so return nothing to remove the comment
@@ -268,25 +245,64 @@ def remove_sql_comments(sql: str) -> str:
     return comment_re.sub(replacer, sql)
 
 
-def np_result(result: QueryResult):
+def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0):
     """
-    Convert QueryResult to a numpy array
-    :param result: QueryResult from driver
-    :return: Two dimensional numpy array from result
+    See doc string from client.query_np
     """
     np = check_numpy()
-    np_types = [(name, ch_type.np_type) for name, ch_type in zip(result.column_names, result.column_types)]
-    return np.array(result.result_set, dtype=np_types)
+    if result.empty:
+        return np.empty(0)
+    if not result.column_oriented:
+        raise ProgrammingError('Numpy arrays should only be constructed from column oriented query results')
+    np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
+    first_type = np.dtype(np_types[0])
+    if first_type != np.object_ and all(np.dtype(np_type) == first_type for np_type in np_types):
+        # Optimize the underlying "matrix" array without any additional processing
+        return np.array(result.result_set, first_type).transpose()
+    columns = []
+    has_objects = False
+    for column, col_type, np_type in zip(result.result_set, result.column_types, np_types):
+        if np_type == 'O':
+            columns.append(column)
+            has_objects = True
+        elif use_none and col_type.nullable:
+            new_col = []
+            item_array = np.empty(1, dtype=np_type)
+            for x in column:
+                if x is None:
+                    new_col.append(None)
+                    has_objects = True
+                else:
+                    item_array[0] = x
+                    new_col.append(item_array[0])
+            columns.append(new_col)
+        elif 'date' in np_type:
+            columns.append(np.array(column, dtype=np_type))
+        else:
+            columns.append(column)
+    if has_objects:
+        np_types = [np.object_] * len(result.column_names)
+    dtypes = np.dtype(list(zip(result.column_names, np_types)))
+    return np.rec.fromarrays(columns, dtypes)
 
 
-def to_pandas_df(result: QueryResult):
+def pandas_result(result: QueryResult):
     """
     Convert QueryResult to a pandas dataframe
     :param result: QueryResult from driver
     :return: Two dimensional pandas dataframe from result
     """
     pd = check_pandas()
-    return pd.DataFrame(dict(zip(result.column_names, result.result_set)), columns=result.column_names)
+    np = check_numpy()
+    if not result.column_oriented:
+        raise ProgrammingError('Pandas dataframes should only be constructed from column oriented query results')
+    raw = {}
+    for name, col_type, column in zip(result.column_names, result.column_types, result.result_set):
+        np_type = col_type.np_type()
+        if 'datetime' in np_type:
+            column = pd.to_datetime(np.array(column, dtype=np_type))
+        raw[name] = column
+    return pd.DataFrame(raw)
 
 
 def to_arrow(content: bytes):
