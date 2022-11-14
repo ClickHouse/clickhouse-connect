@@ -4,13 +4,14 @@ import random
 import time
 from pathlib import Path
 from subprocess import Popen, PIPE
-from typing import Iterator, NamedTuple
+from typing import Iterator, NamedTuple, Sequence, Optional
 
 from pytest import fixture
 
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.exceptions import ClickHouseError
+from tests.helpers import TableContext
 
 
 class TestConfig(NamedTuple):
@@ -89,6 +90,18 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             sys.stderr.write(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')
         else:
             sys.stderr.write('Successfully stopped docker compose')
+
+
+@fixture(scope='session', name='table_context')
+def table_context_fixture(test_client: Client, test_table_engine: str):
+
+    def context(name: str,
+                columns: Sequence[str],
+                column_types: Optional[Sequence[str]] = None,
+                order_by: Optional[str] = None):
+        return TableContext(test_client, name, columns, column_types, test_table_engine, order_by)
+
+    yield context
 
 
 def run_cmd(cmd):

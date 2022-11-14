@@ -19,6 +19,7 @@ if int_size == 2:
 array_sizes = {v: k for k, v in array_map.items()}
 array_sizes['f'] = 4
 array_sizes['d'] = 8
+np_date_types = {3: '[ms]', 6: '[us]', 9: '[ns]'}
 
 
 def array_type(size: int, signed: bool):
@@ -67,7 +68,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
             column = [int(x) for x in column]
     try:
         buff = array.array(code, column)
-    except TypeError as ex:
+    except (TypeError, OverflowError) as ex:
         raise ProgrammingError('Unable to create Python array.  This is usually caused by trying to insert None ' +
                                'values into a ClickHouse column that is not Nullable') from ex
     if must_swap:
@@ -187,6 +188,7 @@ def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
 
 
 class SliceView(Sequence):
+    slots = ('_source', '_range')
     """
     Provides a view into a sequence rather than copying.  Borrows liberally from
     https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1
