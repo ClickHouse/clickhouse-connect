@@ -17,6 +17,7 @@ from clickhouse_connect.driver.query import QueryResult, np_result, pandas_resul
     QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
+arrow_str_setting = 'output_format_arrow_string_as_string'
 
 
 class Client(ABC):
@@ -99,7 +100,8 @@ class Client(ABC):
     def client_setting(self, key, value):
         """
         Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
-        or the setting is identified as "read_only", the
+        or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
+        to send the setting anyway based on the common setting 'invalid_setting_action'
         :param key: ClickHouse setting name
         :param value: ClickHouse setting value
         """
@@ -257,10 +259,10 @@ class Client(ABC):
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
         :return: PyArrow.Table
         """
-        arrow_settings = {} if not settings else settings.copy()
-        if 'output_format_arrow_string_as_string' not in arrow_settings:
-            arrow_settings['output_format_arrow_string_as_string'] = '1' if use_strings else '0'
-        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'Arrow'))
+        settings = dict_copy(settings)
+        if arrow_str_setting in self.server_settings and arrow_str_setting not in settings:
+            settings[arrow_str_setting] = '1' if use_strings else '0'
+        return to_arrow(self.raw_query(query, parameters, settings, 'Arrow'))
 
     @abstractmethod
     def command(self,
