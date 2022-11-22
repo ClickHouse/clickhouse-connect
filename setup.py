@@ -40,6 +40,7 @@ def run_setup(try_c: bool = True):
         version=version,
         long_description=long_desc,
         long_description_content_type='text/markdown',
+        package_data={'clickhouse_connect': ['VERSION']},
         url='https://github.com/ClickHouse/clickhouse-connect',
         packages=find_packages(exclude=['tests*']),
         python_requires='~=3.7',
