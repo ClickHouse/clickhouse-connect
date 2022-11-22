@@ -28,8 +28,8 @@ columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 # Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
 # the client as thread safe as possible while sharing a single connection pool.  For the same reason we
 # don't call the Session.close() method from the client so the connection pool remains available
-http_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
-atexit.register(http_adapter.close)
+default_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
+atexit.register(default_adapter.close)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
@@ -63,6 +63,7 @@ class HttpClient(Client):
                  client_cert_key: str = None,
                  session_id: str = None,
                  settings: Optional[Dict] = None,
+                 http_adapter: KeepAliveAdapter = default_adapter,
                  **kwargs):
         """
         Create an HTTP ClickHouse Connect client
@@ -86,9 +87,12 @@ class HttpClient(Client):
           applicable intermediate certificates
         :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
           is not included the Client Certificate key file
-        :param session_id: ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
+        :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
           is True, the client will generate a UUID1 session id
-        :param kwargs: Optional clickhouse setting values (str/value) for every connection request
+        :param settings Optional dictionary of ClickHouse setting values (str/value) for every connection request
+        :param http_adapter Optional requests.HTTPAdapter for this client.  Useful for creating separate connection
+          pools for multiple client endpoints instead the singleton pool in the default_adapter
+        :param kwargs: Optional clickhouse setting values (str/value) for every connection request (deprecated)
         """
         self.url = f'{interface}://{host}:{port}'
         session = Session()
@@ -115,7 +119,7 @@ class HttpClient(Client):
         # Remove the default session adapters, they are not used and this avoids issues with their connection pools
         session.adapters.pop('http://').close()
         session.adapters.pop('https://').close()
-        session.mount(self.url, adapter=http_adapter)
+        session.mount(self.url, adapter=http_adapter if http_adapter else default_adapter)
         session.headers['User-Agent'] = client_name
 
         self.read_format = self.write_format = 'Native'
@@ -359,5 +363,5 @@ def reset_connections():
     Used for tests to force new connection by resetting the singleton HttpAdapter
     """
 
-    global http_adapter  # pylint: disable=global-statement
-    http_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
+    global default_adapter  # pylint: disable=global-statement
+    default_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
