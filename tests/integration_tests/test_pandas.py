@@ -57,6 +57,8 @@ key2,6666,,string2,,
         result_df = test_client.query_df('SELECT * FROM test_pandas_csv')
         assert np.isclose(result_df.iloc[0]['flt'], 25.44)
         assert pd.isna(result_df.iloc[1]['flt'])
+        result_df = test_client.query('SELECT * FROM test_pandas_csv')
+        assert result_df.result_set[1][2] is None
 
 
 def test_pandas_context_inserts(test_client: Client, table_context: Callable):
