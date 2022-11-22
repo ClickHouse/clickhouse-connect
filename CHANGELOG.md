@@ -7,7 +7,14 @@ other client methods, `get_client` now accepts an optional `settings` Dict[str, 
 to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
 release.
 
-### Release 0.4.3 2022-11-23
+### Release 0.4.4 2022-11-22
+
+#### Bug fix
+* Ignore all "transport settings" when validating settings.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/80 
+for older ClickHouse versions
+
+
+### Release 0.4.3 2022-11-22
 
 #### Improvements
 * The get_client method now accepts a http_adapter parameter to allow sharing a requests.HTTPAdapter (and its associated

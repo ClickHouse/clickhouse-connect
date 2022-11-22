@@ -27,7 +27,6 @@ class Client(ABC):
     column_inserts = False
     compression = None
     valid_transport_settings = set()
-    optional_transport_settings = set()
 
     def __init__(self, database: str, query_limit: int, uri: str, compression: Optional[str]):
         """
@@ -77,8 +76,6 @@ class Client(ABC):
                     raise ProgrammingError(
                         f'Setting {key} is not recognized by this ClickHouse server') from None
             elif setting_def.readonly:
-                if key in self.optional_transport_settings:
-                    return None
                 if send_anyway:
                     logger.warning('Attempting to send readonly setting %s', key)
                 else:
