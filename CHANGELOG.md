@@ -1,5 +1,31 @@
 ## ClickHouse Connect ChangeLog
 
+
+### Release 0.4.2 2022-11-22
+
+#### Deprecation Warning -- Removing get_client Arbitrary Keyword Arguments 
+* The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) currently accepts arbitrary
+keyword arguments that are interpreted as ClickHouse server settings sent with every request.  To be consistent with
+other client methods, `get_client` now accepts an optional `settings` Dict[str, Any] argument that should be used instead
+to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
+release.
+
+#### Improvements
+* Global/common configuration options are now available in the `clickhouse_connect.common` module.  The available settings are:
+  * `autogenerate_session_id`  [bool]  Whether to generate a UUID1 session id used for every client request.  Defaults to True. Disabling this can facilitate client sharing and load balancing in some use cases.
+  * `dict_parameter_format` [str]  Options are 'json' and 'map'.  This controls whether parameterized queries convert a Python dictionary to JSON or ClickHouse Map syntax.  Default to `json` for insert into Object('json') columns.
+  * `invalid_setting_action` [str]  Options are 'send' and 'drop'.  Client Connect normally validates and drops (with a warning any settings that aren't recognized by the Server or are readonly).
+Changing this setting to 'send' will include such settings with the request anyway -- which will normally result in a error being returned.
+* The `clickhouse_connect.get_client` method now accepts a `settings` dictionary argument for consistency with other client methods.
+
+#### Bug Fixes
+* Fixed insert of Pandas Dataframes for Timestamp columns with timezones  https://github.com/ClickHouse/clickhouse-connect/issues/77
+* Fixed exception when inserting a Pandas Dataframes with NaType values into ClickHouse Float column (see known issue)
+
+#### Known Issue
+When inserting Pandas DataFrame values into a ClickHouse `Nullable(Float*)` column, a Float NaN value will be converted to a ClickHouse NULL.
+This is a side effect of a Pandas issue where `df.replace` cannot distinguish between NaT and NaN values:  https://github.com/pandas-dev/pandas/issues/29024
+
 ### Release 0.4.1 2022-11-14
 
 #### Bug Fixes

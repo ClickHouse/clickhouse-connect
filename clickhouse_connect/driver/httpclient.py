@@ -11,9 +11,11 @@ from typing import Optional, Dict, Any, Sequence, Union, List, Callable
 from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
 
+from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.insert import InsertContext
@@ -37,6 +39,8 @@ PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
 class HttpClient(Client):
     valid_transport_settings = {'database', 'buffer_size', 'session_id', 'compress', 'decompress',
                                 'session_timeout', 'session_check', 'query_id', 'quota_key', 'wait_end_of_query'}
+    optional_transport_settings = {'send_progress_in_http_headers', 'http_headers_progress_interval_ms',
+                                   'enable_http_compression'}
 
     # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     def __init__(self,
@@ -57,6 +61,8 @@ class HttpClient(Client):
                  ca_cert: str = None,
                  client_cert: str = None,
                  client_cert_key: str = None,
+                 session_id: str = None,
+                 settings: Optional[Dict] = None,
                  **kwargs):
         """
         Create an HTTP ClickHouse Connect client
@@ -80,6 +86,8 @@ class HttpClient(Client):
           applicable intermediate certificates
         :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
           is not included the Client Certificate key file
+        :param session_id: ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
+          is True, the client will generate a UUID1 session id
         :param kwargs: Optional clickhouse setting values (str/value) for every connection request
         """
         self.url = f'{interface}://{host}:{port}'
@@ -118,28 +126,30 @@ class HttpClient(Client):
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
         self.query_retries = query_retries
-        settings = kwargs.copy()
+        ch_settings = dict_copy(settings, kwargs)
         if send_progress:
-            settings['send_progress_in_http_headers'] = '1'
-            settings['wait_end_of_query'] = '1'
+            ch_settings['send_progress_in_http_headers'] = '1'
+            ch_settings['wait_end_of_query'] = '1'
             if self.read_timeout > 10:
                 progress_interval = (self.read_timeout - 5) * 1000
             else:
                 progress_interval = 120000  # Two minutes
-            settings['http_headers_progress_interval_ms'] = str(progress_interval)
+            ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
         compression = 'gzip' if compress is True else compress
         if compression:
             session.headers['Accept-Encoding'] = compression
-            settings['enable_http_compression'] = '1'
-        if 'session_id' not in settings and self.generate_session_id:
-            settings['session_id'] = str(uuid.uuid1())
+            ch_settings['enable_http_compression'] = '1'
+        if session_id:
+            ch_settings['session_id'] = session_id
+        elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
+            ch_settings['session_id'] = str(uuid.uuid1())
         super().__init__(database=database, query_limit=query_limit, uri=self.url, compression=compression)
-        self.session.params = self._validate_settings(settings, True)
+        self.session.params = self._validate_settings(ch_settings)
 
-    def client_setting(self, name, value):
-        if isinstance(value, bool):
-            value = '1' if value else '0'
-        self.session.params[name] = str(value)
+    def client_setting(self, key, value):
+        str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action') == 'send')
+        if str_value is not None:
+            self.session.params[key] = str_value
 
     def _prep_query(self, context: QueryContext):
         final_query = super()._prep_query(context)
@@ -150,7 +160,7 @@ class HttpClient(Client):
     def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
-        params.update(self._validate_settings(context.settings, True))
+        params.update(self._validate_settings(context.settings))
         if columns_only_re.search(context.uncommented_query):
             response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
                                          params, headers, retries=self.query_retries)
@@ -226,7 +236,7 @@ class HttpClient(Client):
                   'database': self.database}
         if isinstance(insert_block, str):
             insert_block = insert_block.encode()
-        params.update(self._validate_settings(settings, True))
+        params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
 
@@ -257,7 +267,7 @@ class HttpClient(Client):
             params['query'] = cmd
         if use_database:
             params['database'] = self.database
-        params.update(self._validate_settings(settings, True))
+        params.update(self._validate_settings(settings or {}))
         method = 'POST' if payload else 'GET'
         response = self._raw_request(payload, params, headers, method)
         result = response.content.decode('utf8')[:-1].split('\t')
@@ -341,7 +351,7 @@ class HttpClient(Client):
         final_query = finalize_query(query, parameters, self.server_tz)
         if fmt:
             final_query += f'\n FORMAT {fmt}'
-        return self._raw_request(final_query, self._validate_settings(settings, True)).content
+        return self._raw_request(final_query, self._validate_settings(settings or {})).content
 
 
 def reset_connections():

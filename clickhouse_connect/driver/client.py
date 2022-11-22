@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Iterable, Optional, Any, Union, Sequence, Dict
 from pytz.exceptions import UnknownTimeZoneError
 
+from clickhouse_connect import common
 from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -16,6 +17,7 @@ from clickhouse_connect.driver.query import QueryResult, np_result, pandas_resul
     QueryContext, arrow_buffer
 
 logger = logging.getLogger(__name__)
+arrow_str_setting = 'output_format_arrow_string_as_string'
 
 
 class Client(ABC):
@@ -24,8 +26,8 @@ class Client(ABC):
     """
     column_inserts = False
     compression = None
-    generate_session_id = True
     valid_transport_settings = set()
+    optional_transport_settings = set()
 
     def __init__(self, database: str, query_limit: int, uri: str, compression: Optional[str]):
         """
@@ -50,28 +52,40 @@ class Client(ABC):
             self.database = database
         self.uri = uri
 
-    def _validate_settings(self, settings: Optional[Dict[str, Any]], stringify: bool = False) -> Dict[str, Any]:
+    def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        This strips any ClickHouse settings that are not recognized or are read only
+        This strips any ClickHouse settings that are not recognized or are read only.
         :param settings:  Dictionary of setting name and values
         :param stringify:  Return the result dictionary values as strings
         :return:
         """
         validated = {}
-        if settings:
-            for key, value in settings.items():
-                if key not in self.valid_transport_settings:
-                    setting_def = self.server_settings.get(key)
-                    if setting_def is None or setting_def.readonly:
-                        logger.debug('Setting %s is not valid or read only, ignoring', key)
-                        continue
-                if stringify:
-                    if isinstance(value, bool):
-                        value = '1' if value else '0'
-                    else:
-                        value = str(value)
+        send_anyway = common.get_setting('invalid_setting_action') == 'send'
+        for key, value in settings.items():
+            str_value = self._validate_setting(key, value, send_anyway)
+            if str_value is not None:
                 validated[key] = value
         return validated
+
+    def _validate_setting(self, key: str, value: Any, send_anyway: bool):
+        if key not in self.valid_transport_settings:
+            setting_def = self.server_settings.get(key)
+            if setting_def is None:
+                if send_anyway:
+                    logger.warning('Attempting to send unrecognized setting %s', key)
+                else:
+                    raise ProgrammingError(
+                        f'Setting {key} is not recognized by this ClickHouse server') from None
+            elif setting_def.readonly:
+                if key in self.optional_transport_settings:
+                    return None
+                if send_anyway:
+                    logger.warning('Attempting to send readonly setting %s', key)
+                else:
+                    raise ProgrammingError(f'Setting {key} is readonly') from None
+        if isinstance(value, bool):
+            return '1' if value else '0'
+        return str(value)
 
     def _prep_query(self, context: QueryContext):
         if context.is_select and not context.has_limit and self.query_limit:
@@ -83,11 +97,13 @@ class Client(ABC):
         pass
 
     @abstractmethod
-    def client_setting(self, name, value):
+    def client_setting(self, key, value):
         """
-        Set a clickhouse setting for the client after initialization
-        :param name: Setting name
-        :param value: Setting value
+        Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
+        or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
+        to send the setting anyway based on the common setting 'invalid_setting_action'
+        :param key: ClickHouse setting name
+        :param value: ClickHouse setting value
         """
 
     # pylint: disable=duplicate-code,too-many-arguments
@@ -243,10 +259,10 @@ class Client(ABC):
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
         :return: PyArrow.Table
         """
-        arrow_settings = {} if not settings else settings.copy()
-        if 'output_format_arrow_string_as_string' not in arrow_settings:
-            arrow_settings['output_format_arrow_string_as_string'] = '1' if use_strings else '0'
-        return to_arrow(self.raw_query(query, parameters, arrow_settings, 'Arrow'))
+        settings = dict_copy(settings)
+        if arrow_str_setting in self.server_settings and arrow_str_setting not in settings:
+            settings[arrow_str_setting] = '1' if use_strings else '0'
+        return to_arrow(self.raw_query(query, parameters, settings, 'Arrow'))
 
     @abstractmethod
     def command(self,
@@ -370,10 +386,12 @@ class Client(ABC):
         Builds a reusable insert context to hold state for a duration of an insert
         :param table: Target table
         :param database: Target database.  If not set, uses the client default database
-        :param column_names: Ordered list of column names or '*' if column types should be retrieved from ClickHouse table definition
+        :param column_names: Optional ordered list of column names.  If not set, all columns ('*') will be assumed
+          in the order specified by the table definition
         :param database: Target database -- will use client default database if not specified
-        :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from the server
-        :param column_type_names: ClickHouse column type names.  If set then column data does not need to be retrieved from the server
+        :param column_types: ClickHouse column types.  Optional  Sequence of ClickHouseType objects.  If neither column
+           types nor column type names are set, actual column types will be retrieved from the server.
+        :param column_type_names: ClickHouse column type names.  Specified column types by name string
         :param column_oriented: If true the data is already "pivoted" in column form
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param data: Initial dataset for insert

@@ -7,9 +7,9 @@ from enum import Enum
 from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
 from datetime import date, datetime, tzinfo
 
+from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.json_impl import any_to_json
-from clickhouse_connect.common import common_settings
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
@@ -207,14 +207,11 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, tuple):
         return f"({', '.join(format_query_value(x, server_tz) for x in value)})"
     if isinstance(value, dict):
-        dict_format = common_settings.get('dict_parameter_format', 'json')
-        if dict_format.lower() == 'json':
+        if common.get_setting('dict_parameter_format') == 'json':
             return format_str(any_to_json(value).decode())
-        if dict_format.lower() == 'map':
-            pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz)
-                     for k, v in value.items()]
-            return f"{{{', '.join(pairs)}}}"
-        raise ProgrammingError("Unrecognized 'dict_parameter_format' in global settings")
+        pairs = [format_query_value(k, server_tz) + ':' + format_query_value(v, server_tz)
+                 for k, v in value.items()]
+        return f"{{{', '.join(pairs)}}}"
     if isinstance(value, Enum):
         return format_query_value(value.value, server_tz)
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
