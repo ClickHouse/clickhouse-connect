@@ -115,12 +115,12 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif 'datetime' in ch_type.np_type() and np.issubdtype(df_col.dtype, np.datetime64):
+            elif 'datetime' in ch_type.np_type() and pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'
                 continue
-            if ch_type.nullable and ch_type.python_type != float:
+            if ch_type.nullable:
                 df_col.replace({np.nan: None}, inplace=True)
             data.append(df_col.tolist())
         return data

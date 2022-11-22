@@ -1,7 +1,7 @@
 ## ClickHouse Connect ChangeLog
 
 
-### Release 0.4.2 2022-11-29
+### Release 0.4.2 2022-11-22
 
 #### Deprecation Warning -- Removing get_client Arbitrary Keyword Arguments 
 * The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) currently accepts arbitrary
@@ -17,6 +17,14 @@ release.
   * `invalid_setting_action` [str]  Options are 'send' and 'drop'.  Client Connect normally validates and drops (with a warning any settings that aren't recognized by the Server or are readonly).
 Changing this setting to 'send' will include such settings with the request anyway -- which will normally result in a error being returned.
 * The `clickhouse_connect.get_client` method now accepts a `settings` dictionary argument for consistency with other client methods.
+
+#### Bug Fixes
+* Fixed insert of Pandas Dataframes for Timestamp columns with timezones  https://github.com/ClickHouse/clickhouse-connect/issues/77
+* Fixed exception when inserting a Pandas Dataframes with NaType values into ClickHouse Float column (see known issue)
+
+#### Known Issue
+When inserting Pandas DataFrame values into a ClickHouse `Nullable(Float*)` column, a Float NaN value will be converted to a ClickHouse NULL.
+This is a side effect of a Pandas issue where `df.replace` cannot distinguish between NaT and NaN values:  https://github.com/pandas-dev/pandas/issues/29024
 
 ### Release 0.4.1 2022-11-14
 

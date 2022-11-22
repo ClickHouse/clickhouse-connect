@@ -1,10 +1,11 @@
 from datetime import datetime, date
 from typing import Callable
+from io import StringIO
 
 import pytest
 
 from clickhouse_connect.driver import Client, ProgrammingError
-from clickhouse_connect.driver.options import pd
+from clickhouse_connect.driver.options import np, pd
 from tests.integration_tests.datasets import null_ds, null_ds_columns, null_ds_types
 
 pytestmark = pytest.mark.skipif(pd is None, reason='Pandas package not installed')
@@ -35,11 +36,27 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
                         'str Nullable(String)', 'dt Nullable(DateTime)', 'day_col Nullable(Date)']):
         test_client.insert_df('test_pandas_nulls_good', df, column_names=insert_columns)
         result_df = test_client.query_df('SELECT * FROM test_pandas_nulls_good')
-        test_client.command('DROP TABLE IF EXISTS test_pandas')
         assert result_df.iloc[0]['num'] == 1000
         assert result_df.iloc[1]['day_col'] == pd.Timestamp(year=1976, month=5, day=5)
         assert pd.isna(result_df.iloc[2]['flt'])
         assert result_df.iloc[2]['str'] == 'value3'
+
+
+def test_pandas_csv(test_client: Client, table_context: Callable):
+    csv = """
+key,num,flt,str,dt,d
+key1,555,25.44,string1,2022-11-22 15:00:44,2001-02-14
+key2,6666,,string2,,
+"""
+    csv_file = StringIO(csv)
+    df = pd.read_csv(csv_file, parse_dates=['dt', 'd'], date_parser=pd.Timestamp)
+    df[['num', 'flt']] = df[['num', 'flt']].astype('Float32')
+
+    with table_context('test_pandas_csv', null_ds_columns, null_ds_types):
+        test_client.insert_df('test_pandas_csv', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_csv')
+        assert np.isclose(result_df.iloc[0]['flt'], 25.44)
+        assert pd.isna(result_df.iloc[1]['flt'])
 
 
 def test_pandas_context_inserts(test_client: Client, table_context: Callable):
@@ -74,3 +91,8 @@ def test_pandas_datetime64(test_client: Client, table_context: Callable):
         result_df = test_client.query_df('SELECT * FROM test_pandas_dt64')
         assert result_df.iloc[0]['value'] == now
         assert result_df.iloc[1]['value'] == pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
+        test_dt = np.array(['2017-11-22 15:42:58.270000+00:00'][0])
+        df = pd.DataFrame([['key3', pd.to_datetime(test_dt)]], columns=['key', 'value'])
+        test_client.insert_df('test_pandas_dt64', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_dt64 WHERE key = %s', parameters=('key3',))
+        assert result_df.iloc[0]['value'].second == 58
