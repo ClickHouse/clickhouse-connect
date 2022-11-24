@@ -257,6 +257,7 @@ class Client(ABC):
         :return: PyArrow.Table
         """
         settings = dict_copy(settings)
+        settings['database'] = self.database
         if arrow_str_setting in self.server_settings and arrow_str_setting not in settings:
             settings[arrow_str_setting] = '1' if use_strings else '0'
         return to_arrow(self.raw_query(query, parameters, settings, 'Arrow'))

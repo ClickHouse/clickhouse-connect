@@ -274,7 +274,7 @@ class HttpClient(Client):
         params.update(self._validate_settings(settings or {}))
         method = 'POST' if payload else 'GET'
         response = self._raw_request(payload, params, headers, method)
-        result = response.content.decode('utf8')[:-1].split('\t')
+        result = response.content.decode()[:-1].split('\t')
         if len(result) == 1:
             try:
                 return int(result[0])

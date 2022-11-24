@@ -1,4 +1,5 @@
-from typing import NamedTuple, Any, Sequence, Optional, Dict
+from dataclasses import dataclass
+from typing import Any, Sequence, Optional, Dict
 
 import pkg_resources
 
@@ -9,7 +10,8 @@ def version():
     return pkg_resources.get_distribution('clickhouse-connect').version
 
 
-class CommonSetting(NamedTuple):
+@dataclass
+class CommonSetting():
     name: str
     options: Sequence[Any]
     default: Any

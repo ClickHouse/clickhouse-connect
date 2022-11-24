@@ -7,9 +7,15 @@ other client methods, `get_client` now accepts an optional `settings` Dict[str, 
 to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
 release.
 
+## 0.4.5, 2022-11-24
+
+### Bug Fixes
+* Common settings were stored in an immutable named tuple and could not be changed.  This is fixed.
+* Fixed issue where the query_arrow method would not use the client database
+
 ## 0.4.4, 2022-11-22
 
-### Bug fixes
+### Bug Fixes
 * Ignore all "transport settings" when validating settings.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/80 
 for older ClickHouse versions
 
