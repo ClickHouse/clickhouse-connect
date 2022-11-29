@@ -64,7 +64,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
         'P1Y': 'toStartOfYear(toDateTime({col}))',
     }
 
-    sqlalchemy_uri_placeholder = 'clickhousedb+connect://user:password@host[:port][/dbname][?secure=value&=value...]'
+    sqlalchemy_uri_placeholder = 'clickhousedb://user:password@host[:port][/dbname][?secure=value&=value...]'
     parameters_schema = ClickHouseParametersSchema()
     encryption_parameters = {'secure': 'true'}
 
@@ -156,7 +156,7 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
             host=url.host,
             port=url.port,
             database=None if url.database == '__default__' else url.database,
-            query=query,
+            query=dict(query),
             encryption=encryption)
 
     @classmethod

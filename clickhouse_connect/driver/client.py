@@ -27,6 +27,7 @@ class Client(ABC):
     column_inserts = False
     compression = None
     valid_transport_settings = set()
+    optional_transport_settings = set()
 
     def __init__(self, database: str, query_limit: int, uri: str, compression: Optional[str]):
         """
@@ -69,17 +70,13 @@ class Client(ABC):
     def _validate_setting(self, key: str, value: Any, send_anyway: bool):
         if key not in self.valid_transport_settings:
             setting_def = self.server_settings.get(key)
-            if setting_def is None:
+            if setting_def is None or setting_def.readonly:
+                if key in self.optional_transport_settings:
+                    return None
                 if send_anyway:
-                    logger.warning('Attempting to send unrecognized setting %s', key)
+                    logger.warning('Attempting to send unrecognized or readonly setting %s', key)
                 else:
-                    raise ProgrammingError(
-                        f'Setting {key} is not recognized by this ClickHouse server') from None
-            elif setting_def.readonly:
-                if send_anyway:
-                    logger.warning('Attempting to send readonly setting %s', key)
-                else:
-                    raise ProgrammingError(f'Setting {key} is readonly') from None
+                    raise ProgrammingError(f'Setting {key} is unknown or readonly') from None
         if isinstance(value, bool):
             return '1' if value else '0'
         return str(value)

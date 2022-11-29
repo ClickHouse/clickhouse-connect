@@ -7,6 +7,12 @@ other client methods, `get_client` now accepts an optional `settings` Dict[str, 
 to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
 release.
 
+## 0.4.6, 2022-11-29
+
+### Bug Fixes
+* Fixed a major settings issue with connecting to a readonly database (introduced in v0.4.4)
+* Fix for broken database setup dialog with recent Superset versions using SQLAlchemy 1.4
+
 ## 0.4.5, 2022-11-24
 
 ### Bug Fixes
