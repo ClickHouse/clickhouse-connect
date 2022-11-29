@@ -11,7 +11,7 @@ def version():
 
 
 @dataclass
-class CommonSetting():
+class CommonSetting:
     name: str
     options: Sequence[Any]
     default: Any
