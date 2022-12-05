@@ -11,8 +11,12 @@ except ImportError:
 
 try:
     import ujson
+
+    def _ujson_to_json(obj: Any) -> bytes:
+        return ujson.dumps(obj).encode()  # pylint: disable=c-extension-no-member
 except ImportError:
     ujson = None
+    _ujson_to_json = None
 
 
 def _pyjson_to_json(obj: Any) -> bytes:
@@ -21,8 +25,8 @@ def _pyjson_to_json(obj: Any) -> bytes:
 
 logger = logging.getLogger(__name__)
 _to_json = OrderedDict()
-_to_json['orjson'] = orjson.dumps if orjson else None # pylint: disable=no-member
-_to_json['ujson'] = ujson.dumps if ujson else None # pylint: disable=c-extension-no-member
+_to_json['orjson'] = orjson.dumps if orjson else None  # pylint: disable=no-member
+_to_json['ujson'] = _ujson_to_json if ujson else None
 _to_json['python'] = _pyjson_to_json
 
 any_to_json = _pyjson_to_json
@@ -32,8 +36,10 @@ def set_json_library(impl: str = None):
     global any_to_json # pylint: disable=global-statement
     if impl:
         func = _to_json.get(impl)
-        if not func:
-            raise NotImplementedError(f'JSON library {impl} is not supported')
+        if func:
+            any_to_json = func
+            return
+        raise NotImplementedError(f'JSON library {impl} is not supported')
     for library, func in _to_json.items():
         if func:
             logger.info('Using %s library for writing JSON byte strings', library)
