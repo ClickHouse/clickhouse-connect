@@ -5,6 +5,8 @@ from typing import Dict, Type, Sequence
 from clickhouse_connect.datatypes.base import ClickHouseType, type_map, ch_read_formats, ch_write_formats
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
+json_re = re.compile('json', re.IGNORECASE)
+
 
 def default_encoding(encoding: str):
     ClickHouseType._encoding = encoding  # pylint: disable=protected-access
@@ -28,6 +30,7 @@ def clear_default_format(pattern: str):
 
 
 def set_write_format(pattern: str, fmt: str):
+    pattern = json_re.sub('object', pattern)
     for ch_type in _matching_types(pattern):
         ch_write_formats[ch_type] = fmt
 
