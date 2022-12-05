@@ -205,6 +205,7 @@ class Nested(ClickHouseType):
 
 class JSON(ClickHouseType):
     python_type = dict
+    valid_formats = 'string', 'native'  # Native is a Python type (primitive, dict, array), string is an actual JSON string
 
     def write_native_prefix(self, dest: MutableSequence):
         dest.append(0x01)
@@ -212,18 +213,31 @@ class JSON(ClickHouseType):
     # pylint: disable=duplicate-code
     def write_native_data(self, column: Sequence, dest: MutableSequence):
         app = dest.append
-        to_json = any_to_json
-        for x in column:
-            v = to_json(x)
-            sz = len(v)
-            while True:
-                b = sz & 0x7f
-                sz >>= 7
-                if sz == 0:
-                    app(b)
-                    break
-                app(0x80 | b)
-            dest += v
+        if self.write_format() == 'string':
+            for x in column:
+                v = x.encode()
+                sz = len(v)
+                while True:
+                    b = sz & 0x7f
+                    sz >>= 7
+                    if sz == 0:
+                        app(b)
+                        break
+                    app(0x80 | b)
+                dest += v
+        else:
+            to_json = any_to_json
+            for x in column:
+                v = to_json(x)
+                sz = len(v)
+                while True:
+                    b = sz & 0x7f
+                    sz >>= 7
+                    if sz == 0:
+                        app(b)
+                        break
+                    app(0x80 | b)
+                dest += v
 
 
 class Object(JSON):

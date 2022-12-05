@@ -7,6 +7,14 @@ other client methods, `get_client` now accepts an optional `settings` Dict[str, 
 to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
 release.
 
+## 0.4.7, 2022-12-05
+
+### Bug Fixes
+* JSON inserts with the ujson failed, this has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/84
+
+### New Features
+* The JSON/Object datatype now supports writes using JSON strings as well as Python native types
+
 ## 0.4.6, 2022-11-29
 
 ### Bug Fixes
