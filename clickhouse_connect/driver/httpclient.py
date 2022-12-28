@@ -156,6 +156,10 @@ class HttpClient(Client):
         if str_value is not None:
             self.session.params[key] = str_value
 
+    def get_client_setting(self, key) -> Optional[str]:
+        values = self.session.params.get(key)
+        return values[0] if values else None
+
     def _prep_query(self, context: QueryContext):
         final_query = super()._prep_query(context)
         if context.is_insert:

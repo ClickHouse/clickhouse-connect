@@ -82,6 +82,16 @@ def test_session_params(test_config: TestConfig):
     assert result[0] == ('test_session_params', test_config.username)
 
 
+def test_dsn_config(test_config: TestConfig):
+    dsn = (f'clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:{test_config.port}' +
+           f'/{test_config.test_database}?session_id=TEST_DSN_SESSION')
+    client = create_client(dsn=dsn)
+    assert client.get_client_setting('session_id') == 'TEST_DSN_SESSION'
+    count = client.command('SELECT count() from system.tables')
+    assert count > 0
+    client.close()
+
+
 def test_get_columns_only(test_client):
     result = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
     assert result.column_names == ('name', 'database')

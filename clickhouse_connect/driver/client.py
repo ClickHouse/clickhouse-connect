@@ -100,6 +100,13 @@ class Client(ABC):
         :param value: ClickHouse setting value
         """
 
+    @abstractmethod
+    def get_client_setting(self, key) -> Optional[str]:
+        """
+        :param key: The setting key
+        :return: The string value of the setting, if it exists, or None
+        """
+
     # pylint: disable=duplicate-code,too-many-arguments
     def query(self,
               query: str = None,

@@ -23,7 +23,6 @@ def create_client(host: str = 'localhost',
         parsed = urlparse(dsn)
         username = username or parsed.username
         password = password or parsed.password
-        interface = interface or parsed.scheme
         host = host or parsed.hostname
         port = port or parsed.port
         if parsed.path and not database:
