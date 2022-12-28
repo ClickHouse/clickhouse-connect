@@ -147,6 +147,16 @@ class QueryResult:
             for row in self.result_set:
                 yield dict(zip(self.column_names, row))
 
+    def result(self):
+        if self.column_oriented:
+            return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
+        return dict(zip(self.column_names, self.result_set[0]))
+
+    def row(self):
+        if self.column_oriented:
+            return [col[0] for col in self.result_set]
+        return self.result_set[0]
+
 
 class DataResult(NamedTuple):
     """

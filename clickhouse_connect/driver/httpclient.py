@@ -6,7 +6,7 @@ import uuid
 import http as PyHttp
 from http.client import RemoteDisconnected
 
-from typing import Optional, Dict, Any, Sequence, Union, List, Callable
+from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 
 from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
@@ -223,8 +223,8 @@ class HttpClient(Client):
         context.data = None
 
     def raw_insert(self, table: str,
-                   column_names: Sequence[str],
-                   insert_block: Union[str, bytes],
+                   column_names: Optional[Sequence[str]],
+                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
                    compression: Optional[str] = None,
@@ -232,15 +232,12 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        column_ids = [quote_identifier(x) for x in column_names]
         write_format = fmt if fmt else self.write_format
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
-        params = {'query': f"INSERT INTO {table} ({', '.join(column_ids)}) FORMAT {write_format}",
-                  'database': self.database}
-        if isinstance(insert_block, str):
-            insert_block = insert_block.encode()
+        cols = f"({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
+        params = {'query': f'INSERT INTO {table} {cols} FORMAT {write_format}', 'database': self.database}
         params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)

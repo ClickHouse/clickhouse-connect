@@ -2,7 +2,7 @@ import logging
 import pytz
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Optional, Any, Union, Sequence, Dict
+from typing import Iterable, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
@@ -455,8 +455,8 @@ class Client(ABC):
 
     @abstractmethod
     def raw_insert(self, table: str,
-                   column_names: Sequence[str],
-                   insert_block: Union[str, bytes],
+                   column_names: Optional[Sequence[str]],
+                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO],
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None):
         """

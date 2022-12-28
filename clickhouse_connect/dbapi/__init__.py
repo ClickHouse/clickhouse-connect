@@ -1,3 +1,5 @@
+from typing import Optional
+
 from clickhouse_connect.dbapi.connection import Connection
 
 
@@ -10,5 +12,15 @@ class Error(Exception):
     pass
 
 
-def connect(**kwargs):
-    return Connection(**kwargs)
+def connect(host: Optional[str] = None,
+            database: Optional[str] = None,
+            username: Optional[str] = None,
+            password: Optional[str] = None,
+            port: Optional[int] = None,
+            **kwargs):
+    return Connection(host=host,
+                      database=database,
+                      username=username,
+                      password=password,
+                      port=port,
+                      settings=kwargs)
