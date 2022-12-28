@@ -9,7 +9,7 @@ from clickhouse_connect.driver.httpclient import HttpClient
 
 
 # pylint: disable=too-many-arguments
-def create_client(host: str = 'localhost',
+def create_client(host: str = None,
                   username: str = None,
                   password: str = '',
                   database: str = '__default__',
@@ -31,6 +31,8 @@ def create_client(host: str = 'localhost',
         qs_settings = dict(parse_qs(parsed.query))
         settings = dict_copy(qs_settings, settings)
     use_tls = str(secure).lower() == 'true' or interface == 'https' or (not interface and port in (443, 8443))
+    if not host:
+        host = 'localhost'
     if not interface:
         interface = 'https' if use_tls else 'http'
     port = port or default_port(interface, use_tls)
