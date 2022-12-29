@@ -9,6 +9,7 @@ class Connection:
     """
     See :ref:`https://peps.python.org/pep-0249/`
     """
+    # pylint: disable=too-many-arguments
     def __init__(self,
                  dsn: str = None,
                  username: str = None,
