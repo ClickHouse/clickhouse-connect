@@ -20,7 +20,8 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier
+from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier, \
+    bind_query
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -169,6 +170,7 @@ class HttpClient(Client):
     def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
+        params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
         if columns_only_re.search(context.uncommented_query):
             response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
@@ -240,8 +242,8 @@ class HttpClient(Client):
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
-        cols = f"({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
-        params = {'query': f'INSERT INTO {table} {cols} FORMAT {write_format}', 'database': self.database}
+        cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
+        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}', 'database': self.database}
         params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
@@ -255,9 +257,8 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        cmd = finalize_query(cmd, parameters, self.server_tz)
+        cmd, params = bind_query(cmd, parameters, self.server_tz)
         headers = {}
-        params = {}
         payload = None
         if isinstance(data, str):
             headers['Content-Type'] = 'text/plain; charset=utf-8'

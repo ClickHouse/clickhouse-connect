@@ -92,13 +92,13 @@ def test_dsn_config(test_config: TestConfig):
     client.close()
 
 
-def test_get_columns_only(test_client):
+def test_get_columns_only(test_client: Client):
     result = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
     assert result.column_names == ('name', 'database')
     assert len(result.result_set) == 0
 
 
-def test_no_limit(test_client):
+def test_no_limit(test_client: Client):
     old_limit = test_client.query_limit
     test_client.limit = 0
     result = test_client.query('SELECT name FROM system.databases')

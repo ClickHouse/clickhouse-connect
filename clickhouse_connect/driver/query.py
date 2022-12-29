@@ -22,6 +22,7 @@ limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
 select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
 insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
 command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
+external_bind_re = re.compile(r'{.+:.+}')
 
 
 # pylint: disable=too-many-instance-attributes
@@ -65,14 +66,8 @@ class QueryContext(BaseQueryContext):
         self.server_tz = server_tz
         self.use_none = use_none
         self.column_oriented = column_oriented
-        self.final_query = finalize_query(query, parameters, server_tz)
-        self._uncommented_query = None
-
-    @property
-    def uncommented_query(self) -> str:
-        if not self._uncommented_query:
-            self._uncommented_query = remove_sql_comments(self.final_query)
-        return self._uncommented_query
+        self.final_query, self.bind_params = bind_query(query, parameters, server_tz)
+        self.uncommented_query = remove_sql_comments(self.final_query)
 
     @property
     def is_select(self) -> bool:
@@ -147,12 +142,18 @@ class QueryResult:
             for row in self.result_set:
                 yield dict(zip(self.column_names, row))
 
-    def result(self):
+    @property
+    def first_item(self):
+        if self.empty:
+            return None
         if self.column_oriented:
             return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
         return dict(zip(self.column_names, self.result_set[0]))
 
-    def row(self):
+    @property
+    def first_row(self):
+        if self.empty:
+            return None
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
@@ -188,6 +189,15 @@ def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, An
     if hasattr(parameters, 'items'):
         return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
     return query % tuple(format_query_value(v) for v in parameters)
+
+
+def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],
+               server_tz: Optional[tzinfo] = None) -> Tuple[str, Dict[str, str]]:
+    if not parameters:
+        return query, {}
+    if external_bind_re.search(query) is None:
+        return finalize_query(query, parameters, server_tz), {}
+    return query, {f'param_{k}': format_bind_value(v, server_tz) for k, v in parameters.items()}
 
 
 def format_str(value: str):
@@ -226,6 +236,36 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
         return format_query_value(value.value, server_tz)
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
         return f"'{value}'"
+    return str(value)
+
+
+def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC):
+    """
+    Format Python values in a ClickHouse query
+    :param value: Python object
+    :param server_tz: Server timezone for adjusting datetime values
+    :return: Literal string for python value
+    """
+    if value is None:
+        return 'NULL'
+    if isinstance(value, datetime):
+        if value.tzinfo is None and server_tz != local_tz:
+            value = value.replace(tzinfo=server_tz)
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, list):
+        return f"[{', '.join(format_bind_value(x, server_tz) for x in value)}]"
+    if isinstance(value, tuple):
+        return f"({', '.join(format_bind_value(x, server_tz) for x in value)})"
+    if isinstance(value, dict):
+        if common.get_setting('dict_parameter_format') == 'json':
+            return any_to_json(value).decode()
+        pairs = [format_bind_value(k, server_tz) + ':' + format_bind_value(v, server_tz)
+                 for k, v in value.items()]
+        return f"{{{', '.join(pairs)}}}"
+    if isinstance(value, Enum):
+        return format_bind_value(value.value, server_tz)
     return str(value)
 
 
