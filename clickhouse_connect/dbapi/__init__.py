@@ -18,9 +18,11 @@ def connect(host: Optional[str] = None,
             password: Optional[str] = None,
             port: Optional[int] = None,
             **kwargs):
+    secure = kwargs.pop('secure', False)
     return Connection(host=host,
                       database=database,
                       username=username,
                       password=password,
                       port=port,
+                      secure=secure,
                       settings=kwargs)

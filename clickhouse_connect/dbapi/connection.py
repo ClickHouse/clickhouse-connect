@@ -1,3 +1,5 @@
+from typing import Dict, Any, Union
+
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import create_client
 from clickhouse_connect.driver.query import QueryResult
@@ -15,8 +17,17 @@ class Connection:
                  database: str = None,
                  interface: str = None,
                  port: int = 0,
-                 **kwargs):
-        self.client = create_client(host, username, password, database, interface, port, dsn=dsn, **kwargs)
+                 secure: Union[bool, str] = False,
+                 settings: Dict[str, Any] = None):
+        self.client = create_client(host=host,
+                                    username=username,
+                                    password=password,
+                                    database=database,
+                                    interface=interface,
+                                    port=port,
+                                    secure=secure,
+                                    dsn=dsn,
+                                    settings=settings or {})
         self.timezone = self.client.server_tz
 
     def close(self):
