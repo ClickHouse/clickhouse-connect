@@ -60,21 +60,24 @@ class Client(ABC):
         :return:
         """
         validated = {}
-        send_anyway = common.get_setting('invalid_setting_action') == 'send'
+        invalid_action = common.get_setting('invalid_setting_action')
         for key, value in settings.items():
-            str_value = self._validate_setting(key, value, send_anyway)
+            str_value = self._validate_setting(key, value, invalid_action)
             if str_value is not None:
                 validated[key] = value
         return validated
 
-    def _validate_setting(self, key: str, value: Any, send_anyway: bool):
+    def _validate_setting(self, key: str, value: Any, invalid_action: str):
         if key not in self.valid_transport_settings:
             setting_def = self.server_settings.get(key)
             if setting_def is None or setting_def.readonly:
                 if key in self.optional_transport_settings:
                     return None
-                if send_anyway:
+                if invalid_action == 'send':
                     logger.warning('Attempting to send unrecognized or readonly setting %s', key)
+                elif invalid_action == 'drop':
+                    logger.warning('Dropping unrecognized or readonly settings %s', key)
+                    return None
                 else:
                     raise ProgrammingError(f'Setting {key} is unknown or readonly') from None
         if isinstance(value, bool):
@@ -342,6 +345,8 @@ class Client(ABC):
                   database: str = None,
                   settings: Optional[Dict] = None,
                   column_names: Optional[Sequence[str]] = None,
+                  column_types: Sequence[ClickHouseType] = None,
+                  column_type_names: Sequence[str] = None,
                   context: InsertContext = None) -> None:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
@@ -351,6 +356,10 @@ class Client(ABC):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param column_names: An optional list of ClickHouse column names.  If not set, the DataFrame column names
            will be used
+        :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from
+            the server
+        :param column_type_names: ClickHouse column type names.  If set then column data does not need to be
+            retrieved from the server
         :param context: Optional reusable insert context to allow repeated inserts into the same table with
             different data batches
         :return: No return, throws an exception if the insert fails
@@ -360,7 +369,8 @@ class Client(ABC):
                 column_names = df.columns
             elif len(column_names) != len(df.columns):
                 raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-        self.insert(table, df, column_names, database, settings=settings, context=context)
+        self.insert(table, df, column_names, database, column_types=column_types, column_type_names=column_type_names,
+                    settings=settings, context=context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
         """

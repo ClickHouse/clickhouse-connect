@@ -153,7 +153,7 @@ class HttpClient(Client):
         self.session.params = self._validate_settings(ch_settings)
 
     def client_setting(self, key, value):
-        str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action') == 'send')
+        str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
         if str_value is not None:
             self.session.params[key] = str_value
 
