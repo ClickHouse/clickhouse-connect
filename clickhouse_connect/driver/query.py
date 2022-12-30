@@ -66,8 +66,7 @@ class QueryContext(BaseQueryContext):
         self.server_tz = server_tz
         self.use_none = use_none
         self.column_oriented = column_oriented
-        self.final_query, self.bind_params = bind_query(query, parameters, server_tz)
-        self.uncommented_query = remove_sql_comments(self.final_query)
+        self._update_query()
 
     @property
     def is_select(self) -> bool:
@@ -84,6 +83,16 @@ class QueryContext(BaseQueryContext):
     @property
     def is_command(self) -> bool:
         return command_re.search(self.uncommented_query) is not None
+
+    def set_parameters(self, parameters: Dict[str, Any]):
+        self.parameters = parameters
+        self._update_query()
+
+    def set_parameter(self, key: str, value: Any):
+        if not self.parameters:
+            self.parameters = {}
+        self.parameters[key] = value
+        self._update_query()
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -107,6 +116,10 @@ class QueryContext(BaseQueryContext):
                             server_tz if server_tz else self.server_tz,
                             self.use_none if use_none is None else use_none,
                             self.column_oriented if column_oriented is None else column_oriented)
+
+    def _update_query(self):
+        self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
+        self.uncommented_query = remove_sql_comments(self.final_query)
 
 
 class QueryResult:

@@ -148,15 +148,14 @@ class Client(ABC):
                                                  use_none=use_none,
                                                  column_oriented=column_oriented)
         else:
-            query_context = QueryContext(query=query,
-                                         parameters=parameters,
-                                         settings=settings,
-                                         query_formats=query_formats,
-                                         column_formats=column_formats,
-                                         encoding=encoding,
-                                         server_tz=self.server_tz,
-                                         use_none=use_none,
-                                         column_oriented=column_oriented)
+            query_context = self.create_query_context(query=query,
+                                                      parameters=parameters,
+                                                      settings=settings,
+                                                      query_formats=query_formats,
+                                                      column_formats=column_formats,
+                                                      encoding=encoding,
+                                                      use_none=use_none,
+                                                      column_oriented=column_oriented)
         if query_context.is_command:
             response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
             return QueryResult([response] if isinstance(response, list) else [[response]], (), ())
@@ -249,6 +248,37 @@ class Client(ABC):
                                         use_none=use_none,
                                         column_oriented=True,
                                         context=context))
+
+    def create_query_context(self,
+                             query: str = None,
+                             parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                             settings: Optional[Dict[str, Any]] = None,
+                             query_formats: Optional[Dict[str, str]] = None,
+                             column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                             encoding: Optional[str] = None,
+                             use_none: bool = True,
+                             column_oriented: bool = False) -> QueryContext:
+        """
+        Creates a reusable query context
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param query_formats: See QueryContext __init__ docstring
+        :param column_formats: See QueryContext __init__ docstring
+        :param encoding: See QueryContext __init__ docstring
+        :param use_none: Use None for ClickHouse nulls instead of empty values
+        :param column_oriented: True if the result should be sequence of column values, False for rows:
+        :return: Reusable QueryContext
+        """
+        return QueryContext(query=query,
+                            parameters=parameters,
+                            settings=settings,
+                            query_formats=query_formats,
+                            column_formats=column_formats,
+                            encoding=encoding,
+                            server_tz=self.server_tz,
+                            use_none=use_none,
+                            column_oriented=column_oriented)
 
     def query_arrow(self,
                     query: str,
