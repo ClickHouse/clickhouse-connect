@@ -228,8 +228,8 @@ class HttpClient(Client):
         context.data = None
 
     def raw_insert(self, table: str,
-                   column_names: Optional[Sequence[str]],
-                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO],
+                   column_names: Optional[Sequence[str]] = None,
+                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
                    compression: Optional[str] = None,

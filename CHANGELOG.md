@@ -9,7 +9,7 @@ release.
 
 ## 0.4.8, 2022-12-29
 ### New Features
-* File upload support.  The new `driver.tools` module includes the functions `insert_file` and `insert_csv_file` to simplify
+* File upload support.  The new `driver.tools` module adds the function `insert_file` to simplify
 directly inserting data files into a table.  See the [test file](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_tools.py) 
 for examples.  This closes https://github.com/ClickHouse/clickhouse-connect/issues/41.
 * Added support for [http query parameters](https://clickhouse.com/docs/en/interfaces/http/#cli-queries-with-parameters) 

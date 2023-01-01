@@ -52,12 +52,11 @@ class Client(ABC):
             self.database = database
         self.uri = uri
 
-    def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """
         This strips any ClickHouse settings that are not recognized or are read only.
         :param settings:  Dictionary of setting name and values
-        :param stringify:  Return the result dictionary values as strings
-        :return:
+        :return: A filtered dictionary of settings with values rendered as strings
         """
         validated = {}
         invalid_action = common.get_setting('invalid_setting_action')
@@ -67,7 +66,7 @@ class Client(ABC):
                 validated[key] = value
         return validated
 
-    def _validate_setting(self, key: str, value: Any, invalid_action: str):
+    def _validate_setting(self, key: str, value: Any, invalid_action: str) -> Optional[str]:
         if key not in self.valid_transport_settings:
             setting_def = self.server_settings.get(key)
             if setting_def is None or setting_def.readonly:
@@ -502,8 +501,8 @@ class Client(ABC):
 
     @abstractmethod
     def raw_insert(self, table: str,
-                   column_names: Optional[Sequence[str]],
-                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO],
+                   column_names: Optional[Sequence[str]] = None,
+                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None):
         """

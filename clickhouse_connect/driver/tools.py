@@ -7,7 +7,7 @@ from clickhouse_connect.driver.query import quote_identifier
 def insert_file(client: Client,
                 table: str,
                 file_path: str,
-                fmt: str,
+                fmt: Optional[str] = None,
                 column_names: Optional[Sequence[str]] = None,
                 database: Optional[str] = None,
                 settings: Optional[Dict[str, Any]] = None):
@@ -16,13 +16,3 @@ def insert_file(client: Client,
         fmt = 'CSV' if column_names else 'CSVWithNames'
     with open(file_path, 'rb') as file:
         client.raw_insert(full_table, column_names=column_names, insert_block=file, fmt=fmt, settings=settings)
-
-
-def insert_csv_file(client: Client,
-                    table: str,
-                    file_path: str,
-                    column_names: Optional[Sequence[str]] = None,
-                    database: Optional[str] = None,
-                    settings: Optional[Dict[str, Any]] = None):
-    fmt = 'CSV' if column_names else 'CSVWithNames'
-    insert_file(client, table, file_path, fmt, column_names, database, settings)

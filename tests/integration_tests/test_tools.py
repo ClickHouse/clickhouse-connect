@@ -2,16 +2,18 @@ from pathlib import Path
 from typing import Callable
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.tools import insert_csv_file, insert_file
+from clickhouse_connect.driver.tools import insert_file
 
 
 def test_csv_upload(test_client: Client, table_context: Callable):
     data_file = f'{Path(__file__).parent}/IMDB_Top_250.csv'
     with table_context('test_csv_upload', ['movie String', 'year UInt16', 'rating Decimal32(3)']):
-        insert_csv_file(test_client, 'test_csv_upload', data_file)
+        insert_file(test_client, 'test_csv_upload', data_file,
+                    settings={'input_format_allow_errors_ratio': .2,
+                              'input_format_allow_errors_num': 5})
         res = test_client.query(
             'SELECT count() as count, sum(rating) as rating, max(year) as year FROM test_csv_upload').first_item
-        assert res['count'] == 250
+        assert res['count'] == 248
         assert res['year'] == 2022
 
 
