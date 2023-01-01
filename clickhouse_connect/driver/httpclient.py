@@ -20,8 +20,7 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier, \
-    bind_query
+from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, quote_identifier, bind_query
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -351,14 +350,16 @@ class HttpClient(Client):
                   query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
-                  fmt: str = None):
+                  fmt: str = None) -> bytes:
         """
         See BaseClient doc_string for this method
         """
-        final_query = finalize_query(query, parameters, self.server_tz)
+        final_query, bind_params = bind_query(query, parameters, self.server_tz)
         if fmt:
             final_query += f'\n FORMAT {fmt}'
-        return self._raw_request(final_query, self._validate_settings(settings or {})).content
+        params = self._validate_settings(settings or {})
+        params.update(bind_params)
+        return self._raw_request(final_query, params).content
 
 
 def reset_connections():

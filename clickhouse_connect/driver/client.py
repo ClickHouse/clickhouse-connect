@@ -118,8 +118,8 @@ class Client(ABC):
               query_formats: Optional[Dict[str, str]] = None,
               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
               encoding: Optional[str] = None,
-              use_none: bool = True,
-              column_oriented: bool = False,
+              use_none: Optional[bool] = None,
+              column_oriented: Optional[bool] = None,
               context: QueryContext = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix
@@ -256,8 +256,8 @@ class Client(ABC):
                              query_formats: Optional[Dict[str, str]] = None,
                              column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                              encoding: Optional[str] = None,
-                             use_none: bool = True,
-                             column_oriented: bool = False) -> QueryContext:
+                             use_none: Optional[bool] = None,
+                             column_oriented: Optional[bool] = None) -> QueryContext:
         """
         Creates a reusable query context
         :param query: Query statement/format string

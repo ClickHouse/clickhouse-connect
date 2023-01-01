@@ -18,7 +18,7 @@ For queries that contain bindings of the form `{<name>:<datatype>}`, the client 
 * The main `clickhouse_connect.get_client` command will now accept a standard Python `dsn` argument and extract host, port,
 user, password, and settings (query parameters) from the dsn.  Note that values for other keyword parameters will take
 precedence over values extracted from the dsn.
-* The QueryResult object now contains convenience properties for the `first_item` and `first_row` in the result.
+* The QueryResult object now contains convenience properties for the `first_item`, `first_row`, and `row_count` in the result.
 
 ## 0.4.7, 2022-12-05
 

@@ -4,7 +4,7 @@ import uuid
 import pytz
 
 from enum import Enum
-from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
+from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union, Generator
 from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
@@ -40,8 +40,8 @@ class QueryContext(BaseQueryContext):
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  encoding: Optional[str] = None,
                  server_tz: tzinfo = pytz.UTC,
-                 use_none: bool = True,
-                 column_oriented: bool = False):
+                 use_none: Optional[bool] = None,
+                 column_oriented: Optional[bool] = None):
         """
         Initializes various configuration settings for the query context
 
@@ -64,8 +64,8 @@ class QueryContext(BaseQueryContext):
         self.query = query
         self.parameters = parameters or {}
         self.server_tz = server_tz
-        self.use_none = use_none
-        self.column_oriented = column_oriented
+        self.use_none = True if use_none is None else use_none
+        self.column_oriented = False if column_oriented is None else column_oriented
         self._update_query()
 
     @property
@@ -105,7 +105,7 @@ class QueryContext(BaseQueryContext):
                      use_none: Optional[bool] = None,
                      column_oriented: Optional[bool] = None) -> 'QueryContext':
         """
-        Creates Query context copy with parameters overridden/updated as appropriate
+        Creates Query context copy with parameters overridden/updated as appropriate.
         """
         return QueryContext(query or self.query,
                             dict_copy(self.parameters, parameters),
@@ -143,17 +143,21 @@ class QueryResult:
 
     @property
     def empty(self):
-        if self.column_oriented:
-            return len(self.result_set) == 0 or len(self.result_set[0]) == 0
-        return len(self.result_set) == 0
+        return self.row_count == 0
 
-    def named_results(self):
+    def named_results(self) -> Generator[dict, None, None]:
         if self.column_oriented:
             for row in zip(*self.result_set):
                 yield dict(zip(self.column_names, row))
         else:
             for row in self.result_set:
                 yield dict(zip(self.column_names, row))
+
+    @property
+    def row_count(self) -> int:
+        if self.column_oriented:
+            return 0 if len(self.result_set) == 0 else len(self.result_set[0])
+        return len(self.result_set)
 
     @property
     def first_item(self):
