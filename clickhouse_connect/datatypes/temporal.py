@@ -25,8 +25,11 @@ class Date(ArrayType):
         return [epoch_start_date + timedelta(days) for days in column], loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        if self.write_format() == 'native':
-            first = self._first_value(column)
+        first = self._first_value(column)
+        if isinstance(first, int) or self.write_format() == 'int':
+            if self.nullable:
+                column = [x if x else 0 for x in column]
+        else:
             if isinstance(first, datetime):
                 esd = epoch_start_datetime
             else:
@@ -35,8 +38,6 @@ class Date(ArrayType):
                 column = [0 if x is None else (x - esd).days for x in column]
             else:
                 column = [(x - esd).days for x in column]
-        elif self.nullable:
-            column = [x if x else 0 for x in column]
         write_array(self._array_type, column, dest)
 
 
@@ -65,13 +66,15 @@ class DateTime(ArrayType):
         return [fts(ts) for ts in column], loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        if self.write_format() == 'native':
+        first = self._first_value(column)
+        if isinstance(first, int) or self.write_format() == 'int':
+            if self.nullable:
+                column = [x if x else 0 for x in column]
+        else:
             if self.nullable:
                 column = [int(x.timestamp()) if x else 0 for x in column]
             else:
                 column = [int(x.timestamp()) for x in column]
-        elif self.nullable:
-            column = [x if x else 0 for x in column]
         write_array(self._array_type, column, dest)
 
 
@@ -104,7 +107,7 @@ class DateTime64(ArrayType):
 
     def _read_native_tz(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
-        if self.write_format() == 'int':
+        if self.read_format() == 'int':
             return column, loc
         new_col = []
         app = new_col.append
@@ -119,7 +122,7 @@ class DateTime64(ArrayType):
 
     def _read_native_naive(self, source: Sequence, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
-        if self.write_format() == 'int':
+        if self.read_format() == 'int':
             return column, loc
         new_col = []
         app = new_col.append
@@ -132,12 +135,14 @@ class DateTime64(ArrayType):
         return new_col, loc
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        if self.write_format() == 'native':
+        first = self._first_value(column)
+        if isinstance(first, int) or self.write_format() == 'int':
+            if self.nullable:
+                column = [x if x else 0 for x in column]
+        else:
             prec = self.prec
             if self.nullable:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
-        elif self.nullable:
-            column = [x if x else 0 for x in column]
         write_array(self._array_type, column, dest)

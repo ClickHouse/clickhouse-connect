@@ -213,7 +213,8 @@ class JSON(ClickHouseType):
     # pylint: disable=duplicate-code
     def write_native_data(self, column: Sequence, dest: MutableSequence):
         app = dest.append
-        if self.write_format() == 'string':
+        first = self._first_value(column)
+        if isinstance(first, str) or self.write_format() == 'string':
             for x in column:
                 v = x.encode()
                 sz = len(v)

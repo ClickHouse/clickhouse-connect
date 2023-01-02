@@ -36,7 +36,7 @@ def test_json(test_client: Client, table_context: Callable):
         set_write_format('JSON', 'string')
         test_client.insert('native_json_test', [[999, '{"key4": 283, "value.2": "str_value"}', 77]])
         result = test_client.query('SELECT value.key4 FROM native_json_test')
-        assert result.result_set[3][0]== 283
+        assert result.result_set[3][0] == 283
 
 
 def test_read_formats(test_client: Client, test_table_engine: str):

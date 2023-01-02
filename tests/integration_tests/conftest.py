@@ -74,9 +74,9 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    allow_suspicious_low_cardinality_types=True)
             break
         except ClickHouseError as ex:
-            if tries > 15:
+            if tries > 10:
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
-            time.sleep(2)
+            time.sleep(3)
     if client.min_version('22.6.1'):
         client.command('SET allow_experimental_object_type = 1')
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)

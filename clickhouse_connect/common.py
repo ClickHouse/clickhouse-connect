@@ -46,4 +46,4 @@ def _init_common(name: str, options: Sequence[Any], default: Any):
 
 _init_common('autogenerate_session_id', (True, False), True)
 _init_common('dict_parameter_format', ('json', 'map'), 'json')
-_init_common('invalid_setting_action', ('send', 'drop'), 'drop')
+_init_common('invalid_setting_action', ('send', 'drop', 'error'), 'error')
