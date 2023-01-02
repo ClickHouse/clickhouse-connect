@@ -7,12 +7,13 @@ other client methods, `get_client` now accepts an optional `settings` Dict[str, 
 to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
 release.
 
-## 0.4.8, 2022-12-29
+## 0.4.8, 2023-01-02
 ### New Features
+* [Documentation](https://clickhouse.com/docs/en/integrations/language-clients/python/intro) has been expanded to cover recent updates.
 * File upload support.  The new `driver.tools` module adds the function `insert_file` to simplify
 directly inserting data files into a table.  See the [test file](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_tools.py) 
 for examples.  This closes https://github.com/ClickHouse/clickhouse-connect/issues/41.
-* Added support for [http query parameters](https://clickhouse.com/docs/en/interfaces/http/#cli-queries-with-parameters) 
+* Added support for server side [http query parameters](https://clickhouse.com/docs/en/interfaces/http/#cli-queries-with-parameters) 
 For queries that contain bindings of the form `{<name>:<datatype>}`, the client will automatically convert the query* method
 `parameters` dictionary to the appropriate http query parameters.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/49.
 * The main `clickhouse_connect.get_client` command will now accept a standard Python `dsn` argument and extract host, port,
