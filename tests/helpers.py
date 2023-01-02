@@ -177,13 +177,13 @@ def list_equal(a: Sequence, b: Sequence) -> bool:
 
 class TableContext:
     def __init__(self, client: Client,
-                 name: str,
+                 table: str,
                  columns: Sequence[str],
                  column_types: Optional[Sequence[str]] = None,
                  engine: str = 'MergeTree',
                  order_by: str = None):
         self.client = client
-        self.name = name
+        self.table = table
         if column_types is None:
             self.column_names = []
             self.column_types = []
@@ -198,10 +198,10 @@ class TableContext:
         self.order_by = self.column_names[0] if order_by is None else order_by
 
     def __enter__(self):
-        self.client.command(f'DROP TABLE IF EXISTS {self.name}')
-        col_defs = ','.join(f'{name} {type}' for name, type in zip(self.column_names, self.column_types))
-        self.client.command(f'CREATE TABLE {self.name} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}')
+        self.client.command(f'DROP TABLE IF EXISTS {self.table}')
+        col_defs = ','.join(f'{name} {col_type}' for name, col_type in zip(self.column_names, self.column_types))
+        self.client.command(f'CREATE TABLE {self.table} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}')
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.client.command(f'DROP TABLE IF EXISTS {self.name}')
+        self.client.command(f'DROP TABLE IF EXISTS {self.table}')

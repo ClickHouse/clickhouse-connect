@@ -31,19 +31,19 @@ class InsertContext(BaseQueryContext):
                  column_names: Sequence[str],
                  column_types: Sequence[ClickHouseType],
                  data: Any = None,
-                 column_oriented: bool = False,
+                 column_oriented: Optional[bool] = None,
                  settings: Optional[Dict[str, Any]] = None,
                  compression: Optional[str] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-                 block_size: int = DEFAULT_BLOCK_SIZE):
+                 block_size: Optional[int] = None):
         super().__init__(settings, query_formats, column_formats)
         self.table = table
         self.column_names = column_names
         self.column_types = column_types
-        self.column_oriented = column_oriented
+        self.column_oriented = False if column_oriented is None else column_oriented
         self.compression = compression
-        self.block_size = block_size
+        self.block_size = DEFAULT_BLOCK_SIZE if block_size is None else block_size
         self.data = data
         self.insert_exception = None
 

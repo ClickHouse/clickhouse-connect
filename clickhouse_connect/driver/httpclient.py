@@ -6,7 +6,7 @@ import uuid
 import http as PyHttp
 from http.client import RemoteDisconnected
 
-from typing import Optional, Dict, Any, Sequence, Union, List, Callable
+from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 
 from requests import Session, Response, get as req_get
 from requests.exceptions import RequestException
@@ -20,7 +20,7 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, finalize_query, quote_identifier
+from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, quote_identifier, bind_query
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -152,9 +152,13 @@ class HttpClient(Client):
         self.session.params = self._validate_settings(ch_settings)
 
     def client_setting(self, key, value):
-        str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action') == 'send')
+        str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
         if str_value is not None:
             self.session.params[key] = str_value
+
+    def get_client_setting(self, key) -> Optional[str]:
+        values = self.session.params.get(key)
+        return values[0] if values else None
 
     def _prep_query(self, context: QueryContext):
         final_query = super()._prep_query(context)
@@ -165,6 +169,7 @@ class HttpClient(Client):
     def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
         params = {'database': self.database}
+        params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
         if columns_only_re.search(context.uncommented_query):
             response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
@@ -223,8 +228,8 @@ class HttpClient(Client):
         context.data = None
 
     def raw_insert(self, table: str,
-                   column_names: Sequence[str],
-                   insert_block: Union[str, bytes],
+                   column_names: Optional[Sequence[str]] = None,
+                   insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
                    compression: Optional[str] = None,
@@ -232,15 +237,12 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        column_ids = [quote_identifier(x) for x in column_names]
         write_format = fmt if fmt else self.write_format
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
-        params = {'query': f"INSERT INTO {table} ({', '.join(column_ids)}) FORMAT {write_format}",
-                  'database': self.database}
-        if isinstance(insert_block, str):
-            insert_block = insert_block.encode()
+        cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
+        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}', 'database': self.database}
         params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
@@ -254,9 +256,8 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        cmd = finalize_query(cmd, parameters, self.server_tz)
+        cmd, params = bind_query(cmd, parameters, self.server_tz)
         headers = {}
-        params = {}
         payload = None
         if isinstance(data, str):
             headers['Content-Type'] = 'text/plain; charset=utf-8'
@@ -349,14 +350,16 @@ class HttpClient(Client):
                   query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
-                  fmt: str = None):
+                  fmt: str = None) -> bytes:
         """
         See BaseClient doc_string for this method
         """
-        final_query = finalize_query(query, parameters, self.server_tz)
+        final_query, bind_params = bind_query(query, parameters, self.server_tz)
         if fmt:
             final_query += f'\n FORMAT {fmt}'
-        return self._raw_request(final_query, self._validate_settings(settings or {})).content
+        params = self._validate_settings(settings or {})
+        params.update(bind_params)
+        return self._raw_request(final_query, params).content
 
 
 def reset_connections():

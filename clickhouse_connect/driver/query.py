@@ -4,7 +4,7 @@ import uuid
 import pytz
 
 from enum import Enum
-from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union
+from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union, Generator
 from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
@@ -22,6 +22,7 @@ limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
 select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
 insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
 command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
+external_bind_re = re.compile(r'{.+:.+}')
 
 
 # pylint: disable=too-many-instance-attributes
@@ -39,8 +40,8 @@ class QueryContext(BaseQueryContext):
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  encoding: Optional[str] = None,
                  server_tz: tzinfo = pytz.UTC,
-                 use_none: bool = True,
-                 column_oriented: bool = False):
+                 use_none: Optional[bool] = None,
+                 column_oriented: Optional[bool] = None):
         """
         Initializes various configuration settings for the query context
 
@@ -63,16 +64,9 @@ class QueryContext(BaseQueryContext):
         self.query = query
         self.parameters = parameters or {}
         self.server_tz = server_tz
-        self.use_none = use_none
-        self.column_oriented = column_oriented
-        self.final_query = finalize_query(query, parameters, server_tz)
-        self._uncommented_query = None
-
-    @property
-    def uncommented_query(self) -> str:
-        if not self._uncommented_query:
-            self._uncommented_query = remove_sql_comments(self.final_query)
-        return self._uncommented_query
+        self.use_none = True if use_none is None else use_none
+        self.column_oriented = False if column_oriented is None else column_oriented
+        self._update_query()
 
     @property
     def is_select(self) -> bool:
@@ -90,6 +84,16 @@ class QueryContext(BaseQueryContext):
     def is_command(self) -> bool:
         return command_re.search(self.uncommented_query) is not None
 
+    def set_parameters(self, parameters: Dict[str, Any]):
+        self.parameters = parameters
+        self._update_query()
+
+    def set_parameter(self, key: str, value: Any):
+        if not self.parameters:
+            self.parameters = {}
+        self.parameters[key] = value
+        self._update_query()
+
     def updated_copy(self,
                      query: Optional[str] = None,
                      parameters: Optional[Dict[str, Any]] = None,
@@ -101,7 +105,7 @@ class QueryContext(BaseQueryContext):
                      use_none: Optional[bool] = None,
                      column_oriented: Optional[bool] = None) -> 'QueryContext':
         """
-        Creates Query context copy with parameters overridden/updated as appropriate
+        Creates Query context copy with parameters overridden/updated as appropriate.
         """
         return QueryContext(query or self.query,
                             dict_copy(self.parameters, parameters),
@@ -112,6 +116,10 @@ class QueryContext(BaseQueryContext):
                             server_tz if server_tz else self.server_tz,
                             self.use_none if use_none is None else use_none,
                             self.column_oriented if column_oriented is None else column_oriented)
+
+    def _update_query(self):
+        self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
+        self.uncommented_query = remove_sql_comments(self.final_query)
 
 
 class QueryResult:
@@ -135,17 +143,37 @@ class QueryResult:
 
     @property
     def empty(self):
-        if self.column_oriented:
-            return len(self.result_set) == 0 or len(self.result_set[0]) == 0
-        return len(self.result_set) == 0
+        return self.row_count == 0
 
-    def named_results(self):
+    def named_results(self) -> Generator[dict, None, None]:
         if self.column_oriented:
             for row in zip(*self.result_set):
                 yield dict(zip(self.column_names, row))
         else:
             for row in self.result_set:
                 yield dict(zip(self.column_names, row))
+
+    @property
+    def row_count(self) -> int:
+        if self.column_oriented:
+            return 0 if len(self.result_set) == 0 else len(self.result_set[0])
+        return len(self.result_set)
+
+    @property
+    def first_item(self):
+        if self.empty:
+            return None
+        if self.column_oriented:
+            return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
+        return dict(zip(self.column_names, self.result_set[0]))
+
+    @property
+    def first_row(self):
+        if self.empty:
+            return None
+        if self.column_oriented:
+            return [col[0] for col in self.result_set]
+        return self.result_set[0]
 
 
 class DataResult(NamedTuple):
@@ -178,6 +206,15 @@ def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, An
     if hasattr(parameters, 'items'):
         return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
     return query % tuple(format_query_value(v) for v in parameters)
+
+
+def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],
+               server_tz: Optional[tzinfo] = None) -> Tuple[str, Dict[str, str]]:
+    if not parameters:
+        return query, {}
+    if external_bind_re.search(query) is None:
+        return finalize_query(query, parameters, server_tz), {}
+    return query, {f'param_{k}': format_bind_value(v, server_tz) for k, v in parameters.items()}
 
 
 def format_str(value: str):
@@ -216,6 +253,36 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
         return format_query_value(value.value, server_tz)
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
         return f"'{value}'"
+    return str(value)
+
+
+def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC):
+    """
+    Format Python values in a ClickHouse query
+    :param value: Python object
+    :param server_tz: Server timezone for adjusting datetime values
+    :return: Literal string for python value
+    """
+    if value is None:
+        return 'NULL'
+    if isinstance(value, datetime):
+        if value.tzinfo is None and server_tz != local_tz:
+            value = value.replace(tzinfo=server_tz)
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, list):
+        return f"[{', '.join(format_bind_value(x, server_tz) for x in value)}]"
+    if isinstance(value, tuple):
+        return f"({', '.join(format_bind_value(x, server_tz) for x in value)})"
+    if isinstance(value, dict):
+        if common.get_setting('dict_parameter_format') == 'json':
+            return any_to_json(value).decode()
+        pairs = [format_bind_value(k, server_tz) + ':' + format_bind_value(v, server_tz)
+                 for k, v in value.items()]
+        return f"{{{', '.join(pairs)}}}"
+    if isinstance(value, Enum):
+        return format_bind_value(value.value, server_tz)
     return str(value)
 
 

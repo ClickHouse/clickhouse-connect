@@ -1,3 +1,4 @@
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.parser import parse_callable, parse_enum
 from clickhouse_connect.driver.query import remove_sql_comments
 
@@ -14,6 +15,11 @@ def test_parse_callable():
 def test_parse_enum():
     assert parse_enum("Enum8('one' = 1)") == (('one',), (1,))
     assert parse_enum("Enum16('**\\'5' = 5, '578' = 7)") == (("**'5", '578'), (5, 7))
+
+
+def test_map_type():
+    ch_type = get_from_name('Map(String, Decimal(5, 5))')
+    assert ch_type.name == 'Map(String, Decimal(5, 5))'
 
 
 def test_remove_comments():
