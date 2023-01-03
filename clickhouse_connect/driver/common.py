@@ -1,9 +1,10 @@
 import array
 import sys
 
-from typing import Tuple, Sequence, MutableSequence, Dict, Optional
+from typing import Tuple, Sequence, MutableSequence, Dict, Optional, Iterable
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.types import ByteSource
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
@@ -36,7 +37,7 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def array_column(code: str, source: Sequence, loc: int, num_rows: int) -> Tuple[array.array, int]:
+def array_column(code: str, source: Iterable, loc: int, num_rows: int) -> Tuple[array.array, int]:
     """
     Read the source binary buffer into a Python array.array
     :param code: Python array.array type code
@@ -76,7 +77,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
     dest += buff.tobytes()
 
 
-def read_uint64(source: Sequence, loc: int) -> Tuple[int, int]:
+def read_uint64(source: ByteSource, loc: int) -> Tuple[int, int]:
     """
     Read a single UInt64 value from a data buffer
     :param source: Source binary buffer
@@ -95,7 +96,7 @@ def write_uint64(value: int, dest: MutableSequence):
     dest.extend(value.to_bytes(8, 'little'))
 
 
-def read_leb128(source: Sequence, loc: int) -> Tuple[int, int]:
+def read_leb128(source: Iterable, loc: int) -> Tuple[int, int]:
     """
     Read a LEB128 encoded integer value from a source buffer
     :param source: Source binary buffer
@@ -113,7 +114,7 @@ def read_leb128(source: Sequence, loc: int) -> Tuple[int, int]:
     return length, loc + ix
 
 
-def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8') -> Tuple[str, int]:
+def read_leb128_str(source: Iterable, loc: int, encoding: str = 'utf8') -> Tuple[str, int]:
     """
     Read a LEB128 encoded string from a binary source buffer
     :param source: Binary source buffer

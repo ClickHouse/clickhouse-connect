@@ -3,12 +3,13 @@ import logging
 
 from abc import ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple, Iterable
 
 from clickhouse_connect.driver.common import array_column, array_type, int_size, read_uint64, write_array, \
     write_uint64, low_card_version
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.threads import query_settings
+from clickhouse_connect.driver.types import ByteSource
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -112,7 +113,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             write_uint64(low_card_version, dest)
 
-    def read_native_prefix(self, source: Sequence, loc: int):
+    def read_native_prefix(self, source: ByteSource, loc: int):
         """
         Read the low cardinality version.  Like the write method, this has to happen immediately for container classes
         :param source: The native protocol binary read buffer
@@ -125,7 +126,7 @@ class ClickHouseType(ABC):
                 logger.warning('Unexpected low cardinality version %d reading type %s', v, self.name)
         return loc
 
-    def read_native_column(self, source: Sequence, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:
+    def read_native_column(self, source: ByteSource, loc: int, num_rows: int, **kwargs) -> Tuple[Sequence, int]:
         """
         Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that
          the LowCardinality version is read for the contained types
@@ -138,7 +139,7 @@ class ClickHouseType(ABC):
         loc = self.read_native_prefix(source, loc)
         return self.read_native_data(source, loc, num_rows, **kwargs)
 
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True) -> Tuple[Sequence, int]:
+    def read_native_data(self, source: ByteSource, loc: int, num_rows: int, use_none=True) -> Tuple[Sequence, int]:
         """
         Public read method for all ClickHouseType data type columns
         :param source: Native protocol binary read buffer
@@ -151,7 +152,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             return self._read_native_low_card(source, loc, num_rows, use_none)
         if self.nullable:
-            null_map = memoryview(source[loc: loc + num_rows])
+            null_map = source[loc: loc + num_rows]
             loc += num_rows
             column, loc = self._read_native_binary(source, loc, num_rows)
             if use_none:
@@ -167,7 +168,7 @@ class ClickHouseType(ABC):
     # delegate binary operations to their elements
 
     # pylint: disable=no-self-use
-    def _read_native_binary(self, _source: Sequence, _loc: int, _num_rows: int) \
+    def _read_native_binary(self, _source: ByteSource, _loc: int, _num_rows: int) \
             -> Tuple[Union[Sequence, MutableSequence], int]:
         """
         Lowest level read method for ClickHouseType native data columns
@@ -209,7 +210,7 @@ class ClickHouseType(ABC):
                 dest += bytes([1 if x is None else 0 for x in column])
             self._write_native_binary(column, dest)
 
-    def _read_native_low_card(self, source: Sequence, loc: int, num_rows: int, use_none=True):
+    def _read_native_low_card(self, source: ByteSource, loc: int, num_rows: int, use_none=True):
         if num_rows == 0:
             return tuple(), loc
         key_data, loc = read_uint64(source, loc)
@@ -226,7 +227,7 @@ class ClickHouseType(ABC):
         index, loc = array_column(array_type(index_sz, False), source, loc, num_rows)
         return tuple(keys[ix] for ix in index), loc
 
-    def _write_native_low_card(self, column: Sequence, dest: MutableSequence):
+    def _write_native_low_card(self, column: Iterable, dest: MutableSequence):
         if not column:
             return
         index = []
@@ -300,7 +301,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._struct_type = '<' + cls._array_type
             cls.byte_size = array.array(cls._array_type).itemsize
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         if self.read_format() == 'string':
             column = [str(x) for x in column]

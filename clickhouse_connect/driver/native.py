@@ -1,31 +1,31 @@
 import zlib
-from typing import Sequence
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import DataResult
 from clickhouse_connect.driver.transform import DataTransform, QueryContext
+from clickhouse_connect.driver.types import ByteSource
 
 block_size = 16384
 
 
 class NativeTransform(DataTransform):
     # pylint: disable=too-many-locals
-    def _transform_response(self, source: Sequence, context: QueryContext) -> DataResult:
-        if not isinstance(source, memoryview):
-            source = memoryview(source)
+    def _transform_response(self, source: ByteSource, context: QueryContext) -> DataResult:
         loc = 0
         names = []
         col_types = []
         result = []
-        total_size = len(source)
         block = 0
         use_none = context.use_none
-        while loc < total_size:
+        while True:
+            try:
+                num_cols, loc = read_leb128(source, loc)
+                num_rows, loc = read_leb128(source, loc)
+            except (StopIteration, IndexError):
+                break
             result_block = []
-            num_cols, loc = read_leb128(source, loc)
-            num_rows, loc = read_leb128(source, loc)
             for col_num in range(num_cols):
                 name, loc = read_leb128_str(source, loc)
                 if block == 0:

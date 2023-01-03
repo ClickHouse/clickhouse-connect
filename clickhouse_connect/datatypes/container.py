@@ -1,6 +1,7 @@
 import array
 from typing import Sequence, MutableSequence
 
+from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import array_column, must_swap
@@ -16,11 +17,11 @@ class Array(ClickHouseType):
         self.element_type = get_from_name(type_def.values[0])
         self._name_suffix = f'({self.element_type.name})'
 
-    def read_native_prefix(self, source: Sequence, loc: int):
+    def read_native_prefix(self, source: ByteSource, loc: int):
         return self.element_type.read_native_prefix(source, loc)
 
     # pylint: disable=too-many-locals
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
+    def read_native_data(self, source: ByteSource, loc: int, num_rows: int, use_none: bool = True):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
@@ -91,12 +92,12 @@ class Tuple(ClickHouseType):
             return str
         return dict
 
-    def read_native_prefix(self, source: Sequence, loc: int):
+    def read_native_prefix(self, source: ByteSource, loc: int):
         for e_type in self.element_types:
             loc = e_type.read_native_prefix(source, loc)
         return loc
 
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True):
+    def read_native_data(self, source: ByteSource, loc: int, num_rows: int, use_none=True):
         columns = []
         e_names = self.element_names
         for e_type in self.element_types:
@@ -133,13 +134,13 @@ class Map(ClickHouseType):
         self.value_type = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
-    def read_native_prefix(self, source: Sequence, loc: int):
+    def read_native_prefix(self, source: ByteSource, loc: int):
         loc = self.key_type.read_native_prefix(source, loc)
         loc = self.value_type.read_native_prefix(source, loc)
         return loc
 
     # pylint: disable=too-many-locals
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none=True):
+    def read_native_data(self, source: ByteSource, loc: int, num_rows: int, use_none=True):
         offsets, loc = array_column('Q', source, loc, num_rows)
         total_rows = offsets[-1]
         keys, loc = self.key_type.read_native_data(source, loc, total_rows, use_none)
@@ -186,10 +187,10 @@ class Nested(ClickHouseType):
         cols = [f'{x[0]} {x[1].name}' for x in zip(type_def.keys, self.element_types)]
         self._name_suffix = f"({', '.join(cols)})"
 
-    def read_native_prefix(self, source: Sequence, loc: int):
+    def read_native_prefix(self, source: ByteSource, loc: int):
         return self.tuple_array.read_native_prefix(source, loc)
 
-    def read_native_data(self, source: Sequence, loc: int, num_rows: int, use_none: bool = True):
+    def read_native_data(self, source: ByteSource, loc: int, num_rows: int, use_none: bool = True):
         keys = self.element_names
         data, loc = self.tuple_array.read_native_data(source, loc, num_rows, use_none)
         return [[dict(zip(keys, x)) for x in row] for row in data], loc
@@ -205,7 +206,8 @@ class Nested(ClickHouseType):
 
 class JSON(ClickHouseType):
     python_type = dict
-    valid_formats = 'string', 'native'  # Native is a Python type (primitive, dict, array), string is an actual JSON string
+    # Native is a Python type (primitive, dict, array), string is an actual JSON string
+    valid_formats = 'string', 'native'
 
     def write_native_prefix(self, dest: MutableSequence):
         dest.append(0x01)

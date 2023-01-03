@@ -14,6 +14,7 @@ from requests.exceptions import RequestException
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.buffer import ResponseBuffer
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
@@ -33,6 +34,13 @@ atexit.register(default_adapter.close)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
+BuffCls = ResponseBuffer
+
+try:
+    from clickhouse_connect.driverc.buffer import ResponseBuffer as CBuffer
+    BuffCls = CBuffer
+except ImportError:
+    logger.warning('Failed to import CBuffer, falling back to pure Python implementation')
 
 
 # pylint: disable=too-many-instance-attributes
@@ -184,8 +192,9 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             data_result = DataResult([], tuple(names), tuple(types))
         else:
-            response = self._raw_request(self._prep_query(context), params, headers, retries=self.query_retries)
-            data_result = self.transform.parse_response(response.content, context)
+            response = self._raw_request(self._prep_query(context), params, headers, stream=True,
+                                         retries=self.query_retries)
+            data_result = self.transform.parse_response(BuffCls(response), context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -298,6 +307,7 @@ class HttpClient(Client):
                      headers: Optional[Dict[str, Any]] = None,
                      method: str = 'POST',
                      retries: int = 0,
+                     stream: bool = False,
                      error_handler: Callable = None) -> Response:
         if isinstance(data, str):
             data = data.encode()
@@ -309,7 +319,8 @@ class HttpClient(Client):
                                                           headers=headers,
                                                           timeout=(self.connect_timeout, self.read_timeout),
                                                           data=data,
-                                                          params=params)
+                                                          params=params,
+                                                          stream=stream)
             except RequestException as ex:
                 rex_context = ex.__context__
                 if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):

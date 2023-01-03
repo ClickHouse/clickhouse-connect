@@ -5,6 +5,7 @@ from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import array_column, write_array, np_date_types
+from clickhouse_connect.driver.types import ByteSource
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
@@ -18,7 +19,7 @@ class Date(ArrayType):
     python_null = epoch_start_date
     python_type = date
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, loc: int, num_rows: int):
         column, loc = array_column(self._array_type, source, loc, num_rows)
         if self.read_format() == 'int':
             return column, loc

@@ -10,7 +10,7 @@ _EMPTY_QUERY_CONTEXT = QueryContext()
 
 class DataTransform(ABC):
 
-    def parse_response(self, source: Sequence, context: QueryContext = _EMPTY_QUERY_CONTEXT) -> DataResult:
+    def parse_response(self, source, context: QueryContext = _EMPTY_QUERY_CONTEXT) -> DataResult:
         """
         Decodes the ClickHouse byte buffer response into rows of native Python data
         :param source: A byte buffer or similar source

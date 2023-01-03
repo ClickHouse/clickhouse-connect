@@ -4,6 +4,7 @@ from uuid import UUID as PYUUID, SafeUUID
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import array_column
+from clickhouse_connect.driver.types import ByteSource
 
 empty_uuid_b = bytes(b'\x00' * 16)
 
@@ -13,7 +14,7 @@ class UUID(ClickHouseType):
 
     @property
     def python_null(self):
-        return '' if self.read_format() == 'string' else PYUUID(0)
+        return '' if self.read_format() == 'string' else PYUUID(int=0)
 
     def np_type(self, _str_len: int = 0):
         return 'U36' if self.read_format() == 'string' else 'O'
@@ -109,7 +110,7 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, loc: int, num_rows: int):
         return self.element_type.read_native_data(source, loc, num_rows)
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
