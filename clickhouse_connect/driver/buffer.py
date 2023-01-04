@@ -64,6 +64,7 @@ class ResponseBuffer:
                     self.beg = self.end = end + x
                 else:
                     self.beg = end + loc + 1
+
                     self.buffer = chunk[loc + 1:]
                     self.buf_loc = 0
                 self.end = end + x
