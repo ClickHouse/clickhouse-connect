@@ -1,15 +1,14 @@
-from typing import Union
+from typing import Union, Generator
 
 from requests import Response
 
 
 class ResponseBuffer:
-    def __init__(self, response: Response):
-        self.response = response
+    def __init__(self, gen: Generator[bytes, None, None]):
         self.beg = 0
         self.end = 0
         self.buf_loc = 0
-        self.gen = response.iter_content(None)
+        self.gen = gen
         self.buffer: bytes = bytes()
 
     def __getitem__(self, key: Union[slice, int]) -> Union[int, bytes, bytearray, memoryview]:
@@ -64,7 +63,6 @@ class ResponseBuffer:
                     self.beg = self.end = end + x
                 else:
                     self.beg = end + loc + 1
-
                     self.buffer = chunk[loc + 1:]
                     self.buf_loc = 0
                 self.end = end + x

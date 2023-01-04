@@ -7,7 +7,8 @@ c_modules = []
 try:
     from Cython.Build import cythonize
     print ('Using Cython to build cython modules')
-    c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
+    c_modules = cythonize(['clickhouse_connect/driverc/buffer.pyx', 'clickhouse_connect/driverc/creaders.pyx'],
+                          language_level='3')
     C_PKG = None
 except ImportError:
     print ('Cython Not Successfully Installed, Attempt to compile c files directly')

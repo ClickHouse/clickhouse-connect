@@ -1,10 +1,10 @@
-# cython: language_level=3
 from cpython cimport Py_INCREF
 from cpython.unicode cimport PyUnicode_Decode
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_ANY_CONTIGUOUS, PyBUF_SIMPLE
 
+from .buffer cimport ResponseBuffer
 
 cdef char * errors = 'strict'
 
@@ -110,3 +110,32 @@ def read_fixed_string_bytes(source, loc: int, num_rows: int, size: int):
     finally:
         PyBuffer_Release(&source_buffer)
     return column, cloc
+
+
+# def read_strings_streaming(ResponseBuffer source, loc: int, num_rows: int, encoding: str):
+#     column = PyTuple_New(num_rows)  # preallocate the tuple of strings
+#     temp_encoding = encoding.encode()
+#     cdef:
+#         unsigned long long sz = 0, shift = 0, end = 0, x = 0, cloc = loc, rows = num_rows
+#         char * c_encoding = temp_encoding
+#         unsigned char b
+#         unsigned char* sl
+#     for x in range(rows):
+#         sz = 0
+#         shift = 0
+#         while 1:
+#             b = source.get_index(cloc)
+#             sz += ((b & 0x7f) << shift)
+#             cloc += 1
+#             if (b & 0x80) == 0:
+#                 break
+#             shift += 7
+#         sl = source.get_bytes(cloc, sz)
+#         try:
+#             v = PyUnicode_Decode(<char*>sl, sz, c_encoding, errors)
+#         except UnicodeDecodeError:
+#             v = PyBytes_FromStringAndSize(<char*>sl, sz).hex()
+#         PyTuple_SET_ITEM(column, x, v)
+#         Py_INCREF(v)  # Increment the reference count for the new Python string stored in the tuple
+#         cloc += sz
+#     return column, cloc
