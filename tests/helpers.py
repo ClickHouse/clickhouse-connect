@@ -1,7 +1,7 @@
 import math
 import random
 import re
-from typing import Sequence, Optional
+from typing import Sequence, Optional, Union
 
 import pkg_resources
 
@@ -205,3 +205,19 @@ class TableContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.client.command(f'DROP TABLE IF EXISTS {self.table}')
+
+
+def bytes_gen(source: Union[str, bytes], chunk_size:int = 256):
+    if isinstance(source, str):
+        source = bytes.fromhex(source)
+
+    def gen():
+        end = 0
+        for i in range(len(source) // chunk_size):
+            yield source[end:end + chunk_size]
+            end += chunk_size
+        if end < len(source):
+            yield source[end:]
+
+    return gen()
+

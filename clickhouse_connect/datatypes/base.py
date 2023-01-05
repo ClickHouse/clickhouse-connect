@@ -113,7 +113,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             write_uint64(low_card_version, dest)
 
-    def read_native_prefix(self, source: ByteSource, loc: int):
+    def read_native_prefix(self, source: ByteSource):
         """
         Read the low cardinality version.  Like the write method, this has to happen immediately for container classes
         :param source: The native protocol binary read buffer
