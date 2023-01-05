@@ -1,3 +1,4 @@
+import traceback
 import zlib
 
 from clickhouse_connect.datatypes import registry

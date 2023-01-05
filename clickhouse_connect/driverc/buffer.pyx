@@ -20,7 +20,7 @@ cdef char * errors = 'strict'
 
 cdef class ResponseBuffer:
     def __init__(self, gen: Generator[bytes, None, None], buf_size: int = 512 * 1024):
-        self.slice_sz = 512
+        self.slice_sz = 512 * 1024
         self.slice_start = -1
         self.buf_loc = 0
         self.end = 0
@@ -65,8 +65,9 @@ cdef class ResponseBuffer:
             else:
                 tail = sz - cur_len
                 memcpy(self.slice + cur_len, ptr, tail)
-                memcpy(self.buffer, ptr + tail, x - tail)
-                self.end = x - tail
+                memcpy(self.buffer, ptr, x)
+                self.end = x
+                self.buf_loc = tail
                 cur_len += tail
 
     @cython.inline
@@ -89,7 +90,7 @@ cdef class ResponseBuffer:
             self.end = x - 1
         return ret
 
-    cdef char* _read_bytes(self, unsigned long long sz):
+    cdef char* _read_bytes(self, unsigned long long sz) except NULL:
         if self._set_slice(sz) == 255:
             return NULL
         return self._cur_slice()
@@ -125,15 +126,16 @@ cdef class ResponseBuffer:
 
     def read_uint64(self) -> int:
         cdef ull_wrapper* x
-        if self._set_slice(8) == 1:
-            raise IndexError
+        if self._set_slice(8) == 255:
+            raise StopIteration
         x = <ull_wrapper*>self._cur_slice()
         return x.int_value
 
     def read_bytes(self, unsigned long long sz):
         if self._set_slice(sz) == 255:
-            raise IndexError
+            raise StopIteration
         return self._cur_slice()[:sz]
 
     def __dealloc__(self):
         PyMem_Free(self.buffer)
+        PyMem_Free(self.slice)
