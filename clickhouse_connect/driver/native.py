@@ -1,7 +1,7 @@
 import zlib
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver.common import read_leb128, read_leb128_str, write_leb128
+from clickhouse_connect.driver.common import write_leb128
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import DataResult
 from clickhouse_connect.driver.transform import DataTransform, QueryContext
@@ -13,7 +13,6 @@ block_size = 16384
 class NativeTransform(DataTransform):
     # pylint: disable=too-many-locals
     def _transform_response(self, source: ByteSource, context: QueryContext) -> DataResult:
-        loc = 0
         names = []
         col_types = []
         result = []
@@ -21,23 +20,23 @@ class NativeTransform(DataTransform):
         use_none = context.use_none
         while True:
             try:
-                num_cols, loc = read_leb128(source, loc)
-                num_rows, loc = read_leb128(source, loc)
+                num_cols = source.read_leb128()
+                num_rows = source.read_leb128()
             except (StopIteration, IndexError):
                 break
             result_block = []
             for col_num in range(num_cols):
-                name, loc = read_leb128_str(source, loc)
+                name = source.read_leb128_str()
                 if block == 0:
                     names.append(name)
-                type_name, loc = read_leb128_str(source, loc)
+                type_name = source.read_leb128_str()
                 if block == 0:
                     col_type = registry.get_from_name(type_name)
                     col_types.append(col_type)
                 else:
                     col_type = col_types[col_num]
                 context.start_column(name, col_type)
-                column, loc = col_type.read_native_column(source, loc, num_rows, use_none=use_none)
+                column = col_type.read_native_column(source, num_rows, use_none=use_none)
                 result_block.append(column)
             if context.column_oriented:
                 if block == 0:

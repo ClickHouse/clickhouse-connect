@@ -7,29 +7,16 @@ from clickhouse_connect.driver.types import ByteSource
 class String(ClickHouseType):
     python_null = ''
 
-    def _read_native_binary(self, source: ByteSource, loc: int, num_rows: int):
-        return self._read_native_impl(source, loc, num_rows, self.encoding)
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        return self._read_native_impl(source, num_rows, self.encoding)
 
     def np_type(self, str_len: int = 0):
         return f'<U{str_len}' if str_len else 'O'
 
     @staticmethod
-    def _read_native_python(source: ByteSource, loc: int, num_rows: int, encoding: str):
-        column = []
-        app = column.append
-        for _ in range(num_rows):
-            length = 0
-            shift = 0
-            while True:
-                b = source[loc]
-                length += ((b & 0x7f) << shift)
-                loc += 1
-                if (b & 0x80) == 0:
-                    break
-                shift += 7
-            app(str(source[loc: loc + length], encoding))
-            loc += length
-        return column, loc
+    def _read_native_python(source: ByteSource, num_rows: int, encoding: str):
+        enc = encoding.encode()
+        return [source.read_leb128_str(enc) for _ in range(num_rows)]
 
     # pylint: disable=duplicate-code
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -82,27 +69,26 @@ class FixedString(ClickHouseType):
     def np_type(self, _str_len: int = 0):
         return f'<U{self.byte_size}'
 
-    def _read_native_binary(self, source: ByteSource, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            return self._read_native_str(source, loc, num_rows, self.byte_size, self.encoding)
-        return self._read_native_bytes(source, loc, num_rows, self.byte_size)
+            return self._read_native_str(source, num_rows, self.byte_size, self.encoding)
+        return self._read_native_bytes(source, num_rows, self.byte_size)
 
     @staticmethod
-    def _read_native_str_python(source: ByteSource, loc: int, num_rows: int, sz: int, encoding: str):
+    def _read_native_str_python(source: ByteSource, num_rows: int, sz: int, encoding: str):
         column = []
         app = column.append
-        end = loc + sz * num_rows
-        for ix in range(loc, end, sz):
+        for ix in range(num_rows):
+            b = source.read_bytes(sz)
             try:
-                app(str(source[ix: ix + sz], encoding).rstrip('\x00'))
+                app(str(b, encoding).rstrip('\x00'))
             except UnicodeDecodeError:
-                app(source[ix: ix + sz].hex())
-        return column, end
+                app(b.hex())
+        return column
 
     @staticmethod
-    def _read_native_bytes_python(source: ByteSource, loc: int, num_rows: int, sz: int):
-        end = loc + sz * num_rows
-        return [bytes(source[ix: ix + sz]) for ix in range(loc, end, sz)], end
+    def _read_native_bytes_python(source: ByteSource, num_rows: int, sz: int):
+        return [source.read_bytes(sz) for _ in range(num_rows)]
 
     # pylint: disable=too-many-branches
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

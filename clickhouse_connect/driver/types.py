@@ -5,5 +5,17 @@ from typing import Union
 class ByteSource(ABC):
 
     @abstractmethod
-    def __getitem__(self, key: Union[slice, int]) -> Union[int, bytes, bytearray, memoryview]:
+    def read_leb128(self) -> int:
+        pass
+
+    @abstractmethod
+    def read_leb128_str(self, encoding: bytes = 'utf-8'.encode()) -> str:
+        pass
+
+    @abstractmethod
+    def read_uint64(self) -> int:
+        pass
+
+    @abstractmethod
+    def read_bytes(self, sz: int) -> bytes:
         pass

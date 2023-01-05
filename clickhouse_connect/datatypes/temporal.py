@@ -19,11 +19,11 @@ class Date(ArrayType):
     python_null = epoch_start_date
     python_type = date
 
-    def _read_native_binary(self, source: ByteSource, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        column= array_column(self._array_type, source, num_rows)
         if self.read_format() == 'int':
-            return column, loc
-        return [epoch_start_date + timedelta(days) for days in column], loc
+            return column
+        return [epoch_start_date + timedelta(days) for days in column]
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
@@ -59,12 +59,12 @@ class DateTime(ArrayType):
     python_type = datetime
     nano_divisor = 1000000000
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        column = array_column(self._array_type, source, num_rows)
         if self.read_format() == 'int':
-            return column, loc
+            return column
         fts = from_ts_naive
-        return [fts(ts) for ts in column], loc
+        return [fts(ts) for ts in column]
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
@@ -106,10 +106,10 @@ class DateTime64(ArrayType):
     def nano_divisor(self):
         return 1000000000 // self.prec
 
-    def _read_native_tz(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _read_native_tz(self, source: ByteSource, num_rows: int):
+        column= array_column(self._array_type, source, num_rows)
         if self.read_format() == 'int':
-            return column, loc
+            return column
         new_col = []
         app = new_col.append
         dt_from = datetime.fromtimestamp
@@ -119,12 +119,12 @@ class DateTime64(ArrayType):
             seconds = ticks // prec
             dt_sec = dt_from(seconds, tz_info)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
-        return new_col, loc
+        return new_col
 
-    def _read_native_naive(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _read_native_naive(self, source: ByteSource, num_rows: int):
+        column = array_column(self._array_type, source, num_rows)
         if self.read_format() == 'int':
-            return column, loc
+            return column
         new_col = []
         app = new_col.append
         dt_from = datetime.utcfromtimestamp
@@ -133,7 +133,7 @@ class DateTime64(ArrayType):
             seconds = ticks // prec
             dt_sec = dt_from(seconds)
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
-        return new_col, loc
+        return new_col
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)

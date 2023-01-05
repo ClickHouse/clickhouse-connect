@@ -194,7 +194,7 @@ class HttpClient(Client):
         else:
             response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                          retries=self.query_retries)
-            data_result = self.transform.parse_response(BuffCls(response), context)
+            data_result = self.transform.parse_response(BuffCls(response.iter_content(None)), context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:

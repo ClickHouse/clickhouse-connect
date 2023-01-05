@@ -3,6 +3,7 @@ from typing import Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, array_column, write_array, decimal_size, decimal_prec
+from clickhouse_connect.driver.types import ByteSource
 
 
 class Int8(ArrayType):
@@ -55,20 +56,19 @@ class BigInt(ClickHouseType, registered=False):
     _signed = True
     valid_formats = 'string', 'native'
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
         signed = self._signed
         sz = self.byte_size
-        end = loc + num_rows * sz
         column = []
         app = column.append
         ifb = int.from_bytes
         if self.read_format() == 'string':
-            for ix in range(loc, end, sz):
-                app(str(ifb(source[ix: ix + sz], 'little', signed=signed)))
+            for ix in range(num_rows):
+                app(str(ifb(source.read_bytes(sz), 'little', signed=signed)))
         else:
-            for ix in range(loc, end, sz):
-                app(ifb(source[ix: ix + sz], 'little', signed=signed))
-        return column, end
+            for ix in range(num_rows):
+                app(ifb(source.read_bytes(sz), 'little', signed=signed))
+        return column
 
     # pylint: disable=too-many-branches
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -137,9 +137,9 @@ class Bool(ClickHouseType):
     _np_type = '?'
     python_type = bool
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column('B', source, loc, num_rows)
-        return [b > 0 for b in column], loc
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        column = source.read_bytes(num_rows)
+        return [b != 0 for b in column]
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         write_array('B', [1 if x else 0 for x in column], dest)
@@ -162,10 +162,10 @@ class Enum(ArrayType):
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        column = array_column(self._array_type, source, num_rows)
         lookup = self._int_map.get
-        return [lookup(x, None) for x in column], loc
+        return [lookup(x, None) for x in column]
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
@@ -214,13 +214,13 @@ class Decimal(ClickHouseType):
         self._name_suffix = f'({prec}, {scale})'
         self._array_type = array_type(self.byte_size, True)
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        column = array_column(self._array_type, source, num_rows)
         dec = decimal.Decimal
         scale = self.scale
         prec = self.prec
         if scale == 0:
-            return [dec(str(x)) for x in column], loc
+            return [dec(str(x)) for x in column]
         new_col = []
         app = new_col.append
         for x in column:
@@ -230,7 +230,7 @@ class Decimal(ClickHouseType):
             else:
                 digits = str(-x).rjust(prec, '0')
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
-        return new_col, loc
+        return new_col
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         mult = self._mult
@@ -241,28 +241,27 @@ class Decimal(ClickHouseType):
 
 
 class BigDecimal(Decimal, registered=False):
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
         dec = decimal.Decimal
         scale = self.scale
         prec = self.prec
         column = []
         app = column.append
         sz = self.byte_size
-        end = loc + sz * num_rows
         ifb = int.from_bytes
         if scale == 0:
-            for ix in range(loc, end, sz):
-                app(dec(str(ifb(source[ix: ix + sz], 'little', signed=True))))
-            return column, end
-        for ix in range(loc, end, sz):
-            x = ifb(source[ix: ix + sz], 'little', signed=True)
+            for ix in range(num_rows):
+                app(dec(str(ifb(source.read_bytes(sz), 'little', signed=True))))
+            return column
+        for ix in range(num_rows):
+            x = ifb(source.read_bytes(sz), 'little', signed=True)
             if x >= 0:
                 digits = str(x).rjust(prec, '0')
                 app(dec(f'{digits[:-scale]}.{digits[-scale:]}'))
             else:
                 digits = str(-x).rjust(prec, '0')
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
-        return column, end
+        return column
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         with decimal.localcontext() as ctx:
