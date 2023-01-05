@@ -1,7 +1,5 @@
 from typing import Union, Generator
 
-from requests import Response
-
 
 class ResponseBuffer:
     def __init__(self, gen: Generator[bytes, None, None]):

@@ -3,7 +3,7 @@ from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.native import NativeTransform
-from tests.helpers import to_bytes
+from tests.helpers import bytes_response
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 UINT16_NULLS = """
@@ -65,24 +65,24 @@ def check_result(result, expected, row_num=0, col_num=0):
 
 
 def test_uint16_nulls():
-    result = parse_response(to_bytes(UINT16_NULLS))
+    result = parse_response(bytes_response(UINT16_NULLS))
     assert result[0] == [(None,), (20,), (None,), (40,)]
 
 
 def test_low_cardinality():
-    result = parse_response(to_bytes(LOW_CARDINALITY))
+    result = parse_response(bytes_response(LOW_CARDINALITY))
     assert result[0] == [('CDMA',), ('GSM',), ('UMTS',)]
 
 
 def test_low_card_array():
-    result = parse_response(to_bytes(LOW_CARD_ARRAY))
+    result = parse_response(bytes_response(LOW_CARD_ARRAY))
     assert result[0][0] == ([],), ([],)
 
 
 def test_map():
-    result = parse_response(to_bytes(SIMPLE_MAP))
+    result = parse_response(bytes_response(SIMPLE_MAP))
     check_result(result, {'key1': 'value1', 'key2': 'value2'})
-    result = parse_response(to_bytes(LOW_CARD_MAP))
+    result = parse_response(bytes_response(LOW_CARD_MAP))
     check_result(result, {'george': UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9'), 'igor': None})
 
 
@@ -91,10 +91,10 @@ def test_ip():
     ipv4_type = registry.get_from_name('IPv4')
     dest = bytearray()
     ipv4_type.write_native_column(ips, dest)
-    python, _ = ipv4_type.read_native_column(dest, 0, 3)
+    python = ipv4_type.read_native_column(bytes_response(bytes(dest)), 3)
     assert python == [IPv4Address(ip) for ip in ips]
 
 
 def test_nested():
-    result = parse_response (to_bytes(NESTED_BINARY))
+    result = parse_response (bytes_response(NESTED_BINARY))
     check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)

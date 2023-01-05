@@ -9,7 +9,7 @@ cdef extern from "Python.h":
 from cpython.unicode cimport PyUnicode_Decode
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.exc cimport PyErr_Occurred
-from cpython.mem cimport PyMem_Realloc, PyMem_Free, PyMem_Malloc
+from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from libc.string cimport memcpy
 
 cdef union ull_wrapper:
@@ -19,8 +19,8 @@ cdef union ull_wrapper:
 cdef char * errors = 'strict'
 
 cdef class ResponseBuffer:
-    def __init__(self, gen: Generator[bytes, None, None], buf_size: int = 512 * 1024):
-        self.slice_sz = 512 * 1024
+    def __init__(self, gen: Generator[bytes, None, None], buf_size: int = 1024 * 1024):
+        self.slice_sz = 4096
         self.slice_start = -1
         self.buf_loc = 0
         self.end = 0
@@ -46,9 +46,10 @@ cdef class ResponseBuffer:
         cur_len = e - self.buf_loc
         temp = self.slice_sz
         while temp < sz * 2:
-            temp <<= 1
+            temp <<= 2
         if temp > self.slice_sz:
-            PyMem_Realloc(self.slice, temp)
+            PyMem_Free(self.slice)
+            self.slice = <char*>PyMem_Malloc(temp)
             self.slice_sz = temp
         if cur_len > 0:
             memcpy(self.slice, self.buffer + self.buf_loc, cur_len)
@@ -129,6 +130,7 @@ cdef class ResponseBuffer:
         if self._set_slice(8) == 255:
             raise StopIteration
         x = <ull_wrapper*>self._cur_slice()
+        ret = x.int_value
         return x.int_value
 
     def read_bytes(self, unsigned long long sz):

@@ -8,6 +8,7 @@ import pkg_resources
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driverc.buffer import ResponseBuffer
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
@@ -207,7 +208,7 @@ class TableContext:
         self.client.command(f'DROP TABLE IF EXISTS {self.table}')
 
 
-def bytes_gen(source: Union[str, bytes], chunk_size:int = 256):
+def bytes_response(source: Union[str, bytes], chunk_size:int = 256):
     if isinstance(source, str):
         source = bytes.fromhex(source)
 
@@ -219,5 +220,5 @@ def bytes_gen(source: Union[str, bytes], chunk_size:int = 256):
         if end < len(source):
             yield source[end:]
 
-    return gen()
+    return ResponseBuffer(gen())
 

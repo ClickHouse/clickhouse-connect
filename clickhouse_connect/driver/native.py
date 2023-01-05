@@ -48,7 +48,7 @@ class NativeTransform(DataTransform):
             else:
                 result.extend(list(zip(*result_block)))
             block += 1
-        return DataResult(result, tuple(names), tuple(col_types), context.column_oriented)
+        return DataResult(result, tuple(names), tuple(col_types), context.column_oriented, block)
 
     def _build_insert(self, context: InsertContext):
         if context.compression == 'gzip':

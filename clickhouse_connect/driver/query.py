@@ -133,13 +133,15 @@ class QueryResult:
                  column_types: Tuple[ClickHouseType, ...],
                  query_id: str = None,
                  summary: Dict[str, Any] = None,
-                 column_oriented: bool = False):
+                 column_oriented: bool = False,
+                 blocks: int = 0):
         self.result_set = result_set
         self.column_names = column_names
         self.column_types = column_types
         self.query_id = query_id
         self.summary = summary
         self.column_oriented = column_oriented
+        self.blocks = blocks
 
     @property
     def empty(self):
@@ -184,6 +186,7 @@ class DataResult(NamedTuple):
     column_names: Tuple[str]
     column_types: Tuple[ClickHouseType]
     column_oriented: bool = False
+    blocks: int = 0
 
 
 local_tz = datetime.now().astimezone().tzinfo

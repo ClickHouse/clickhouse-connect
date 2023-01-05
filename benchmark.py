@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 -u
 
 import datetime
 import sys
@@ -83,7 +83,7 @@ def main():
                 sys.exit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.get_client(compress='gzip')
+    client = clickhouse_connect.get_client(compress=True)
 
     set_default_formats('IP*', 'native', '*Int64', 'native')
     create_table(client, col_names, rows)
