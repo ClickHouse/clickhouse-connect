@@ -89,7 +89,7 @@ class IPv6(ClickHouseType):
         new_col = []
         app = new_col.append
         ifb = int.from_bytes
-        for ix in range(num_rows):
+        for _ in range(num_rows):
             int_value = ifb(source.read_bytes(16), 'big')
             if int_value >> 32 == 0xFFFF:
                 ipv4 = fast_ip_v4(IPv4Address)
@@ -111,7 +111,7 @@ class IPv6(ClickHouseType):
         tov4 = socket.inet_ntoa
         tov6 = socket.inet_ntop
         af6 = socket.AF_INET6
-        for ix in range(num_rows):
+        for _ in range(num_rows):
             x = source.read_bytes(16)
             if x[:12] == v4mask:
                 app(tov4(x[12:]))

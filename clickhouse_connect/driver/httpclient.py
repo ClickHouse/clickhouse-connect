@@ -14,14 +14,13 @@ from requests.exceptions import RequestException
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.buffer import ResponseBuffer
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
-from clickhouse_connect.driver.query import QueryResult, DataResult, QueryContext, quote_identifier, bind_query
+from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -34,13 +33,6 @@ atexit.register(default_adapter.close)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
-BuffCls = ResponseBuffer
-
-try:
-    from clickhouse_connect.driverc.buffer import ResponseBuffer as CBuffer
-    BuffCls = CBuffer
-except ImportError:
-    logger.warning('Failed to import CBuffer, falling back to pure Python implementation')
 
 
 # pylint: disable=too-many-instance-attributes
@@ -191,24 +183,20 @@ class HttpClient(Client):
             for col in json_result['meta']:
                 names.append(col['name'])
                 types.append(registry.get_from_name(col['type']))
-            data_result = DataResult([], tuple(names), tuple(types))
+            query_result = QueryResult([], None, tuple(names), tuple(types))
         else:
             response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                          retries=self.query_retries)
-            data_result = self.transform.parse_response(BuffCls(response.iter_content(None)), context)
-        summary = {}
+            buff = Client.BuffCls(response.iter_content(None))  # pylint: disable=not-callable
+            query_result = self.transform.parse_response(buff, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:
                 summary = json.loads(response.headers['X-ClickHouse-Summary'])
+                query_result.summary = summary
             except json.JSONDecodeError:
                 pass
-        return QueryResult(data_result.result,
-                           data_result.column_names,
-                           data_result.column_types,
-                           response.headers.get('X-ClickHouse-Query-Id'),
-                           summary,
-                           data_result.column_oriented,
-                           data_result.blocks)
+        query_result.query_id = response.headers.get('X-ClickHouse-Query-Id')
+        return query_result
 
     def data_insert(self, context: InsertContext):
         """

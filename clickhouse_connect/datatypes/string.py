@@ -15,7 +15,7 @@ class String(ClickHouseType):
 
     @staticmethod
     def _read_native_python(source: ByteSource, num_rows: int, encoding: str):
-        return source.read_str_col(num_rows, encoding.encode())
+        return source.read_str_col(num_rows, encoding)
 
     # pylint: disable=duplicate-code
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -74,7 +74,7 @@ class FixedString(ClickHouseType):
         return self._read_native_bytes(source, num_rows, self.byte_size)
 
     @staticmethod
-    def _read_native_str_python(source: ByteSource, num_rows: int, sz: int, encoding: str):
+    def _read_native_str(source: ByteSource, num_rows: int, sz: int, encoding: str):
         column = []
         app = column.append
         for ix in range(num_rows):
@@ -86,7 +86,7 @@ class FixedString(ClickHouseType):
         return column
 
     @staticmethod
-    def _read_native_bytes_python(source: ByteSource, num_rows: int, sz: int):
+    def _read_native_bytes(source: ByteSource, num_rows: int, sz: int):
         return [source.read_bytes(sz) for _ in range(num_rows)]
 
     # pylint: disable=too-many-branches
@@ -128,6 +128,3 @@ class FixedString(ClickHouseType):
         else:
             for x in column:
                 ext(x)
-
-    _read_native_str = _read_native_str_python
-    _read_native_bytes = _read_native_bytes_python

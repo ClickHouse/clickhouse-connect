@@ -4,11 +4,12 @@ import uuid
 import pytz
 
 from enum import Enum
-from typing import NamedTuple, Any, Tuple, Dict, Sequence, Optional, Union, Generator
+from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Iterator
 from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.types import Matrix
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -128,24 +129,44 @@ class QueryResult:
     """
 
     def __init__(self,
-                 result_set: Sequence[Sequence[Any]],
-                 column_names: Tuple[str, ...],
-                 column_types: Tuple[ClickHouseType, ...],
+                 result_set: Matrix = None,
+                 block_gen: Generator[Matrix, None, None] = None,
+                 column_names: Tuple[str, ...] = (),
+                 column_types: Tuple[ClickHouseType, ...] = (),
                  query_id: str = None,
                  summary: Dict[str, Any] = None,
-                 column_oriented: bool = False,
-                 blocks: int = 0):
-        self.result_set = result_set
+                 column_oriented: bool = False):
+        self._result_set = result_set
+        self._block_gen = block_gen
         self.column_names = column_names
         self.column_types = column_types
         self.query_id = query_id
-        self.summary = summary
+        self.summary = {} if summary is None else summary
         self.column_oriented = column_oriented
-        self.blocks = blocks
 
     @property
     def empty(self):
         return self.row_count == 0
+
+    @property
+    def result_set(self) -> Matrix:
+        if self._result_set is None:
+            if self.column_oriented:
+                result = [[] for _ in range(len(self.column_names))]
+                for block in self._block_gen:
+                    for base, added in zip(result, block):
+                        base.extend(added)
+            else:
+                result = []
+                for block in self._block_gen:
+                    result.extend(list(zip(*block)))
+            self._result_set = result
+        return self._result_set
+
+    def stream(self) -> Iterator[Matrix]:
+        if self._result_set is not None or self._block_gen is None:
+            return iter(())
+        return self._block_gen
 
     def named_results(self) -> Generator[dict, None, None]:
         if self.column_oriented:
@@ -176,17 +197,6 @@ class QueryResult:
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
-
-
-class DataResult(NamedTuple):
-    """
-    Wrapper class for data return values and metadata at the lowest level
-    """
-    result: Sequence[Sequence[Any]]
-    column_names: Tuple[str]
-    column_types: Tuple[ClickHouseType]
-    column_oriented: bool = False
-    blocks: int = 0
 
 
 local_tz = datetime.now().astimezone().tzinfo

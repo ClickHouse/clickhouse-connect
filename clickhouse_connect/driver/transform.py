@@ -1,21 +1,23 @@
+
 from abc import ABC, abstractmethod
-from typing import Sequence
+
+
+from clickhouse_connect.driver.types import ByteSource
 
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import DataResult, QueryContext
-
+from clickhouse_connect.driver.query import QueryResult, QueryContext
 
 _EMPTY_QUERY_CONTEXT = QueryContext()
 
 
 class DataTransform(ABC):
 
-    def parse_response(self, source, context: QueryContext = _EMPTY_QUERY_CONTEXT) -> DataResult:
+    def parse_response(self, source: ByteSource, context: QueryContext = _EMPTY_QUERY_CONTEXT) -> QueryResult:
         """
         Decodes the ClickHouse byte buffer response into rows of native Python data
         :param source: A byte buffer or similar source
         :param context: The QueryContext to use in processing the response
-        :return: DataResult -- data matrix, column names, column types
+        :return: QueryResult -- data matrix, column names, column types, etc
         """
         with context:
             return self._transform_response(source, context)
@@ -30,7 +32,7 @@ class DataTransform(ABC):
             return self._build_insert(context)
 
     @abstractmethod
-    def _transform_response(self, source: Sequence, context: QueryContext) -> DataResult:
+    def _transform_response(self, source: ByteSource, context: QueryContext) -> QueryResult:
         pass
 
     @abstractmethod

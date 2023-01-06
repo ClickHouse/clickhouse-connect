@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Union
+from typing import Sequence, Any
+
+Matrix = Sequence[Sequence[Any]]
 
 
 class ByteSource(ABC):
@@ -9,7 +11,7 @@ class ByteSource(ABC):
         pass
 
     @abstractmethod
-    def read_leb128_str(self, encoding: bytes = 'utf-8'.encode()) -> str:
+    def read_leb128_str(self, encoding: str = 'utf-8') -> str:
         pass
 
     @abstractmethod
@@ -21,9 +23,13 @@ class ByteSource(ABC):
         pass
 
     @abstractmethod
-    def read_str_col(self, num_rows: int, encoding: bytes = 'utf-8'.encode()):
+    def read_str_col(self, num_rows: int, encoding: str):
         pass
 
     @abstractmethod
     def read_array(self, array_type: str, num_rows: int):
+        pass
+
+    @abstractmethod
+    def read_byte(self) -> int:
         pass

@@ -91,7 +91,6 @@ cdef class ResponseBuffer:
 
     @cython.inline
     cdef unsigned char _read_byte(self) except? 255:
-        cdef unsigned char ret
         if self.buf_loc < self.end:
             self.buf_loc += 1
             return self.buffer[self.buf_loc - 1]
@@ -102,20 +101,20 @@ cdef class ResponseBuffer:
         if x == 0:
             raise IndexError
         py_chunk = chunk
-        ret = <unsigned char>chunk[0]
         if x > 1:
             self._reset_buff(chunk)
             self.buf_loc = 1
             self.end = x
-        return ret
+        return <unsigned char>chunk[0]
 
+    @cython.inline
     cdef char* _read_bytes(self, unsigned long long sz) except NULL:
         if self._set_slice(sz) == 255:
             return NULL
         return self._cur_slice()
 
     @cython.inline
-    cpdef object read_leb128_str(self, char* encoding='utf-8'):
+    cdef object _read_leb128_str(self, char* encoding='utf-8'):
         cdef unsigned long long sz = self.read_leb128()
         cdef char* b = self._read_bytes(sz)
         if b == NULL:
@@ -124,6 +123,9 @@ cdef class ResponseBuffer:
             return PyUnicode_Decode(b, sz, encoding, errors)
         except UnicodeDecodeError:
             return PyBytes_FromStringAndSize(b, sz).hex()
+
+    def read_leb128_str(self, encoding: str='utf-8'):
+        return self._read_leb128_str(encoding.encode())
 
     def read_byte(self) -> int:
         cdef unsigned char ret = self._read_byte()
@@ -161,10 +163,11 @@ cdef class ResponseBuffer:
             raise StopIteration
         return self._cur_slice()[:sz]
 
-    def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):
+    def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):
         cdef object column = PyTuple_New(num_rows)
+        enc = encoding.encode()
         for x in range(num_rows):
-            v = self.read_leb128_str(encoding)
+            v = self._read_leb128_str(enc)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
         return column

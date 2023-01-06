@@ -58,7 +58,7 @@ parse_response = NativeTransform().parse_response
 
 
 def check_result(result, expected, row_num=0, col_num=0):
-    result_set = result[0]
+    result_set = result.result_set
     row = result_set[row_num]
     value = row[col_num]
     assert value == expected
@@ -66,17 +66,17 @@ def check_result(result, expected, row_num=0, col_num=0):
 
 def test_uint16_nulls():
     result = parse_response(bytes_response(UINT16_NULLS))
-    assert result[0] == [(None,), (20,), (None,), (40,)]
+    assert result.result_set == [(None,), (20,), (None,), (40,)]
 
 
 def test_low_cardinality():
     result = parse_response(bytes_response(LOW_CARDINALITY))
-    assert result[0] == [('CDMA',), ('GSM',), ('UMTS',)]
+    assert result.result_set == [('CDMA',), ('GSM',), ('UMTS',)]
 
 
 def test_low_card_array():
     result = parse_response(bytes_response(LOW_CARD_ARRAY))
-    assert result[0][0] == ([],), ([],)
+    assert result.first_row == ([],), ([],)
 
 
 def test_map():

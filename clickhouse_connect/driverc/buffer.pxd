@@ -11,7 +11,6 @@ cdef class ResponseBuffer:
         char* _read_bytes(self, unsigned long long sz) except NULL
         _reset_buff(self, object source)
         Py_buffer buff_source
-
-    cpdef object read_leb128_str(self, char * encoding = *)
+        cdef object _read_leb128_str(self, char * encoding = *)
     cpdef unsigned long long read_leb128(self) except? 99999
 

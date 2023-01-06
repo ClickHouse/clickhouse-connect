@@ -1,10 +1,9 @@
 import array
 import sys
 
-from typing import Tuple, Sequence, MutableSequence, Dict, Optional, Iterable
+from typing import Sequence, MutableSequence, Dict, Optional
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.types import ByteSource
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'

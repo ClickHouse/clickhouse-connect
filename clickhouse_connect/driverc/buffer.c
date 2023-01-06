@@ -980,17 +980,17 @@ struct arrayobject;
 typedef struct arrayobject arrayobject;
 #endif
 struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer;
-struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str;
+struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str;
 union __pyx_t_18clickhouse_connect_7driverc_6buffer_ull_wrapper;
 
-/* "clickhouse_connect/driverc/buffer.pxd":15
+/* "clickhouse_connect/driverc/buffer.pxd":14
+ *         _reset_buff(self, object source)
  *         Py_buffer buff_source
- * 
- *     cpdef object read_leb128_str(self, char * encoding = *)             # <<<<<<<<<<<<<<
+ *         cdef object _read_leb128_str(self, char * encoding = *)             # <<<<<<<<<<<<<<
  *     cpdef unsigned long long read_leb128(self) except? 99999
  * 
  */
-struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str {
+struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str {
   int __pyx_n;
   char *encoding;
 };
@@ -1041,7 +1041,7 @@ struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer {
   unsigned char (*_read_byte)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *);
   char *(*_read_bytes)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, unsigned PY_LONG_LONG);
   PyObject *(*_reset_buff)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, PyObject *);
-  PyObject *(*read_leb128_str)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, int __pyx_skip_dispatch, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str *__pyx_optional_args);
+  PyObject *(*_read_leb128_str)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str *__pyx_optional_args);
   unsigned PY_LONG_LONG (*read_leb128)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, int __pyx_skip_dispatch);
 };
 static struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_vtabptr_18clickhouse_connect_7driverc_6buffer_ResponseBuffer;
@@ -1197,37 +1197,36 @@ static PyObject *__Pyx_GetItemInt_Generic(PyObject *o, PyObject* j);
 static CYTHON_INLINE PyObject *__Pyx_GetItemInt_Fast(PyObject *o, Py_ssize_t i,
                                                      int is_list, int wraparound, int boundscheck);
 
-/* PyDictVersioning.proto */
-#if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_TYPE_SLOTS
-#define __PYX_DICT_VERSION_INIT  ((PY_UINT64_T) -1)
-#define __PYX_GET_DICT_VERSION(dict)  (((PyDictObject*)(dict))->ma_version_tag)
-#define __PYX_UPDATE_DICT_CACHE(dict, value, cache_var, version_var)\
-    (version_var) = __PYX_GET_DICT_VERSION(dict);\
-    (cache_var) = (value);
-#define __PYX_PY_DICT_LOOKUP_IF_MODIFIED(VAR, DICT, LOOKUP) {\
-    static PY_UINT64_T __pyx_dict_version = 0;\
-    static PyObject *__pyx_dict_cached_value = NULL;\
-    if (likely(__PYX_GET_DICT_VERSION(DICT) == __pyx_dict_version)) {\
-        (VAR) = __pyx_dict_cached_value;\
-    } else {\
-        (VAR) = __pyx_dict_cached_value = (LOOKUP);\
-        __pyx_dict_version = __PYX_GET_DICT_VERSION(DICT);\
-    }\
-}
-static CYTHON_INLINE PY_UINT64_T __Pyx_get_tp_dict_version(PyObject *obj);
-static CYTHON_INLINE PY_UINT64_T __Pyx_get_object_dict_version(PyObject *obj);
-static CYTHON_INLINE int __Pyx_object_dict_version_matches(PyObject* obj, PY_UINT64_T tp_dict_version, PY_UINT64_T obj_dict_version);
-#else
-#define __PYX_GET_DICT_VERSION(dict)  (0)
-#define __PYX_UPDATE_DICT_CACHE(dict, value, cache_var, version_var)
-#define __PYX_PY_DICT_LOOKUP_IF_MODIFIED(VAR, DICT, LOOKUP)  (VAR) = (LOOKUP);
+/* GetTopmostException.proto */
+#if CYTHON_USE_EXC_INFO_STACK
+static _PyErr_StackItem * __Pyx_PyErr_GetTopmostException(PyThreadState *tstate);
 #endif
 
-/* PyCFunctionFastCall.proto */
-#if CYTHON_FAST_PYCCALL
-static CYTHON_INLINE PyObject *__Pyx_PyCFunction_FastCall(PyObject *func, PyObject **args, Py_ssize_t nargs);
+/* SaveResetException.proto */
+#if CYTHON_FAST_THREAD_STATE
+#define __Pyx_ExceptionSave(type, value, tb)  __Pyx__ExceptionSave(__pyx_tstate, type, value, tb)
+static CYTHON_INLINE void __Pyx__ExceptionSave(PyThreadState *tstate, PyObject **type, PyObject **value, PyObject **tb);
+#define __Pyx_ExceptionReset(type, value, tb)  __Pyx__ExceptionReset(__pyx_tstate, type, value, tb)
+static CYTHON_INLINE void __Pyx__ExceptionReset(PyThreadState *tstate, PyObject *type, PyObject *value, PyObject *tb);
 #else
-#define __Pyx_PyCFunction_FastCall(func, args, nargs)  (assert(0), NULL)
+#define __Pyx_ExceptionSave(type, value, tb)   PyErr_GetExcInfo(type, value, tb)
+#define __Pyx_ExceptionReset(type, value, tb)  PyErr_SetExcInfo(type, value, tb)
+#endif
+
+/* PyErrExceptionMatches.proto */
+#if CYTHON_FAST_THREAD_STATE
+#define __Pyx_PyErr_ExceptionMatches(err) __Pyx_PyErr_ExceptionMatchesInState(__pyx_tstate, err)
+static CYTHON_INLINE int __Pyx_PyErr_ExceptionMatchesInState(PyThreadState* tstate, PyObject* err);
+#else
+#define __Pyx_PyErr_ExceptionMatches(err)  PyErr_ExceptionMatches(err)
+#endif
+
+/* GetException.proto */
+#if CYTHON_FAST_THREAD_STATE
+#define __Pyx_GetException(type, value, tb)  __Pyx__GetException(__pyx_tstate, type, value, tb)
+static int __Pyx__GetException(PyThreadState *tstate, PyObject **type, PyObject **value, PyObject **tb);
+#else
+static int __Pyx_GetException(PyObject **type, PyObject **value, PyObject **tb);
 #endif
 
 /* PyFunctionFastCall.proto */
@@ -1268,47 +1267,9 @@ static CYTHON_INLINE PyObject* __Pyx_PyObject_Call(PyObject *func, PyObject *arg
 #define __Pyx_PyObject_Call(func, arg, kw) PyObject_Call(func, arg, kw)
 #endif
 
-/* PyObjectCall2Args.proto */
-static CYTHON_UNUSED PyObject* __Pyx_PyObject_Call2Args(PyObject* function, PyObject* arg1, PyObject* arg2);
-
 /* PyObjectCallMethO.proto */
 #if CYTHON_COMPILING_IN_CPYTHON
 static CYTHON_INLINE PyObject* __Pyx_PyObject_CallMethO(PyObject *func, PyObject *arg);
-#endif
-
-/* PyObjectCallOneArg.proto */
-static CYTHON_INLINE PyObject* __Pyx_PyObject_CallOneArg(PyObject *func, PyObject *arg);
-
-/* GetTopmostException.proto */
-#if CYTHON_USE_EXC_INFO_STACK
-static _PyErr_StackItem * __Pyx_PyErr_GetTopmostException(PyThreadState *tstate);
-#endif
-
-/* SaveResetException.proto */
-#if CYTHON_FAST_THREAD_STATE
-#define __Pyx_ExceptionSave(type, value, tb)  __Pyx__ExceptionSave(__pyx_tstate, type, value, tb)
-static CYTHON_INLINE void __Pyx__ExceptionSave(PyThreadState *tstate, PyObject **type, PyObject **value, PyObject **tb);
-#define __Pyx_ExceptionReset(type, value, tb)  __Pyx__ExceptionReset(__pyx_tstate, type, value, tb)
-static CYTHON_INLINE void __Pyx__ExceptionReset(PyThreadState *tstate, PyObject *type, PyObject *value, PyObject *tb);
-#else
-#define __Pyx_ExceptionSave(type, value, tb)   PyErr_GetExcInfo(type, value, tb)
-#define __Pyx_ExceptionReset(type, value, tb)  PyErr_SetExcInfo(type, value, tb)
-#endif
-
-/* PyErrExceptionMatches.proto */
-#if CYTHON_FAST_THREAD_STATE
-#define __Pyx_PyErr_ExceptionMatches(err) __Pyx_PyErr_ExceptionMatchesInState(__pyx_tstate, err)
-static CYTHON_INLINE int __Pyx_PyErr_ExceptionMatchesInState(PyThreadState* tstate, PyObject* err);
-#else
-#define __Pyx_PyErr_ExceptionMatches(err)  PyErr_ExceptionMatches(err)
-#endif
-
-/* GetException.proto */
-#if CYTHON_FAST_THREAD_STATE
-#define __Pyx_GetException(type, value, tb)  __Pyx__GetException(__pyx_tstate, type, value, tb)
-static int __Pyx__GetException(PyThreadState *tstate, PyObject **type, PyObject **value, PyObject **tb);
-#else
-static int __Pyx_GetException(PyObject **type, PyObject **value, PyObject **tb);
 #endif
 
 /* PyObjectCallNoArg.proto */
@@ -1318,11 +1279,47 @@ static CYTHON_INLINE PyObject* __Pyx_PyObject_CallNoArg(PyObject *func);
 #define __Pyx_PyObject_CallNoArg(func) __Pyx_PyObject_Call(func, __pyx_empty_tuple, NULL)
 #endif
 
+/* PyCFunctionFastCall.proto */
+#if CYTHON_FAST_PYCCALL
+static CYTHON_INLINE PyObject *__Pyx_PyCFunction_FastCall(PyObject *func, PyObject **args, Py_ssize_t nargs);
+#else
+#define __Pyx_PyCFunction_FastCall(func, args, nargs)  (assert(0), NULL)
+#endif
+
+/* PyObjectCallOneArg.proto */
+static CYTHON_INLINE PyObject* __Pyx_PyObject_CallOneArg(PyObject *func, PyObject *arg);
+
 /* ArgTypeTest.proto */
 #define __Pyx_ArgTypeTest(obj, type, none_allowed, name, exact)\
     ((likely((Py_TYPE(obj) == type) | (none_allowed && (obj == Py_None)))) ? 1 :\
         __Pyx__ArgTypeTest(obj, type, name, exact))
 static int __Pyx__ArgTypeTest(PyObject *obj, PyTypeObject *type, const char *name, int exact);
+
+/* PyDictVersioning.proto */
+#if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_TYPE_SLOTS
+#define __PYX_DICT_VERSION_INIT  ((PY_UINT64_T) -1)
+#define __PYX_GET_DICT_VERSION(dict)  (((PyDictObject*)(dict))->ma_version_tag)
+#define __PYX_UPDATE_DICT_CACHE(dict, value, cache_var, version_var)\
+    (version_var) = __PYX_GET_DICT_VERSION(dict);\
+    (cache_var) = (value);
+#define __PYX_PY_DICT_LOOKUP_IF_MODIFIED(VAR, DICT, LOOKUP) {\
+    static PY_UINT64_T __pyx_dict_version = 0;\
+    static PyObject *__pyx_dict_cached_value = NULL;\
+    if (likely(__PYX_GET_DICT_VERSION(DICT) == __pyx_dict_version)) {\
+        (VAR) = __pyx_dict_cached_value;\
+    } else {\
+        (VAR) = __pyx_dict_cached_value = (LOOKUP);\
+        __pyx_dict_version = __PYX_GET_DICT_VERSION(DICT);\
+    }\
+}
+static CYTHON_INLINE PY_UINT64_T __Pyx_get_tp_dict_version(PyObject *obj);
+static CYTHON_INLINE PY_UINT64_T __Pyx_get_object_dict_version(PyObject *obj);
+static CYTHON_INLINE int __Pyx_object_dict_version_matches(PyObject* obj, PY_UINT64_T tp_dict_version, PY_UINT64_T obj_dict_version);
+#else
+#define __PYX_GET_DICT_VERSION(dict)  (0)
+#define __PYX_UPDATE_DICT_CACHE(dict, value, cache_var, version_var)
+#define __PYX_PY_DICT_LOOKUP_IF_MODIFIED(VAR, DICT, LOOKUP)  (VAR) = (LOOKUP);
+#endif
 
 /* DictGetItem.proto */
 #if PY_MAJOR_VERSION >= 3 && !CYTHON_COMPILING_IN_PYPY
@@ -1590,7 +1587,7 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
 static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__set_slice(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_sz); /* proto*/
 static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_byte(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self); /* proto*/
 static char *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_bytes(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_sz); /* proto*/
-static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, int __pyx_skip_dispatch, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str *__pyx_optional_args); /* proto*/
+static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str *__pyx_optional_args); /* proto*/
 static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, int __pyx_skip_dispatch); /* proto*/
 
 /* Module declarations from 'cpython.version' */
@@ -1714,6 +1711,7 @@ static const char __pyx_k_name[] = "__name__";
 static const char __pyx_k_test[] = "__test__";
 static const char __pyx_k_array[] = "array";
 static const char __pyx_k_range[] = "range";
+static const char __pyx_k_utf_8[] = "utf-8";
 static const char __pyx_k_import[] = "__import__";
 static const char __pyx_k_reduce[] = "__reduce__";
 static const char __pyx_k_typing[] = "typing";
@@ -1734,7 +1732,6 @@ static const char __pyx_k_read_leb128[] = "read_leb128";
 static const char __pyx_k_StopIteration[] = "StopIteration";
 static const char __pyx_k_reduce_cython[] = "__reduce_cython__";
 static const char __pyx_k_ResponseBuffer[] = "ResponseBuffer";
-static const char __pyx_k_read_leb128_str[] = "read_leb128_str";
 static const char __pyx_k_setstate_cython[] = "__setstate_cython__";
 static const char __pyx_k_UnicodeDecodeError[] = "UnicodeDecodeError";
 static const char __pyx_k_cline_in_traceback[] = "cline_in_traceback";
@@ -1765,7 +1762,6 @@ static PyObject *__pyx_n_s_num_rows;
 static PyObject *__pyx_n_s_pyx_vtable;
 static PyObject *__pyx_n_s_range;
 static PyObject *__pyx_n_s_read_leb128;
-static PyObject *__pyx_n_s_read_leb128_str;
 static PyObject *__pyx_n_s_reduce;
 static PyObject *__pyx_n_s_reduce_cython;
 static PyObject *__pyx_n_s_reduce_ex;
@@ -1776,13 +1772,14 @@ static PyObject *__pyx_n_s_sys;
 static PyObject *__pyx_n_s_t;
 static PyObject *__pyx_n_s_test;
 static PyObject *__pyx_n_s_typing;
+static PyObject *__pyx_kp_u_utf_8;
 static int __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer___init__(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, PyObject *__pyx_v_gen); /* proto */
-static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_2read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, char *__pyx_v_encoding); /* proto */
+static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_2read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, PyObject *__pyx_v_encoding); /* proto */
 static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_4read_byte(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_6read_leb128(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_8read_uint64(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_10read_bytes(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_sz); /* proto */
-static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_12read_str_col(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_num_rows, char *__pyx_v_encoding); /* proto */
+static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_12read_str_col(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_num_rows, PyObject *__pyx_v_encoding); /* proto */
 static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_14read_array(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, PyObject *__pyx_v_t, unsigned PY_LONG_LONG __pyx_v_num_rows); /* proto */
 static void __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_16__dealloc__(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_18__reduce_cython__(CYTHON_UNUSED struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self); /* proto */
@@ -2490,12 +2487,11 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
  * 
  *     @cython.inline
  *     cdef unsigned char _read_byte(self) except? 255:             # <<<<<<<<<<<<<<
- *         cdef unsigned char ret
  *         if self.buf_loc < self.end:
+ *             self.buf_loc += 1
  */
 
 static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_byte(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self) {
-  unsigned char __pyx_v_ret;
   PyObject *__pyx_v_chunk = NULL;
   Py_ssize_t __pyx_v_x;
   CYTHON_UNUSED PyObject *__pyx_v_py_chunk = NULL;
@@ -2511,9 +2507,9 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_read_byte", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":95
+  /* "clickhouse_connect/driverc/buffer.pyx":94
+ *     @cython.inline
  *     cdef unsigned char _read_byte(self) except? 255:
- *         cdef unsigned char ret
  *         if self.buf_loc < self.end:             # <<<<<<<<<<<<<<
  *             self.buf_loc += 1
  *             return self.buffer[self.buf_loc - 1]
@@ -2521,8 +2517,8 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
   __pyx_t_1 = ((__pyx_v_self->buf_loc < __pyx_v_self->end) != 0);
   if (__pyx_t_1) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":96
- *         cdef unsigned char ret
+    /* "clickhouse_connect/driverc/buffer.pyx":95
+ *     cdef unsigned char _read_byte(self) except? 255:
  *         if self.buf_loc < self.end:
  *             self.buf_loc += 1             # <<<<<<<<<<<<<<
  *             return self.buffer[self.buf_loc - 1]
@@ -2530,7 +2526,7 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
  */
     __pyx_v_self->buf_loc = (__pyx_v_self->buf_loc + 1);
 
-    /* "clickhouse_connect/driverc/buffer.pyx":97
+    /* "clickhouse_connect/driverc/buffer.pyx":96
  *         if self.buf_loc < self.end:
  *             self.buf_loc += 1
  *             return self.buffer[self.buf_loc - 1]             # <<<<<<<<<<<<<<
@@ -2540,16 +2536,16 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
     __pyx_r = (__pyx_v_self->buffer[(__pyx_v_self->buf_loc - 1)]);
     goto __pyx_L0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":95
+    /* "clickhouse_connect/driverc/buffer.pyx":94
+ *     @cython.inline
  *     cdef unsigned char _read_byte(self) except? 255:
- *         cdef unsigned char ret
  *         if self.buf_loc < self.end:             # <<<<<<<<<<<<<<
  *             self.buf_loc += 1
  *             return self.buffer[self.buf_loc - 1]
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":98
+  /* "clickhouse_connect/driverc/buffer.pyx":97
  *             self.buf_loc += 1
  *             return self.buffer[self.buf_loc - 1]
  *         self.buf_loc = 0             # <<<<<<<<<<<<<<
@@ -2558,7 +2554,7 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
  */
   __pyx_v_self->buf_loc = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":99
+  /* "clickhouse_connect/driverc/buffer.pyx":98
  *             return self.buffer[self.buf_loc - 1]
  *         self.buf_loc = 0
  *         self.end = 0             # <<<<<<<<<<<<<<
@@ -2567,7 +2563,7 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
  */
   __pyx_v_self->end = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":100
+  /* "clickhouse_connect/driverc/buffer.pyx":99
  *         self.buf_loc = 0
  *         self.end = 0
  *         chunk = next(self.gen)             # <<<<<<<<<<<<<<
@@ -2576,23 +2572,23 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
  */
   __pyx_t_2 = __pyx_v_self->gen;
   __Pyx_INCREF(__pyx_t_2);
-  __pyx_t_3 = __Pyx_PyIter_Next(__pyx_t_2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 100, __pyx_L1_error)
+  __pyx_t_3 = __Pyx_PyIter_Next(__pyx_t_2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 99, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_3);
   __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
   __pyx_v_chunk = __pyx_t_3;
   __pyx_t_3 = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":101
+  /* "clickhouse_connect/driverc/buffer.pyx":100
  *         self.end = 0
  *         chunk = next(self.gen)
  *         x = len(chunk)             # <<<<<<<<<<<<<<
  *         if x == 0:
  *             raise IndexError
  */
-  __pyx_t_4 = PyObject_Length(__pyx_v_chunk); if (unlikely(__pyx_t_4 == ((Py_ssize_t)-1))) __PYX_ERR(0, 101, __pyx_L1_error)
+  __pyx_t_4 = PyObject_Length(__pyx_v_chunk); if (unlikely(__pyx_t_4 == ((Py_ssize_t)-1))) __PYX_ERR(0, 100, __pyx_L1_error)
   __pyx_v_x = __pyx_t_4;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":102
+  /* "clickhouse_connect/driverc/buffer.pyx":101
  *         chunk = next(self.gen)
  *         x = len(chunk)
  *         if x == 0:             # <<<<<<<<<<<<<<
@@ -2602,17 +2598,17 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
   __pyx_t_1 = ((__pyx_v_x == 0) != 0);
   if (unlikely(__pyx_t_1)) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":103
+    /* "clickhouse_connect/driverc/buffer.pyx":102
  *         x = len(chunk)
  *         if x == 0:
  *             raise IndexError             # <<<<<<<<<<<<<<
  *         py_chunk = chunk
- *         ret = <unsigned char>chunk[0]
+ *         if x > 1:
  */
     __Pyx_Raise(__pyx_builtin_IndexError, 0, 0, 0);
-    __PYX_ERR(0, 103, __pyx_L1_error)
+    __PYX_ERR(0, 102, __pyx_L1_error)
 
-    /* "clickhouse_connect/driverc/buffer.pyx":102
+    /* "clickhouse_connect/driverc/buffer.pyx":101
  *         chunk = next(self.gen)
  *         x = len(chunk)
  *         if x == 0:             # <<<<<<<<<<<<<<
@@ -2621,32 +2617,19 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":104
+  /* "clickhouse_connect/driverc/buffer.pyx":103
  *         if x == 0:
  *             raise IndexError
  *         py_chunk = chunk             # <<<<<<<<<<<<<<
- *         ret = <unsigned char>chunk[0]
  *         if x > 1:
+ *             self._reset_buff(chunk)
  */
   __Pyx_INCREF(__pyx_v_chunk);
   __pyx_v_py_chunk = __pyx_v_chunk;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":105
+  /* "clickhouse_connect/driverc/buffer.pyx":104
  *             raise IndexError
  *         py_chunk = chunk
- *         ret = <unsigned char>chunk[0]             # <<<<<<<<<<<<<<
- *         if x > 1:
- *             self._reset_buff(chunk)
- */
-  __pyx_t_3 = __Pyx_GetItemInt(__pyx_v_chunk, 0, long, 1, __Pyx_PyInt_From_long, 0, 0, 1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 105, __pyx_L1_error)
-  __Pyx_GOTREF(__pyx_t_3);
-  __pyx_t_5 = __Pyx_PyInt_As_unsigned_char(__pyx_t_3); if (unlikely((__pyx_t_5 == (unsigned char)-1) && PyErr_Occurred())) __PYX_ERR(0, 105, __pyx_L1_error)
-  __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-  __pyx_v_ret = ((unsigned char)__pyx_t_5);
-
-  /* "clickhouse_connect/driverc/buffer.pyx":106
- *         py_chunk = chunk
- *         ret = <unsigned char>chunk[0]
  *         if x > 1:             # <<<<<<<<<<<<<<
  *             self._reset_buff(chunk)
  *             self.buf_loc = 1
@@ -2654,60 +2637,64 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
   __pyx_t_1 = ((__pyx_v_x > 1) != 0);
   if (__pyx_t_1) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":107
- *         ret = <unsigned char>chunk[0]
+    /* "clickhouse_connect/driverc/buffer.pyx":105
+ *         py_chunk = chunk
  *         if x > 1:
  *             self._reset_buff(chunk)             # <<<<<<<<<<<<<<
  *             self.buf_loc = 1
  *             self.end = x
  */
-    __pyx_t_3 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_reset_buff(__pyx_v_self, __pyx_v_chunk); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 107, __pyx_L1_error)
+    __pyx_t_3 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_reset_buff(__pyx_v_self, __pyx_v_chunk); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 105, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":108
+    /* "clickhouse_connect/driverc/buffer.pyx":106
  *         if x > 1:
  *             self._reset_buff(chunk)
  *             self.buf_loc = 1             # <<<<<<<<<<<<<<
  *             self.end = x
- *         return ret
+ *         return <unsigned char>chunk[0]
  */
     __pyx_v_self->buf_loc = 1;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":109
+    /* "clickhouse_connect/driverc/buffer.pyx":107
  *             self._reset_buff(chunk)
  *             self.buf_loc = 1
  *             self.end = x             # <<<<<<<<<<<<<<
- *         return ret
+ *         return <unsigned char>chunk[0]
  * 
  */
     __pyx_v_self->end = __pyx_v_x;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":106
+    /* "clickhouse_connect/driverc/buffer.pyx":104
+ *             raise IndexError
  *         py_chunk = chunk
- *         ret = <unsigned char>chunk[0]
  *         if x > 1:             # <<<<<<<<<<<<<<
  *             self._reset_buff(chunk)
  *             self.buf_loc = 1
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":110
+  /* "clickhouse_connect/driverc/buffer.pyx":108
  *             self.buf_loc = 1
  *             self.end = x
- *         return ret             # <<<<<<<<<<<<<<
+ *         return <unsigned char>chunk[0]             # <<<<<<<<<<<<<<
  * 
- *     cdef char* _read_bytes(self, unsigned long long sz) except NULL:
+ *     @cython.inline
  */
-  __pyx_r = __pyx_v_ret;
+  __pyx_t_3 = __Pyx_GetItemInt(__pyx_v_chunk, 0, long, 1, __Pyx_PyInt_From_long, 0, 0, 1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 108, __pyx_L1_error)
+  __Pyx_GOTREF(__pyx_t_3);
+  __pyx_t_5 = __Pyx_PyInt_As_unsigned_char(__pyx_t_3); if (unlikely((__pyx_t_5 == (unsigned char)-1) && PyErr_Occurred())) __PYX_ERR(0, 108, __pyx_L1_error)
+  __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
+  __pyx_r = ((unsigned char)__pyx_t_5);
   goto __pyx_L0;
 
   /* "clickhouse_connect/driverc/buffer.pyx":93
  * 
  *     @cython.inline
  *     cdef unsigned char _read_byte(self) except? 255:             # <<<<<<<<<<<<<<
- *         cdef unsigned char ret
  *         if self.buf_loc < self.end:
+ *             self.buf_loc += 1
  */
 
   /* function exit code */
@@ -2723,9 +2710,9 @@ static unsigned char __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuf
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":112
- *         return ret
+/* "clickhouse_connect/driverc/buffer.pyx":111
  * 
+ *     @cython.inline
  *     cdef char* _read_bytes(self, unsigned long long sz) except NULL:             # <<<<<<<<<<<<<<
  *         if self._set_slice(sz) == 255:
  *             return NULL
@@ -2741,18 +2728,18 @@ static char *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__rea
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_read_bytes", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":113
- * 
+  /* "clickhouse_connect/driverc/buffer.pyx":112
+ *     @cython.inline
  *     cdef char* _read_bytes(self, unsigned long long sz) except NULL:
  *         if self._set_slice(sz) == 255:             # <<<<<<<<<<<<<<
  *             return NULL
  *         return self._cur_slice()
  */
-  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF))) __PYX_ERR(0, 113, __pyx_L1_error)
+  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF))) __PYX_ERR(0, 112, __pyx_L1_error)
   __pyx_t_2 = ((__pyx_t_1 == 0xFF) != 0);
   if (__pyx_t_2) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":114
+    /* "clickhouse_connect/driverc/buffer.pyx":113
  *     cdef char* _read_bytes(self, unsigned long long sz) except NULL:
  *         if self._set_slice(sz) == 255:
  *             return NULL             # <<<<<<<<<<<<<<
@@ -2762,8 +2749,8 @@ static char *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__rea
     __pyx_r = NULL;
     goto __pyx_L0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":113
- * 
+    /* "clickhouse_connect/driverc/buffer.pyx":112
+ *     @cython.inline
  *     cdef char* _read_bytes(self, unsigned long long sz) except NULL:
  *         if self._set_slice(sz) == 255:             # <<<<<<<<<<<<<<
  *             return NULL
@@ -2771,7 +2758,7 @@ static char *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__rea
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":115
+  /* "clickhouse_connect/driverc/buffer.pyx":114
  *         if self._set_slice(sz) == 255:
  *             return NULL
  *         return self._cur_slice()             # <<<<<<<<<<<<<<
@@ -2781,9 +2768,9 @@ static char *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__rea
   __pyx_r = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_cur_slice(__pyx_v_self);
   goto __pyx_L0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":112
- *         return ret
+  /* "clickhouse_connect/driverc/buffer.pyx":111
  * 
+ *     @cython.inline
  *     cdef char* _read_bytes(self, unsigned long long sz) except NULL:             # <<<<<<<<<<<<<<
  *         if self._set_slice(sz) == 255:
  *             return NULL
@@ -2798,124 +2785,74 @@ static char *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__rea
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":118
+/* "clickhouse_connect/driverc/buffer.pyx":117
  * 
  *     @cython.inline
- *     cpdef object read_leb128_str(self, char* encoding='utf-8'):             # <<<<<<<<<<<<<<
+ *     cdef object _read_leb128_str(self, char* encoding='utf-8'):             # <<<<<<<<<<<<<<
  *         cdef unsigned long long sz = self.read_leb128()
  *         cdef char* b = self._read_bytes(sz)
  */
 
-static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_3read_leb128_str(PyObject *__pyx_v_self, PyObject *__pyx_args, PyObject *__pyx_kwds); /*proto*/
-static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, int __pyx_skip_dispatch, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str *__pyx_optional_args) {
+static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str *__pyx_optional_args) {
   char *__pyx_v_encoding = ((char *)((char *)"utf-8"));
   unsigned PY_LONG_LONG __pyx_v_sz;
   char *__pyx_v_b;
   PyObject *__pyx_r = NULL;
   __Pyx_RefNannyDeclarations
-  PyObject *__pyx_t_1 = NULL;
-  PyObject *__pyx_t_2 = NULL;
-  PyObject *__pyx_t_3 = NULL;
+  unsigned PY_LONG_LONG __pyx_t_1;
+  char *__pyx_t_2;
+  int __pyx_t_3;
   PyObject *__pyx_t_4 = NULL;
   PyObject *__pyx_t_5 = NULL;
-  unsigned PY_LONG_LONG __pyx_t_6;
-  char *__pyx_t_7;
+  PyObject *__pyx_t_6 = NULL;
+  PyObject *__pyx_t_7 = NULL;
   int __pyx_t_8;
   PyObject *__pyx_t_9 = NULL;
   PyObject *__pyx_t_10 = NULL;
   PyObject *__pyx_t_11 = NULL;
-  int __pyx_t_12;
+  PyObject *__pyx_t_12 = NULL;
   PyObject *__pyx_t_13 = NULL;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
-  __Pyx_RefNannySetupContext("read_leb128_str", 0);
+  __Pyx_RefNannySetupContext("_read_leb128_str", 0);
   if (__pyx_optional_args) {
     if (__pyx_optional_args->__pyx_n > 0) {
       __pyx_v_encoding = __pyx_optional_args->encoding;
     }
   }
-  /* Check if called by wrapper */
-  if (unlikely(__pyx_skip_dispatch)) ;
-  /* Check if overridden in Python */
-  else if (unlikely((Py_TYPE(((PyObject *)__pyx_v_self))->tp_dictoffset != 0) || (Py_TYPE(((PyObject *)__pyx_v_self))->tp_flags & (Py_TPFLAGS_IS_ABSTRACT | Py_TPFLAGS_HEAPTYPE)))) {
-    #if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_PYTYPE_LOOKUP && CYTHON_USE_TYPE_SLOTS
-    static PY_UINT64_T __pyx_tp_dict_version = __PYX_DICT_VERSION_INIT, __pyx_obj_dict_version = __PYX_DICT_VERSION_INIT;
-    if (unlikely(!__Pyx_object_dict_version_matches(((PyObject *)__pyx_v_self), __pyx_tp_dict_version, __pyx_obj_dict_version))) {
-      PY_UINT64_T __pyx_type_dict_guard = __Pyx_get_tp_dict_version(((PyObject *)__pyx_v_self));
-      #endif
-      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_self), __pyx_n_s_read_leb128_str); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 118, __pyx_L1_error)
-      __Pyx_GOTREF(__pyx_t_1);
-      if (!PyCFunction_Check(__pyx_t_1) || (PyCFunction_GET_FUNCTION(__pyx_t_1) != (PyCFunction)(void*)__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_3read_leb128_str)) {
-        __Pyx_XDECREF(__pyx_r);
-        __pyx_t_3 = __Pyx_PyBytes_FromString(__pyx_v_encoding); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 118, __pyx_L1_error)
-        __Pyx_GOTREF(__pyx_t_3);
-        __Pyx_INCREF(__pyx_t_1);
-        __pyx_t_4 = __pyx_t_1; __pyx_t_5 = NULL;
-        if (CYTHON_UNPACK_METHODS && unlikely(PyMethod_Check(__pyx_t_4))) {
-          __pyx_t_5 = PyMethod_GET_SELF(__pyx_t_4);
-          if (likely(__pyx_t_5)) {
-            PyObject* function = PyMethod_GET_FUNCTION(__pyx_t_4);
-            __Pyx_INCREF(__pyx_t_5);
-            __Pyx_INCREF(function);
-            __Pyx_DECREF_SET(__pyx_t_4, function);
-          }
-        }
-        __pyx_t_2 = (__pyx_t_5) ? __Pyx_PyObject_Call2Args(__pyx_t_4, __pyx_t_5, __pyx_t_3) : __Pyx_PyObject_CallOneArg(__pyx_t_4, __pyx_t_3);
-        __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-        __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 118, __pyx_L1_error)
-        __Pyx_GOTREF(__pyx_t_2);
-        __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
-        __pyx_r = __pyx_t_2;
-        __pyx_t_2 = 0;
-        __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-        goto __pyx_L0;
-      }
-      #if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_PYTYPE_LOOKUP && CYTHON_USE_TYPE_SLOTS
-      __pyx_tp_dict_version = __Pyx_get_tp_dict_version(((PyObject *)__pyx_v_self));
-      __pyx_obj_dict_version = __Pyx_get_object_dict_version(((PyObject *)__pyx_v_self));
-      if (unlikely(__pyx_type_dict_guard != __pyx_tp_dict_version)) {
-        __pyx_tp_dict_version = __pyx_obj_dict_version = __PYX_DICT_VERSION_INIT;
-      }
-      #endif
-      __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-      #if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_PYTYPE_LOOKUP && CYTHON_USE_TYPE_SLOTS
-    }
-    #endif
-  }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":119
+  /* "clickhouse_connect/driverc/buffer.pyx":118
  *     @cython.inline
- *     cpdef object read_leb128_str(self, char* encoding='utf-8'):
+ *     cdef object _read_leb128_str(self, char* encoding='utf-8'):
  *         cdef unsigned long long sz = self.read_leb128()             # <<<<<<<<<<<<<<
  *         cdef char* b = self._read_bytes(sz)
  *         if b == NULL:
  */
-  __pyx_t_6 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->read_leb128(__pyx_v_self, 0); if (unlikely(__pyx_t_6 == ((unsigned PY_LONG_LONG)0x1869F) && PyErr_Occurred())) __PYX_ERR(0, 119, __pyx_L1_error)
-  __pyx_v_sz = __pyx_t_6;
+  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->read_leb128(__pyx_v_self, 0); if (unlikely(__pyx_t_1 == ((unsigned PY_LONG_LONG)0x1869F) && PyErr_Occurred())) __PYX_ERR(0, 118, __pyx_L1_error)
+  __pyx_v_sz = __pyx_t_1;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":120
- *     cpdef object read_leb128_str(self, char* encoding='utf-8'):
+  /* "clickhouse_connect/driverc/buffer.pyx":119
+ *     cdef object _read_leb128_str(self, char* encoding='utf-8'):
  *         cdef unsigned long long sz = self.read_leb128()
  *         cdef char* b = self._read_bytes(sz)             # <<<<<<<<<<<<<<
  *         if b == NULL:
  *             raise StopIteration
  */
-  __pyx_t_7 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_bytes(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_7 == ((char *)NULL))) __PYX_ERR(0, 120, __pyx_L1_error)
-  __pyx_v_b = __pyx_t_7;
+  __pyx_t_2 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_bytes(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_2 == ((char *)NULL))) __PYX_ERR(0, 119, __pyx_L1_error)
+  __pyx_v_b = __pyx_t_2;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":121
+  /* "clickhouse_connect/driverc/buffer.pyx":120
  *         cdef unsigned long long sz = self.read_leb128()
  *         cdef char* b = self._read_bytes(sz)
  *         if b == NULL:             # <<<<<<<<<<<<<<
  *             raise StopIteration
  *         try:
  */
-  __pyx_t_8 = ((__pyx_v_b == NULL) != 0);
-  if (unlikely(__pyx_t_8)) {
+  __pyx_t_3 = ((__pyx_v_b == NULL) != 0);
+  if (unlikely(__pyx_t_3)) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":122
+    /* "clickhouse_connect/driverc/buffer.pyx":121
  *         cdef char* b = self._read_bytes(sz)
  *         if b == NULL:
  *             raise StopIteration             # <<<<<<<<<<<<<<
@@ -2923,9 +2860,9 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
  *             return PyUnicode_Decode(b, sz, encoding, errors)
  */
     __Pyx_Raise(__pyx_builtin_StopIteration, 0, 0, 0);
-    __PYX_ERR(0, 122, __pyx_L1_error)
+    __PYX_ERR(0, 121, __pyx_L1_error)
 
-    /* "clickhouse_connect/driverc/buffer.pyx":121
+    /* "clickhouse_connect/driverc/buffer.pyx":120
  *         cdef unsigned long long sz = self.read_leb128()
  *         cdef char* b = self._read_bytes(sz)
  *         if b == NULL:             # <<<<<<<<<<<<<<
@@ -2934,7 +2871,7 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":123
+  /* "clickhouse_connect/driverc/buffer.pyx":122
  *         if b == NULL:
  *             raise StopIteration
  *         try:             # <<<<<<<<<<<<<<
@@ -2944,13 +2881,13 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
   {
     __Pyx_PyThreadState_declare
     __Pyx_PyThreadState_assign
-    __Pyx_ExceptionSave(&__pyx_t_9, &__pyx_t_10, &__pyx_t_11);
-    __Pyx_XGOTREF(__pyx_t_9);
-    __Pyx_XGOTREF(__pyx_t_10);
-    __Pyx_XGOTREF(__pyx_t_11);
+    __Pyx_ExceptionSave(&__pyx_t_4, &__pyx_t_5, &__pyx_t_6);
+    __Pyx_XGOTREF(__pyx_t_4);
+    __Pyx_XGOTREF(__pyx_t_5);
+    __Pyx_XGOTREF(__pyx_t_6);
     /*try:*/ {
 
-      /* "clickhouse_connect/driverc/buffer.pyx":124
+      /* "clickhouse_connect/driverc/buffer.pyx":123
  *             raise StopIteration
  *         try:
  *             return PyUnicode_Decode(b, sz, encoding, errors)             # <<<<<<<<<<<<<<
@@ -2958,13 +2895,13 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
  *             return PyBytes_FromStringAndSize(b, sz).hex()
  */
       __Pyx_XDECREF(__pyx_r);
-      __pyx_t_1 = PyUnicode_Decode(__pyx_v_b, __pyx_v_sz, __pyx_v_encoding, __pyx_v_18clickhouse_connect_7driverc_6buffer_errors); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 124, __pyx_L4_error)
-      __Pyx_GOTREF(__pyx_t_1);
-      __pyx_r = __pyx_t_1;
-      __pyx_t_1 = 0;
+      __pyx_t_7 = PyUnicode_Decode(__pyx_v_b, __pyx_v_sz, __pyx_v_encoding, __pyx_v_18clickhouse_connect_7driverc_6buffer_errors); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 123, __pyx_L4_error)
+      __Pyx_GOTREF(__pyx_t_7);
+      __pyx_r = __pyx_t_7;
+      __pyx_t_7 = 0;
       goto __pyx_L8_try_return;
 
-      /* "clickhouse_connect/driverc/buffer.pyx":123
+      /* "clickhouse_connect/driverc/buffer.pyx":122
  *         if b == NULL:
  *             raise StopIteration
  *         try:             # <<<<<<<<<<<<<<
@@ -2973,108 +2910,104 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
  */
     }
     __pyx_L4_error:;
-    __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
-    __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-    __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-    __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
-    __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
+    __Pyx_XDECREF(__pyx_t_7); __pyx_t_7 = 0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":125
+    /* "clickhouse_connect/driverc/buffer.pyx":124
  *         try:
  *             return PyUnicode_Decode(b, sz, encoding, errors)
  *         except UnicodeDecodeError:             # <<<<<<<<<<<<<<
  *             return PyBytes_FromStringAndSize(b, sz).hex()
  * 
  */
-    __pyx_t_12 = __Pyx_PyErr_ExceptionMatches(__pyx_builtin_UnicodeDecodeError);
-    if (__pyx_t_12) {
-      __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer.read_leb128_str", __pyx_clineno, __pyx_lineno, __pyx_filename);
-      if (__Pyx_GetException(&__pyx_t_1, &__pyx_t_2, &__pyx_t_4) < 0) __PYX_ERR(0, 125, __pyx_L6_except_error)
-      __Pyx_GOTREF(__pyx_t_1);
-      __Pyx_GOTREF(__pyx_t_2);
-      __Pyx_GOTREF(__pyx_t_4);
+    __pyx_t_8 = __Pyx_PyErr_ExceptionMatches(__pyx_builtin_UnicodeDecodeError);
+    if (__pyx_t_8) {
+      __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer._read_leb128_str", __pyx_clineno, __pyx_lineno, __pyx_filename);
+      if (__Pyx_GetException(&__pyx_t_7, &__pyx_t_9, &__pyx_t_10) < 0) __PYX_ERR(0, 124, __pyx_L6_except_error)
+      __Pyx_GOTREF(__pyx_t_7);
+      __Pyx_GOTREF(__pyx_t_9);
+      __Pyx_GOTREF(__pyx_t_10);
 
-      /* "clickhouse_connect/driverc/buffer.pyx":126
+      /* "clickhouse_connect/driverc/buffer.pyx":125
  *             return PyUnicode_Decode(b, sz, encoding, errors)
  *         except UnicodeDecodeError:
  *             return PyBytes_FromStringAndSize(b, sz).hex()             # <<<<<<<<<<<<<<
  * 
- *     def read_byte(self) -> int:
+ *     def read_leb128_str(self, encoding: str='utf-8'):
  */
       __Pyx_XDECREF(__pyx_r);
-      __pyx_t_5 = PyBytes_FromStringAndSize(__pyx_v_b, __pyx_v_sz); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 126, __pyx_L6_except_error)
-      __Pyx_GOTREF(__pyx_t_5);
-      __pyx_t_13 = __Pyx_PyObject_GetAttrStr(__pyx_t_5, __pyx_n_s_hex); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 126, __pyx_L6_except_error)
+      __pyx_t_12 = PyBytes_FromStringAndSize(__pyx_v_b, __pyx_v_sz); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 125, __pyx_L6_except_error)
+      __Pyx_GOTREF(__pyx_t_12);
+      __pyx_t_13 = __Pyx_PyObject_GetAttrStr(__pyx_t_12, __pyx_n_s_hex); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 125, __pyx_L6_except_error)
       __Pyx_GOTREF(__pyx_t_13);
-      __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
-      __pyx_t_5 = NULL;
+      __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
+      __pyx_t_12 = NULL;
       if (CYTHON_UNPACK_METHODS && likely(PyMethod_Check(__pyx_t_13))) {
-        __pyx_t_5 = PyMethod_GET_SELF(__pyx_t_13);
-        if (likely(__pyx_t_5)) {
+        __pyx_t_12 = PyMethod_GET_SELF(__pyx_t_13);
+        if (likely(__pyx_t_12)) {
           PyObject* function = PyMethod_GET_FUNCTION(__pyx_t_13);
-          __Pyx_INCREF(__pyx_t_5);
+          __Pyx_INCREF(__pyx_t_12);
           __Pyx_INCREF(function);
           __Pyx_DECREF_SET(__pyx_t_13, function);
         }
       }
-      __pyx_t_3 = (__pyx_t_5) ? __Pyx_PyObject_CallOneArg(__pyx_t_13, __pyx_t_5) : __Pyx_PyObject_CallNoArg(__pyx_t_13);
-      __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-      if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 126, __pyx_L6_except_error)
-      __Pyx_GOTREF(__pyx_t_3);
+      __pyx_t_11 = (__pyx_t_12) ? __Pyx_PyObject_CallOneArg(__pyx_t_13, __pyx_t_12) : __Pyx_PyObject_CallNoArg(__pyx_t_13);
+      __Pyx_XDECREF(__pyx_t_12); __pyx_t_12 = 0;
+      if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 125, __pyx_L6_except_error)
+      __Pyx_GOTREF(__pyx_t_11);
       __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
-      __pyx_r = __pyx_t_3;
-      __pyx_t_3 = 0;
-      __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-      __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-      __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
+      __pyx_r = __pyx_t_11;
+      __pyx_t_11 = 0;
+      __Pyx_DECREF(__pyx_t_7); __pyx_t_7 = 0;
+      __Pyx_DECREF(__pyx_t_9); __pyx_t_9 = 0;
+      __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       goto __pyx_L7_except_return;
     }
     goto __pyx_L6_except_error;
     __pyx_L6_except_error:;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":123
+    /* "clickhouse_connect/driverc/buffer.pyx":122
  *         if b == NULL:
  *             raise StopIteration
  *         try:             # <<<<<<<<<<<<<<
  *             return PyUnicode_Decode(b, sz, encoding, errors)
  *         except UnicodeDecodeError:
  */
-    __Pyx_XGIVEREF(__pyx_t_9);
-    __Pyx_XGIVEREF(__pyx_t_10);
-    __Pyx_XGIVEREF(__pyx_t_11);
-    __Pyx_ExceptionReset(__pyx_t_9, __pyx_t_10, __pyx_t_11);
+    __Pyx_XGIVEREF(__pyx_t_4);
+    __Pyx_XGIVEREF(__pyx_t_5);
+    __Pyx_XGIVEREF(__pyx_t_6);
+    __Pyx_ExceptionReset(__pyx_t_4, __pyx_t_5, __pyx_t_6);
     goto __pyx_L1_error;
     __pyx_L8_try_return:;
-    __Pyx_XGIVEREF(__pyx_t_9);
-    __Pyx_XGIVEREF(__pyx_t_10);
-    __Pyx_XGIVEREF(__pyx_t_11);
-    __Pyx_ExceptionReset(__pyx_t_9, __pyx_t_10, __pyx_t_11);
+    __Pyx_XGIVEREF(__pyx_t_4);
+    __Pyx_XGIVEREF(__pyx_t_5);
+    __Pyx_XGIVEREF(__pyx_t_6);
+    __Pyx_ExceptionReset(__pyx_t_4, __pyx_t_5, __pyx_t_6);
     goto __pyx_L0;
     __pyx_L7_except_return:;
-    __Pyx_XGIVEREF(__pyx_t_9);
-    __Pyx_XGIVEREF(__pyx_t_10);
-    __Pyx_XGIVEREF(__pyx_t_11);
-    __Pyx_ExceptionReset(__pyx_t_9, __pyx_t_10, __pyx_t_11);
+    __Pyx_XGIVEREF(__pyx_t_4);
+    __Pyx_XGIVEREF(__pyx_t_5);
+    __Pyx_XGIVEREF(__pyx_t_6);
+    __Pyx_ExceptionReset(__pyx_t_4, __pyx_t_5, __pyx_t_6);
     goto __pyx_L0;
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":118
+  /* "clickhouse_connect/driverc/buffer.pyx":117
  * 
  *     @cython.inline
- *     cpdef object read_leb128_str(self, char* encoding='utf-8'):             # <<<<<<<<<<<<<<
+ *     cdef object _read_leb128_str(self, char* encoding='utf-8'):             # <<<<<<<<<<<<<<
  *         cdef unsigned long long sz = self.read_leb128()
  *         cdef char* b = self._read_bytes(sz)
  */
 
   /* function exit code */
   __pyx_L1_error:;
-  __Pyx_XDECREF(__pyx_t_1);
-  __Pyx_XDECREF(__pyx_t_2);
-  __Pyx_XDECREF(__pyx_t_3);
-  __Pyx_XDECREF(__pyx_t_4);
-  __Pyx_XDECREF(__pyx_t_5);
+  __Pyx_XDECREF(__pyx_t_7);
+  __Pyx_XDECREF(__pyx_t_9);
+  __Pyx_XDECREF(__pyx_t_10);
+  __Pyx_XDECREF(__pyx_t_11);
+  __Pyx_XDECREF(__pyx_t_12);
   __Pyx_XDECREF(__pyx_t_13);
-  __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer.read_leb128_str", __pyx_clineno, __pyx_lineno, __pyx_filename);
+  __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer._read_leb128_str", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __pyx_r = 0;
   __pyx_L0:;
   __Pyx_XGIVEREF(__pyx_r);
@@ -3082,10 +3015,18 @@ static PyObject *__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_
   return __pyx_r;
 }
 
+/* "clickhouse_connect/driverc/buffer.pyx":127
+ *             return PyBytes_FromStringAndSize(b, sz).hex()
+ * 
+ *     def read_leb128_str(self, encoding: str='utf-8'):             # <<<<<<<<<<<<<<
+ *         return self._read_leb128_str(encoding.encode())
+ * 
+ */
+
 /* Python wrapper */
 static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_3read_leb128_str(PyObject *__pyx_v_self, PyObject *__pyx_args, PyObject *__pyx_kwds); /*proto*/
 static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_3read_leb128_str(PyObject *__pyx_v_self, PyObject *__pyx_args, PyObject *__pyx_kwds) {
-  char *__pyx_v_encoding;
+  PyObject *__pyx_v_encoding = 0;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
@@ -3095,6 +3036,7 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   {
     static PyObject **__pyx_pyargnames[] = {&__pyx_n_s_encoding,0};
     PyObject* values[1] = {0};
+    values[0] = ((PyObject*)__pyx_kp_u_utf_8);
     if (unlikely(__pyx_kwds)) {
       Py_ssize_t kw_args;
       const Py_ssize_t pos_args = PyTuple_GET_SIZE(__pyx_args);
@@ -3113,7 +3055,7 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
         }
       }
       if (unlikely(kw_args > 0)) {
-        if (unlikely(__Pyx_ParseOptionalKeywords(__pyx_kwds, __pyx_pyargnames, 0, values, pos_args, "read_leb128_str") < 0)) __PYX_ERR(0, 118, __pyx_L3_error)
+        if (unlikely(__Pyx_ParseOptionalKeywords(__pyx_kwds, __pyx_pyargnames, 0, values, pos_args, "read_leb128_str") < 0)) __PYX_ERR(0, 127, __pyx_L3_error)
       }
     } else {
       switch (PyTuple_GET_SIZE(__pyx_args)) {
@@ -3123,48 +3065,76 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
         default: goto __pyx_L5_argtuple_error;
       }
     }
-    if (values[0]) {
-      __pyx_v_encoding = __Pyx_PyObject_AsWritableString(values[0]); if (unlikely((!__pyx_v_encoding) && PyErr_Occurred())) __PYX_ERR(0, 118, __pyx_L3_error)
-    } else {
-      __pyx_v_encoding = ((char *)((char *)"utf-8"));
-    }
+    __pyx_v_encoding = ((PyObject*)values[0]);
   }
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("read_leb128_str", 0, 0, 1, PyTuple_GET_SIZE(__pyx_args)); __PYX_ERR(0, 118, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("read_leb128_str", 0, 0, 1, PyTuple_GET_SIZE(__pyx_args)); __PYX_ERR(0, 127, __pyx_L3_error)
   __pyx_L3_error:;
   __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer.read_leb128_str", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __Pyx_RefNannyFinishContext();
   return NULL;
   __pyx_L4_argument_unpacking_done:;
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_encoding), (&PyUnicode_Type), 1, "encoding", 1))) __PYX_ERR(0, 127, __pyx_L1_error)
   __pyx_r = __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_2read_leb128_str(((struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self), __pyx_v_encoding);
 
   /* function exit code */
+  goto __pyx_L0;
+  __pyx_L1_error:;
+  __pyx_r = NULL;
+  __pyx_L0:;
   __Pyx_RefNannyFinishContext();
   return __pyx_r;
 }
 
-static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_2read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, char *__pyx_v_encoding) {
+static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_2read_leb128_str(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, PyObject *__pyx_v_encoding) {
   PyObject *__pyx_r = NULL;
   __Pyx_RefNannyDeclarations
   PyObject *__pyx_t_1 = NULL;
-  struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str __pyx_t_2;
+  char *__pyx_t_2;
+  PyObject *__pyx_t_3 = NULL;
+  struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str __pyx_t_4;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_leb128_str", 0);
+
+  /* "clickhouse_connect/driverc/buffer.pyx":128
+ * 
+ *     def read_leb128_str(self, encoding: str='utf-8'):
+ *         return self._read_leb128_str(encoding.encode())             # <<<<<<<<<<<<<<
+ * 
+ *     def read_byte(self) -> int:
+ */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_2.__pyx_n = 1;
-  __pyx_t_2.encoding = __pyx_v_encoding;
-  __pyx_t_1 = __pyx_vtabptr_18clickhouse_connect_7driverc_6buffer_ResponseBuffer->read_leb128_str(__pyx_v_self, 1, &__pyx_t_2); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 118, __pyx_L1_error)
+  if (unlikely(__pyx_v_encoding == Py_None)) {
+    PyErr_Format(PyExc_AttributeError, "'NoneType' object has no attribute '%.30s'", "encode");
+    __PYX_ERR(0, 128, __pyx_L1_error)
+  }
+  __pyx_t_1 = PyUnicode_AsEncodedString(__pyx_v_encoding, NULL, NULL); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 128, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
-  __pyx_r = __pyx_t_1;
-  __pyx_t_1 = 0;
+  __pyx_t_2 = __Pyx_PyBytes_AsWritableString(__pyx_t_1); if (unlikely((!__pyx_t_2) && PyErr_Occurred())) __PYX_ERR(0, 128, __pyx_L1_error)
+  __pyx_t_4.__pyx_n = 1;
+  __pyx_t_4.encoding = __pyx_t_2;
+  __pyx_t_3 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_leb128_str(__pyx_v_self, &__pyx_t_4); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 128, __pyx_L1_error)
+  __Pyx_GOTREF(__pyx_t_3);
+  __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
+  __pyx_r = __pyx_t_3;
+  __pyx_t_3 = 0;
   goto __pyx_L0;
+
+  /* "clickhouse_connect/driverc/buffer.pyx":127
+ *             return PyBytes_FromStringAndSize(b, sz).hex()
+ * 
+ *     def read_leb128_str(self, encoding: str='utf-8'):             # <<<<<<<<<<<<<<
+ *         return self._read_leb128_str(encoding.encode())
+ * 
+ */
 
   /* function exit code */
   __pyx_L1_error:;
   __Pyx_XDECREF(__pyx_t_1);
+  __Pyx_XDECREF(__pyx_t_3);
   __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer.read_leb128_str", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __pyx_r = NULL;
   __pyx_L0:;
@@ -3173,8 +3143,8 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":128
- *             return PyBytes_FromStringAndSize(b, sz).hex()
+/* "clickhouse_connect/driverc/buffer.pyx":130
+ *         return self._read_leb128_str(encoding.encode())
  * 
  *     def read_byte(self) -> int:             # <<<<<<<<<<<<<<
  *         cdef unsigned char ret = self._read_byte()
@@ -3207,17 +3177,17 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_byte", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":129
+  /* "clickhouse_connect/driverc/buffer.pyx":131
  * 
  *     def read_byte(self) -> int:
  *         cdef unsigned char ret = self._read_byte()             # <<<<<<<<<<<<<<
  *         if ret == 255 and PyErr_Occurred():
  *             raise StopIteration
  */
-  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_byte(__pyx_v_self); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF) && PyErr_Occurred())) __PYX_ERR(0, 129, __pyx_L1_error)
+  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_byte(__pyx_v_self); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF) && PyErr_Occurred())) __PYX_ERR(0, 131, __pyx_L1_error)
   __pyx_v_ret = __pyx_t_1;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":130
+  /* "clickhouse_connect/driverc/buffer.pyx":132
  *     def read_byte(self) -> int:
  *         cdef unsigned char ret = self._read_byte()
  *         if ret == 255 and PyErr_Occurred():             # <<<<<<<<<<<<<<
@@ -3235,7 +3205,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __pyx_L4_bool_binop_done:;
   if (unlikely(__pyx_t_2)) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":131
+    /* "clickhouse_connect/driverc/buffer.pyx":133
  *         cdef unsigned char ret = self._read_byte()
  *         if ret == 255 and PyErr_Occurred():
  *             raise StopIteration             # <<<<<<<<<<<<<<
@@ -3243,9 +3213,9 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  * 
  */
     __Pyx_Raise(__pyx_builtin_StopIteration, 0, 0, 0);
-    __PYX_ERR(0, 131, __pyx_L1_error)
+    __PYX_ERR(0, 133, __pyx_L1_error)
 
-    /* "clickhouse_connect/driverc/buffer.pyx":130
+    /* "clickhouse_connect/driverc/buffer.pyx":132
  *     def read_byte(self) -> int:
  *         cdef unsigned char ret = self._read_byte()
  *         if ret == 255 and PyErr_Occurred():             # <<<<<<<<<<<<<<
@@ -3254,7 +3224,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":132
+  /* "clickhouse_connect/driverc/buffer.pyx":134
  *         if ret == 255 and PyErr_Occurred():
  *             raise StopIteration
  *         return ret             # <<<<<<<<<<<<<<
@@ -3262,14 +3232,14 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  *     @cython.inline
  */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_4 = __Pyx_PyInt_From_unsigned_char(__pyx_v_ret); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 132, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_PyInt_From_unsigned_char(__pyx_v_ret); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 134, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_4);
   __pyx_r = __pyx_t_4;
   __pyx_t_4 = 0;
   goto __pyx_L0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":128
- *             return PyBytes_FromStringAndSize(b, sz).hex()
+  /* "clickhouse_connect/driverc/buffer.pyx":130
+ *         return self._read_leb128_str(encoding.encode())
  * 
  *     def read_byte(self) -> int:             # <<<<<<<<<<<<<<
  *         cdef unsigned char ret = self._read_byte()
@@ -3287,7 +3257,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":135
+/* "clickhouse_connect/driverc/buffer.pyx":137
  * 
  *     @cython.inline
  *     cpdef unsigned long long read_leb128(self) except? 99999:             # <<<<<<<<<<<<<<
@@ -3323,7 +3293,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
     if (unlikely(!__Pyx_object_dict_version_matches(((PyObject *)__pyx_v_self), __pyx_tp_dict_version, __pyx_obj_dict_version))) {
       PY_UINT64_T __pyx_type_dict_guard = __Pyx_get_tp_dict_version(((PyObject *)__pyx_v_self));
       #endif
-      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_self), __pyx_n_s_read_leb128); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 135, __pyx_L1_error)
+      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_self), __pyx_n_s_read_leb128); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 137, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       if (!PyCFunction_Check(__pyx_t_1) || (PyCFunction_GET_FUNCTION(__pyx_t_1) != (PyCFunction)(void*)__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_7read_leb128)) {
         __Pyx_INCREF(__pyx_t_1);
@@ -3339,10 +3309,10 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
         }
         __pyx_t_2 = (__pyx_t_4) ? __Pyx_PyObject_CallOneArg(__pyx_t_3, __pyx_t_4) : __Pyx_PyObject_CallNoArg(__pyx_t_3);
         __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
-        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 135, __pyx_L1_error)
+        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 137, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-        __pyx_t_5 = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(__pyx_t_2); if (unlikely((__pyx_t_5 == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 135, __pyx_L1_error)
+        __pyx_t_5 = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(__pyx_t_2); if (unlikely((__pyx_t_5 == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 137, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __pyx_r = __pyx_t_5;
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
@@ -3361,7 +3331,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
     #endif
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":137
+  /* "clickhouse_connect/driverc/buffer.pyx":139
  *     cpdef unsigned long long read_leb128(self) except? 99999:
  *         cdef:
  *             unsigned long long sz = 0, shift = 0             # <<<<<<<<<<<<<<
@@ -3371,7 +3341,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
   __pyx_v_sz = 0;
   __pyx_v_shift = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":139
+  /* "clickhouse_connect/driverc/buffer.pyx":141
  *             unsigned long long sz = 0, shift = 0
  *             unsigned char b
  *         while 1:             # <<<<<<<<<<<<<<
@@ -3380,17 +3350,17 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
  */
   while (1) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":140
+    /* "clickhouse_connect/driverc/buffer.pyx":142
  *             unsigned char b
  *         while 1:
  *             b = self._read_byte()             # <<<<<<<<<<<<<<
  *             if b == 255 and PyErr_Occurred():
  *                 raise StopIteration
  */
-    __pyx_t_6 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_byte(__pyx_v_self); if (unlikely(__pyx_t_6 == ((unsigned char)0xFF) && PyErr_Occurred())) __PYX_ERR(0, 140, __pyx_L1_error)
+    __pyx_t_6 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_byte(__pyx_v_self); if (unlikely(__pyx_t_6 == ((unsigned char)0xFF) && PyErr_Occurred())) __PYX_ERR(0, 142, __pyx_L1_error)
     __pyx_v_b = __pyx_t_6;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":141
+    /* "clickhouse_connect/driverc/buffer.pyx":143
  *         while 1:
  *             b = self._read_byte()
  *             if b == 255 and PyErr_Occurred():             # <<<<<<<<<<<<<<
@@ -3408,7 +3378,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
     __pyx_L6_bool_binop_done:;
     if (unlikely(__pyx_t_7)) {
 
-      /* "clickhouse_connect/driverc/buffer.pyx":142
+      /* "clickhouse_connect/driverc/buffer.pyx":144
  *             b = self._read_byte()
  *             if b == 255 and PyErr_Occurred():
  *                 raise StopIteration             # <<<<<<<<<<<<<<
@@ -3416,9 +3386,9 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
  *             if (b & 0x80) == 0:
  */
       __Pyx_Raise(__pyx_builtin_StopIteration, 0, 0, 0);
-      __PYX_ERR(0, 142, __pyx_L1_error)
+      __PYX_ERR(0, 144, __pyx_L1_error)
 
-      /* "clickhouse_connect/driverc/buffer.pyx":141
+      /* "clickhouse_connect/driverc/buffer.pyx":143
  *         while 1:
  *             b = self._read_byte()
  *             if b == 255 and PyErr_Occurred():             # <<<<<<<<<<<<<<
@@ -3427,7 +3397,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
  */
     }
 
-    /* "clickhouse_connect/driverc/buffer.pyx":143
+    /* "clickhouse_connect/driverc/buffer.pyx":145
  *             if b == 255 and PyErr_Occurred():
  *                 raise StopIteration
  *             sz += ((b & 0x7f) << shift)             # <<<<<<<<<<<<<<
@@ -3436,7 +3406,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
  */
     __pyx_v_sz = (__pyx_v_sz + ((__pyx_v_b & 0x7f) << __pyx_v_shift));
 
-    /* "clickhouse_connect/driverc/buffer.pyx":144
+    /* "clickhouse_connect/driverc/buffer.pyx":146
  *                 raise StopIteration
  *             sz += ((b & 0x7f) << shift)
  *             if (b & 0x80) == 0:             # <<<<<<<<<<<<<<
@@ -3446,7 +3416,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
     __pyx_t_7 = (((__pyx_v_b & 0x80) == 0) != 0);
     if (__pyx_t_7) {
 
-      /* "clickhouse_connect/driverc/buffer.pyx":145
+      /* "clickhouse_connect/driverc/buffer.pyx":147
  *             sz += ((b & 0x7f) << shift)
  *             if (b & 0x80) == 0:
  *                 return sz             # <<<<<<<<<<<<<<
@@ -3456,7 +3426,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
       __pyx_r = __pyx_v_sz;
       goto __pyx_L0;
 
-      /* "clickhouse_connect/driverc/buffer.pyx":144
+      /* "clickhouse_connect/driverc/buffer.pyx":146
  *                 raise StopIteration
  *             sz += ((b & 0x7f) << shift)
  *             if (b & 0x80) == 0:             # <<<<<<<<<<<<<<
@@ -3465,7 +3435,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
  */
     }
 
-    /* "clickhouse_connect/driverc/buffer.pyx":146
+    /* "clickhouse_connect/driverc/buffer.pyx":148
  *             if (b & 0x80) == 0:
  *                 return sz
  *             shift += 7             # <<<<<<<<<<<<<<
@@ -3475,7 +3445,7 @@ static unsigned PY_LONG_LONG __pyx_f_18clickhouse_connect_7driverc_6buffer_14Res
     __pyx_v_shift = (__pyx_v_shift + 7);
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":135
+  /* "clickhouse_connect/driverc/buffer.pyx":137
  * 
  *     @cython.inline
  *     cpdef unsigned long long read_leb128(self) except? 99999:             # <<<<<<<<<<<<<<
@@ -3521,8 +3491,8 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_leb128", 0);
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128(__pyx_v_self, 1); if (unlikely(__pyx_t_1 == ((unsigned PY_LONG_LONG)0x1869F) && PyErr_Occurred())) __PYX_ERR(0, 135, __pyx_L1_error)
-  __pyx_t_2 = __Pyx_PyInt_From_unsigned_PY_LONG_LONG(__pyx_t_1); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 135, __pyx_L1_error)
+  __pyx_t_1 = __pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128(__pyx_v_self, 1); if (unlikely(__pyx_t_1 == ((unsigned PY_LONG_LONG)0x1869F) && PyErr_Occurred())) __PYX_ERR(0, 137, __pyx_L1_error)
+  __pyx_t_2 = __Pyx_PyInt_From_unsigned_PY_LONG_LONG(__pyx_t_1); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 137, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_2);
   __pyx_r = __pyx_t_2;
   __pyx_t_2 = 0;
@@ -3539,7 +3509,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":148
+/* "clickhouse_connect/driverc/buffer.pyx":150
  *             shift += 7
  * 
  *     def read_uint64(self) -> int:             # <<<<<<<<<<<<<<
@@ -3574,18 +3544,18 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_uint64", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":150
+  /* "clickhouse_connect/driverc/buffer.pyx":152
  *     def read_uint64(self) -> int:
  *         cdef ull_wrapper* x
  *         if self._set_slice(8) == 255:             # <<<<<<<<<<<<<<
  *             raise StopIteration
  *         if must_swap:
  */
-  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, 8); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF))) __PYX_ERR(0, 150, __pyx_L1_error)
+  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, 8); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF))) __PYX_ERR(0, 152, __pyx_L1_error)
   __pyx_t_2 = ((__pyx_t_1 == 0xFF) != 0);
   if (unlikely(__pyx_t_2)) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":151
+    /* "clickhouse_connect/driverc/buffer.pyx":153
  *         cdef ull_wrapper* x
  *         if self._set_slice(8) == 255:
  *             raise StopIteration             # <<<<<<<<<<<<<<
@@ -3593,9 +3563,9 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  *             memcpy(swapper.data.as_voidptr, self._cur_slice(), 8)
  */
     __Pyx_Raise(__pyx_builtin_StopIteration, 0, 0, 0);
-    __PYX_ERR(0, 151, __pyx_L1_error)
+    __PYX_ERR(0, 153, __pyx_L1_error)
 
-    /* "clickhouse_connect/driverc/buffer.pyx":150
+    /* "clickhouse_connect/driverc/buffer.pyx":152
  *     def read_uint64(self) -> int:
  *         cdef ull_wrapper* x
  *         if self._set_slice(8) == 255:             # <<<<<<<<<<<<<<
@@ -3604,7 +3574,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":152
+  /* "clickhouse_connect/driverc/buffer.pyx":154
  *         if self._set_slice(8) == 255:
  *             raise StopIteration
  *         if must_swap:             # <<<<<<<<<<<<<<
@@ -3614,7 +3584,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __pyx_t_2 = (__pyx_v_18clickhouse_connect_7driverc_6buffer_must_swap != 0);
   if (__pyx_t_2) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":153
+    /* "clickhouse_connect/driverc/buffer.pyx":155
  *             raise StopIteration
  *         if must_swap:
  *             memcpy(swapper.data.as_voidptr, self._cur_slice(), 8)             # <<<<<<<<<<<<<<
@@ -3623,14 +3593,14 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
     (void)(memcpy(__pyx_v_18clickhouse_connect_7driverc_6buffer_swapper->data.as_voidptr, ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_cur_slice(__pyx_v_self), 8));
 
-    /* "clickhouse_connect/driverc/buffer.pyx":154
+    /* "clickhouse_connect/driverc/buffer.pyx":156
  *         if must_swap:
  *             memcpy(swapper.data.as_voidptr, self._cur_slice(), 8)
  *             swapper.byteswap()             # <<<<<<<<<<<<<<
  *             return swapper[0]
  *         x = <ull_wrapper *> self._cur_slice()
  */
-    __pyx_t_4 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_18clickhouse_connect_7driverc_6buffer_swapper), __pyx_n_s_byteswap); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 154, __pyx_L1_error)
+    __pyx_t_4 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_18clickhouse_connect_7driverc_6buffer_swapper), __pyx_n_s_byteswap); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 156, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_4);
     __pyx_t_5 = NULL;
     if (CYTHON_UNPACK_METHODS && likely(PyMethod_Check(__pyx_t_4))) {
@@ -3644,12 +3614,12 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
     }
     __pyx_t_3 = (__pyx_t_5) ? __Pyx_PyObject_CallOneArg(__pyx_t_4, __pyx_t_5) : __Pyx_PyObject_CallNoArg(__pyx_t_4);
     __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 154, __pyx_L1_error)
+    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 156, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":155
+    /* "clickhouse_connect/driverc/buffer.pyx":157
  *             memcpy(swapper.data.as_voidptr, self._cur_slice(), 8)
  *             swapper.byteswap()
  *             return swapper[0]             # <<<<<<<<<<<<<<
@@ -3657,13 +3627,13 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  *         return x.int_value
  */
     __Pyx_XDECREF(__pyx_r);
-    __pyx_t_3 = __Pyx_GetItemInt(((PyObject *)__pyx_v_18clickhouse_connect_7driverc_6buffer_swapper), 0, long, 1, __Pyx_PyInt_From_long, 0, 0, 1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 155, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_GetItemInt(((PyObject *)__pyx_v_18clickhouse_connect_7driverc_6buffer_swapper), 0, long, 1, __Pyx_PyInt_From_long, 0, 0, 1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 157, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __pyx_r = __pyx_t_3;
     __pyx_t_3 = 0;
     goto __pyx_L0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":152
+    /* "clickhouse_connect/driverc/buffer.pyx":154
  *         if self._set_slice(8) == 255:
  *             raise StopIteration
  *         if must_swap:             # <<<<<<<<<<<<<<
@@ -3672,7 +3642,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":156
+  /* "clickhouse_connect/driverc/buffer.pyx":158
  *             swapper.byteswap()
  *             return swapper[0]
  *         x = <ull_wrapper *> self._cur_slice()             # <<<<<<<<<<<<<<
@@ -3681,7 +3651,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   __pyx_v_x = ((union __pyx_t_18clickhouse_connect_7driverc_6buffer_ull_wrapper *)((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_cur_slice(__pyx_v_self));
 
-  /* "clickhouse_connect/driverc/buffer.pyx":157
+  /* "clickhouse_connect/driverc/buffer.pyx":159
  *             return swapper[0]
  *         x = <ull_wrapper *> self._cur_slice()
  *         return x.int_value             # <<<<<<<<<<<<<<
@@ -3689,13 +3659,13 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  *     def read_bytes(self, unsigned long long sz):
  */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_3 = __Pyx_PyInt_From_unsigned_PY_LONG_LONG(__pyx_v_x->int_value); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 157, __pyx_L1_error)
+  __pyx_t_3 = __Pyx_PyInt_From_unsigned_PY_LONG_LONG(__pyx_v_x->int_value); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 159, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_3);
   __pyx_r = __pyx_t_3;
   __pyx_t_3 = 0;
   goto __pyx_L0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":148
+  /* "clickhouse_connect/driverc/buffer.pyx":150
  *             shift += 7
  * 
  *     def read_uint64(self) -> int:             # <<<<<<<<<<<<<<
@@ -3716,7 +3686,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":159
+/* "clickhouse_connect/driverc/buffer.pyx":161
  *         return x.int_value
  * 
  *     def read_bytes(self, unsigned long long sz):             # <<<<<<<<<<<<<<
@@ -3735,7 +3705,7 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __Pyx_RefNannyDeclarations
   __Pyx_RefNannySetupContext("read_bytes (wrapper)", 0);
   assert(__pyx_arg_sz); {
-    __pyx_v_sz = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(__pyx_arg_sz); if (unlikely((__pyx_v_sz == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 159, __pyx_L3_error)
+    __pyx_v_sz = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(__pyx_arg_sz); if (unlikely((__pyx_v_sz == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 161, __pyx_L3_error)
   }
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -3761,18 +3731,18 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_bytes", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":160
+  /* "clickhouse_connect/driverc/buffer.pyx":162
  * 
  *     def read_bytes(self, unsigned long long sz):
  *         if self._set_slice(sz) == 255:             # <<<<<<<<<<<<<<
  *             raise StopIteration
  *         return self._cur_slice()[:sz]
  */
-  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF))) __PYX_ERR(0, 160, __pyx_L1_error)
+  __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_1 == ((unsigned char)0xFF))) __PYX_ERR(0, 162, __pyx_L1_error)
   __pyx_t_2 = ((__pyx_t_1 == 0xFF) != 0);
   if (unlikely(__pyx_t_2)) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":161
+    /* "clickhouse_connect/driverc/buffer.pyx":163
  *     def read_bytes(self, unsigned long long sz):
  *         if self._set_slice(sz) == 255:
  *             raise StopIteration             # <<<<<<<<<<<<<<
@@ -3780,9 +3750,9 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  * 
  */
     __Pyx_Raise(__pyx_builtin_StopIteration, 0, 0, 0);
-    __PYX_ERR(0, 161, __pyx_L1_error)
+    __PYX_ERR(0, 163, __pyx_L1_error)
 
-    /* "clickhouse_connect/driverc/buffer.pyx":160
+    /* "clickhouse_connect/driverc/buffer.pyx":162
  * 
  *     def read_bytes(self, unsigned long long sz):
  *         if self._set_slice(sz) == 255:             # <<<<<<<<<<<<<<
@@ -3791,21 +3761,21 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":162
+  /* "clickhouse_connect/driverc/buffer.pyx":164
  *         if self._set_slice(sz) == 255:
  *             raise StopIteration
  *         return self._cur_slice()[:sz]             # <<<<<<<<<<<<<<
  * 
- *     def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):
+ *     def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):
  */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_3 = __Pyx_PyBytes_FromStringAndSize(((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_cur_slice(__pyx_v_self) + 0, __pyx_v_sz - 0); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 162, __pyx_L1_error)
+  __pyx_t_3 = __Pyx_PyBytes_FromStringAndSize(((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_cur_slice(__pyx_v_self) + 0, __pyx_v_sz - 0); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 164, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_3);
   __pyx_r = __pyx_t_3;
   __pyx_t_3 = 0;
   goto __pyx_L0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":159
+  /* "clickhouse_connect/driverc/buffer.pyx":161
  *         return x.int_value
  * 
  *     def read_bytes(self, unsigned long long sz):             # <<<<<<<<<<<<<<
@@ -3824,19 +3794,19 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":164
+/* "clickhouse_connect/driverc/buffer.pyx":166
  *         return self._cur_slice()[:sz]
  * 
- *     def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):             # <<<<<<<<<<<<<<
+ *     def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):             # <<<<<<<<<<<<<<
  *         cdef object column = PyTuple_New(num_rows)
- *         for x in range(num_rows):
+ *         enc = encoding.encode()
  */
 
 /* Python wrapper */
 static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_13read_str_col(PyObject *__pyx_v_self, PyObject *__pyx_args, PyObject *__pyx_kwds); /*proto*/
 static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_13read_str_col(PyObject *__pyx_v_self, PyObject *__pyx_args, PyObject *__pyx_kwds) {
   unsigned PY_LONG_LONG __pyx_v_num_rows;
-  char *__pyx_v_encoding;
+  PyObject *__pyx_v_encoding = 0;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
@@ -3846,6 +3816,7 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   {
     static PyObject **__pyx_pyargnames[] = {&__pyx_n_s_num_rows,&__pyx_n_s_encoding,0};
     PyObject* values[2] = {0,0};
+    values[1] = ((PyObject*)__pyx_kp_u_utf_8);
     if (unlikely(__pyx_kwds)) {
       Py_ssize_t kw_args;
       const Py_ssize_t pos_args = PyTuple_GET_SIZE(__pyx_args);
@@ -3870,7 +3841,7 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
         }
       }
       if (unlikely(kw_args > 0)) {
-        if (unlikely(__Pyx_ParseOptionalKeywords(__pyx_kwds, __pyx_pyargnames, 0, values, pos_args, "read_str_col") < 0)) __PYX_ERR(0, 164, __pyx_L3_error)
+        if (unlikely(__Pyx_ParseOptionalKeywords(__pyx_kwds, __pyx_pyargnames, 0, values, pos_args, "read_str_col") < 0)) __PYX_ERR(0, 166, __pyx_L3_error)
       }
     } else {
       switch (PyTuple_GET_SIZE(__pyx_args)) {
@@ -3881,30 +3852,32 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
         default: goto __pyx_L5_argtuple_error;
       }
     }
-    __pyx_v_num_rows = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(values[0]); if (unlikely((__pyx_v_num_rows == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 164, __pyx_L3_error)
-    if (values[1]) {
-      __pyx_v_encoding = __Pyx_PyObject_AsWritableString(values[1]); if (unlikely((!__pyx_v_encoding) && PyErr_Occurred())) __PYX_ERR(0, 164, __pyx_L3_error)
-    } else {
-      __pyx_v_encoding = ((char *)((char *)"utf-8"));
-    }
+    __pyx_v_num_rows = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(values[0]); if (unlikely((__pyx_v_num_rows == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 166, __pyx_L3_error)
+    __pyx_v_encoding = ((PyObject*)values[1]);
   }
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("read_str_col", 0, 1, 2, PyTuple_GET_SIZE(__pyx_args)); __PYX_ERR(0, 164, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("read_str_col", 0, 1, 2, PyTuple_GET_SIZE(__pyx_args)); __PYX_ERR(0, 166, __pyx_L3_error)
   __pyx_L3_error:;
   __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer.read_str_col", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __Pyx_RefNannyFinishContext();
   return NULL;
   __pyx_L4_argument_unpacking_done:;
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_encoding), (&PyUnicode_Type), 1, "encoding", 1))) __PYX_ERR(0, 166, __pyx_L1_error)
   __pyx_r = __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_12read_str_col(((struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self), __pyx_v_num_rows, __pyx_v_encoding);
 
   /* function exit code */
+  goto __pyx_L0;
+  __pyx_L1_error:;
+  __pyx_r = NULL;
+  __pyx_L0:;
   __Pyx_RefNannyFinishContext();
   return __pyx_r;
 }
 
-static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_12read_str_col(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_num_rows, char *__pyx_v_encoding) {
+static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_12read_str_col(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *__pyx_v_self, unsigned PY_LONG_LONG __pyx_v_num_rows, PyObject *__pyx_v_encoding) {
   PyObject *__pyx_v_column = 0;
+  PyObject *__pyx_v_enc = NULL;
   unsigned PY_LONG_LONG __pyx_v_x;
   PyObject *__pyx_v_v = NULL;
   PyObject *__pyx_r = NULL;
@@ -3913,29 +3886,46 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   unsigned PY_LONG_LONG __pyx_t_2;
   unsigned PY_LONG_LONG __pyx_t_3;
   unsigned PY_LONG_LONG __pyx_t_4;
-  struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str __pyx_t_5;
+  char *__pyx_t_5;
+  struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str __pyx_t_6;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_str_col", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":165
+  /* "clickhouse_connect/driverc/buffer.pyx":167
  * 
- *     def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):
+ *     def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):
  *         cdef object column = PyTuple_New(num_rows)             # <<<<<<<<<<<<<<
+ *         enc = encoding.encode()
  *         for x in range(num_rows):
- *             v = self.read_leb128_str(encoding)
  */
-  __pyx_t_1 = PyTuple_New(__pyx_v_num_rows); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 165, __pyx_L1_error)
+  __pyx_t_1 = PyTuple_New(__pyx_v_num_rows); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 167, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_v_column = __pyx_t_1;
   __pyx_t_1 = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":166
- *     def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):
+  /* "clickhouse_connect/driverc/buffer.pyx":168
+ *     def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):
  *         cdef object column = PyTuple_New(num_rows)
+ *         enc = encoding.encode()             # <<<<<<<<<<<<<<
+ *         for x in range(num_rows):
+ *             v = self._read_leb128_str(enc)
+ */
+  if (unlikely(__pyx_v_encoding == Py_None)) {
+    PyErr_Format(PyExc_AttributeError, "'NoneType' object has no attribute '%.30s'", "encode");
+    __PYX_ERR(0, 168, __pyx_L1_error)
+  }
+  __pyx_t_1 = PyUnicode_AsEncodedString(__pyx_v_encoding, NULL, NULL); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 168, __pyx_L1_error)
+  __Pyx_GOTREF(__pyx_t_1);
+  __pyx_v_enc = __pyx_t_1;
+  __pyx_t_1 = 0;
+
+  /* "clickhouse_connect/driverc/buffer.pyx":169
+ *         cdef object column = PyTuple_New(num_rows)
+ *         enc = encoding.encode()
  *         for x in range(num_rows):             # <<<<<<<<<<<<<<
- *             v = self.read_leb128_str(encoding)
+ *             v = self._read_leb128_str(enc)
  *             PyTuple_SET_ITEM(column, x, v)
  */
   __pyx_t_2 = __pyx_v_num_rows;
@@ -3943,31 +3933,32 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   for (__pyx_t_4 = 0; __pyx_t_4 < __pyx_t_3; __pyx_t_4+=1) {
     __pyx_v_x = __pyx_t_4;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":167
- *         cdef object column = PyTuple_New(num_rows)
+    /* "clickhouse_connect/driverc/buffer.pyx":170
+ *         enc = encoding.encode()
  *         for x in range(num_rows):
- *             v = self.read_leb128_str(encoding)             # <<<<<<<<<<<<<<
+ *             v = self._read_leb128_str(enc)             # <<<<<<<<<<<<<<
  *             PyTuple_SET_ITEM(column, x, v)
  *             Py_INCREF(v)
  */
-    __pyx_t_5.__pyx_n = 1;
-    __pyx_t_5.encoding = __pyx_v_encoding;
-    __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->read_leb128_str(__pyx_v_self, 0, &__pyx_t_5); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 167, __pyx_L1_error)
+    __pyx_t_5 = __Pyx_PyObject_AsWritableString(__pyx_v_enc); if (unlikely((!__pyx_t_5) && PyErr_Occurred())) __PYX_ERR(0, 170, __pyx_L1_error)
+    __pyx_t_6.__pyx_n = 1;
+    __pyx_t_6.encoding = __pyx_t_5;
+    __pyx_t_1 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_read_leb128_str(__pyx_v_self, &__pyx_t_6); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 170, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
     __Pyx_XDECREF_SET(__pyx_v_v, __pyx_t_1);
     __pyx_t_1 = 0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":168
+    /* "clickhouse_connect/driverc/buffer.pyx":171
  *         for x in range(num_rows):
- *             v = self.read_leb128_str(encoding)
+ *             v = self._read_leb128_str(enc)
  *             PyTuple_SET_ITEM(column, x, v)             # <<<<<<<<<<<<<<
  *             Py_INCREF(v)
  *         return column
  */
     PyTuple_SET_ITEM(__pyx_v_column, __pyx_v_x, __pyx_v_v);
 
-    /* "clickhouse_connect/driverc/buffer.pyx":169
- *             v = self.read_leb128_str(encoding)
+    /* "clickhouse_connect/driverc/buffer.pyx":172
+ *             v = self._read_leb128_str(enc)
  *             PyTuple_SET_ITEM(column, x, v)
  *             Py_INCREF(v)             # <<<<<<<<<<<<<<
  *         return column
@@ -3976,7 +3967,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
     Py_INCREF(__pyx_v_v);
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":170
+  /* "clickhouse_connect/driverc/buffer.pyx":173
  *             PyTuple_SET_ITEM(column, x, v)
  *             Py_INCREF(v)
  *         return column             # <<<<<<<<<<<<<<
@@ -3988,12 +3979,12 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __pyx_r = __pyx_v_column;
   goto __pyx_L0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":164
+  /* "clickhouse_connect/driverc/buffer.pyx":166
  *         return self._cur_slice()[:sz]
  * 
- *     def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):             # <<<<<<<<<<<<<<
+ *     def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):             # <<<<<<<<<<<<<<
  *         cdef object column = PyTuple_New(num_rows)
- *         for x in range(num_rows):
+ *         enc = encoding.encode()
  */
 
   /* function exit code */
@@ -4003,13 +3994,14 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __pyx_r = NULL;
   __pyx_L0:;
   __Pyx_XDECREF(__pyx_v_column);
+  __Pyx_XDECREF(__pyx_v_enc);
   __Pyx_XDECREF(__pyx_v_v);
   __Pyx_XGIVEREF(__pyx_r);
   __Pyx_RefNannyFinishContext();
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":172
+/* "clickhouse_connect/driverc/buffer.pyx":175
  *         return column
  * 
  *     def read_array(self, t: str, unsigned long long num_rows):             # <<<<<<<<<<<<<<
@@ -4051,11 +4043,11 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
         case  1:
         if (likely((values[1] = __Pyx_PyDict_GetItemStr(__pyx_kwds, __pyx_n_s_num_rows)) != 0)) kw_args--;
         else {
-          __Pyx_RaiseArgtupleInvalid("read_array", 1, 2, 2, 1); __PYX_ERR(0, 172, __pyx_L3_error)
+          __Pyx_RaiseArgtupleInvalid("read_array", 1, 2, 2, 1); __PYX_ERR(0, 175, __pyx_L3_error)
         }
       }
       if (unlikely(kw_args > 0)) {
-        if (unlikely(__Pyx_ParseOptionalKeywords(__pyx_kwds, __pyx_pyargnames, 0, values, pos_args, "read_array") < 0)) __PYX_ERR(0, 172, __pyx_L3_error)
+        if (unlikely(__Pyx_ParseOptionalKeywords(__pyx_kwds, __pyx_pyargnames, 0, values, pos_args, "read_array") < 0)) __PYX_ERR(0, 175, __pyx_L3_error)
       }
     } else if (PyTuple_GET_SIZE(__pyx_args) != 2) {
       goto __pyx_L5_argtuple_error;
@@ -4064,17 +4056,17 @@ static PyObject *__pyx_pw_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
       values[1] = PyTuple_GET_ITEM(__pyx_args, 1);
     }
     __pyx_v_t = ((PyObject*)values[0]);
-    __pyx_v_num_rows = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(values[1]); if (unlikely((__pyx_v_num_rows == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 172, __pyx_L3_error)
+    __pyx_v_num_rows = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(values[1]); if (unlikely((__pyx_v_num_rows == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 175, __pyx_L3_error)
   }
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("read_array", 1, 2, 2, PyTuple_GET_SIZE(__pyx_args)); __PYX_ERR(0, 172, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("read_array", 1, 2, 2, PyTuple_GET_SIZE(__pyx_args)); __PYX_ERR(0, 175, __pyx_L3_error)
   __pyx_L3_error:;
   __Pyx_AddTraceback("clickhouse_connect.driverc.buffer.ResponseBuffer.read_array", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __Pyx_RefNannyFinishContext();
   return NULL;
   __pyx_L4_argument_unpacking_done:;
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_t), (&PyUnicode_Type), 1, "t", 1))) __PYX_ERR(0, 172, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_t), (&PyUnicode_Type), 1, "t", 1))) __PYX_ERR(0, 175, __pyx_L1_error)
   __pyx_r = __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_14read_array(((struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self), __pyx_v_t, __pyx_v_num_rows);
 
   /* function exit code */
@@ -4103,7 +4095,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("read_array", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":173
+  /* "clickhouse_connect/driverc/buffer.pyx":176
  * 
  *     def read_array(self, t: str, unsigned long long num_rows):
  *         cdef array.array template = array_templates[t]             # <<<<<<<<<<<<<<
@@ -4112,57 +4104,57 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   if (unlikely(__pyx_v_18clickhouse_connect_7driverc_6buffer_array_templates == Py_None)) {
     PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-    __PYX_ERR(0, 173, __pyx_L1_error)
+    __PYX_ERR(0, 176, __pyx_L1_error)
   }
-  __pyx_t_1 = __Pyx_PyDict_GetItem(__pyx_v_18clickhouse_connect_7driverc_6buffer_array_templates, __pyx_v_t); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 173, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyDict_GetItem(__pyx_v_18clickhouse_connect_7driverc_6buffer_array_templates, __pyx_v_t); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 176, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
-  if (!(likely(((__pyx_t_1) == Py_None) || likely(__Pyx_TypeTest(__pyx_t_1, __pyx_ptype_7cpython_5array_array))))) __PYX_ERR(0, 173, __pyx_L1_error)
+  if (!(likely(((__pyx_t_1) == Py_None) || likely(__Pyx_TypeTest(__pyx_t_1, __pyx_ptype_7cpython_5array_array))))) __PYX_ERR(0, 176, __pyx_L1_error)
   __pyx_v_template = ((arrayobject *)__pyx_t_1);
   __pyx_t_1 = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":174
+  /* "clickhouse_connect/driverc/buffer.pyx":177
  *     def read_array(self, t: str, unsigned long long num_rows):
  *         cdef array.array template = array_templates[t]
  *         cdef array.array result = array.clone(template, num_rows, 0)             # <<<<<<<<<<<<<<
  *         cdef unsigned long long sz = result.itemsize * num_rows
  *         if self._set_slice(sz) == 255:
  */
-  __pyx_t_1 = ((PyObject *)__pyx_f_7cpython_5array_clone(__pyx_v_template, __pyx_v_num_rows, 0)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 174, __pyx_L1_error)
+  __pyx_t_1 = ((PyObject *)__pyx_f_7cpython_5array_clone(__pyx_v_template, __pyx_v_num_rows, 0)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 177, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_v_result = ((arrayobject *)__pyx_t_1);
   __pyx_t_1 = 0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":175
+  /* "clickhouse_connect/driverc/buffer.pyx":178
  *         cdef array.array template = array_templates[t]
  *         cdef array.array result = array.clone(template, num_rows, 0)
  *         cdef unsigned long long sz = result.itemsize * num_rows             # <<<<<<<<<<<<<<
  *         if self._set_slice(sz) == 255:
  *             raise StopIteration
  */
-  __pyx_t_1 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_result), __pyx_n_s_itemsize); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 175, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_result), __pyx_n_s_itemsize); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 178, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
-  __pyx_t_2 = __Pyx_PyInt_From_unsigned_PY_LONG_LONG(__pyx_v_num_rows); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 175, __pyx_L1_error)
+  __pyx_t_2 = __Pyx_PyInt_From_unsigned_PY_LONG_LONG(__pyx_v_num_rows); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 178, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_2);
-  __pyx_t_3 = PyNumber_Multiply(__pyx_t_1, __pyx_t_2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 175, __pyx_L1_error)
+  __pyx_t_3 = PyNumber_Multiply(__pyx_t_1, __pyx_t_2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 178, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_3);
   __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
   __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-  __pyx_t_4 = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(__pyx_t_3); if (unlikely((__pyx_t_4 == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 175, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_PyInt_As_unsigned_PY_LONG_LONG(__pyx_t_3); if (unlikely((__pyx_t_4 == (unsigned PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 178, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
   __pyx_v_sz = __pyx_t_4;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":176
+  /* "clickhouse_connect/driverc/buffer.pyx":179
  *         cdef array.array result = array.clone(template, num_rows, 0)
  *         cdef unsigned long long sz = result.itemsize * num_rows
  *         if self._set_slice(sz) == 255:             # <<<<<<<<<<<<<<
  *             raise StopIteration
  *         memcpy(result.data.as_voidptr, self._cur_slice(), sz)
  */
-  __pyx_t_5 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_5 == ((unsigned char)0xFF))) __PYX_ERR(0, 176, __pyx_L1_error)
+  __pyx_t_5 = ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_set_slice(__pyx_v_self, __pyx_v_sz); if (unlikely(__pyx_t_5 == ((unsigned char)0xFF))) __PYX_ERR(0, 179, __pyx_L1_error)
   __pyx_t_6 = ((__pyx_t_5 == 0xFF) != 0);
   if (unlikely(__pyx_t_6)) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":177
+    /* "clickhouse_connect/driverc/buffer.pyx":180
  *         cdef unsigned long long sz = result.itemsize * num_rows
  *         if self._set_slice(sz) == 255:
  *             raise StopIteration             # <<<<<<<<<<<<<<
@@ -4170,9 +4162,9 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  *         if must_swap:
  */
     __Pyx_Raise(__pyx_builtin_StopIteration, 0, 0, 0);
-    __PYX_ERR(0, 177, __pyx_L1_error)
+    __PYX_ERR(0, 180, __pyx_L1_error)
 
-    /* "clickhouse_connect/driverc/buffer.pyx":176
+    /* "clickhouse_connect/driverc/buffer.pyx":179
  *         cdef array.array result = array.clone(template, num_rows, 0)
  *         cdef unsigned long long sz = result.itemsize * num_rows
  *         if self._set_slice(sz) == 255:             # <<<<<<<<<<<<<<
@@ -4181,7 +4173,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":178
+  /* "clickhouse_connect/driverc/buffer.pyx":181
  *         if self._set_slice(sz) == 255:
  *             raise StopIteration
  *         memcpy(result.data.as_voidptr, self._cur_slice(), sz)             # <<<<<<<<<<<<<<
@@ -4190,7 +4182,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   (void)(memcpy(__pyx_v_result->data.as_voidptr, ((struct __pyx_vtabstruct_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *)__pyx_v_self->__pyx_vtab)->_cur_slice(__pyx_v_self), __pyx_v_sz));
 
-  /* "clickhouse_connect/driverc/buffer.pyx":179
+  /* "clickhouse_connect/driverc/buffer.pyx":182
  *             raise StopIteration
  *         memcpy(result.data.as_voidptr, self._cur_slice(), sz)
  *         if must_swap:             # <<<<<<<<<<<<<<
@@ -4200,14 +4192,14 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __pyx_t_6 = (__pyx_v_18clickhouse_connect_7driverc_6buffer_must_swap != 0);
   if (__pyx_t_6) {
 
-    /* "clickhouse_connect/driverc/buffer.pyx":180
+    /* "clickhouse_connect/driverc/buffer.pyx":183
  *         memcpy(result.data.as_voidptr, self._cur_slice(), sz)
  *         if must_swap:
  *             result.byteswap()             # <<<<<<<<<<<<<<
  *         return result
  * 
  */
-    __pyx_t_2 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_result), __pyx_n_s_byteswap); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 180, __pyx_L1_error)
+    __pyx_t_2 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_result), __pyx_n_s_byteswap); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 183, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_2);
     __pyx_t_1 = NULL;
     if (CYTHON_UNPACK_METHODS && likely(PyMethod_Check(__pyx_t_2))) {
@@ -4221,12 +4213,12 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
     }
     __pyx_t_3 = (__pyx_t_1) ? __Pyx_PyObject_CallOneArg(__pyx_t_2, __pyx_t_1) : __Pyx_PyObject_CallNoArg(__pyx_t_2);
     __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
-    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 180, __pyx_L1_error)
+    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 183, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
 
-    /* "clickhouse_connect/driverc/buffer.pyx":179
+    /* "clickhouse_connect/driverc/buffer.pyx":182
  *             raise StopIteration
  *         memcpy(result.data.as_voidptr, self._cur_slice(), sz)
  *         if must_swap:             # <<<<<<<<<<<<<<
@@ -4235,7 +4227,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
  */
   }
 
-  /* "clickhouse_connect/driverc/buffer.pyx":181
+  /* "clickhouse_connect/driverc/buffer.pyx":184
  *         if must_swap:
  *             result.byteswap()
  *         return result             # <<<<<<<<<<<<<<
@@ -4247,7 +4239,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   __pyx_r = ((PyObject *)__pyx_v_result);
   goto __pyx_L0;
 
-  /* "clickhouse_connect/driverc/buffer.pyx":172
+  /* "clickhouse_connect/driverc/buffer.pyx":175
  *         return column
  * 
  *     def read_array(self, t: str, unsigned long long num_rows):             # <<<<<<<<<<<<<<
@@ -4270,7 +4262,7 @@ static PyObject *__pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer
   return __pyx_r;
 }
 
-/* "clickhouse_connect/driverc/buffer.pyx":183
+/* "clickhouse_connect/driverc/buffer.pyx":186
  *         return result
  * 
  *     def __dealloc__(self):             # <<<<<<<<<<<<<<
@@ -4293,7 +4285,7 @@ static void __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_16__
   __Pyx_RefNannyDeclarations
   __Pyx_RefNannySetupContext("__dealloc__", 0);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":184
+  /* "clickhouse_connect/driverc/buffer.pyx":187
  * 
  *     def __dealloc__(self):
  *         PyBuffer_Release(&self.buff_source)             # <<<<<<<<<<<<<<
@@ -4301,14 +4293,14 @@ static void __pyx_pf_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_16__
  */
   PyBuffer_Release((&__pyx_v_self->buff_source));
 
-  /* "clickhouse_connect/driverc/buffer.pyx":185
+  /* "clickhouse_connect/driverc/buffer.pyx":188
  *     def __dealloc__(self):
  *         PyBuffer_Release(&self.buff_source)
  *         PyMem_Free(self.slice)             # <<<<<<<<<<<<<<
  */
   PyMem_Free(__pyx_v_self->slice);
 
-  /* "clickhouse_connect/driverc/buffer.pyx":183
+  /* "clickhouse_connect/driverc/buffer.pyx":186
  *         return result
  * 
  *     def __dealloc__(self):             # <<<<<<<<<<<<<<
@@ -5301,7 +5293,6 @@ static __Pyx_StringTabEntry __pyx_string_tab[] = {
   {&__pyx_n_s_pyx_vtable, __pyx_k_pyx_vtable, sizeof(__pyx_k_pyx_vtable), 0, 0, 1, 1},
   {&__pyx_n_s_range, __pyx_k_range, sizeof(__pyx_k_range), 0, 0, 1, 1},
   {&__pyx_n_s_read_leb128, __pyx_k_read_leb128, sizeof(__pyx_k_read_leb128), 0, 0, 1, 1},
-  {&__pyx_n_s_read_leb128_str, __pyx_k_read_leb128_str, sizeof(__pyx_k_read_leb128_str), 0, 0, 1, 1},
   {&__pyx_n_s_reduce, __pyx_k_reduce, sizeof(__pyx_k_reduce), 0, 0, 1, 1},
   {&__pyx_n_s_reduce_cython, __pyx_k_reduce_cython, sizeof(__pyx_k_reduce_cython), 0, 0, 1, 1},
   {&__pyx_n_s_reduce_ex, __pyx_k_reduce_ex, sizeof(__pyx_k_reduce_ex), 0, 0, 1, 1},
@@ -5312,13 +5303,14 @@ static __Pyx_StringTabEntry __pyx_string_tab[] = {
   {&__pyx_n_s_t, __pyx_k_t, sizeof(__pyx_k_t), 0, 0, 1, 1},
   {&__pyx_n_s_test, __pyx_k_test, sizeof(__pyx_k_test), 0, 0, 1, 1},
   {&__pyx_n_s_typing, __pyx_k_typing, sizeof(__pyx_k_typing), 0, 0, 1, 1},
+  {&__pyx_kp_u_utf_8, __pyx_k_utf_8, sizeof(__pyx_k_utf_8), 0, 1, 0, 0},
   {0, 0, 0, 0, 0, 0, 0}
 };
 static CYTHON_SMALL_CODE int __Pyx_InitCachedBuiltins(void) {
-  __pyx_builtin_IndexError = __Pyx_GetBuiltinName(__pyx_n_s_IndexError); if (!__pyx_builtin_IndexError) __PYX_ERR(0, 103, __pyx_L1_error)
-  __pyx_builtin_StopIteration = __Pyx_GetBuiltinName(__pyx_n_s_StopIteration); if (!__pyx_builtin_StopIteration) __PYX_ERR(0, 122, __pyx_L1_error)
-  __pyx_builtin_UnicodeDecodeError = __Pyx_GetBuiltinName(__pyx_n_s_UnicodeDecodeError); if (!__pyx_builtin_UnicodeDecodeError) __PYX_ERR(0, 125, __pyx_L1_error)
-  __pyx_builtin_range = __Pyx_GetBuiltinName(__pyx_n_s_range); if (!__pyx_builtin_range) __PYX_ERR(0, 166, __pyx_L1_error)
+  __pyx_builtin_IndexError = __Pyx_GetBuiltinName(__pyx_n_s_IndexError); if (!__pyx_builtin_IndexError) __PYX_ERR(0, 102, __pyx_L1_error)
+  __pyx_builtin_StopIteration = __Pyx_GetBuiltinName(__pyx_n_s_StopIteration); if (!__pyx_builtin_StopIteration) __PYX_ERR(0, 121, __pyx_L1_error)
+  __pyx_builtin_UnicodeDecodeError = __Pyx_GetBuiltinName(__pyx_n_s_UnicodeDecodeError); if (!__pyx_builtin_UnicodeDecodeError) __PYX_ERR(0, 124, __pyx_L1_error)
+  __pyx_builtin_range = __Pyx_GetBuiltinName(__pyx_n_s_range); if (!__pyx_builtin_range) __PYX_ERR(0, 169, __pyx_L1_error)
   __pyx_builtin_TypeError = __Pyx_GetBuiltinName(__pyx_n_s_TypeError); if (!__pyx_builtin_TypeError) __PYX_ERR(1, 2, __pyx_L1_error)
   __pyx_builtin_MemoryError = __Pyx_GetBuiltinName(__pyx_n_s_MemoryError); if (!__pyx_builtin_MemoryError) __PYX_ERR(2, 109, __pyx_L1_error)
   return 0;
@@ -5410,7 +5402,7 @@ static int __Pyx_modinit_type_init_code(void) {
   __pyx_vtable_18clickhouse_connect_7driverc_6buffer_ResponseBuffer._read_byte = (unsigned char (*)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *))__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_byte;
   __pyx_vtable_18clickhouse_connect_7driverc_6buffer_ResponseBuffer._read_bytes = (char *(*)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, unsigned PY_LONG_LONG))__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_bytes;
   __pyx_vtable_18clickhouse_connect_7driverc_6buffer_ResponseBuffer._reset_buff = (PyObject *(*)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, PyObject *))__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__reset_buff;
-  __pyx_vtable_18clickhouse_connect_7driverc_6buffer_ResponseBuffer.read_leb128_str = (PyObject *(*)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, int __pyx_skip_dispatch, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str *__pyx_optional_args))__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128_str;
+  __pyx_vtable_18clickhouse_connect_7driverc_6buffer_ResponseBuffer._read_leb128_str = (PyObject *(*)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, struct __pyx_opt_args_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str *__pyx_optional_args))__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer__read_leb128_str;
   __pyx_vtable_18clickhouse_connect_7driverc_6buffer_ResponseBuffer.read_leb128 = (unsigned PY_LONG_LONG (*)(struct __pyx_obj_18clickhouse_connect_7driverc_6buffer_ResponseBuffer *, int __pyx_skip_dispatch))__pyx_f_18clickhouse_connect_7driverc_6buffer_14ResponseBuffer_read_leb128;
   if (PyType_Ready(&__pyx_type_18clickhouse_connect_7driverc_6buffer_ResponseBuffer) < 0) __PYX_ERR(0, 33, __pyx_L1_error)
   #if PY_VERSION_HEX < 0x030800B1
@@ -6412,283 +6404,6 @@ static CYTHON_INLINE PyObject *__Pyx_GetItemInt_Fast(PyObject *o, Py_ssize_t i, 
     return __Pyx_GetItemInt_Generic(o, PyInt_FromSsize_t(i));
 }
 
-/* PyDictVersioning */
-#if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_TYPE_SLOTS
-static CYTHON_INLINE PY_UINT64_T __Pyx_get_tp_dict_version(PyObject *obj) {
-    PyObject *dict = Py_TYPE(obj)->tp_dict;
-    return likely(dict) ? __PYX_GET_DICT_VERSION(dict) : 0;
-}
-static CYTHON_INLINE PY_UINT64_T __Pyx_get_object_dict_version(PyObject *obj) {
-    PyObject **dictptr = NULL;
-    Py_ssize_t offset = Py_TYPE(obj)->tp_dictoffset;
-    if (offset) {
-#if CYTHON_COMPILING_IN_CPYTHON
-        dictptr = (likely(offset > 0)) ? (PyObject **) ((char *)obj + offset) : _PyObject_GetDictPtr(obj);
-#else
-        dictptr = _PyObject_GetDictPtr(obj);
-#endif
-    }
-    return (dictptr && *dictptr) ? __PYX_GET_DICT_VERSION(*dictptr) : 0;
-}
-static CYTHON_INLINE int __Pyx_object_dict_version_matches(PyObject* obj, PY_UINT64_T tp_dict_version, PY_UINT64_T obj_dict_version) {
-    PyObject *dict = Py_TYPE(obj)->tp_dict;
-    if (unlikely(!dict) || unlikely(tp_dict_version != __PYX_GET_DICT_VERSION(dict)))
-        return 0;
-    return obj_dict_version == __Pyx_get_object_dict_version(obj);
-}
-#endif
-
-/* PyCFunctionFastCall */
-#if CYTHON_FAST_PYCCALL
-static CYTHON_INLINE PyObject * __Pyx_PyCFunction_FastCall(PyObject *func_obj, PyObject **args, Py_ssize_t nargs) {
-    PyCFunctionObject *func = (PyCFunctionObject*)func_obj;
-    PyCFunction meth = PyCFunction_GET_FUNCTION(func);
-    PyObject *self = PyCFunction_GET_SELF(func);
-    int flags = PyCFunction_GET_FLAGS(func);
-    assert(PyCFunction_Check(func));
-    assert(METH_FASTCALL == (flags & ~(METH_CLASS | METH_STATIC | METH_COEXIST | METH_KEYWORDS | METH_STACKLESS)));
-    assert(nargs >= 0);
-    assert(nargs == 0 || args != NULL);
-    /* _PyCFunction_FastCallDict() must not be called with an exception set,
-       because it may clear it (directly or indirectly) and so the
-       caller loses its exception */
-    assert(!PyErr_Occurred());
-    if ((PY_VERSION_HEX < 0x030700A0) || unlikely(flags & METH_KEYWORDS)) {
-        return (*((__Pyx_PyCFunctionFastWithKeywords)(void*)meth)) (self, args, nargs, NULL);
-    } else {
-        return (*((__Pyx_PyCFunctionFast)(void*)meth)) (self, args, nargs);
-    }
-}
-#endif
-
-/* PyFunctionFastCall */
-#if CYTHON_FAST_PYCALL
-static PyObject* __Pyx_PyFunction_FastCallNoKw(PyCodeObject *co, PyObject **args, Py_ssize_t na,
-                                               PyObject *globals) {
-    PyFrameObject *f;
-    PyThreadState *tstate = __Pyx_PyThreadState_Current;
-    PyObject **fastlocals;
-    Py_ssize_t i;
-    PyObject *result;
-    assert(globals != NULL);
-    /* XXX Perhaps we should create a specialized
-       PyFrame_New() that doesn't take locals, but does
-       take builtins without sanity checking them.
-       */
-    assert(tstate != NULL);
-    f = PyFrame_New(tstate, co, globals, NULL);
-    if (f == NULL) {
-        return NULL;
-    }
-    fastlocals = __Pyx_PyFrame_GetLocalsplus(f);
-    for (i = 0; i < na; i++) {
-        Py_INCREF(*args);
-        fastlocals[i] = *args++;
-    }
-    result = PyEval_EvalFrameEx(f,0);
-    ++tstate->recursion_depth;
-    Py_DECREF(f);
-    --tstate->recursion_depth;
-    return result;
-}
-#if 1 || PY_VERSION_HEX < 0x030600B1
-static PyObject *__Pyx_PyFunction_FastCallDict(PyObject *func, PyObject **args, Py_ssize_t nargs, PyObject *kwargs) {
-    PyCodeObject *co = (PyCodeObject *)PyFunction_GET_CODE(func);
-    PyObject *globals = PyFunction_GET_GLOBALS(func);
-    PyObject *argdefs = PyFunction_GET_DEFAULTS(func);
-    PyObject *closure;
-#if PY_MAJOR_VERSION >= 3
-    PyObject *kwdefs;
-#endif
-    PyObject *kwtuple, **k;
-    PyObject **d;
-    Py_ssize_t nd;
-    Py_ssize_t nk;
-    PyObject *result;
-    assert(kwargs == NULL || PyDict_Check(kwargs));
-    nk = kwargs ? PyDict_Size(kwargs) : 0;
-    if (Py_EnterRecursiveCall((char*)" while calling a Python object")) {
-        return NULL;
-    }
-    if (
-#if PY_MAJOR_VERSION >= 3
-            co->co_kwonlyargcount == 0 &&
-#endif
-            likely(kwargs == NULL || nk == 0) &&
-            co->co_flags == (CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE)) {
-        if (argdefs == NULL && co->co_argcount == nargs) {
-            result = __Pyx_PyFunction_FastCallNoKw(co, args, nargs, globals);
-            goto done;
-        }
-        else if (nargs == 0 && argdefs != NULL
-                 && co->co_argcount == Py_SIZE(argdefs)) {
-            /* function called with no arguments, but all parameters have
-               a default value: use default values as arguments .*/
-            args = &PyTuple_GET_ITEM(argdefs, 0);
-            result =__Pyx_PyFunction_FastCallNoKw(co, args, Py_SIZE(argdefs), globals);
-            goto done;
-        }
-    }
-    if (kwargs != NULL) {
-        Py_ssize_t pos, i;
-        kwtuple = PyTuple_New(2 * nk);
-        if (kwtuple == NULL) {
-            result = NULL;
-            goto done;
-        }
-        k = &PyTuple_GET_ITEM(kwtuple, 0);
-        pos = i = 0;
-        while (PyDict_Next(kwargs, &pos, &k[i], &k[i+1])) {
-            Py_INCREF(k[i]);
-            Py_INCREF(k[i+1]);
-            i += 2;
-        }
-        nk = i / 2;
-    }
-    else {
-        kwtuple = NULL;
-        k = NULL;
-    }
-    closure = PyFunction_GET_CLOSURE(func);
-#if PY_MAJOR_VERSION >= 3
-    kwdefs = PyFunction_GET_KW_DEFAULTS(func);
-#endif
-    if (argdefs != NULL) {
-        d = &PyTuple_GET_ITEM(argdefs, 0);
-        nd = Py_SIZE(argdefs);
-    }
-    else {
-        d = NULL;
-        nd = 0;
-    }
-#if PY_MAJOR_VERSION >= 3
-    result = PyEval_EvalCodeEx((PyObject*)co, globals, (PyObject *)NULL,
-                               args, (int)nargs,
-                               k, (int)nk,
-                               d, (int)nd, kwdefs, closure);
-#else
-    result = PyEval_EvalCodeEx(co, globals, (PyObject *)NULL,
-                               args, (int)nargs,
-                               k, (int)nk,
-                               d, (int)nd, closure);
-#endif
-    Py_XDECREF(kwtuple);
-done:
-    Py_LeaveRecursiveCall();
-    return result;
-}
-#endif
-#endif
-
-/* PyObjectCall */
-#if CYTHON_COMPILING_IN_CPYTHON
-static CYTHON_INLINE PyObject* __Pyx_PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw) {
-    PyObject *result;
-    ternaryfunc call = Py_TYPE(func)->tp_call;
-    if (unlikely(!call))
-        return PyObject_Call(func, arg, kw);
-    if (unlikely(Py_EnterRecursiveCall((char*)" while calling a Python object")))
-        return NULL;
-    result = (*call)(func, arg, kw);
-    Py_LeaveRecursiveCall();
-    if (unlikely(!result) && unlikely(!PyErr_Occurred())) {
-        PyErr_SetString(
-            PyExc_SystemError,
-            "NULL result without error in PyObject_Call");
-    }
-    return result;
-}
-#endif
-
-/* PyObjectCall2Args */
-static CYTHON_UNUSED PyObject* __Pyx_PyObject_Call2Args(PyObject* function, PyObject* arg1, PyObject* arg2) {
-    PyObject *args, *result = NULL;
-    #if CYTHON_FAST_PYCALL
-    if (PyFunction_Check(function)) {
-        PyObject *args[2] = {arg1, arg2};
-        return __Pyx_PyFunction_FastCall(function, args, 2);
-    }
-    #endif
-    #if CYTHON_FAST_PYCCALL
-    if (__Pyx_PyFastCFunction_Check(function)) {
-        PyObject *args[2] = {arg1, arg2};
-        return __Pyx_PyCFunction_FastCall(function, args, 2);
-    }
-    #endif
-    args = PyTuple_New(2);
-    if (unlikely(!args)) goto done;
-    Py_INCREF(arg1);
-    PyTuple_SET_ITEM(args, 0, arg1);
-    Py_INCREF(arg2);
-    PyTuple_SET_ITEM(args, 1, arg2);
-    Py_INCREF(function);
-    result = __Pyx_PyObject_Call(function, args, NULL);
-    Py_DECREF(args);
-    Py_DECREF(function);
-done:
-    return result;
-}
-
-/* PyObjectCallMethO */
-#if CYTHON_COMPILING_IN_CPYTHON
-static CYTHON_INLINE PyObject* __Pyx_PyObject_CallMethO(PyObject *func, PyObject *arg) {
-    PyObject *self, *result;
-    PyCFunction cfunc;
-    cfunc = PyCFunction_GET_FUNCTION(func);
-    self = PyCFunction_GET_SELF(func);
-    if (unlikely(Py_EnterRecursiveCall((char*)" while calling a Python object")))
-        return NULL;
-    result = cfunc(self, arg);
-    Py_LeaveRecursiveCall();
-    if (unlikely(!result) && unlikely(!PyErr_Occurred())) {
-        PyErr_SetString(
-            PyExc_SystemError,
-            "NULL result without error in PyObject_Call");
-    }
-    return result;
-}
-#endif
-
-/* PyObjectCallOneArg */
-#if CYTHON_COMPILING_IN_CPYTHON
-static PyObject* __Pyx__PyObject_CallOneArg(PyObject *func, PyObject *arg) {
-    PyObject *result;
-    PyObject *args = PyTuple_New(1);
-    if (unlikely(!args)) return NULL;
-    Py_INCREF(arg);
-    PyTuple_SET_ITEM(args, 0, arg);
-    result = __Pyx_PyObject_Call(func, args, NULL);
-    Py_DECREF(args);
-    return result;
-}
-static CYTHON_INLINE PyObject* __Pyx_PyObject_CallOneArg(PyObject *func, PyObject *arg) {
-#if CYTHON_FAST_PYCALL
-    if (PyFunction_Check(func)) {
-        return __Pyx_PyFunction_FastCall(func, &arg, 1);
-    }
-#endif
-    if (likely(PyCFunction_Check(func))) {
-        if (likely(PyCFunction_GET_FLAGS(func) & METH_O)) {
-            return __Pyx_PyObject_CallMethO(func, arg);
-#if CYTHON_FAST_PYCCALL
-        } else if (__Pyx_PyFastCFunction_Check(func)) {
-            return __Pyx_PyCFunction_FastCall(func, &arg, 1);
-#endif
-        }
-    }
-    return __Pyx__PyObject_CallOneArg(func, arg);
-}
-#else
-static CYTHON_INLINE PyObject* __Pyx_PyObject_CallOneArg(PyObject *func, PyObject *arg) {
-    PyObject *result;
-    PyObject *args = PyTuple_Pack(1, arg);
-    if (unlikely(!args)) return NULL;
-    result = __Pyx_PyObject_Call(func, args, NULL);
-    Py_DECREF(args);
-    return result;
-}
-#endif
-
 /* GetTopmostException */
 #if CYTHON_USE_EXC_INFO_STACK
 static _PyErr_StackItem *
@@ -6844,6 +6559,165 @@ bad:
     return -1;
 }
 
+/* PyFunctionFastCall */
+#if CYTHON_FAST_PYCALL
+static PyObject* __Pyx_PyFunction_FastCallNoKw(PyCodeObject *co, PyObject **args, Py_ssize_t na,
+                                               PyObject *globals) {
+    PyFrameObject *f;
+    PyThreadState *tstate = __Pyx_PyThreadState_Current;
+    PyObject **fastlocals;
+    Py_ssize_t i;
+    PyObject *result;
+    assert(globals != NULL);
+    /* XXX Perhaps we should create a specialized
+       PyFrame_New() that doesn't take locals, but does
+       take builtins without sanity checking them.
+       */
+    assert(tstate != NULL);
+    f = PyFrame_New(tstate, co, globals, NULL);
+    if (f == NULL) {
+        return NULL;
+    }
+    fastlocals = __Pyx_PyFrame_GetLocalsplus(f);
+    for (i = 0; i < na; i++) {
+        Py_INCREF(*args);
+        fastlocals[i] = *args++;
+    }
+    result = PyEval_EvalFrameEx(f,0);
+    ++tstate->recursion_depth;
+    Py_DECREF(f);
+    --tstate->recursion_depth;
+    return result;
+}
+#if 1 || PY_VERSION_HEX < 0x030600B1
+static PyObject *__Pyx_PyFunction_FastCallDict(PyObject *func, PyObject **args, Py_ssize_t nargs, PyObject *kwargs) {
+    PyCodeObject *co = (PyCodeObject *)PyFunction_GET_CODE(func);
+    PyObject *globals = PyFunction_GET_GLOBALS(func);
+    PyObject *argdefs = PyFunction_GET_DEFAULTS(func);
+    PyObject *closure;
+#if PY_MAJOR_VERSION >= 3
+    PyObject *kwdefs;
+#endif
+    PyObject *kwtuple, **k;
+    PyObject **d;
+    Py_ssize_t nd;
+    Py_ssize_t nk;
+    PyObject *result;
+    assert(kwargs == NULL || PyDict_Check(kwargs));
+    nk = kwargs ? PyDict_Size(kwargs) : 0;
+    if (Py_EnterRecursiveCall((char*)" while calling a Python object")) {
+        return NULL;
+    }
+    if (
+#if PY_MAJOR_VERSION >= 3
+            co->co_kwonlyargcount == 0 &&
+#endif
+            likely(kwargs == NULL || nk == 0) &&
+            co->co_flags == (CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE)) {
+        if (argdefs == NULL && co->co_argcount == nargs) {
+            result = __Pyx_PyFunction_FastCallNoKw(co, args, nargs, globals);
+            goto done;
+        }
+        else if (nargs == 0 && argdefs != NULL
+                 && co->co_argcount == Py_SIZE(argdefs)) {
+            /* function called with no arguments, but all parameters have
+               a default value: use default values as arguments .*/
+            args = &PyTuple_GET_ITEM(argdefs, 0);
+            result =__Pyx_PyFunction_FastCallNoKw(co, args, Py_SIZE(argdefs), globals);
+            goto done;
+        }
+    }
+    if (kwargs != NULL) {
+        Py_ssize_t pos, i;
+        kwtuple = PyTuple_New(2 * nk);
+        if (kwtuple == NULL) {
+            result = NULL;
+            goto done;
+        }
+        k = &PyTuple_GET_ITEM(kwtuple, 0);
+        pos = i = 0;
+        while (PyDict_Next(kwargs, &pos, &k[i], &k[i+1])) {
+            Py_INCREF(k[i]);
+            Py_INCREF(k[i+1]);
+            i += 2;
+        }
+        nk = i / 2;
+    }
+    else {
+        kwtuple = NULL;
+        k = NULL;
+    }
+    closure = PyFunction_GET_CLOSURE(func);
+#if PY_MAJOR_VERSION >= 3
+    kwdefs = PyFunction_GET_KW_DEFAULTS(func);
+#endif
+    if (argdefs != NULL) {
+        d = &PyTuple_GET_ITEM(argdefs, 0);
+        nd = Py_SIZE(argdefs);
+    }
+    else {
+        d = NULL;
+        nd = 0;
+    }
+#if PY_MAJOR_VERSION >= 3
+    result = PyEval_EvalCodeEx((PyObject*)co, globals, (PyObject *)NULL,
+                               args, (int)nargs,
+                               k, (int)nk,
+                               d, (int)nd, kwdefs, closure);
+#else
+    result = PyEval_EvalCodeEx(co, globals, (PyObject *)NULL,
+                               args, (int)nargs,
+                               k, (int)nk,
+                               d, (int)nd, closure);
+#endif
+    Py_XDECREF(kwtuple);
+done:
+    Py_LeaveRecursiveCall();
+    return result;
+}
+#endif
+#endif
+
+/* PyObjectCall */
+#if CYTHON_COMPILING_IN_CPYTHON
+static CYTHON_INLINE PyObject* __Pyx_PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw) {
+    PyObject *result;
+    ternaryfunc call = Py_TYPE(func)->tp_call;
+    if (unlikely(!call))
+        return PyObject_Call(func, arg, kw);
+    if (unlikely(Py_EnterRecursiveCall((char*)" while calling a Python object")))
+        return NULL;
+    result = (*call)(func, arg, kw);
+    Py_LeaveRecursiveCall();
+    if (unlikely(!result) && unlikely(!PyErr_Occurred())) {
+        PyErr_SetString(
+            PyExc_SystemError,
+            "NULL result without error in PyObject_Call");
+    }
+    return result;
+}
+#endif
+
+/* PyObjectCallMethO */
+#if CYTHON_COMPILING_IN_CPYTHON
+static CYTHON_INLINE PyObject* __Pyx_PyObject_CallMethO(PyObject *func, PyObject *arg) {
+    PyObject *self, *result;
+    PyCFunction cfunc;
+    cfunc = PyCFunction_GET_FUNCTION(func);
+    self = PyCFunction_GET_SELF(func);
+    if (unlikely(Py_EnterRecursiveCall((char*)" while calling a Python object")))
+        return NULL;
+    result = cfunc(self, arg);
+    Py_LeaveRecursiveCall();
+    if (unlikely(!result) && unlikely(!PyErr_Occurred())) {
+        PyErr_SetString(
+            PyExc_SystemError,
+            "NULL result without error in PyObject_Call");
+    }
+    return result;
+}
+#endif
+
 /* PyObjectCallNoArg */
 #if CYTHON_COMPILING_IN_CPYTHON
 static CYTHON_INLINE PyObject* __Pyx_PyObject_CallNoArg(PyObject *func) {
@@ -6863,6 +6737,69 @@ static CYTHON_INLINE PyObject* __Pyx_PyObject_CallNoArg(PyObject *func) {
         }
     }
     return __Pyx_PyObject_Call(func, __pyx_empty_tuple, NULL);
+}
+#endif
+
+/* PyCFunctionFastCall */
+#if CYTHON_FAST_PYCCALL
+static CYTHON_INLINE PyObject * __Pyx_PyCFunction_FastCall(PyObject *func_obj, PyObject **args, Py_ssize_t nargs) {
+    PyCFunctionObject *func = (PyCFunctionObject*)func_obj;
+    PyCFunction meth = PyCFunction_GET_FUNCTION(func);
+    PyObject *self = PyCFunction_GET_SELF(func);
+    int flags = PyCFunction_GET_FLAGS(func);
+    assert(PyCFunction_Check(func));
+    assert(METH_FASTCALL == (flags & ~(METH_CLASS | METH_STATIC | METH_COEXIST | METH_KEYWORDS | METH_STACKLESS)));
+    assert(nargs >= 0);
+    assert(nargs == 0 || args != NULL);
+    /* _PyCFunction_FastCallDict() must not be called with an exception set,
+       because it may clear it (directly or indirectly) and so the
+       caller loses its exception */
+    assert(!PyErr_Occurred());
+    if ((PY_VERSION_HEX < 0x030700A0) || unlikely(flags & METH_KEYWORDS)) {
+        return (*((__Pyx_PyCFunctionFastWithKeywords)(void*)meth)) (self, args, nargs, NULL);
+    } else {
+        return (*((__Pyx_PyCFunctionFast)(void*)meth)) (self, args, nargs);
+    }
+}
+#endif
+
+/* PyObjectCallOneArg */
+#if CYTHON_COMPILING_IN_CPYTHON
+static PyObject* __Pyx__PyObject_CallOneArg(PyObject *func, PyObject *arg) {
+    PyObject *result;
+    PyObject *args = PyTuple_New(1);
+    if (unlikely(!args)) return NULL;
+    Py_INCREF(arg);
+    PyTuple_SET_ITEM(args, 0, arg);
+    result = __Pyx_PyObject_Call(func, args, NULL);
+    Py_DECREF(args);
+    return result;
+}
+static CYTHON_INLINE PyObject* __Pyx_PyObject_CallOneArg(PyObject *func, PyObject *arg) {
+#if CYTHON_FAST_PYCALL
+    if (PyFunction_Check(func)) {
+        return __Pyx_PyFunction_FastCall(func, &arg, 1);
+    }
+#endif
+    if (likely(PyCFunction_Check(func))) {
+        if (likely(PyCFunction_GET_FLAGS(func) & METH_O)) {
+            return __Pyx_PyObject_CallMethO(func, arg);
+#if CYTHON_FAST_PYCCALL
+        } else if (__Pyx_PyFastCFunction_Check(func)) {
+            return __Pyx_PyCFunction_FastCall(func, &arg, 1);
+#endif
+        }
+    }
+    return __Pyx__PyObject_CallOneArg(func, arg);
+}
+#else
+static CYTHON_INLINE PyObject* __Pyx_PyObject_CallOneArg(PyObject *func, PyObject *arg) {
+    PyObject *result;
+    PyObject *args = PyTuple_Pack(1, arg);
+    if (unlikely(!args)) return NULL;
+    result = __Pyx_PyObject_Call(func, args, NULL);
+    Py_DECREF(args);
+    return result;
 }
 #endif
 
@@ -6886,6 +6823,32 @@ static int __Pyx__ArgTypeTest(PyObject *obj, PyTypeObject *type, const char *nam
         name, type->tp_name, Py_TYPE(obj)->tp_name);
     return 0;
 }
+
+/* PyDictVersioning */
+#if CYTHON_USE_DICT_VERSIONS && CYTHON_USE_TYPE_SLOTS
+static CYTHON_INLINE PY_UINT64_T __Pyx_get_tp_dict_version(PyObject *obj) {
+    PyObject *dict = Py_TYPE(obj)->tp_dict;
+    return likely(dict) ? __PYX_GET_DICT_VERSION(dict) : 0;
+}
+static CYTHON_INLINE PY_UINT64_T __Pyx_get_object_dict_version(PyObject *obj) {
+    PyObject **dictptr = NULL;
+    Py_ssize_t offset = Py_TYPE(obj)->tp_dictoffset;
+    if (offset) {
+#if CYTHON_COMPILING_IN_CPYTHON
+        dictptr = (likely(offset > 0)) ? (PyObject **) ((char *)obj + offset) : _PyObject_GetDictPtr(obj);
+#else
+        dictptr = _PyObject_GetDictPtr(obj);
+#endif
+    }
+    return (dictptr && *dictptr) ? __PYX_GET_DICT_VERSION(*dictptr) : 0;
+}
+static CYTHON_INLINE int __Pyx_object_dict_version_matches(PyObject* obj, PY_UINT64_T tp_dict_version, PY_UINT64_T obj_dict_version) {
+    PyObject *dict = Py_TYPE(obj)->tp_dict;
+    if (unlikely(!dict) || unlikely(tp_dict_version != __PYX_GET_DICT_VERSION(dict)))
+        return 0;
+    return obj_dict_version == __Pyx_get_object_dict_version(obj);
+}
+#endif
 
 /* DictGetItem */
 #if PY_MAJOR_VERSION >= 3 && !CYTHON_COMPILING_IN_PYPY

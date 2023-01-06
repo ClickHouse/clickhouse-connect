@@ -1,38 +1,35 @@
-import traceback
 import zlib
-from typing import Any
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import DataResult
+from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.transform import DataTransform, QueryContext
 from clickhouse_connect.driver.types import ByteSource
-
-block_size = 16384
 
 
 class NativeTransform(DataTransform):
     # pylint: disable=too-many-locals
-    def _transform_response(self, source: ByteSource, context: QueryContext) -> DataResult:
+    def _transform_response(self, source: ByteSource, context: QueryContext) -> QueryResult:
         names = []
         col_types = []
-        block = 0
-        result = []
         use_none = context.use_none
-        while True:
+        block_num = 0
+
+        def get_block():
+            nonlocal block_num
             try:
                 num_cols = source.read_leb128()
                 num_rows = source.read_leb128()
             except (StopIteration, IndexError):
-                break
+                return None
             result_block = []
             for col_num in range(num_cols):
                 name = source.read_leb128_str()
-                if block == 0:
+                if block_num == 0:
                     names.append(name)
                 type_name = source.read_leb128_str()
-                if block == 0:
+                if block_num == 0:
                     col_type = registry.get_from_name(type_name)
                     col_types.append(col_type)
                 else:
@@ -40,16 +37,22 @@ class NativeTransform(DataTransform):
                 context.start_column(name, col_type)
                 column = col_type.read_native_column(source, num_rows, use_none=use_none)
                 result_block.append(column)
-            if context.column_oriented:
-                if block == 0:
-                    result = [x if isinstance(x, list) else list(x) for x in result_block]
-                else:
-                    for base, added in zip(result, result_block):
-                        base.extend(added)
-            else:
-                result.extend(list(zip(*result_block)))
-            block += 1
-        return DataResult(result, tuple(names), tuple(col_types), context.column_oriented, block)
+            block_num += 1
+            return result_block
+
+        first_block = get_block()
+        if first_block is None:
+            return QueryResult([])
+
+        def gen():
+            yield first_block
+            while True:
+                next_block = get_block()
+                if next_block is None:
+                    return
+                yield next_block
+
+        return QueryResult(None, gen(), tuple(names), tuple(col_types), column_oriented=context.column_oriented)
 
     def _build_insert(self, context: InsertContext):
         if context.compression == 'gzip':

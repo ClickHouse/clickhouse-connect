@@ -1,14 +1,14 @@
 import math
 import random
 import re
-from typing import Sequence, Optional, Union
+from typing import Sequence, Optional, Union, Type
 
 import pkg_resources
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driverc.buffer import ResponseBuffer
+from clickhouse_connect.driverc.buffer import ResponseBuffer # pylint: disable=no-name-in-module
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.native import NativeTransform
@@ -208,17 +208,16 @@ class TableContext:
         self.client.command(f'DROP TABLE IF EXISTS {self.table}')
 
 
-def bytes_response(source: Union[str, bytes], chunk_size:int = 256):
+def bytes_response(source: Union[str, bytes], chunk_size:int = 256, cls: Type = ResponseBuffer):
     if isinstance(source, str):
         source = bytes.fromhex(source)
 
     def gen():
         end = 0
-        for i in range(len(source) // chunk_size):
+        for _ in range(len(source) // chunk_size):
             yield source[end:end + chunk_size]
             end += chunk_size
         if end < len(source):
             yield source[end:]
 
-    return ResponseBuffer(gen())
-
+    return cls(gen())

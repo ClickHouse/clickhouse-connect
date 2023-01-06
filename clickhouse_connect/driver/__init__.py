@@ -1,11 +1,23 @@
+import logging
 from typing import Optional, Union, Dict, Any
 from urllib.parse import urlparse, parse_qs
+
+from clickhouse_connect.driver.buffer import ResponseBuffer
 
 from clickhouse_connect.driver.common import dict_copy
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.httpclient import HttpClient
+
+logger = logging.getLogger(__name__)
+Client.BuffCls = ResponseBuffer
+try:
+    from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
+    Client.BuffCls = CResponseBuffer
+except ImportError:
+    CResponseBuffer = None
+    logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
 
 
 # pylint: disable=too-many-arguments

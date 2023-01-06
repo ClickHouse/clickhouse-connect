@@ -63,10 +63,10 @@ class BigInt(ClickHouseType, registered=False):
         app = column.append
         ifb = int.from_bytes
         if self.read_format() == 'string':
-            for ix in range(num_rows):
+            for _ in range(num_rows):
                 app(str(ifb(source.read_bytes(sz), 'little', signed=signed)))
         else:
-            for ix in range(num_rows):
+            for _ in range(num_rows):
                 app(ifb(source.read_bytes(sz), 'little', signed=signed))
         return column
 
@@ -250,7 +250,7 @@ class BigDecimal(Decimal, registered=False):
         sz = self.byte_size
         ifb = int.from_bytes
         if scale == 0:
-            for ix in range(num_rows):
+            for _ in range(num_rows):
                 app(dec(str(ifb(source.read_bytes(sz), 'little', signed=True))))
             return column
         for ix in range(num_rows):
