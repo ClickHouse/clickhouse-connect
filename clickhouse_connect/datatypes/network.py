@@ -3,7 +3,7 @@ from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import write_array, array_column
+from clickhouse_connect.driver.common import write_array
 from clickhouse_connect.driver.types import ByteSource
 
 IPV4_V6_MASK = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
@@ -33,7 +33,7 @@ class IPv4(ArrayType):
         return self._from_native_ip(source, num_rows)
 
     def _from_native_ip(self, source: ByteSource, num_rows: int):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
         app = new_col.append
@@ -44,7 +44,7 @@ class IPv4(ArrayType):
         return new_col
 
     def _from_native_str(self, source: ByteSource, num_rows: int, **_):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

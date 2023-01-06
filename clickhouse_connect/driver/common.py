@@ -37,23 +37,6 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def array_column(code: str, source: ByteSource, num_rows: int) -> array.array:
-    """
-    Read the source binary buffer into a Python array.array
-    :param code: Python array.array type code
-    :param source: Source byte buffer like object
-    :param num_rows: Number of rows to read
-    :return: array.array of the requested data type plus next buffer read location
-    """
-    column = array.array(code)
-    sz = column.itemsize * num_rows
-    b = source.read_bytes(sz)
-    column.frombytes(b)
-    if must_swap:
-        column.byteswap()
-    return column
-
-
 def write_array(code: str, column: Sequence, dest: MutableSequence):
     """
     Write a column of native Python data matching the array.array code

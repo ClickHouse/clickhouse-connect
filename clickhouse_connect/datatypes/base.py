@@ -3,10 +3,9 @@ import logging
 
 from abc import ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Tuple, Iterable
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Iterable
 
-from clickhouse_connect.driver.common import array_column, array_type, int_size, write_array, \
-    write_uint64, low_card_version
+from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
@@ -217,7 +216,7 @@ class ClickHouseType(ABC):
                 keys = (None if use_none else self.python_null,) + tuple(keys[1:])
         index_cnt = source.read_uint64()
         assert index_cnt == num_rows
-        index = array_column(array_type(index_sz, False), source, num_rows)
+        index = source.read_array(array_type(index_sz, False), num_rows)
         return tuple(keys[ix] for ix in index)
 
     def _write_native_low_card(self, column: Iterable, dest: MutableSequence):
@@ -295,7 +294,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls.byte_size = array.array(cls._array_type).itemsize
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'string':
             column = [str(x) for x in column]
         return column

@@ -159,11 +159,6 @@ class HttpClient(Client):
             ch_settings['session_id'] = str(uuid.uuid1())
         super().__init__(database=database, query_limit=query_limit, uri=self.url, compression=compression)
         self.session.params = self._validate_settings(ch_settings)
-        try:
-            self.block_bytes = int(self.server_settings['preferred_block_size_bytes'].value) * 6 // 5
-        except (KeyError, TypeError):
-            pass
-
 
     def client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
@@ -200,7 +195,7 @@ class HttpClient(Client):
         else:
             response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                          retries=self.query_retries)
-            data_result = self.transform.parse_response(BuffCls(response.iter_content(None), self.block_bytes), context)
+            data_result = self.transform.parse_response(BuffCls(response.iter_content(None)), context)
         summary = {}
         if 'X-ClickHouse-Summary' in response.headers:
             try:

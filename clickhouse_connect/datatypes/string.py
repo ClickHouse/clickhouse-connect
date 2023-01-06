@@ -15,8 +15,7 @@ class String(ClickHouseType):
 
     @staticmethod
     def _read_native_python(source: ByteSource, num_rows: int, encoding: str):
-        enc = encoding.encode()
-        return [source.read_leb128_str(enc) for _ in range(num_rows)]
+        return source.read_str_col(num_rows, encoding.encode())
 
     # pylint: disable=duplicate-code
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

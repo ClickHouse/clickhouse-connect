@@ -1,3 +1,4 @@
+import sys
 from typing import Generator
 from cpython cimport PyObject
 
@@ -6,8 +7,12 @@ import cython
 cdef extern from "Python.h":
     PyObject *Py_BuildValue(const char *, ...)
 
+from cpython cimport Py_INCREF, array
+import array
 from cpython.unicode cimport PyUnicode_Decode
+from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytes cimport PyBytes_FromStringAndSize
+from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_ANY_CONTIGUOUS, PyBUF_SIMPLE
 from cpython.exc cimport PyErr_Occurred
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from libc.string cimport memcpy
@@ -17,15 +22,22 @@ cdef union ull_wrapper:
     unsigned long long int_value
 
 cdef char * errors = 'strict'
+cdef dict array_templates = {}
+cdef bint must_swap = sys.byteorder == 'big'
+cdef array.array swapper = array.array('Q', [0])
+
+for c in 'bBuhHiIlLqQfd':
+    array_templates[c] = array.array(c, [])
+
 
 cdef class ResponseBuffer:
-    def __init__(self, gen: Generator[bytes, None, None], buf_size: int = 1024 * 1024):
+    def __init__(self, gen: Generator[bytes, None, None]):
         self.slice_sz = 4096
         self.slice_start = -1
         self.buf_loc = 0
         self.end = 0
         self.gen = gen
-        self.buffer = <char*>PyMem_Malloc(buf_size)
+        self.buffer = NULL
         self.slice = <char*>PyMem_Malloc(self.slice_sz)
 
     @cython.inline
@@ -33,6 +45,12 @@ cdef class ResponseBuffer:
         if self.slice_start == -1:
             return self.slice
         return self.buffer + self.slice_start
+
+    @cython.inline
+    cdef _reset_buff(self, object source):
+        PyBuffer_Release(&self.buff_source)
+        PyObject_GetBuffer(source, &self.buff_source, PyBUF_SIMPLE | PyBUF_ANY_CONTIGUOUS)
+        self.buffer = <char *> self.buff_source.buf
 
     cdef unsigned char _set_slice(self, unsigned long long sz) except 255:
         cdef unsigned long long x, e, tail, cur_len, temp
@@ -66,7 +84,7 @@ cdef class ResponseBuffer:
             else:
                 tail = sz - cur_len
                 memcpy(self.slice + cur_len, ptr, tail)
-                memcpy(self.buffer, ptr, x)
+                self._reset_buff(chunk)
                 self.end = x
                 self.buf_loc = tail
                 cur_len += tail
@@ -86,9 +104,9 @@ cdef class ResponseBuffer:
         py_chunk = chunk
         ret = <unsigned char>chunk[0]
         if x > 1:
-            ptr = <char*>py_chunk
-            memcpy(self.buffer, <const void*>ptr + 1, x - 1)
-            self.end = x - 1
+            self._reset_buff(chunk)
+            self.buf_loc = 1
+            self.end = x
         return ret
 
     cdef char* _read_bytes(self, unsigned long long sz) except NULL:
@@ -96,7 +114,8 @@ cdef class ResponseBuffer:
             return NULL
         return self._cur_slice()
 
-    def read_leb128_str(self, char* encoding='utf-8') -> str:
+    @cython.inline
+    cpdef object read_leb128_str(self, char* encoding='utf-8'):
         cdef unsigned long long sz = self.read_leb128()
         cdef char* b = self._read_bytes(sz)
         if b == NULL:
@@ -112,7 +131,8 @@ cdef class ResponseBuffer:
             raise StopIteration
         return ret
 
-    def read_leb128(self) -> int:
+    @cython.inline
+    cpdef unsigned long long read_leb128(self) except? 99999:
         cdef:
             unsigned long long sz = 0, shift = 0
             unsigned char b
@@ -129,8 +149,11 @@ cdef class ResponseBuffer:
         cdef ull_wrapper* x
         if self._set_slice(8) == 255:
             raise StopIteration
-        x = <ull_wrapper*>self._cur_slice()
-        ret = x.int_value
+        if must_swap:
+            memcpy(swapper.data.as_voidptr, self._cur_slice(), 8)
+            swapper.byteswap()
+            return swapper[0]
+        x = <ull_wrapper *> self._cur_slice()
         return x.int_value
 
     def read_bytes(self, unsigned long long sz):
@@ -138,6 +161,25 @@ cdef class ResponseBuffer:
             raise StopIteration
         return self._cur_slice()[:sz]
 
+    def read_str_col(self, unsigned long long num_rows, char* encoding='utf-8'):
+        cdef object column = PyTuple_New(num_rows)
+        for x in range(num_rows):
+            v = self.read_leb128_str(encoding)
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
+        return column
+
+    def read_array(self, t: str, unsigned long long num_rows):
+        cdef array.array template = array_templates[t]
+        cdef array.array result = array.clone(template, num_rows, 0)
+        cdef unsigned long long sz = result.itemsize * num_rows
+        if self._set_slice(sz) == 255:
+            raise StopIteration
+        memcpy(result.data.as_voidptr, self._cur_slice(), sz)
+        if must_swap:
+            result.byteswap()
+        return result
+
     def __dealloc__(self):
-        PyMem_Free(self.buffer)
+        PyBuffer_Release(&self.buff_source)
         PyMem_Free(self.slice)

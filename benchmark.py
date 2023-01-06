@@ -54,8 +54,8 @@ def create_table(client: Client, col_names: List[str], rows: int):
 def check_reads(client: Client, tries: int = 100, rows: int = 10000):
     start_time = time.time()
     for _ in range(tries):
-        result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}')
-        assert len(result.result_set) == rows
+        result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}', column_oriented=True)
+        assert result.row_count == rows
     total_time = time.time() - start_time
     avg_time = total_time / tries
     speed = int(1 / avg_time * rows)

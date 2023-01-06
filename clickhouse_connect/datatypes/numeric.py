@@ -2,7 +2,7 @@ import decimal
 from typing import Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import array_type, array_column, write_array, decimal_size, decimal_prec
+from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
 from clickhouse_connect.driver.types import ByteSource
 
 
@@ -163,7 +163,7 @@ class Enum(ArrayType):
         self._name_suffix = f'({val_str})'
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         lookup = self._int_map.get
         return [lookup(x, None) for x in column]
 
@@ -215,7 +215,7 @@ class Decimal(ClickHouseType):
         self._array_type = array_type(self.byte_size, True)
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         dec = decimal.Decimal
         scale = self.scale
         prec = self.prec

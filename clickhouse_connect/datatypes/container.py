@@ -4,7 +4,7 @@ from typing import Sequence, MutableSequence
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
-from clickhouse_connect.driver.common import array_column, must_swap
+from clickhouse_connect.driver.common import must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
 
 
@@ -30,7 +30,7 @@ class Array(ClickHouseType):
         level_size = num_rows
         offset_sizes = []
         for _ in range(depth):
-            level_offsets = array_column('Q', source, level_size)
+            level_offsets = source.read_array('Q', level_size)
             offset_sizes.append(level_offsets)
             level_size = level_offsets[-1] if level_offsets else 0
         if level_size:
@@ -139,7 +139,7 @@ class Map(ClickHouseType):
 
     # pylint: disable=too-many-locals
     def read_native_data(self, source: ByteSource, num_rows: int, use_none=True):
-        offsets = array_column('Q', source, num_rows)
+        offsets = source.read_array('Q', num_rows)
         total_rows = offsets[-1]
         keys = self.key_type.read_native_data(source, total_rows, use_none)
         values = self.value_type.read_native_data(source, total_rows, use_none)

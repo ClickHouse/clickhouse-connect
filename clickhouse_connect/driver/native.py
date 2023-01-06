@@ -1,5 +1,6 @@
 import traceback
 import zlib
+from typing import Any
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
@@ -16,8 +17,8 @@ class NativeTransform(DataTransform):
     def _transform_response(self, source: ByteSource, context: QueryContext) -> DataResult:
         names = []
         col_types = []
-        result = []
         block = 0
+        result = []
         use_none = context.use_none
         while True:
             try:

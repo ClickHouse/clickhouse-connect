@@ -3,7 +3,6 @@ from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.common import array_column
 from clickhouse_connect.driver.types import ByteSource
 
 empty_uuid_b = bytes(b'\x00' * 16)
@@ -27,7 +26,7 @@ class UUID(ClickHouseType):
     # pylint: disable=too-many-locals
     @staticmethod
     def _read_native_uuid(source: ByteSource, num_rows: int):
-        v = array_column('Q', source, num_rows * 2)
+        v = source.read_array('Q', num_rows * 2)
         empty_uuid = PYUUID(int=0)
         new_uuid = PYUUID.__new__
         unsafe = SafeUUID.unsafe
@@ -48,7 +47,7 @@ class UUID(ClickHouseType):
 
     @staticmethod
     def _read_native_str(source: ByteSource, num_rows: int):
-        v = array_column('Q', source, num_rows * 2)
+        v = source.read_array('Q', num_rows * 2)
         column = []
         app = column.append
         for i in range(num_rows):

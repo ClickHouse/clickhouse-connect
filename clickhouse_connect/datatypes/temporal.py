@@ -4,7 +4,7 @@ from datetime import date, timedelta, datetime
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
-from clickhouse_connect.driver.common import array_column, write_array, np_date_types
+from clickhouse_connect.driver.common import  write_array, np_date_types
 from clickhouse_connect.driver.types import ByteSource
 
 epoch_start_date = date(1970, 1, 1)
@@ -20,7 +20,7 @@ class Date(ArrayType):
     python_type = date
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        column= array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
         return [epoch_start_date + timedelta(days) for days in column]
@@ -60,7 +60,7 @@ class DateTime(ArrayType):
     nano_divisor = 1000000000
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
         fts = from_ts_naive
@@ -107,7 +107,7 @@ class DateTime64(ArrayType):
         return 1000000000 // self.prec
 
     def _read_native_tz(self, source: ByteSource, num_rows: int):
-        column= array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
         new_col = []
@@ -122,7 +122,7 @@ class DateTime64(ArrayType):
         return new_col
 
     def _read_native_naive(self, source: ByteSource, num_rows: int):
-        column = array_column(self._array_type, source, num_rows)
+        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
         new_col = []
