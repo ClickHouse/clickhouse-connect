@@ -253,7 +253,7 @@ class BigDecimal(Decimal, registered=False):
             for _ in range(num_rows):
                 app(dec(str(ifb(source.read_bytes(sz), 'little', signed=True))))
             return column
-        for ix in range(num_rows):
+        for _ in range(num_rows):
             x = ifb(source.read_bytes(sz), 'little', signed=True)
             if x >= 0:
                 digits = str(x).rjust(prec, '0')

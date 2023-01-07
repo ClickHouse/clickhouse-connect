@@ -77,7 +77,7 @@ class FixedString(ClickHouseType):
     def _read_native_str(source: ByteSource, num_rows: int, sz: int, encoding: str):
         column = []
         app = column.append
-        for ix in range(num_rows):
+        for _ in range(num_rows):
             b = source.read_bytes(sz)
             try:
                 app(str(b, encoding).rstrip('\x00'))

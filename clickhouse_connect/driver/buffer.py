@@ -1,6 +1,5 @@
 import sys
 import array
-from typing import Generator
 
 from clickhouse_connect.driver.types import ByteSource
 
@@ -10,11 +9,12 @@ must_swap = sys.byteorder == 'big'
 class ResponseBuffer(ByteSource):
     slots = 'slice_sz', 'buf_loc', 'end', 'gen', 'buffer', 'slice'
 
-    def __init__(self, gen: Generator[bytes, None, None]):
+    def __init__(self, source):
         self.slice_sz = 4096
         self.buf_loc = 0
         self.end = 0
-        self.gen = gen
+        self.source = source
+        self.gen = source.gen
         self.buffer = bytes()
         self.slice = bytearray(self.slice_sz)
 
@@ -111,3 +111,6 @@ class ResponseBuffer(ByteSource):
         if must_swap:
             column.byteswap()
         return column
+
+    def close(self):
+        self.source.close()

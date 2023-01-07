@@ -1,11 +1,6 @@
 import sys
-from typing import Generator
-from cpython cimport PyObject
 
 import cython
-
-cdef extern from "Python.h":
-    PyObject *Py_BuildValue(const char *, ...)
 
 from cpython cimport Py_INCREF, array
 import array
@@ -31,12 +26,13 @@ for c in 'bBuhHiIlLqQfd':
 
 
 cdef class ResponseBuffer:
-    def __init__(self, gen: Generator[bytes, None, None]):
+    def __init__(self, source):
         self.slice_sz = 4096
         self.slice_start = -1
         self.buf_loc = 0
         self.end = 0
-        self.gen = gen
+        self.source = source
+        self.gen = source.gen
         self.buffer = NULL
         self.slice = <char*>PyMem_Malloc(self.slice_sz)
 
@@ -183,6 +179,12 @@ cdef class ResponseBuffer:
             result.byteswap()
         return result
 
+    def close(self):
+        if self.source:
+            self.source.close()
+            self.source = None
+
     def __dealloc__(self):
+        self.close()
         PyBuffer_Release(&self.buff_source)
         PyMem_Free(self.slice)

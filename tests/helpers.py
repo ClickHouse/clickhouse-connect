@@ -8,10 +8,10 @@ import pkg_resources
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driverc.buffer import ResponseBuffer # pylint: disable=no-name-in-module
+from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.native import NativeTransform
+from clickhouse_connect.driver.transform import NativeTransform
 
 LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2
@@ -208,16 +208,23 @@ class TableContext:
         self.client.command(f'DROP TABLE IF EXISTS {self.table}')
 
 
-def bytes_response(source: Union[str, bytes], chunk_size:int = 256, cls: Type = ResponseBuffer):
-    if isinstance(source, str):
-        source = bytes.fromhex(source)
+def bytes_source(data: Union[str, bytes], chunk_size:int = 256, cls: Type = ResponseBuffer):
+    if isinstance(data, str):
+        data = bytes.fromhex(data)
 
     def gen():
         end = 0
-        for _ in range(len(source) // chunk_size):
-            yield source[end:end + chunk_size]
+        for _ in range(len(data) // chunk_size):
+            yield data[end:end + chunk_size]
             end += chunk_size
-        if end < len(source):
-            yield source[end:]
+        if end < len(data):
+            yield data[end:]
 
-    return cls(gen())
+    class TestSource:
+        def __init__(self):
+            self.gen = gen()
+
+        def close(self):
+            pass
+
+    return cls(TestSource())

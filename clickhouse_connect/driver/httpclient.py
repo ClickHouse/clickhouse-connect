@@ -1,11 +1,8 @@
-import logging
 import json
-import atexit
+import logging
 import re
 import uuid
-import http as PyHttp
 from http.client import RemoteDisconnected
-
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 
 from requests import Session, Response, get as req_get
@@ -17,22 +14,13 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httpadapter import KeepAliveAdapter
+from clickhouse_connect.driver.httputil import ResponseSource, KeepAliveAdapter, default_adapter
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.native import NativeTransform
+from clickhouse_connect.driver.transform import NativeTransform
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
-
-# Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
-# the client as thread safe as possible while sharing a single connection pool.  For the same reason we
-# don't call the Session.close() method from the client so the connection pool remains available
-default_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
-atexit.register(default_adapter.close)
-
-# Increase this number just to be safe when ClickHouse is returning progress headers
-PyHttp._MAXHEADERS = 10000  # pylint: disable=protected-access
 
 
 # pylint: disable=too-many-instance-attributes
@@ -51,13 +39,13 @@ class HttpClient(Client):
                  username: str,
                  password: str,
                  database: str,
-                 compress: Union[bool, str] = True,
+                 compress: Union[bool, str] = False,
                  query_limit: int = 5000,
                  query_retries: int = 2,
                  connect_timeout: int = 10,
                  send_receive_timeout: int = 300,
-                 client_name: str = 'clickhouse-connect',
-                 send_progress: bool = True,
+                 client_name: str = None,
+                 send_progress: bool = False,
                  verify: bool = True,
                  ca_cert: str = None,
                  client_cert: str = None,
@@ -121,12 +109,13 @@ class HttpClient(Client):
         session.adapters.pop('http://').close()
         session.adapters.pop('https://').close()
         session.mount(self.url, adapter=http_adapter if http_adapter else default_adapter)
+        if client_name is None:
+            client_name = f'clickhouse-connect {common.version()}'
         session.headers['User-Agent'] = client_name
 
-        self.read_format = self.write_format = 'Native'
+        self._read_format = self._write_format = 'Native'
+        self._transform = NativeTransform()
         self.column_inserts = True
-        self.transform = NativeTransform()
-
         self.session = session
         self.connect_timeout = connect_timeout
         self.read_timeout = send_receive_timeout
@@ -165,7 +154,7 @@ class HttpClient(Client):
         final_query = super()._prep_query(context)
         if context.is_insert:
             return final_query
-        return f'{final_query}\n FORMAT {self.write_format}'
+        return f'{final_query}\n FORMAT {self._write_format}'
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
@@ -183,12 +172,13 @@ class HttpClient(Client):
             for col in json_result['meta']:
                 names.append(col['name'])
                 types.append(registry.get_from_name(col['type']))
-            query_result = QueryResult([], None, tuple(names), tuple(types))
-        else:
-            response = self._raw_request(self._prep_query(context), params, headers, stream=True,
-                                         retries=self.query_retries)
-            buff = Client.BuffCls(response.iter_content(None))  # pylint: disable=not-callable
-            query_result = self.transform.parse_response(buff, context)
+            return QueryResult([], None, tuple(names), tuple(types))
+
+        response = self._raw_request(self._prep_query(context), params, headers, stream=True,
+                                     retries=self.query_retries)
+        # pylint: disable=not-callable
+        byte_source = Client.BuffCls(ResponseSource(response))
+        query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:
                 summary = json.loads(response.headers['X-ClickHouse-Summary'])
@@ -206,7 +196,7 @@ class HttpClient(Client):
             logger.debug('No data included in insert, skipping')
             return
         context.compression = self.compression
-        block_gen = self.transform.build_insert(context)
+        block_gen = self._transform.build_insert(context)
 
         def error_handler(response: Response):
             # If we actually had a local exception when building the insert, throw that instead
@@ -221,7 +211,7 @@ class HttpClient(Client):
                         context.column_names,
                         block_gen,
                         context.settings,
-                        self.write_format,
+                        self._write_format,
                         context.compression,
                         error_handler)
         context.data = None
@@ -236,7 +226,7 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        write_format = fmt if fmt else self.write_format
+        write_format = fmt if fmt else self._write_format
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
@@ -361,12 +351,3 @@ class HttpClient(Client):
         params = self._validate_settings(settings or {})
         params.update(bind_params)
         return self._raw_request(final_query, params).content
-
-
-def reset_connections():
-    """
-    Used for tests to force new connection by resetting the singleton HttpAdapter
-    """
-
-    global default_adapter  # pylint: disable=global-statement
-    default_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)

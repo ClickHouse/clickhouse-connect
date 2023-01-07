@@ -1,3 +1,4 @@
+import io
 import logging
 import pytz
 
@@ -16,6 +17,7 @@ from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, pandas_result, to_arrow, \
     QueryContext, arrow_buffer
 
+io.DEFAULT_BUFFER_SIZE = 1024 * 256
 logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
 

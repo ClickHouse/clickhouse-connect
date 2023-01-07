@@ -1,4 +1,5 @@
 import ipaddress
+import logging
 import re
 import uuid
 import pytz
@@ -9,13 +10,14 @@ from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy
-from clickhouse_connect.driver.types import Matrix
+from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
+logger = logging.getLogger(__name__)
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' + \
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
 
@@ -128,21 +130,25 @@ class QueryResult:
     Wrapper class for query return values and metadata
     """
 
+    # pylint: disable=too-many-arguments
     def __init__(self,
                  result_set: Matrix = None,
                  block_gen: Generator[Matrix, None, None] = None,
                  column_names: Tuple[str, ...] = (),
                  column_types: Tuple[ClickHouseType, ...] = (),
+                 column_oriented: bool = False,
+                 source: Closable = None,
                  query_id: str = None,
-                 summary: Dict[str, Any] = None,
-                 column_oriented: bool = False):
+                 summary: Dict[str, Any] = None):
         self._result_set = result_set
         self._block_gen = block_gen
+        self._in_context = False
         self.column_names = column_names
         self.column_types = column_types
+        self.column_oriented = column_oriented
+        self.source = source
         self.query_id = query_id
         self.summary = {} if summary is None else summary
-        self.column_oriented = column_oriented
 
     @property
     def empty(self):
@@ -163,10 +169,17 @@ class QueryResult:
             self._result_set = result
         return self._result_set
 
-    def stream(self) -> Iterator[Matrix]:
+    def stream_blocks(self) -> Iterator[Matrix]:
+        if not self._in_context:
+            logger.warning("Streaming results should be used in a 'with' context")
         if self._result_set is not None or self._block_gen is None:
             return iter(())
         return self._block_gen
+
+    def stream_rows(self) -> Iterator[Sequence]:
+        for block in self.stream_blocks():
+            for row in list(zip(*block)):
+                yield row
 
     def named_results(self) -> Generator[dict, None, None]:
         if self.column_oriented:
@@ -197,6 +210,18 @@ class QueryResult:
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
+
+    def close(self):
+        if self.source:
+            self.source.close()
+            self.source = None
+
+    def __enter__(self):
+        self._in_context = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        self._in_context = False
 
 
 local_tz = datetime.now().astimezone().tzinfo

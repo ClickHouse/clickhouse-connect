@@ -7,13 +7,11 @@ c_modules = []
 try:
     from Cython.Build import cythonize
     print ('Using Cython to build cython modules')
-    c_modules = cythonize(['clickhouse_connect/driverc/buffer.pyx'], language_level='3')
+    c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3')
     C_PKG = None
 except ImportError:
-    print ('Cython Not Successfully Installed, Attempt to compile c files directly')
+    print ('Cython Not Successfully Installed, Not building C extensions')
     cythonize = None
-    C_PKG = 'clickhouse_connect/driverc'
-    c_modules = [Extension('buffer', ['clickhouse_connect/driverc/buffer.c'])]
 
 
 def run_setup(try_c: bool = True):
