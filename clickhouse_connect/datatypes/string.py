@@ -8,14 +8,10 @@ class String(ClickHouseType):
     python_null = ''
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        return self._read_native_impl(source, num_rows, self.encoding)
+        return source.read_str_col(num_rows, self.encoding)
 
     def np_type(self, str_len: int = 0):
         return f'<U{str_len}' if str_len else 'O'
-
-    @staticmethod
-    def _read_native_python(source: ByteSource, num_rows: int, encoding: str):
-        return source.read_str_col(num_rows, encoding)
 
     # pylint: disable=duplicate-code
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -48,8 +44,6 @@ class String(ClickHouseType):
                         break
                     app(0x80 | b)
                 dest += y
-
-    _read_native_impl = _read_native_python
 
 
 class FixedString(ClickHouseType):
