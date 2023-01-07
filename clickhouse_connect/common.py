@@ -7,7 +7,10 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
 def version():
-    return pkg_resources.get_distribution('clickhouse-connect').version
+    try:
+        return pkg_resources.get_distribution('clickhouse-connect').version
+    except pkg_resources.ResolutionError:
+        return 'development'
 
 
 @dataclass
