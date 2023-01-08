@@ -17,7 +17,7 @@ class ByteSource(Closable):
         pass
 
     @abstractmethod
-    def read_leb128_str(self, encoding: str = 'utf-8') -> str:
+    def read_leb128_str(self, encoding: str = 'utf8') -> str:
         pass
 
     @abstractmethod
@@ -30,6 +30,14 @@ class ByteSource(Closable):
 
     @abstractmethod
     def read_str_col(self, num_rows: int, encoding: str):
+        pass
+
+    @abstractmethod
+    def read_bytes_col(self, sz: int, num_rows: int):
+        pass
+
+    @abstractmethod
+    def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str):
         pass
 
     @abstractmethod

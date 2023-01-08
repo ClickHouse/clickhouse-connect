@@ -16,38 +16,26 @@ class ResponseBuffer(ByteSource):
         self.source = source
         self.gen = source.gen
         self.buffer = bytes()
-        self.slice = bytearray(self.slice_sz)
 
     def read_bytes(self, sz: int):
         if self.buf_loc + sz <= self.end:
             self.buf_loc += sz
             return self.buffer[self.buf_loc - sz: self.buf_loc]
-        cur_len = self.end - self.buf_loc
-        temp = self.slice_sz
-        while temp < sz * 2:
-            temp <<= 1
-        if temp > self.slice_sz:
-            self.slice = bytearray(self.slice_sz)
-            self.slice_sz = temp
-        if cur_len > 0:
-            self.slice[cur_len:] = self.buffer[self.buf_loc: self.buf_loc + cur_len]
+        bridge = bytearray(self.buffer[self.buf_loc: self.end])
         self.buf_loc = 0
-        while cur_len < sz:
+        self.end = 0
+        while len(bridge) < sz:
             chunk = next(self.gen)
             x = len(chunk)
-            if cur_len + x <= sz:
-                self.slice[cur_len:cur_len + x] = chunk
-                cur_len += x
-                if cur_len == sz:
-                    self.end = 0
+            if len(bridge) + x <= sz:
+                bridge.extend(chunk)
             else:
-                tail = sz - cur_len
-                self.slice[cur_len:cur_len + tail] = chunk[:tail]
+                tail = sz - len(bridge)
+                bridge.extend(chunk[:tail])
                 self.buffer = chunk
                 self.end = x
                 self.buf_loc = tail
-                cur_len += tail
-        return self.slice[:sz]
+        return bridge
 
     def read_byte(self) -> int:
         if self.buf_loc < self.end:
@@ -101,6 +89,21 @@ class ResponseBuffer(ByteSource):
                 app(x.decode(encoding))
             except UnicodeDecodeError:
                 app(x.hex())
+        return column
+
+    def read_bytes_col(self, sz: int, num_rows: int):
+        source = self.read_bytes(sz * num_rows)
+        return [bytes(source[x:x+sz]) for x in range(0, sz * num_rows, sz)]
+
+    def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str):
+        source = self.read_bytes(sz * num_rows)
+        column = []
+        app = column.append
+        for ix in range(0, sz * num_rows, sz):
+            try:
+                app(str(source[ix: ix + sz], encoding).rstrip('\x00'))
+            except UnicodeDecodeError:
+                app(source[ix: ix + sz].hex())
         return column
 
     def read_array(self, array_type: str, num_rows: int):

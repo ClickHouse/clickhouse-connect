@@ -64,24 +64,8 @@ class FixedString(ClickHouseType):
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            return self._read_native_str(source, num_rows, self.byte_size, self.encoding)
-        return self._read_native_bytes(source, num_rows, self.byte_size)
-
-    @staticmethod
-    def _read_native_str(source: ByteSource, num_rows: int, sz: int, encoding: str):
-        column = []
-        app = column.append
-        for _ in range(num_rows):
-            b = source.read_bytes(sz)
-            try:
-                app(str(b, encoding).rstrip('\x00'))
-            except UnicodeDecodeError:
-                app(b.hex())
-        return column
-
-    @staticmethod
-    def _read_native_bytes(source: ByteSource, num_rows: int, sz: int):
-        return [source.read_bytes(sz) for _ in range(num_rows)]
+            return source.read_fixed_str_col(self.byte_size, num_rows, self.encoding)
+        return source.read_bytes_col(self.byte_size, num_rows)
 
     # pylint: disable=too-many-branches
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

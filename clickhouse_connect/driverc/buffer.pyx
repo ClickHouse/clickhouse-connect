@@ -110,7 +110,7 @@ cdef class ResponseBuffer:
         return self._cur_slice()
 
     @cython.inline
-    cdef object _read_leb128_str(self, char* encoding='utf-8'):
+    cdef object _read_leb128_str(self, char* encoding='utf8'):
         cdef unsigned long long sz = self.read_leb128()
         cdef char* b = self._read_bytes(sz)
         if b == NULL:
@@ -120,7 +120,7 @@ cdef class ResponseBuffer:
         except UnicodeDecodeError:
             return PyBytes_FromStringAndSize(b, sz).hex()
 
-    def read_leb128_str(self, encoding: str='utf-8'):
+    def read_leb128_str(self, encoding: str='utf8'):
         return self._read_leb128_str(encoding.encode())
 
     def read_byte(self) -> int:
@@ -159,9 +159,11 @@ cdef class ResponseBuffer:
             raise StopIteration
         return self._cur_slice()[:sz]
 
-    def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf-8'):
+    def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf8'):
         cdef object column = PyTuple_New(num_rows)
-        enc = encoding.encode()
+        cdef char* enc
+        pyenc = encoding.encode()
+        enc = pyenc
         for x in range(num_rows):
             v = self._read_leb128_str(enc)
             PyTuple_SET_ITEM(column, x, v)
@@ -178,6 +180,37 @@ cdef class ResponseBuffer:
         if must_swap:
             result.byteswap()
         return result
+
+    def read_bytes_col(self, unsigned long long sz, unsigned long long num_rows):
+        cdef object column = PyTuple_New(num_rows)
+        if self._set_slice(sz * num_rows) == 255:
+            raise StopIteration
+        cdef char* start = self._cur_slice()
+        for x in range(num_rows):
+            v = PyBytes_FromStringAndSize(start, sz)
+            start += sz
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
+        return column
+
+    def read_fixed_str_col(self, unsigned long long sz, unsigned long long num_rows,
+                           encoding:str ='utf8'):
+        cdef object column = PyTuple_New(num_rows)
+        cdef char * enc
+        cdef object v
+        pyenc = encoding.encode()
+        enc = pyenc
+        if self._set_slice(sz * num_rows) == 255:
+            raise StopIteration
+        cdef char * start = self._cur_slice()
+        for x in range(num_rows):
+            try:
+                v = PyUnicode_Decode(start, sz, enc, errors)
+            except UnicodeDecodeError:
+                v = PyBytes_FromStringAndSize(start, sz).hex()
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
+        return column
 
     def close(self):
         if self.source:
