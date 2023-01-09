@@ -1,4 +1,5 @@
 import sys
+from typing import Sequence, Iterable, Any
 
 import cython
 
@@ -30,7 +31,7 @@ cdef class ResponseBuffer:
         self.slice_sz = 4096
         self.slice_start = -1
         self.buf_loc = 0
-        self.end = 0
+        self.buf_sz = 0
         self.source = source
         self.gen = source.gen
         self.buffer = NULL
@@ -51,7 +52,7 @@ cdef class ResponseBuffer:
     cdef unsigned char _set_slice(self, unsigned long long sz) except 255:
         cdef unsigned long long x, e, tail, cur_len, temp
         cdef char* ptr
-        e = self.end
+        e = self.buf_sz
         if self.buf_loc + sz <= e:
             self.slice_start = self.buf_loc
             self.buf_loc += sz
@@ -68,6 +69,7 @@ cdef class ResponseBuffer:
         if cur_len > 0:
             memcpy(self.slice, self.buffer + self.buf_loc, cur_len)
         self.buf_loc = 0
+        self.buf_sz = 0
         while cur_len < sz:
             chunk = next(self.gen)
             x = len(chunk)
@@ -75,23 +77,21 @@ cdef class ResponseBuffer:
             if cur_len + x <= sz:
                 memcpy(self.slice + cur_len, ptr, x)
                 cur_len += x
-                if cur_len == sz:
-                    self.end = 0
             else:
                 tail = sz - cur_len
                 memcpy(self.slice + cur_len, ptr, tail)
                 self._reset_buff(chunk)
-                self.end = x
+                self.buf_sz = x
                 self.buf_loc = tail
                 cur_len += tail
 
     @cython.inline
     cdef unsigned char _read_byte(self) except? 255:
-        if self.buf_loc < self.end:
+        if self.buf_loc < self.buf_sz:
             self.buf_loc += 1
             return self.buffer[self.buf_loc - 1]
         self.buf_loc = 0
-        self.end = 0
+        self.buf_sz = 0
         chunk = next(self.gen)
         x = len(chunk)
         if x == 0:
@@ -100,7 +100,7 @@ cdef class ResponseBuffer:
         if x > 1:
             self._reset_buff(chunk)
             self.buf_loc = 1
-            self.end = x
+            self.buf_sz = x
         return <unsigned char>chunk[0]
 
     @cython.inline
@@ -120,7 +120,7 @@ cdef class ResponseBuffer:
         except UnicodeDecodeError:
             return PyBytes_FromStringAndSize(b, sz).hex()
 
-    def read_leb128_str(self, encoding: str='utf8'):
+    def read_leb128_str(self, encoding: str='utf8') -> str:
         return self._read_leb128_str(encoding.encode())
 
     def read_byte(self) -> int:
@@ -154,12 +154,12 @@ cdef class ResponseBuffer:
         x = <ull_wrapper *> self._cur_slice()
         return x.int_value
 
-    def read_bytes(self, unsigned long long sz):
+    def read_bytes(self, unsigned long long sz) -> bytes:
         if self._set_slice(sz) == 255:
             raise StopIteration
         return self._cur_slice()[:sz]
 
-    def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf8'):
+    def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf8') -> Iterable[str]:
         cdef object column = PyTuple_New(num_rows)
         cdef char* enc
         pyenc = encoding.encode()
@@ -170,7 +170,7 @@ cdef class ResponseBuffer:
             Py_INCREF(v)
         return column
 
-    def read_array(self, t: str, unsigned long long num_rows):
+    def read_array(self, t: str, unsigned long long num_rows) -> Iterable[Any]:
         cdef array.array template = array_templates[t]
         cdef array.array result = array.clone(template, num_rows, 0)
         cdef unsigned long long sz = result.itemsize * num_rows
@@ -181,7 +181,7 @@ cdef class ResponseBuffer:
             result.byteswap()
         return result
 
-    def read_bytes_col(self, unsigned long long sz, unsigned long long num_rows):
+    def read_bytes_col(self, unsigned long long sz, unsigned long long num_rows) -> Iterable[Any]:
         cdef object column = PyTuple_New(num_rows)
         if self._set_slice(sz * num_rows) == 255:
             raise StopIteration
@@ -194,7 +194,7 @@ cdef class ResponseBuffer:
         return column
 
     def read_fixed_str_col(self, unsigned long long sz, unsigned long long num_rows,
-                           encoding:str ='utf8'):
+                           encoding:str ='utf8') -> Iterable[str]:
         cdef object column = PyTuple_New(num_rows)
         cdef char * enc
         cdef object v

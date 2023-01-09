@@ -45,7 +45,7 @@ class HttpClient(Client):
                  connect_timeout: int = 10,
                  send_receive_timeout: int = 300,
                  client_name: str = None,
-                 send_progress: bool = False,
+                 send_progress: bool = True,
                  verify: bool = True,
                  ca_cert: str = None,
                  client_cert: str = None,
@@ -123,12 +123,12 @@ class HttpClient(Client):
         self.block_bytes = 1000000
         ch_settings = dict_copy(settings, kwargs)
         if send_progress:
-            ch_settings['send_progress_in_http_headers'] = '1'
             ch_settings['wait_end_of_query'] = '1'
-            if self.read_timeout > 10:
-                progress_interval = (self.read_timeout - 5) * 1000
-            else:
-                progress_interval = 120000  # Two minutes
+            # We can't actually read the progress headers, but we enable them so ClickHouse sends data
+            # to keep the connection alive when waiting for long-running queries that don't return data
+            # Accordingly we make sure it's always less than the read timeout
+            ch_settings['send_progress_in_http_headers'] = '1'
+            progress_interval = min(120000, (self.read_timeout - 5) * 1000)
             ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
         compression = 'gzip' if compress is True else compress
         if compression:

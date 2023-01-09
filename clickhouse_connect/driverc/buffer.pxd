@@ -1,9 +1,8 @@
 cdef class ResponseBuffer:
     cdef:
-        unsigned long long buf_loc, end, slice_sz
+        unsigned long long buf_loc, buf_sz, slice_sz
         signed long long slice_start
-        object gen
-        object source
+        object gen, source
         char* buffer
         char* slice
         unsigned char _set_slice(self, unsigned long long sz) except 255

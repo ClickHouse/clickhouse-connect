@@ -12,9 +12,9 @@ from urllib3 import poolmanager
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
 
-KEEP_INTERVAL = 30
-KEEP_COUNT = 3
-KEEP_IDLE = 30
+DEFAULT_KEEP_INTERVAL = 30
+DEFAULT_KEEP_COUNT = 3
+DEFAULT_KEEP_IDLE = 30
 
 SOCKET_TCP = socket.IPPROTO_TCP
 
@@ -34,9 +34,9 @@ class KeepAliveAdapter(HTTPAdapter):
     # pylint: disable=no-member
     def __init__(self, **kwargs):
         options = core_socket_options.copy()
-        interval = kwargs.pop('keep_interval', KEEP_INTERVAL)
-        count = kwargs.pop('keep_count', KEEP_COUNT)
-        idle = kwargs.pop('keep_idle', KEEP_IDLE)
+        interval = kwargs.pop('keep_interval', DEFAULT_KEEP_INTERVAL)
+        count = kwargs.pop('keep_count', DEFAULT_KEEP_COUNT)
+        idle = kwargs.pop('keep_idle', DEFAULT_KEEP_IDLE)
 
         if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
             options.append((SOCKET_TCP, socket.TCP_KEEPINTVL, interval))

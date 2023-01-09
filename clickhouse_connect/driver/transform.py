@@ -21,26 +21,24 @@ class NativeTransform:
 
             def get_block():
                 nonlocal block_num
+                result_block = []
                 try:
                     num_cols = source.read_leb128()
                     num_rows = source.read_leb128()
                 except (StopIteration, IndexError):
                     source.close()
                     return None
-                result_block = []
                 for col_num in range(num_cols):
                     name = source.read_leb128_str()
-                    if block_num == 0:
-                        names.append(name)
                     type_name = source.read_leb128_str()
                     if block_num == 0:
+                        names.append(name)
                         col_type = registry.get_from_name(type_name)
                         col_types.append(col_type)
                     else:
                         col_type = col_types[col_num]
                     context.start_column(name, col_type)
-                    column = col_type.read_native_column(source, num_rows, use_none=use_none)
-                    result_block.append(column)
+                    result_block.append(col_type.read_native_column(source, num_rows, use_none=use_none))
                 block_num += 1
                 return result_block
 
@@ -61,9 +59,9 @@ class NativeTransform:
     @staticmethod
     def build_insert(context: InsertContext):
         if context.compression == 'gzip':
-            compressor = GzipCompressor()
+            compressor = _GZIP_COMPRESSOR
         else:
-            compressor = NullCompressor()
+            compressor = _NULL_COMPRESSOR
 
         with context:
 
@@ -80,7 +78,7 @@ class NativeTransform:
                         context.start_column(col_name, col_type)
                         try:
                             col_type.write_native_column(data, output)
-                        except Exception as ex: # pylint: disable=broad-except
+                        except Exception as ex:  # pylint: disable=broad-except
                             # This is hideous, but some low level serializations can fail while streaming
                             # the insert if the user has included bad data in the column.  We need to ensure that the
                             # insert fails (using garbage data) to avoid a partial insert, and use the context to
@@ -89,7 +87,7 @@ class NativeTransform:
                             yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
                             return
                     yield compressor.compress_block(output)
-                footer = compressor.complete()
+                footer = compressor.flush()
                 if footer:
                     yield footer
 
@@ -101,7 +99,7 @@ class NullCompressor:
     def compress_block(block):
         return block
 
-    def complete(self):
+    def flush(self):
         pass
 
 
@@ -112,5 +110,9 @@ class GzipCompressor:
     def compress_block(self, block):
         return self.zlib_obj.compress(block)
 
-    def complete(self):
+    def flush(self):
         return self.zlib_obj.flush()
+
+
+_NULL_COMPRESSOR = NullCompressor()
+_GZIP_COMPRESSOR = GzipCompressor()

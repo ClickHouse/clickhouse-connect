@@ -1,5 +1,6 @@
 import sys
 import array
+from typing import Any, Iterable
 
 from clickhouse_connect.driver.types import ByteSource
 
@@ -12,18 +13,19 @@ class ResponseBuffer(ByteSource):
     def __init__(self, source):
         self.slice_sz = 4096
         self.buf_loc = 0
-        self.end = 0
+        self.buf_sz = 0
         self.source = source
         self.gen = source.gen
         self.buffer = bytes()
 
     def read_bytes(self, sz: int):
-        if self.buf_loc + sz <= self.end:
+        if self.buf_loc + sz <= self.buf_sz:
             self.buf_loc += sz
             return self.buffer[self.buf_loc - sz: self.buf_loc]
-        bridge = bytearray(self.buffer[self.buf_loc: self.end])
+        # Create a temporary buffer that bridges two or more source chunks
+        bridge = bytearray(self.buffer[self.buf_loc: self.buf_sz])
         self.buf_loc = 0
-        self.end = 0
+        self.buf_sz = 0
         while len(bridge) < sz:
             chunk = next(self.gen)
             x = len(chunk)
@@ -33,22 +35,22 @@ class ResponseBuffer(ByteSource):
                 tail = sz - len(bridge)
                 bridge.extend(chunk[:tail])
                 self.buffer = chunk
-                self.end = x
+                self.buf_sz = x
                 self.buf_loc = tail
         return bridge
 
     def read_byte(self) -> int:
-        if self.buf_loc < self.end:
+        if self.buf_loc < self.buf_sz:
             self.buf_loc += 1
             return self.buffer[self.buf_loc - 1]
-        self.end = 0
+        self.buf_sz = 0
         self.buf_loc = 0
         chunk = next(self.gen)
         x = len(chunk)
         if x > 1:
             self.buffer = chunk
             self.buf_loc = 1
-            self.end = x
+            self.buf_sz = x
         return chunk[0]
 
     def read_leb128(self) -> int:
@@ -72,7 +74,7 @@ class ResponseBuffer(ByteSource):
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), 'little', signed=False)
 
-    def read_str_col(self, num_rows: int, encoding: str = 'utf8'):
+    def read_str_col(self, num_rows: int, encoding: str = 'utf8') -> Iterable[str]:
         column = []
         app = column.append
         for _ in range(num_rows):
@@ -91,11 +93,11 @@ class ResponseBuffer(ByteSource):
                 app(x.hex())
         return column
 
-    def read_bytes_col(self, sz: int, num_rows: int):
+    def read_bytes_col(self, sz: int, num_rows: int) -> Iterable[bytes]:
         source = self.read_bytes(sz * num_rows)
         return [bytes(source[x:x+sz]) for x in range(0, sz * num_rows, sz)]
 
-    def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str):
+    def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str) -> Iterable[str]:
         source = self.read_bytes(sz * num_rows)
         column = []
         app = column.append
@@ -106,7 +108,7 @@ class ResponseBuffer(ByteSource):
                 app(source[ix: ix + sz].hex())
         return column
 
-    def read_array(self, array_type: str, num_rows: int):
+    def read_array(self, array_type: str, num_rows: int) -> Iterable[Any]:
         column = array.array(array_type)
         sz = column.itemsize * num_rows
         b = self.read_bytes(sz)
