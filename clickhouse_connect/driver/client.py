@@ -96,7 +96,7 @@ class Client(ABC):
         pass
 
     @abstractmethod
-    def client_setting(self, key, value):
+    def set_client_setting(self, key, value):
         """
         Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
         or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
