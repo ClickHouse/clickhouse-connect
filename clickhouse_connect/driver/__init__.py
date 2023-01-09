@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 Client.BuffCls = ResponseBuffer
 try:
     from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
-    # Client.BuffCls = CResponseBuffer
+    Client.BuffCls = CResponseBuffer
 except ImportError:
     CResponseBuffer = None
     logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
