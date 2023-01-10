@@ -2,11 +2,14 @@ import json
 import logging
 import re
 import uuid
+from base64 import b64encode
 from http.client import RemoteDisconnected
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
+from urllib.parse import urlencode
 
-from requests import Session, Response, get as req_get
-from requests.exceptions import RequestException
+from urllib3 import Timeout
+from urllib3.exceptions import HTTPError
+from urllib3.response import HTTPResponse
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
@@ -14,10 +17,10 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, KeepAliveAdapter, default_adapter
+from clickhouse_connect.driver.httputil import ResponseSource, get_https_pool_manager, get_pool_manager
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.transform import NativeTransform
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
+from clickhouse_connect.driver.transform import NativeTransform
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -52,7 +55,6 @@ class HttpClient(Client):
                  client_cert_key: str = None,
                  session_id: str = None,
                  settings: Optional[Dict] = None,
-                 http_adapter: KeepAliveAdapter = default_adapter,
                  **kwargs):
         """
         Create an HTTP ClickHouse Connect client
@@ -84,43 +86,32 @@ class HttpClient(Client):
         :param kwargs: Optional clickhouse setting values (str/value) for every connection request (deprecated)
         """
         self.url = f'{interface}://{host}:{port}'
-        session = Session()
-        session.stream = False
-        session.max_redirects = 3
-        if client_cert:
-            if not username:
-                raise ProgrammingError('username parameter is required for Mutual TLS authentication')
-            if client_cert_key:
-                session.cert = (client_cert, client_cert_key)
-            else:
-                session.cert = client_cert
-            session.headers['X-ClickHouse-User'] = username
-            session.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
-        else:
-            session.auth = (username, password if password else '') if username else None
-        session.verify = False
-        if interface == 'https':
-            if verify and ca_cert:
-                session.verify = ca_cert
-            else:
-                session.verify = verify
+        self.headers: Dict[str, str] = {}
 
-        # Remove the default session adapters, they are not used and this avoids issues with their connection pools
-        session.adapters.pop('http://').close()
-        session.adapters.pop('https://').close()
-        session.mount(self.url, adapter=http_adapter if http_adapter else default_adapter)
+        if interface == 'https':
+            if client_cert:
+                if not username:
+                    raise ProgrammingError('username parameter is required for Mutual TLS authentication')
+                self.headers['X-ClickHouse-User'] = username
+                self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
+            self.http = get_https_pool_manager(ca_cert=ca_cert,
+                                               verify=verify,
+                                               client_cert=client_cert,
+                                               client_cert_key=client_cert_key)
+        else:
+            self.http = get_pool_manager()
+        if not client_cert:
+            self.headers['Authorization'] = b64encode(f'{username}:{password}'.encode()).decode()
+
         if client_name is None:
             client_name = f'clickhouse-connect {common.version()}'
-        session.headers['User-Agent'] = client_name
+        self.headers['User-Agent'] = client_name
 
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
         self.column_inserts = True
-        self.session = session
-        self.connect_timeout = connect_timeout
-        self.read_timeout = send_receive_timeout
+        self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
         self.query_retries = query_retries
-        self.block_bytes = 1000000
         ch_settings = dict_copy(settings, kwargs)
         if send_progress:
             ch_settings['wait_end_of_query'] = '1'
@@ -128,26 +119,26 @@ class HttpClient(Client):
             # to keep the connection alive when waiting for long-running queries that don't return data
             # Accordingly we make sure it's always less than the read timeout
             ch_settings['send_progress_in_http_headers'] = '1'
-            progress_interval = min(120000, (self.read_timeout - 5) * 1000)
+            progress_interval = min(120000, (send_receive_timeout - 5) * 1000)
             ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
         compression = 'gzip' if compress is True else compress
         if compression:
-            session.headers['Accept-Encoding'] = compression
+            self.headers['Accept-Encoding'] = compression
             ch_settings['enable_http_compression'] = '1'
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
             ch_settings['session_id'] = str(uuid.uuid1())
         super().__init__(database=database, query_limit=query_limit, uri=self.url, compression=compression)
-        self.session.params = self._validate_settings(ch_settings)
+        self.params = self._validate_settings(ch_settings)
 
     def set_client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
         if str_value is not None:
-            self.session.params[key] = str_value
+            self.params[key] = str_value
 
     def get_client_setting(self, key) -> Optional[str]:
-        values = self.session.params.get(key)
+        values = self.params.get(key)
         return values[0] if values else None
 
     def _prep_query(self, context: QueryContext):
@@ -164,7 +155,7 @@ class HttpClient(Client):
         if columns_only_re.search(context.uncommented_query):
             response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
                                          params, headers, retries=self.query_retries)
-            json_result = json.loads(response.content)
+            json_result = json.loads(response.data)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
             names: List[str] = []
@@ -198,7 +189,7 @@ class HttpClient(Client):
         context.compression = self.compression
         block_gen = self._transform.build_insert(context)
 
-        def error_handler(response: Response):
+        def error_handler(response: HTTPResponse):
             # If we actually had a local exception when building the insert, throw that instead
             if context.insert_exception:
                 ex = context.insert_exception
@@ -234,7 +225,7 @@ class HttpClient(Client):
         params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}', 'database': self.database}
         params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
-        logger.debug('Insert response code: %d, content: %s', response.status_code, response.content)
+        logger.debug('Insert response code: %d, content: %s', response.status, response.data)
 
     def command(self,
                 cmd,
@@ -265,7 +256,7 @@ class HttpClient(Client):
         params.update(self._validate_settings(settings or {}))
         method = 'POST' if payload else 'GET'
         response = self._raw_request(payload, params, headers, method)
-        result = response.content.decode()[:-1].split('\t')
+        result = response.data.decode()[:-1].split('\t')
         if len(result) == 1:
             try:
                 return int(result[0])
@@ -273,35 +264,35 @@ class HttpClient(Client):
                 return result[0]
         return result
 
-    def _error_handler(self, response: Response = None, retried: bool = False) -> None:
-        err_str = f'HTTPDriver for {self.url} returned response code {response.status_code})'
-        if response.content:
-            err_msg = response.content.decode(errors='backslashreplace')
+    def _error_handler(self, response: HTTPResponse = None, retried: bool = False) -> None:
+        err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
+        if response.data:
+            err_msg = response.data.decode(errors='backslashreplace')
             logger.error(str(err_msg))
             err_str = f':{err_str}\n {err_msg[0:240]}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,
                      data,
-                     params: Dict[str, Any],
+                     params: Dict[str, str],
                      headers: Optional[Dict[str, Any]] = None,
                      method: str = 'POST',
                      retries: int = 0,
                      stream: bool = False,
-                     error_handler: Callable = None) -> Response:
+                     error_handler: Callable = None) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
+        url = f'{self.url}?{urlencode(params)}'
         attempts = 0
         while True:
             attempts += 1
             try:
-                response: Response = self.session.request(method, self.url,
-                                                          headers=headers,
-                                                          timeout=(self.connect_timeout, self.read_timeout),
-                                                          data=data,
-                                                          params=params,
-                                                          stream=stream)
-            except RequestException as ex:
+                response: HTTPResponse = self.http.request(method, url,
+                                                           headers=headers,
+                                                           timeout=self.timeout,
+                                                           body=data,
+                                                           preload_content=not stream)
+            except HTTPError as ex:
                 rex_context = ex.__context__
                 if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):
                     # See https://github.com/psf/requests/issues/4664
@@ -315,12 +306,12 @@ class HttpClient(Client):
                         continue
                 logger.exception('Unexpected Http Driver Exception')
                 raise OperationalError(f'Error executing HTTP request {self.url}') from ex
-            if 200 <= response.status_code < 300:
+            if 200 <= response.status < 300:
                 return response
-            if response.status_code in (429, 503, 504):
+            if response.status in (429, 503, 504):
                 if attempts > retries:
                     self._error_handler(response, True)
-                logger.debug('Retrying requests with status code %d', response.status_code)
+                logger.debug('Retrying requests with status code %d', response.status)
             else:
                 if error_handler:
                     error_handler(response)
@@ -331,9 +322,9 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         try:
-            response = req_get(f'{self.url}/ping', timeout=3)
+            response = self.http.request('GET', f'{self.url}/ping', timeout=3)
             return 200 <= response.status_code < 300
-        except RequestException:
+        except HTTPError:
             logger.debug('ping failed', exc_info=True)
             return False
 
@@ -350,4 +341,4 @@ class HttpClient(Client):
             final_query += f'\n FORMAT {fmt}'
         params = self._validate_settings(settings or {})
         params.update(bind_params)
-        return self._raw_request(final_query, params).content
+        return self._raw_request(final_query, params).data
