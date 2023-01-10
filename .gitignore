@@ -21,6 +21,4 @@ test.env
 .python-version
 
 # C extensions
-*.so
 *.pyd
-

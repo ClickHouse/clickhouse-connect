@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 -u
 
 import datetime
 import sys
@@ -54,8 +54,8 @@ def create_table(client: Client, col_names: List[str], rows: int):
 def check_reads(client: Client, tries: int = 100, rows: int = 10000):
     start_time = time.time()
     for _ in range(tries):
-        result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}')
-        assert len(result.result_set) == rows
+        result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}', column_oriented=True)
+        assert result.row_count == rows
     total_time = time.time() - start_time
     avg_time = total_time / tries
     speed = int(1 / avg_time * rows)
@@ -83,7 +83,7 @@ def main():
                 sys.exit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.get_client(compress='gzip')
+    client = clickhouse_connect.get_client(compress=True)
 
     set_default_formats('IP*', 'native', '*Int64', 'native')
     create_table(client, col_names, rows)

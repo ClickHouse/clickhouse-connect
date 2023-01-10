@@ -1,8 +1,9 @@
+import io
 import logging
 import pytz
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO
+from typing import Iterable, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO, Type
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
@@ -16,6 +17,7 @@ from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.query import QueryResult, np_result, pandas_result, to_arrow, \
     QueryContext, arrow_buffer
 
+io.DEFAULT_BUFFER_SIZE = 1024 * 256
 logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
 
@@ -24,6 +26,7 @@ class Client(ABC):
     """
     Base ClickHouse Connect client
     """
+    BuffCls: Type = None
     column_inserts = False
     compression = None
     valid_transport_settings = set()
@@ -93,7 +96,7 @@ class Client(ABC):
         pass
 
     @abstractmethod
-    def client_setting(self, key, value):
+    def set_client_setting(self, key, value):
         """
         Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
         or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
@@ -134,7 +137,7 @@ class Client(ABC):
         :return: QueryResult -- data and metadata from response
         """
         if query and query.lower().strip().startswith('select connect_version'):
-            return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']],
+            return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']], None,
                                ('connect_version',), (get_from_name('String'),))
         if context:
             query_context = context.updated_copy(query=query,
@@ -157,7 +160,7 @@ class Client(ABC):
                                                       column_oriented=column_oriented)
         if query_context.is_command:
             response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
-            return QueryResult([response] if isinstance(response, list) else [[response]], (), ())
+            return QueryResult([response] if isinstance(response, list) else [[response]])
         return self._query_with_context(query_context)
 
     @abstractmethod

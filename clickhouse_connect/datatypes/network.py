@@ -3,7 +3,8 @@ from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import write_array, array_column
+from clickhouse_connect.driver.common import write_array
+from clickhouse_connect.driver.types import ByteSource
 
 IPV4_V6_MASK = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
 V6_NULL = bytes(b'\x00' * 16)
@@ -26,13 +27,13 @@ class IPv4(ArrayType):
     def np_type(self, _str_len: int = 0):
         return 'U15' if self.read_format() == 'string' else 'O'
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            return self._from_native_str(source, loc, num_rows)
-        return self._from_native_ip(source, loc, num_rows)
+            return self._from_native_str(source, num_rows)
+        return self._from_native_ip(source, num_rows)
 
-    def _from_native_ip(self, source: Sequence, loc: int, num_rows: int):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
+    def _from_native_ip(self, source: ByteSource, num_rows: int):
+        column = source.read_array(self._array_type, num_rows)
         fast_ip_v4 = IPv4Address.__new__
         new_col = []
         app = new_col.append
@@ -40,11 +41,11 @@ class IPv4(ArrayType):
             ipv4 = fast_ip_v4(IPv4Address)
             ipv4._ip = x
             app(ipv4)
-        return new_col, loc
+        return new_col
 
-    def _from_native_str(self, source: Sequence, loc: int, num_rows: int, **_):
-        column, loc = array_column(self._array_type, source, loc, num_rows)
-        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column], loc
+    def _from_native_str(self, source: ByteSource, num_rows: int, **_):
+        column = source.read_array(self._array_type, num_rows)
+        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
@@ -75,22 +76,21 @@ class IPv6(ClickHouseType):
     def python_null(self):
         return '' if self.read_format() == 'string' else V6_NULL
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            return self._read_native_str(source, loc, num_rows)
-        return self._read_native_ip(source, loc, num_rows)
+            return self._read_native_str(source, num_rows)
+        return self._read_native_ip(source, num_rows)
 
     @staticmethod
-    def _read_native_ip(source: Sequence, loc: int, num_rows: int):
+    def _read_native_ip(source: ByteSource, num_rows: int):
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
         with_scope_id = '_scope_id' in IPv6Address.__slots__
         new_col = []
         app = new_col.append
         ifb = int.from_bytes
-        end = loc + (num_rows << 4)
-        for ix in range(loc, end, 16):
-            int_value = ifb(source[ix: ix + 16], 'big')
+        for _ in range(num_rows):
+            int_value = ifb(source.read_bytes(16), 'big')
             if int_value >> 32 == 0xFFFF:
                 ipv4 = fast_ip_v4(IPv4Address)
                 ipv4._ip = int_value & 0xFFFFFFFF
@@ -101,24 +101,23 @@ class IPv6(ClickHouseType):
                 if with_scope_id:
                     ipv6._scope_id = None
                 app(ipv6)
-        return new_col, end
+        return new_col
 
     @staticmethod
-    def _read_native_str(source: Sequence, loc: int, num_rows: int):
+    def _read_native_str(source: ByteSource, num_rows: int):
         new_col = []
         app = new_col.append
         v4mask = IPV4_V6_MASK
         tov4 = socket.inet_ntoa
         tov6 = socket.inet_ntop
         af6 = socket.AF_INET6
-        end = loc + (num_rows << 4)
-        for ix in range(loc, end, 16):
-            x = source[ix: ix + 16]
+        for _ in range(num_rows):
+            x = source.read_bytes(16)
             if x[:12] == v4mask:
                 app(tov4(x[12:]))
             else:
                 app(tov6(af6, x))
-        return new_col, end
+        return new_col
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         v = V6_NULL

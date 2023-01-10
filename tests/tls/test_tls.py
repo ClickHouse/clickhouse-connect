@@ -5,7 +5,7 @@ from requests.exceptions import SSLError
 
 from clickhouse_connect import get_client
 from clickhouse_connect.driver.exceptions import OperationalError
-from clickhouse_connect.driver.httpclient import reset_connections
+from clickhouse_connect.driver.httputil import reset_connections
 
 cert_dir = f'{Path(__file__).parent}/'
 host = 'server.clickhouseconnect.test'
