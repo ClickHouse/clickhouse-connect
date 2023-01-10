@@ -3,7 +3,7 @@ from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.common import array_column
+from clickhouse_connect.driver.types import ByteSource
 
 empty_uuid_b = bytes(b'\x00' * 16)
 
@@ -13,20 +13,20 @@ class UUID(ClickHouseType):
 
     @property
     def python_null(self):
-        return '' if self.read_format() == 'string' else PYUUID(0)
+        return '' if self.read_format() == 'string' else PYUUID(int=0)
 
     def np_type(self, _str_len: int = 0):
         return 'U36' if self.read_format() == 'string' else 'O'
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            return self._read_native_str(source, loc, num_rows)
-        return self._read_native_uuid(source, loc, num_rows)
+            return self._read_native_str(source, num_rows)
+        return self._read_native_uuid(source, num_rows)
 
     # pylint: disable=too-many-locals
     @staticmethod
-    def _read_native_uuid(source: Sequence, loc: int, num_rows: int):
-        v, end = array_column('Q', source, loc, num_rows * 2)
+    def _read_native_uuid(source: ByteSource, num_rows: int):
+        v = source.read_array('Q', num_rows * 2)
         empty_uuid = PYUUID(int=0)
         new_uuid = PYUUID.__new__
         unsafe = SafeUUID.unsafe
@@ -43,18 +43,18 @@ class UUID(ClickHouseType):
                 oset(fast_uuid, 'int', int_value)
                 oset(fast_uuid, 'is_safe', unsafe)
                 app(fast_uuid)
-        return column, end
+        return column
 
     @staticmethod
-    def _read_native_str(source: Sequence, loc: int, num_rows: int):
-        v, end = array_column('Q', source, loc, num_rows * 2)
+    def _read_native_str(source: ByteSource, num_rows: int):
+        v = source.read_array('Q', num_rows * 2)
         column = []
         app = column.append
         for i in range(num_rows):
             ix = i << 1
             x = f'{(v[ix] << 64 | v[ix + 1]):032x}'
             app(f'{x[:8]}-{x[8:12]}-{x[12:16]}-{x[16:20]}-{x[20:]}')
-        return column, end
+        return column
 
     # pylint: disable=too-many-branches
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -109,8 +109,8 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
-    def _read_native_binary(self, source: Sequence, loc: int, num_rows: int):
-        return self.element_type.read_native_data(source, loc, num_rows)
+    def _read_native_binary(self, source: ByteSource, num_rows: int):
+        return self.element_type.read_native_data(source, num_rows)
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         self.element_type.write_native_data(column, dest)

@@ -71,14 +71,19 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    port=test_config.port,
                                    username=test_config.username,
                                    password=test_config.password,
-                                   allow_suspicious_low_cardinality_types=True)
+                                   compress=False,
+                                   send_progress=False,
+                                   settings={
+                                       'allow_suspicious_low_cardinality_types': True
+                                   }
+                                   )
             break
         except ClickHouseError as ex:
             if tries > 10:
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
     if client.min_version('22.6.1'):
-        client.command('SET allow_experimental_object_type = 1')
+        client.set_client_setting('allow_experimental_object_type', 1)
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
     client.database = test_db
     yield client
@@ -94,7 +99,6 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
 
 @fixture(scope='session', name='table_context')
 def table_context_fixture(test_client: Client, test_table_engine: str):
-
     def context(name: str,
                 columns: Sequence[str],
                 column_types: Optional[Sequence[str]] = None,

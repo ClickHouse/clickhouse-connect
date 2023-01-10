@@ -1,7 +1,7 @@
 import array
 import sys
 
-from typing import Tuple, Sequence, MutableSequence, Dict, Optional
+from typing import Sequence, MutableSequence, Dict, Optional
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
@@ -36,24 +36,6 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def array_column(code: str, source: Sequence, loc: int, num_rows: int) -> Tuple[array.array, int]:
-    """
-    Read the source binary buffer into a Python array.array
-    :param code: Python array.array type code
-    :param source: Source byte buffer like object
-    :param loc: Start read position in the buffer
-    :param num_rows: Number of rows to read
-    :return: array.array of the requested data type plus next buffer read location
-    """
-    column = array.array(code)
-    sz = column.itemsize * num_rows
-    end = loc + sz
-    column.frombytes(source[loc: end])
-    if must_swap:
-        column.byteswap()
-    return column, end
-
-
 def write_array(code: str, column: Sequence, dest: MutableSequence):
     """
     Write a column of native Python data matching the array.array code
@@ -76,16 +58,6 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
     dest += buff.tobytes()
 
 
-def read_uint64(source: Sequence, loc: int) -> Tuple[int, int]:
-    """
-    Read a single UInt64 value from a data buffer
-    :param source: Source binary buffer
-    :param loc: Source start location
-    :return: UInt64 value from buffer plus new source location
-    """
-    return int.from_bytes(source[loc: loc + 8], 'little'), loc + 8
-
-
 def write_uint64(value: int, dest: MutableSequence):
     """
     Write a single UInt64 value to a binary write buffer
@@ -93,36 +65,6 @@ def write_uint64(value: int, dest: MutableSequence):
     :param dest: Destination byte buffer
     """
     dest.extend(value.to_bytes(8, 'little'))
-
-
-def read_leb128(source: Sequence, loc: int) -> Tuple[int, int]:
-    """
-    Read a LEB128 encoded integer value from a source buffer
-    :param source: Source binary buffer
-    :param loc: Start location
-    :return: Leb128 value plus next read location
-    """
-    length = 0
-    ix = 0
-    while True:
-        b = source[loc + ix]
-        length = length + ((b & 0x7f) << (ix * 7))
-        ix += 1
-        if (b & 0x80) == 0:
-            break
-    return length, loc + ix
-
-
-def read_leb128_str(source: Sequence, loc: int, encoding: str = 'utf8') -> Tuple[str, int]:
-    """
-    Read a LEB128 encoded string from a binary source buffer
-    :param source: Binary source buffer
-    :param loc: read start location
-    :param encoding: expected string encoding
-    :return: Complete string plus new read location in source buffer
-    """
-    length, loc = read_leb128(source, loc)
-    return str(source[loc:loc + length], encoding), loc + length
 
 
 def write_leb128(value: int, dest: MutableSequence):
