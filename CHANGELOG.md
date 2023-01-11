@@ -1,13 +1,13 @@
 # ClickHouse Connect ChangeLog
 
-### Deprecation Warning -- Removing get_client Arbitrary Keyword Arguments 
-* The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) currently accepts arbitrary
-keyword arguments that are interpreted as ClickHouse server settings sent with every request.  To be consistent with
-other client methods, `get_client` now accepts an optional `settings` Dict[str, Any] argument that should be used instead
-to set ClickHouse server settings.  The use of `**kwargs` for this purpose is deprecated and will be removed in a future
-release.
+## 0.5.0, <In Progress, Release Coming Soon>
 
-## 0.5.0, 2023-01-10
+### WARNING -- Breaking Change -- Removing get_client Arbitrary Keyword Arguments 
+* The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) previously accepted arbitrary
+keyword arguments that were interpreted as ClickHouse server settings sent with every request.  To be consistent with
+other client methods, `get_client` now accepts an optional `settings` Dict[str, Any] argument that should be used instead
+to set ClickHouse server settings.  
+
 ### New Features
 * The core client `query` method now supports streaming.  The returned `QueryResult` object has new methods `stream_blocks` which
 returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface, and `stream_rows`,
