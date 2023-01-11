@@ -2,7 +2,6 @@ import http
 import logging
 import sys
 import socket
-from typing import Optional
 
 import certifi
 import lz4.frame
@@ -26,9 +25,10 @@ core_socket_options = [
     (socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 256)
 ]
 
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
+# pylint: disable=no-member
 def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                      keep_count: int = DEFAULT_KEEP_COUNT,
                      keep_idle: int = DEFAULT_KEEP_IDLE,
@@ -53,8 +53,9 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
     if client_cert:
         options['cert_file'] = client_cert
     if client_cert_key:
-        options['cert_key_file'] = client_cert_key
+        options['key_file'] = client_cert_key
     return PoolManager(block=False, socket_options=socket_options, **options)
+
 
 def get_response_data(response: HTTPResponse) -> bytes:
     encoding = response.headers.get('content-encoding', None)
@@ -107,8 +108,8 @@ class ResponseSource:
         else:
             self.gen = response.stream(decode_content=True)
 
-    def read(self, n: int) -> bytes:
-        return self.response.read(n)
+    def read(self, amt: int) -> bytes:
+        return self.response.read(amt)
 
     def close(self):
         self.response.drain_conn()

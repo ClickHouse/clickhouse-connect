@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from requests.exceptions import SSLError
+from urllib3.exceptions import SSLError
 
 from clickhouse_connect import get_client
 from clickhouse_connect.driver.exceptions import OperationalError
@@ -49,14 +49,14 @@ def test_basic_tls(request):
         get_client(interface='https', host='localhost', port=8443, ca_cert=f'{cert_dir}ca.crt')
         pytest.fail('Expected TLS exception with different hostname')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__, SSLError)
+        assert isinstance(ex.__cause__.reason, SSLError)
     client.http.clear()
 
     try:
         get_client(interface='https', host=host, port=8443)
         pytest.fail('Expected TLS exception with self signed cert')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__, SSLError)
+        assert isinstance(ex.__cause__.reason, SSLError)
 
 
 def test_mutual_tls(request):

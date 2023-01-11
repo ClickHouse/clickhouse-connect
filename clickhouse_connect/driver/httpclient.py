@@ -7,7 +7,6 @@ from http.client import RemoteDisconnected
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
 
-import certifi
 from urllib3 import Timeout
 from urllib3.exceptions import HTTPError
 from urllib3.poolmanager import PoolManager
