@@ -1,3 +1,4 @@
+import os
 import random
 
 from clickhouse_connect.datatypes.registry import get_from_name
@@ -5,7 +6,6 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
 from tests.helpers import random_data, random_columns, unsupported_types
 
-TEST_RUNS = 250
 TEST_COLUMNS = 10
 MAX_DATA_ROWS = 40
 
@@ -17,7 +17,8 @@ def test_query_fuzz(test_client: Client, test_table_engine: str):
         unsupported_types.add('Bool')
         unsupported_types.add('UInt128')
         unsupported_types.add('UUID')
-    for _ in range(TEST_RUNS):
+    test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250'))
+    for _ in range(test_runs):
         test_client.command('DROP TABLE IF EXISTS fuzz_test')
         data_rows = random.randint(0, MAX_DATA_ROWS)
         col_names, col_types = random_columns(TEST_COLUMNS)

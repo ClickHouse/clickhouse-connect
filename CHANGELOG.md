@@ -19,18 +19,6 @@ is implemented for https://github.com/ClickHouse/clickhouse-connect/issues/89
 Note it is likely that this issue has always been present and is not a result of the updates in the new version
 * Numerous internal small refactorings to simplify and consolidate some of the messy code
 
-## 0.5.0, 2023-01-10
-### New Features
-* The core client `query` method now supports streaming.  The returned `QueryResult` object has new methods `stream_blocks` which
-returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface, and `stream_rows`,
-which returns a generator of each row.  These methods should be used within a `with` context to ensure the stream is properly
-closed when done.
-* More data conversions and the above streaming functionality have been written in Cython code to improve performance
-* The default for the client creation parameter `compress` has been changed to `False` to improve performance until a fix
-is implemented for https://github.com/ClickHouse/clickhouse-connect/issues/89
-Note it is likely that this issue has always been present and is not a result of the updates in the new version
-* Numerous internal small refactorings to simplify and consolidate some of the messy code
-
 ## 0.4.8, 2023-01-02
 ### New Features
 * [Documentation](https://clickhouse.com/docs/en/integrations/language-clients/python/intro) has been expanded to cover recent updates.

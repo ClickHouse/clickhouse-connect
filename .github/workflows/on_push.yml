@@ -84,6 +84,7 @@ jobs:
       - name: Run tests
         env:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
+          CLICKHOUSE_CONNECT_TEST_FUZZ: 50
         run: pytest tests
 
   cloud-tests:
@@ -112,6 +113,7 @@ jobs:
         run: python setup.py build_ext --inplace
       - name: Run tests
         env:
+          CLICKHOUSE_CONNECT_TEST_FUZZ: 10
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
           CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}

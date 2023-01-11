@@ -1,4 +1,5 @@
 import http
+import logging
 import sys
 import socket
 from typing import Optional
@@ -6,7 +7,7 @@ from typing import Optional
 import certifi
 import lz4.frame
 import zstandard
-from urllib3 import poolmanager
+from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
@@ -25,53 +26,51 @@ core_socket_options = [
     (socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 256)
 ]
 
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-def get_pool_manager(connections: int = 4,
-                     max_size: int = 8,
-                     keep_interval: int = DEFAULT_KEEP_INTERVAL,
+
+def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                      keep_count: int = DEFAULT_KEEP_COUNT,
                      keep_idle: int = DEFAULT_KEEP_IDLE,
-                     **kwargs):
-    options = core_socket_options.copy()
+                     ca_cert: str = None,
+                     verify: bool = True,
+                     client_cert: str = None,
+                     client_cert_key: str = None,
+                     **options) -> PoolManager:
+    socket_options = core_socket_options.copy()
     if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
-        options.append((SOCKET_TCP, socket.TCP_KEEPINTVL, keep_interval))
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPINTVL, keep_interval))
     if getattr(socket, 'TCP_KEEPCNT', None) is not None:
-        options.append((SOCKET_TCP, socket.TCP_KEEPCNT, keep_count))
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPCNT, keep_count))
     if getattr(socket, 'TCP_KEEPIDLE', None) is not None:
-        options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))
     if sys.platform == 'darwin':
-        options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), keep_interval))
-    return poolmanager.PoolManager(num_pools=connections,
-                                   maxsize=max_size,
-                                   block=False,
-                                   socket_options=options,
-                                   **kwargs
-                                   )
+        socket_options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), keep_interval))
+    if not ca_cert:
+        ca_cert = certifi.where()
+    options['cert_reqs'] = 'CERT_REQUIRED' if verify else 'CERT_NONE'
+    options['ca_certs'] = ca_cert
+    if client_cert:
+        options['cert_file'] = client_cert
+    if client_cert_key:
+        options['cert_key_file'] = client_cert_key
+    return PoolManager(block=False, socket_options=socket_options, **options)
 
-
-def get_https_pool_manager(ca_cert: str = None,
-                           verify: bool = True,
-                           client_cert: str = None,
-                           client_cert_key=None, **kwargs):
-    return get_pool_manager()
-
-
-def get_error_msg(response: HTTPResponse) -> Optional[str]:
+def get_response_data(response: HTTPResponse) -> bytes:
     encoding = response.headers.get('content-encoding', None)
     if encoding == 'zstd':
         try:
             zstd_decom = zstandard.ZstdDecompressor()
-            msg = zstd_decom.stream_reader(response.data).read()
+            return zstd_decom.stream_reader(response.data).read()
         except zstandard.ZstdError:
-            msg = response.data
-    elif encoding == 'lz4':
+            pass
+    if encoding == 'lz4':
         lz4_decom = lz4.frame.LZ4FrameDecompressor()
-        msg = lz4_decom.decompress(response.data, len(response.data))
-    else:
-        msg = response.data
-    if msg:
-        return msg.decode(errors='backslashreplace')
-    return None
+        return lz4_decom.decompress(response.data, len(response.data))
+    return response.data
+
+
+default_pool_manager = get_pool_manager()
 
 
 class ResponseSource:

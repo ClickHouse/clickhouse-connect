@@ -34,6 +34,7 @@ def run_setup(try_c: bool = True):
         name='clickhouse-connect',
         author='ClickHouse Inc.',
         author_email='clients@clickhouse.com',
+        keywords=['clickhouse', 'superset', 'sqlalchemy', 'http', 'driver'],
         description='ClickHouse core driver, SqlAlchemy, and Superset libraries',
         version=version,
         long_description=long_desc,
@@ -44,7 +45,7 @@ def run_setup(try_c: bool = True):
         python_requires='~=3.7',
         license='Apache License 2.0',
         install_requires=[
-            'urllib3',
+            'urllib3>=1.26',
             'pytz'
         ],
         extras_require={

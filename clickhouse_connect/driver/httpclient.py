@@ -7,8 +7,10 @@ from http.client import RemoteDisconnected
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
 
+import certifi
 from urllib3 import Timeout
 from urllib3.exceptions import HTTPError
+from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect import common
@@ -17,8 +19,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, get_https_pool_manager, get_pool_manager, \
-    get_error_msg
+from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, default_pool_manager
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -55,7 +56,8 @@ class HttpClient(Client):
                  client_cert: str = None,
                  client_cert_key: str = None,
                  session_id: str = None,
-                 settings: Optional[Dict] = None):
+                 settings: Optional[Dict] = None,
+                 pool_mgr: Optional[PoolManager] = None):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -73,7 +75,7 @@ class HttpClient(Client):
         :param verify: Verify the server certificate in secure/https mode
         :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
          certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
-         certificate is a globally trusted root as verified by the operating system
+         certificate is a globally trusted root as recognized in the "certifi" package
         :param client_cert: File path to a TLS Client certificate in .pem format.  This file should contain any
           applicable intermediate certificates
         :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
@@ -81,11 +83,12 @@ class HttpClient(Client):
         :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
           is True, the client will generate a UUID1 session id
         :param settings Optional dictionary of ClickHouse setting values (str/value) for every connection request
-        :param http_adapter Optional requests.HTTPAdapter for this client.  Useful for creating separate connection
-          pools for multiple client endpoints instead the singleton pool in the default_adapter
+        :param pool_mgr Optional urllib3 PoolManager for this client.  Useful for creating separate connection
+          pools for multiple client endpoints for applications with many clients
         """
         self.url = f'{interface}://{host}:{port}'
         self.headers: Dict[str, str] = {}
+        self.http = pool_mgr
 
         if interface == 'https':
             if client_cert:
@@ -93,12 +96,14 @@ class HttpClient(Client):
                     raise ProgrammingError('username parameter is required for Mutual TLS authentication')
                 self.headers['X-ClickHouse-User'] = username
                 self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
-            self.http = get_https_pool_manager(ca_cert=ca_cert,
-                                               verify=verify,
-                                               client_cert=client_cert,
-                                               client_cert_key=client_cert_key)
-        else:
-            self.http = get_pool_manager()
+            if not self.http and (ca_cert or client_cert or verify is False):
+                self.http = get_pool_manager(ca_cert=ca_cert,
+                                             client_cert=client_cert,
+                                             verify=verify,
+                                             client_cert_key=client_cert_key)
+        if not self.http:
+            self.http = default_pool_manager
+
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
@@ -266,8 +271,9 @@ class HttpClient(Client):
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
-        err_msg = get_error_msg(response)
-        if err_msg:
+        err_content = get_response_data(response)
+        if err_content:
+            err_msg = err_content.decode(errors='backslashreplace')
             logger.error(err_msg)
             err_str = f':{err_str}\n {err_msg[0:240]}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
