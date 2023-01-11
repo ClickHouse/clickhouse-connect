@@ -44,7 +44,7 @@ def run_setup(try_c: bool = True):
         python_requires='~=3.7',
         license='Apache License 2.0',
         install_requires=[
-            'requests',
+            'urllib3',
             'pytz'
         ],
         extras_require={
@@ -53,7 +53,8 @@ def run_setup(try_c: bool = True):
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
-            'orjson': ['orjson']
+            'orjson': ['orjson'],
+            'zstd': ['zstd']
         },
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',

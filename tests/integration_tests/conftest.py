@@ -71,7 +71,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    port=test_config.port,
                                    username=test_config.username,
                                    password=test_config.password,
-                                   compress=False,
+                                   compress='zstd',
                                    send_progress=False,
                                    settings={
                                        'allow_suspicious_low_cardinality_types': True

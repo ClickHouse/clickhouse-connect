@@ -17,7 +17,8 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, get_https_pool_manager, get_pool_manager
+from clickhouse_connect.driver.httputil import ResponseSource, get_https_pool_manager, get_pool_manager, \
+    get_error_msg
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -54,8 +55,7 @@ class HttpClient(Client):
                  client_cert: str = None,
                  client_cert_key: str = None,
                  session_id: str = None,
-                 settings: Optional[Dict] = None,
-                 **kwargs):
+                 settings: Optional[Dict] = None):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -83,7 +83,6 @@ class HttpClient(Client):
         :param settings Optional dictionary of ClickHouse setting values (str/value) for every connection request
         :param http_adapter Optional requests.HTTPAdapter for this client.  Useful for creating separate connection
           pools for multiple client endpoints instead the singleton pool in the default_adapter
-        :param kwargs: Optional clickhouse setting values (str/value) for every connection request (deprecated)
         """
         self.url = f'{interface}://{host}:{port}'
         self.headers: Dict[str, str] = {}
@@ -100,19 +99,20 @@ class HttpClient(Client):
                                                client_cert_key=client_cert_key)
         else:
             self.http = get_pool_manager()
-        if not client_cert:
-            self.headers['Authorization'] = b64encode(f'{username}:{password}'.encode()).decode()
+        if not client_cert and username:
+            self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
         if client_name is None:
             client_name = f'clickhouse-connect {common.version()}'
+        self.params = {}
         self.headers['User-Agent'] = client_name
-
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
         self.column_inserts = True
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
         self.query_retries = query_retries
-        ch_settings = dict_copy(settings, kwargs)
+        self.http_retries = 2
+        ch_settings = settings or {}
         if send_progress:
             ch_settings['wait_end_of_query'] = '1'
             # We can't actually read the progress headers, but we enable them so ClickHouse sends data
@@ -121,10 +121,7 @@ class HttpClient(Client):
             ch_settings['send_progress_in_http_headers'] = '1'
             progress_interval = min(120000, (send_receive_timeout - 5) * 1000)
             ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
-        compression = 'gzip' if compress is True else compress
-        if compression:
-            self.headers['Accept-Encoding'] = compression
-            ch_settings['enable_http_compression'] = '1'
+        compression = 'zstd' if compress is True else compress
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
@@ -165,6 +162,9 @@ class HttpClient(Client):
                 types.append(registry.get_from_name(col['type']))
             return QueryResult([], None, tuple(names), tuple(types))
 
+        if self.compression:
+            headers['Accept-Encoding'] = self.compression
+            params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                      retries=self.query_retries)
         # pylint: disable=not-callable
@@ -186,7 +186,7 @@ class HttpClient(Client):
         if context.empty:
             logger.debug('No data included in insert, skipping')
             return
-        context.compression = self.compression
+        # context.compression = self.compression
         block_gen = self._transform.build_insert(context)
 
         def error_handler(response: HTTPResponse):
@@ -264,11 +264,11 @@ class HttpClient(Client):
                 return result[0]
         return result
 
-    def _error_handler(self, response: HTTPResponse = None, retried: bool = False) -> None:
+    def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
-        if response.data:
-            err_msg = response.data.decode(errors='backslashreplace')
-            logger.error(str(err_msg))
+        err_msg = get_error_msg(response)
+        if err_msg:
+            logger.error(err_msg)
             err_str = f':{err_str}\n {err_msg[0:240]}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
@@ -282,7 +282,8 @@ class HttpClient(Client):
                      error_handler: Callable = None) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
-        url = f'{self.url}?{urlencode(params)}'
+        headers = dict_copy(self.headers, headers)
+        url = f'{self.url}?{urlencode(dict_copy(self.params, params))}'
         attempts = 0
         while True:
             attempts += 1
@@ -291,6 +292,7 @@ class HttpClient(Client):
                                                            headers=headers,
                                                            timeout=self.timeout,
                                                            body=data,
+                                                           retries=self.http_retries,
                                                            preload_content=not stream)
             except HTTPError as ex:
                 rex_context = ex.__context__

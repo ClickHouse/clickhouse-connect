@@ -4,6 +4,8 @@ import socket
 from typing import Optional
 
 import certifi
+import lz4.frame
+import zstandard
 from urllib3 import poolmanager
 from urllib3.response import HTTPResponse
 
@@ -54,10 +56,60 @@ def get_https_pool_manager(ca_cert: str = None,
     return get_pool_manager()
 
 
+def get_error_msg(response: HTTPResponse) -> Optional[str]:
+    encoding = response.headers.get('content-encoding', None)
+    if encoding == 'zstd':
+        try:
+            zstd_decom = zstandard.ZstdDecompressor()
+            msg = zstd_decom.stream_reader(response.data).read()
+        except zstandard.ZstdError:
+            msg = response.data
+    elif encoding == 'lz4':
+        lz4_decom = lz4.frame.LZ4FrameDecompressor()
+        msg = lz4_decom.decompress(response.data, len(response.data))
+    else:
+        msg = response.data
+    if msg:
+        return msg.decode(errors='backslashreplace')
+    return None
+
+
 class ResponseSource:
-    def __init__(self, response: HTTPResponse, chunk_size: int = 2 ** 16):
+    def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024):
         self.response = response
-        self.gen = response.stream(chunk_size, decode_content=False)
+        compress = response.headers.get('content-encoding', None)
+        if compress == 'zstd':
+            zstd_decom = zstandard.ZstdDecompressor()
+            reader = zstd_decom.stream_reader(self, read_across_frames=False)
+
+            def decompress():
+                while True:
+                    chunk = reader.read()
+                    if not chunk:
+                        break
+                    yield chunk
+
+            self.gen = decompress()
+        elif compress == 'lz4':
+            lz4_decom = lz4.frame.LZ4FrameDecompressor()
+
+            def decompress():
+                while lz4_decom.needs_input:
+                    data = self.response.read(chunk_size)
+                    if lz4_decom.unused_data:
+                        data = lz4_decom.unused_data + data
+                    if not data:
+                        return
+                    chunk = lz4_decom.decompress(data)
+                    if chunk:
+                        yield chunk
+
+            self.gen = decompress()
+        else:
+            self.gen = response.stream(decode_content=True)
+
+    def read(self, n: int) -> bytes:
+        return self.response.read(n)
 
     def close(self):
         self.response.drain_conn()

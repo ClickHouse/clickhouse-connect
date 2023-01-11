@@ -12,8 +12,8 @@ class Connection:
     # pylint: disable=too-many-arguments
     def __init__(self,
                  dsn: str = None,
-                 username: str = None,
-                 password: str = None,
+                 username: str = '',
+                 password: str = '',
                  host: str = None,
                  database: str = None,
                  interface: str = None,

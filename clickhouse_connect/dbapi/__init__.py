@@ -14,8 +14,8 @@ class Error(Exception):
 
 def connect(host: Optional[str] = None,
             database: Optional[str] = None,
-            username: Optional[str] = None,
-            password: Optional[str] = None,
+            username: Optional[str] = '',
+            password: Optional[str] = '',
             port: Optional[int] = None,
             **kwargs):
     secure = kwargs.pop('secure', False)
