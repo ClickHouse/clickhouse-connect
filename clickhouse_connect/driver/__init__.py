@@ -1,4 +1,5 @@
 import logging
+from inspect import signature
 from typing import Optional, Union, Dict, Any
 from urllib.parse import urlparse, parse_qs
 
@@ -40,8 +41,7 @@ def create_client(host: str = None,
         if parsed.path and not database:
             database = parsed.path[1:].split('/')[0]
         database = database or parsed.path
-        qs_settings = dict(parse_qs(parsed.query))
-        settings = dict_copy(qs_settings, settings)
+        kwargs.update(dict(parse_qs(parsed.query)))
     use_tls = str(secure).lower() == 'true' or interface == 'https' or (not interface and port in (443, 8443))
     if not host:
         host = 'localhost'
@@ -52,11 +52,14 @@ def create_client(host: str = None,
         username = kwargs.pop('user')
     if password and username is None:
         username = 'default'
+    settings = settings or {}
     if interface.startswith('http'):
-        cc_client = HttpClient(interface, host, port, username, password, database, settings=settings, **kwargs)
-    else:
-        raise ProgrammingError(f'Unrecognized client type {interface}')
-    return cc_client
+        client_params = signature(HttpClient).parameters
+        for name in set(kwargs.keys()):
+            if name not in client_params:
+                settings[name] = kwargs.pop(name)
+        return HttpClient(interface, host, port, username, password, database, settings=settings, **kwargs)
+    raise ProgrammingError(f'Unrecognized client type {interface}')
 
 
 def default_port(interface: str, secure: bool):

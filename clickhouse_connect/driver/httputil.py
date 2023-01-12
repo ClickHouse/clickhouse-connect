@@ -4,10 +4,24 @@ import sys
 import socket
 
 import certifi
-import lz4.frame
-import zstandard
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
+
+try:
+    import zstandard
+except ImportError:
+    zstandard = None
+
+try:
+    import lz4
+    import lz4.frame
+except ImportError:
+    lz4 = None
+
+try:
+    import brotli
+except ImportError:
+    brotli = None
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
@@ -46,15 +60,29 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
         socket_options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))
     if sys.platform == 'darwin':
         socket_options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), keep_interval))
-    if not ca_cert:
+    if ca_cert == '<certifi>':
         ca_cert = certifi.where()
     options['cert_reqs'] = 'CERT_REQUIRED' if verify else 'CERT_NONE'
-    options['ca_certs'] = ca_cert
+    if ca_cert:
+        options['ca_certs'] = ca_cert
     if client_cert:
         options['cert_file'] = client_cert
     if client_cert_key:
         options['key_file'] = client_cert_key
     return PoolManager(block=False, socket_options=socket_options, **options)
+
+
+def available_compression():
+    comp = []
+    if lz4:
+        comp.append('lz4')
+    if zstandard:
+        comp.append('zstd')
+    if brotli:
+        comp.append('br')
+    comp.append('gzip')
+    comp.append('deflate')
+    return comp
 
 
 def get_response_data(response: HTTPResponse) -> bytes:

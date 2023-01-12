@@ -25,4 +25,4 @@ def connect(host: Optional[str] = None,
                       password=password,
                       port=port,
                       secure=secure,
-                      settings=kwargs)
+                      **kwargs)

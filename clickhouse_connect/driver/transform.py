@@ -59,7 +59,7 @@ class NativeTransform:
     @staticmethod
     def build_insert(context: InsertContext):
         if context.compression == 'gzip':
-            compressor = _GZIP_COMPRESSOR
+            compressor = GzipCompressor()
         else:
             compressor = _NULL_COMPRESSOR
 
@@ -115,4 +115,3 @@ class GzipCompressor:
 
 
 _NULL_COMPRESSOR = NullCompressor()
-_GZIP_COMPRESSOR = GzipCompressor()

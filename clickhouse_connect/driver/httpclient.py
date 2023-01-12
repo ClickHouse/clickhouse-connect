@@ -16,9 +16,10 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, default_pool_manager
+from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
+    default_pool_manager, available_compression
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -43,7 +44,7 @@ class HttpClient(Client):
                  username: str,
                  password: str,
                  database: str,
-                 compress: Union[bool, str] = False,
+                 compress: Union[bool, str] = True,
                  query_limit: int = 5000,
                  query_retries: int = 2,
                  connect_timeout: int = 10,
@@ -51,12 +52,13 @@ class HttpClient(Client):
                  client_name: str = None,
                  send_progress: bool = True,
                  verify: bool = True,
-                 ca_cert: str = None,
+                 ca_cert: Optional[str] = None,
                  client_cert: str = None,
                  client_cert_key: str = None,
                  session_id: str = None,
                  settings: Optional[Dict] = None,
-                 pool_mgr: Optional[PoolManager] = None):
+                 pool_mgr: Optional[PoolManager] = None,
+                 **kwargs):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -88,14 +90,14 @@ class HttpClient(Client):
         self.url = f'{interface}://{host}:{port}'
         self.headers: Dict[str, str] = {}
         self.http = pool_mgr
-
         if interface == 'https':
             if client_cert:
                 if not username:
                     raise ProgrammingError('username parameter is required for Mutual TLS authentication')
                 self.headers['X-ClickHouse-User'] = username
                 self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
-            if not self.http and (ca_cert or client_cert or verify is False):
+            verify = coerce_bool(verify)
+            if not self.http and (ca_cert or client_cert or not verify):
                 self.http = get_pool_manager(ca_cert=ca_cert,
                                              client_cert=client_cert,
                                              verify=verify,
@@ -107,17 +109,17 @@ class HttpClient(Client):
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
         if client_name is None:
-            client_name = f'clickhouse-connect {common.version()}'
+            client_name = f'ClickHouse-Connect/{common.version()}'
         self.params = {}
         self.headers['User-Agent'] = client_name
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
-        self.column_inserts = True
+        connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
-        self.query_retries = query_retries
+        self.query_retries = coerce_int(query_retries)
         self.http_retries = 2
         ch_settings = settings or {}
-        if send_progress:
+        if coerce_bool(send_progress):
             ch_settings['wait_end_of_query'] = '1'
             # We can't actually read the progress headers, but we enable them so ClickHouse sends data
             # to keep the connection alive when waiting for long-running queries that don't return data
@@ -125,12 +127,21 @@ class HttpClient(Client):
             ch_settings['send_progress_in_http_headers'] = '1'
             progress_interval = min(120000, (send_receive_timeout - 5) * 1000)
             ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
-        compression = 'zstd' if compress is True else compress
+
+        ch_settings.update(kwargs)
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
             ch_settings['session_id'] = str(uuid.uuid1())
-        super().__init__(database=database, query_limit=query_limit, uri=self.url, compression=compression)
+        super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
+        if coerce_bool(compress):
+            compression = ','.join(available_compression())
+        elif compress and compress not in ('False', 'false', '0'):
+            compression = compress
+        else:
+            compression = None
+        if compression and self.server_settings.get('enable_http_compression'):
+            self.compression = compression
         self.params = self._validate_settings(ch_settings)
 
     def set_client_setting(self, key, value):

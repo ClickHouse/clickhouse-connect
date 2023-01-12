@@ -74,11 +74,8 @@ class Cursor:
         col_names = list(data[0].keys())
         if op_columns and {unescape_identifier(x) for x in op_columns} != set(col_names):
             return False  # Data sent in doesn't match the columns in the insert statement
-        if self.client.column_inserts:
-            data_values = [[row[k] for row in data] for k in col_names]
-        else:
-            data_values = [list(row.values()) for row in data]
-        self.client.insert(table, data_values, col_names, column_oriented=self.client.column_inserts)
+        data_values = [list(row.values()) for row in data]
+        self.client.insert(table, data_values, col_names)
         self.data = []
         return True
 
