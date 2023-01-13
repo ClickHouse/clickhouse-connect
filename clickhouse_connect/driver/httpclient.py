@@ -77,7 +77,8 @@ class HttpClient(Client):
         :param verify: Verify the server certificate in secure/https mode
         :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
          certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
-         certificate is a globally trusted root as recognized in the "certifi" package
+         certificate is trusted by the operating system.  To trust the maintained list of "global" public root
+         certificates maintained by the Python 'certifi' package, set ca_cert to 'certifi'
         :param client_cert: File path to a TLS Client certificate in .pem format.  This file should contain any
           applicable intermediate certificates
         :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
