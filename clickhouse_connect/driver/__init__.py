@@ -52,6 +52,8 @@ def create_client(host: str = None,
         username = kwargs.pop('user')
     if password and username is None:
         username = 'default'
+    if 'compression' in kwargs and 'compress' not in kwargs:
+        kwargs['compress'] = kwargs.pop('compression')
     settings = settings or {}
     if interface.startswith('http'):
         client_params = signature(HttpClient).parameters

@@ -1,10 +1,9 @@
-import zlib
-
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.compression import get_compressor
 
 _EMPTY_QUERY_CONTEXT = QueryContext()
 
@@ -58,10 +57,7 @@ class NativeTransform:
 
     @staticmethod
     def build_insert(context: InsertContext):
-        if context.compression == 'gzip':
-            compressor = GzipCompressor()
-        else:
-            compressor = _NULL_COMPRESSOR
+        compressor = get_compressor(context.compression)
 
         with context:
 
@@ -92,26 +88,3 @@ class NativeTransform:
                     yield footer
 
         return chunk_gen()
-
-
-class NullCompressor:
-    @staticmethod
-    def compress_block(block):
-        return block
-
-    def flush(self):
-        pass
-
-
-class GzipCompressor:
-    def __init__(self, level: int = 6, wbits: int = 31):
-        self.zlib_obj = zlib.compressobj(level=level, wbits=wbits)
-
-    def compress_block(self, block):
-        return self.zlib_obj.compress(block)
-
-    def flush(self):
-        return self.zlib_obj.flush()
-
-
-_NULL_COMPRESSOR = NullCompressor()

@@ -1,6 +1,6 @@
 import os
 from distutils.errors import CCompilerError, DistutilsExecError, DistutilsPlatformError
-from setuptools import setup, find_packages, Extension
+from setuptools import setup, find_packages
 
 c_modules = []
 
@@ -47,7 +47,9 @@ def run_setup(try_c: bool = True):
         install_requires=[
             'certifi',
             'urllib3>=1.26',
-            'pytz'
+            'pytz',
+            'zstandard',
+            'lz4'
         ],
         extras_require={
             'sqlalchemy': ['sqlalchemy>1.3.21,<1.4'],
@@ -56,7 +58,6 @@ def run_setup(try_c: bool = True):
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
             'orjson': ['orjson'],
-            'zstd': ['zstd']
         },
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',

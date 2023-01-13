@@ -33,7 +33,7 @@ class InsertContext(BaseQueryContext):
                  data: Any = None,
                  column_oriented: Optional[bool] = None,
                  settings: Optional[Dict[str, Any]] = None,
-                 compression: Optional[str] = None,
+                 compression: Optional[Union[str, bool]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  block_size: Optional[int] = None):

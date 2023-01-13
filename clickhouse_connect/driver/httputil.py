@@ -4,24 +4,11 @@ import sys
 import socket
 
 import certifi
+import lz4.frame
+import zstandard
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
-try:
-    import zstandard
-except ImportError:
-    zstandard = None
-
-try:
-    import lz4
-    import lz4.frame
-except ImportError:
-    lz4 = None
-
-try:
-    import brotli
-except ImportError:
-    brotli = None
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
@@ -72,19 +59,6 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
     return PoolManager(block=False, socket_options=socket_options, **options)
 
 
-def available_compression():
-    comp = []
-    if lz4:
-        comp.append('lz4')
-    if zstandard:
-        comp.append('zstd')
-    if brotli:
-        comp.append('br')
-    comp.append('gzip')
-    comp.append('deflate')
-    return comp
-
-
 def get_response_data(response: HTTPResponse) -> bytes:
     encoding = response.headers.get('content-encoding', None)
     if encoding == 'zstd':
@@ -105,8 +79,8 @@ default_pool_manager = get_pool_manager()
 class ResponseSource:
     def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024):
         self.response = response
-        compress = response.headers.get('content-encoding', None)
-        if compress == 'zstd':
+        compression = response.headers.get('content-encoding')
+        if compression == 'zstd':
             zstd_decom = zstandard.ZstdDecompressor()
             reader = zstd_decom.stream_reader(self, read_across_frames=False)
 
@@ -118,7 +92,7 @@ class ResponseSource:
                     yield chunk
 
             self.gen = decompress()
-        elif compress == 'lz4':
+        elif compression == 'lz4':
             lz4_decom = lz4.frame.LZ4FrameDecompressor()
 
             def decompress():

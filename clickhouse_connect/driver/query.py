@@ -140,7 +140,8 @@ class QueryResult:
                  source: Closable = None,
                  query_id: str = None,
                  summary: Dict[str, Any] = None):
-        self._result_set = result_set
+        self._result_rows = result_set
+        self._result_columns = None
         self._block_gen = block_gen
         self._in_context = False
         self.column_names = column_names
@@ -156,28 +157,49 @@ class QueryResult:
 
     @property
     def result_set(self) -> Matrix:
-        if self._result_set is None:
-            if self.column_oriented:
-                result = [[] for _ in range(len(self.column_names))]
-                for block in self._block_gen:
-                    for base, added in zip(result, block):
-                        base.extend(added)
-            else:
-                result = []
-                for block in self._block_gen:
-                    result.extend(list(zip(*block)))
-            self._result_set = result
-        return self._result_set
+        if self.column_oriented:
+            return self.result_columns
+        return self.result_rows
 
-    def stream_blocks(self) -> Iterator[Matrix]:
+    @property
+    def result_columns(self) -> Matrix:
+        if self._result_columns is None:
+            if self._result_rows is not None:
+                raise ProgrammingError('result_columns referenced after result_rows.  Only one format is supported')
+            result = [[] for _ in range(len(self.column_names))]
+            for block in self._block_gen:
+                for base, added in zip(result, block):
+                    base.extend(added)
+            self._result_columns = result
+            self._block_gen = None
+        return self._result_columns
+
+    @property
+    def result_rows(self) -> Matrix:
+        if self._result_rows is None:
+            if self._result_columns is not None:
+                raise ProgrammingError('result_rows referenced after result_columns.  Only one format is supported')
+            result = []
+            for block in self._block_gen:
+                result.extend(list(zip(*block)))
+            self._result_rows = result
+            self._block_gen = None
+        return self._result_rows
+
+    def stream_column_blocks(self) -> Iterator[Matrix]:
         if not self._in_context:
             logger.warning("Streaming results should be used in a 'with' context")
-        if self._result_set is not None or self._block_gen is None:
-            return iter(())
-        return self._block_gen
+        if not self._block_gen:
+            raise StopIteration
+        temp = self._block_gen
+        self._block_gen = None
+        return temp
+
+    def stream_row_blocks(self):
+        return (list(zip(*block)) for block in self.stream_column_blocks())
 
     def stream_rows(self) -> Iterator[Sequence]:
-        for block in self.stream_blocks():
+        for block in self.stream_column_blocks():
             for row in list(zip(*block)):
                 yield row
 

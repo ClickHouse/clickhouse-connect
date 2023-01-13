@@ -27,7 +27,8 @@ class Client(ABC):
     Base ClickHouse Connect client
     """
     BuffCls: Type = None
-    compression = None
+    compression: str = None
+    write_compression: str = None
     valid_transport_settings = set()
     optional_transport_settings = set()
 

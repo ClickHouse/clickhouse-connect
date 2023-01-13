@@ -17,9 +17,9 @@ from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
+from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
-    default_pool_manager, available_compression
+from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, default_pool_manager
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -135,9 +135,12 @@ class HttpClient(Client):
             ch_settings['session_id'] = str(uuid.uuid1())
         super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
         if coerce_bool(compress):
-            compression = ','.join(available_compression())
+            avail = available_compression()
+            compression = ','.join(avail)
+            self.write_compression = avail[0]
         elif compress and compress not in ('False', 'false', '0'):
             compression = compress
+            self.write_compression = compress
         else:
             compression = None
         if compression and self.server_settings.get('enable_http_compression'):
@@ -201,7 +204,8 @@ class HttpClient(Client):
         if context.empty:
             logger.debug('No data included in insert, skipping')
             return
-        # context.compression = self.compression
+        if context.compression is None:
+            context.compression = self.write_compression
         block_gen = self._transform.build_insert(context)
 
         def error_handler(response: HTTPResponse):
