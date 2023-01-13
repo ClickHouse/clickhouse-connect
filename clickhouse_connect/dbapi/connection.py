@@ -28,7 +28,7 @@ class Connection:
                                     port=port,
                                     secure=secure,
                                     dsn=dsn,
-                                    **kwargs)
+                                    generic_args=kwargs)
         self.timezone = self.client.server_tz
 
     def close(self):

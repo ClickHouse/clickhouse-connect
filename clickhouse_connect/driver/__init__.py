@@ -21,7 +21,7 @@ except ImportError:
     logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
 
 
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-arguments,too-many-locals,too-many-branches
 def create_client(host: str = None,
                   username: str = None,
                   password: str = '',
@@ -31,6 +31,7 @@ def create_client(host: str = None,
                   secure: Union[bool, str] = False,
                   dsn: Optional[str] = None,
                   settings: Optional[Dict[str, Any]] = None,
+                  generic_args: Optional[Dict[str, Any]] = None,
                   **kwargs) -> Client:
     if dsn:
         parsed = urlparse(dsn)
@@ -56,10 +57,15 @@ def create_client(host: str = None,
         kwargs['compress'] = kwargs.pop('compression')
     settings = settings or {}
     if interface.startswith('http'):
-        client_params = signature(HttpClient).parameters
-        for name in set(kwargs.keys()):
-            if name not in client_params:
-                settings[name] = kwargs.pop(name)
+        if generic_args:
+            client_params = signature(HttpClient).parameters
+            for name, value in generic_args.items():
+                if name in client_params:
+                    kwargs[name] = value
+                else:
+                    if name.startswith('ch_'):
+                        name = name[3:]
+                    settings[name] = value
         return HttpClient(interface, host, port, username, password, database, settings=settings, **kwargs)
     raise ProgrammingError(f'Unrecognized client type {interface}')
 

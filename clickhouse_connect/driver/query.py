@@ -190,7 +190,7 @@ class QueryResult:
         if not self._in_context:
             logger.warning("Streaming results should be used in a 'with' context")
         if not self._block_gen:
-            raise StopIteration
+            raise ProgrammingError('Stream closed')
         temp = self._block_gen
         self._block_gen = None
         return temp

@@ -1,5 +1,6 @@
 import json
 import logging
+import platform
 import re
 import uuid
 from base64 import b64encode
@@ -30,6 +31,7 @@ columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 
 # pylint: disable=too-many-instance-attributes
 class HttpClient(Client):
+    params = {}
     valid_transport_settings = {'database', 'buffer_size', 'session_id', 'compress', 'decompress',
                                 'session_timeout', 'session_check', 'query_id', 'quota_key', 'wait_end_of_query',
                                 }
@@ -49,16 +51,15 @@ class HttpClient(Client):
                  query_retries: int = 2,
                  connect_timeout: int = 10,
                  send_receive_timeout: int = 300,
-                 client_name: str = None,
+                 client_name: Optional[str] = None,
                  send_progress: bool = True,
                  verify: bool = True,
                  ca_cert: Optional[str] = None,
-                 client_cert: str = None,
-                 client_cert_key: str = None,
-                 session_id: str = None,
-                 settings: Optional[Dict] = None,
-                 pool_mgr: Optional[PoolManager] = None,
-                 **kwargs):
+                 client_cert: Optional[str] = None,
+                 client_cert_key: Optional[str] = None,
+                 session_id: Optional[str] = None,
+                 settings: Optional[Dict[str, Any]] = None,
+                 pool_mgr: Optional[PoolManager] = None):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -88,7 +89,8 @@ class HttpClient(Client):
           pools for multiple client endpoints for applications with many clients
         """
         self.url = f'{interface}://{host}:{port}'
-        self.headers: Dict[str, str] = {}
+        self.headers = {}
+        ch_settings = settings or {}
         self.http = pool_mgr
         if interface == 'https':
             if client_cert:
@@ -108,17 +110,17 @@ class HttpClient(Client):
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
-        if client_name is None:
-            client_name = f'ClickHouse-Connect/{common.version()}'
-        self.params = {}
-        self.headers['User-Agent'] = client_name
+        client_name = client_name.strip() + ' ' if client_name else ''
+
+        self.headers['User-Agent'] = f'{client_name}clickhouse-connect/{common.version()} (py/{platform.version()})'
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
+
         connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
         self.query_retries = coerce_int(query_retries)
-        self.http_retries = 2
-        ch_settings = settings or {}
+        self.http_retries = 1
+
         if coerce_bool(send_progress):
             ch_settings['wait_end_of_query'] = '1'
             # We can't actually read the progress headers, but we enable them so ClickHouse sends data
@@ -128,12 +130,11 @@ class HttpClient(Client):
             progress_interval = min(120000, (send_receive_timeout - 5) * 1000)
             ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
 
-        ch_settings.update(kwargs)
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
             ch_settings['session_id'] = str(uuid.uuid1())
-        super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
+
         if coerce_bool(compress):
             avail = available_compression()
             compression = ','.join(avail)
@@ -143,8 +144,17 @@ class HttpClient(Client):
             self.write_compression = compress
         else:
             compression = None
-        if compression and self.server_settings.get('enable_http_compression'):
-            self.compression = compression
+
+        super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
+
+        comp_setting = self.server_settings['enable_http_compression']
+        if comp_setting:
+            if comp_setting.value == '1':
+                self.compression = compression
+            elif comp_setting.readonly == 0:
+                ch_settings['enable_http_compression'] = 1
+                self.compression = compression
+
         self.params = self._validate_settings(ch_settings)
 
     def set_client_setting(self, key, value):

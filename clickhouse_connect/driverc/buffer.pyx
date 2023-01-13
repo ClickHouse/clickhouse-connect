@@ -18,6 +18,7 @@ cdef union ull_wrapper:
     unsigned long long int_value
 
 cdef char * errors = 'strict'
+cdef char * utf8 = 'utf8'
 cdef dict array_templates = {}
 cdef bint must_swap = sys.byteorder == 'big'
 cdef array.array swapper = array.array('Q', [0])
@@ -95,40 +96,6 @@ cdef class ResponseBuffer:
             self.buf_sz = x
         return <unsigned char>chunk[0]
 
-    @cython.inline
-    cdef object _read_leb128_str(self, char* encoding='utf8'):
-        cdef unsigned long long sz = self.read_leb128()
-        cdef char* b = self._read_bytes(sz)
-        if b == NULL:
-            raise StopIteration
-        try:
-            return PyUnicode_Decode(b, sz, encoding, errors)
-        except UnicodeDecodeError:
-            return PyBytes_FromStringAndSize(b, sz).hex()
-
-    def read_leb128_str(self, encoding: str='utf8') -> str:
-        return self._read_leb128_str(encoding.encode())
-
-    def read_byte(self) -> int:
-        cdef unsigned char ret = self._read_byte()
-        if ret == 255 and PyErr_Occurred():
-            raise StopIteration
-        return ret
-
-    @cython.inline
-    cpdef unsigned long long read_leb128(self) except? 99999:
-        cdef:
-            unsigned long long sz = 0, shift = 0
-            unsigned char b
-        while 1:
-            b = self._read_byte()
-            if b == 255 and PyErr_Occurred():
-                raise StopIteration
-            sz += ((b & 0x7f) << shift)
-            if (b & 0x80) == 0:
-                return sz
-            shift += 7
-
     cdef object _read_str_col(self, unsigned long long num_rows, char* encoding = 'utf8'):
         cdef object column = PyTuple_New(num_rows), v
         cdef unsigned long long x = 0, sz, shift
@@ -154,6 +121,32 @@ cdef class ResponseBuffer:
             Py_INCREF(v)
             x += 1
         return column
+
+    def read_leb128_str(self) -> str:
+        cdef unsigned long long sz = self.read_leb128()
+        cdef char * b = self._read_bytes(sz)
+        if b == NULL:
+            raise IndexError
+        return PyUnicode_Decode(b, sz, utf8, errors)
+
+    def read_byte(self) -> int:
+        cdef unsigned char ret = self._read_byte()
+        if ret == 255 and PyErr_Occurred():
+            raise StopIteration
+        return ret
+
+    def read_leb128(self) -> int:
+        cdef:
+            unsigned long long sz = 0, shift = 0
+            unsigned char b
+        while 1:
+            b = self._read_byte()
+            if b == 255 and PyErr_Occurred():
+                raise StopIteration
+            sz += ((b & 0x7f) << shift)
+            if (b & 0x80) == 0:
+                return sz
+            shift += 7
 
     def read_uint64(self) -> int:
         cdef ull_wrapper* x

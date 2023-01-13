@@ -1,23 +1,60 @@
 # ClickHouse Connect ChangeLog
 
-## 0.5.0, <In Progress, Release Coming Soon>
+## 0.5.0, 2023-01-16
 
-### WARNING -- Breaking Change -- Removing get_client Arbitrary Keyword Arguments 
-* The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) previously accepted arbitrary
+### WARNING -- Breaking Change -- Removing get_client Arbitrary Keyword Arguments
+The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) previously accepted arbitrary
 keyword arguments that were interpreted as ClickHouse server settings sent with every request.  To be consistent with
 other client methods, `get_client` now accepts an optional `settings` Dict[str, Any] argument that should be used instead
-to set ClickHouse server settings.  
+to set ClickHouse server settings.
+
+### WARNING -- Breaking Change -- HttpClient argument http_adapter replaced with pool_mgr
+The driver.HttpClient constructor previously accepted the optional keyword argument `http_adapter`, which could be used to
+pass a custom `requests.adapter.HttpAdapter` to the client.  ClickHouse Connect no longer uses the `requests` library (see
+Dependency Changes below).  Instead, the HttpClient constructor now accepts an optional `pool_mgr` keyword argument which
+can be used to set a custom `urllib.poolmanager.PoolManager` for the client.  In most cases the default PoolManager is
+all that is needed, but multiple PoolManagers may be required for advanced server/proxy applications with many client instances.
+
+### Dependency Changes 
+* ClickHouse Connect no longer requires the popular `requests` library.  The `requests` library is built on
+[urllib3](https://pypi.org/project/urllib3/), but ClickHouse Connect was utilizing very little of the added functionality.
+Requests also has very restricted access to the `urllib3` streaming API, which made adding additional compression methods
+difficult.  Accordingly, the project now interfacdes to `urllib3` directly.  This should not change the public API (except as
+noted in the warning above), but the HttpClient internals have changed to use the lower level library.
+* ClickHouse Connect now requires the [zstandard](https://pypi.org/project/zstandard/) and [lz4](https://pypi.org/project/lz4/)
+binding libraries to support zstd and lz4 compression.  ClickHouse itself uses these compression algorithms extensively and
+is optimized to work with them, so ClickHouse Connect now takes advantages of them when compression is desired.
 
 ### New Features
-* The core client `query` method now supports streaming.  The returned `QueryResult` object has new methods `stream_blocks` which
-returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface, and `stream_rows`,
-which returns a generator of each row.  These methods should be used within a `with` context to ensure the stream is properly
-closed when done.
-* More data conversions and the above streaming functionality have been written in Cython code to improve performance
-* The default for the client creation parameter `compress` has been changed to `False` to improve performance until a fix
-is implemented for https://github.com/ClickHouse/clickhouse-connect/issues/89
-Note it is likely that this issue has always been present and is not a result of the updates in the new version
-* Numerous internal small refactorings to simplify and consolidate some of the messy code
+* The core client `query` method now supports streaming.  The returned `QueryResult` object has new streaming methods:
+  * `stream_column_blocks` - returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface.
+  * `stream_row_blocks` - returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface,
+but "pivoted" to return data rows.
+  * `stream_rows` - returns a generator that returns a row of data with each iteration.  
+These methods should be used within a `with` context to ensure the stream is properly closed when done.  In addition, two new properties
+`result_columns` and `result_rows` have been added to `QueryResult`.  Referencing either of these properties will consume the stream
+and return the full dataset.  Note that these properties should be used instead of the ambiguous `result_set`, which returns
+the data oriented based on the `column_oriented` boolean property.  With the addition of `result_rows` and `result_columns` the
+`result_set` property and the `column_oriented` property are unnecessary and may be removed in a future release.
+* More compression methods.  As noted above, ClickHouse Connect now supports `zstd` and `lz4` compression, as well as brotli (`br`),
+if the brotli library is installed.  If the client `compress` method is set to `True` (the default), ClickHouse Connect will request compression
+from the ClickHouse server in the order `lz4,zstd,br,gzip,deflate`, and will compress inserts to ClickHouse using `lz4`.  Otherwise,
+the client `compress` argument can be set to any of `lz4`, `zstd`, `br`, or `gzip`, and the specific compression method will be
+used for both queries and inserts.  While `gzip` is available, it doesn't perform as well as the other options and should normally not
+be used.
+
+### Performance Improvements
+* More data conversions for query data have been ported to optimized C/Cython code.  Rough benchmarks suggest that this improves
+query performance approximately 20% for standard data types.
+* Using the new streaming API to process data in blocks significantly improves performance for large datasets (largely because Python has to
+allocate significantly less memory and do much less internal data copying otherwise required to build and hold the full dataset).  For datasets
+of a million rows or more, streaming can improve query performance 2x or more.
+
+### Bug Fixes
+* As mentioned, ClickHouse `gzip` performance is poor compared to `lz4` and `zstd`.  Using those compression methods by default
+avoids the major performance degradation seen in https://github.com/ClickHouse/clickhouse-connect/issues/89.
+* Passing SqlAlchemy query parameters to the driver.Client constructor was broken by changes in release 0.4.8.
+https://github.com/ClickHouse/clickhouse-connect/issues/94. This has been fixed.
 
 ## 0.4.8, 2023-01-02
 ### New Features

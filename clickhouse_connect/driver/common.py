@@ -121,7 +121,7 @@ def coerce_int(val: Optional[Union[str, int]]) -> int:
 def coerce_bool(val: Optional[Union[str, bool]]):
     if not val:
         return False
-    return val in (True, 'True', 'true', '1', 'yes')
+    return val in (True, 'True', 'true', '1')
 
 
 class SliceView(Sequence):
