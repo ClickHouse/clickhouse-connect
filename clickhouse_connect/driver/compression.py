@@ -16,7 +16,7 @@ available_compression = ['lz4', 'zstd']
 
 if brotli:
     available_compression.append('br')
-    available_compression.extend(['gzip', 'deflate'])
+available_compression.extend(['gzip', 'deflate'])
 
 comp_map = {}
 

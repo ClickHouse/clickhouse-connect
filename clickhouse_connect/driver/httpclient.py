@@ -140,6 +140,8 @@ class HttpClient(Client):
             compression = ','.join(available_compression)
             self.write_compression = available_compression[0]
         elif compress and compress not in ('False', 'false', '0'):
+            if compress not in available_compression:
+                raise ProgrammingError(f'Unsupported compression method {compress}')
             compression = compress
             self.write_compression = compress
         else:
