@@ -1,4 +1,3 @@
-import certifi
 from sqlalchemy.engine import Engine
 
 
