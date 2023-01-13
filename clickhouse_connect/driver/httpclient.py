@@ -137,9 +137,8 @@ class HttpClient(Client):
             ch_settings['session_id'] = str(uuid.uuid1())
 
         if coerce_bool(compress):
-            avail = available_compression()
-            compression = ','.join(avail)
-            self.write_compression = avail[0]
+            compression = ','.join(available_compression)
+            self.write_compression = available_compression[0]
         elif compress and compress not in ('False', 'false', '0'):
             compression = compress
             self.write_compression = compress
@@ -149,13 +148,9 @@ class HttpClient(Client):
         super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
 
         comp_setting = self.server_settings['enable_http_compression']
-        if comp_setting:
-            if comp_setting.value == '1':
-                self.compression = compression
-            elif comp_setting.readonly == 0:
-                ch_settings['enable_http_compression'] = 1
-                self.compression = compression
-
+        # We only set the header for the query method so no need to modify headers or settings here
+        if comp_setting and (comp_setting.value == '1' or comp_setting.readonly != 1):
+            self.compression = compression
         self.params = self._validate_settings(ch_settings)
 
     def set_client_setting(self, key, value):
@@ -196,8 +191,7 @@ class HttpClient(Client):
             params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                      retries=self.query_retries)
-        # pylint: disable=not-callable
-        byte_source = Client.BuffCls(ResponseSource(response))
+        byte_source = Client.BuffCls(ResponseSource(response)) # pylint: disable=not-callable
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:

@@ -12,13 +12,11 @@ except ImportError:
     brotli = None
 
 
-def available_compression():
-    comp = ['lz4', 'zstd']
-    if brotli:
-        comp.append('br')
-    comp.extend(['gzip', 'deflate'])
-    return comp
+available_compression = ['lz4', 'zstd']
 
+if brotli:
+    available_compression.append('br')
+    available_compression.extend(['gzip', 'deflate'])
 
 comp_map = {}
 

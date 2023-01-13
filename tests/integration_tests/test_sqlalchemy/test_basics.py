@@ -1,3 +1,4 @@
+import certifi
 from sqlalchemy.engine import Engine
 
 
@@ -7,6 +8,15 @@ test_query = """
    SELECT database, name FROM system.tables LIMIT 2
    -- 6dcd92a04feb50f14bbcf07c661680ba
    """
+
+
+def test_dsn_config(test_engine: Engine):
+    client = test_engine.raw_connection().connection.client
+    assert client.http.connection_pool_kw['cert_reqs'] == 'CERT_REQUIRED'
+    assert 'use_skip_indexes' in client.params
+    assert 'allow_experimental_object_type' in client.params
+    assert client.query_limit == 2333
+    assert client.compression == 'zstd'
 
 
 def test_cursor(test_engine: Engine):
