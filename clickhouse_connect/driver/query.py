@@ -165,7 +165,9 @@ class QueryResult:
     def result_columns(self) -> Matrix:
         if self._result_columns is None:
             if self._result_rows is not None:
-                raise ProgrammingError('result_columns referenced after result_rows.  Only one format is supported')
+                raise ProgrammingError(
+                    'result_columns referenced after result_rows.  Only one final format is supported'
+                )
             result = [[] for _ in range(len(self.column_names))]
             for block in self._block_gen:
                 for base, added in zip(result, block):
@@ -178,7 +180,9 @@ class QueryResult:
     def result_rows(self) -> Matrix:
         if self._result_rows is None:
             if self._result_columns is not None:
-                raise ProgrammingError('result_rows referenced after result_columns.  Only one format is supported')
+                raise ProgrammingError(
+                    'result_rows referenced after result_columns.  Only one final format is supported'
+                )
             result = []
             for block in self._block_gen:
                 result.extend(list(zip(*block)))
@@ -188,7 +192,7 @@ class QueryResult:
 
     def stream_column_blocks(self) -> Iterator[Matrix]:
         if not self._in_context:
-            logger.warning("Streaming results should be used in a 'with' context")
+            logger.warning("Streaming results should be used in a 'with' context to ensure the stream is closed")
         if not self._block_gen:
             raise ProgrammingError('Stream closed')
         temp = self._block_gen
@@ -204,12 +208,8 @@ class QueryResult:
                 yield row
 
     def named_results(self) -> Generator[dict, None, None]:
-        if self.column_oriented:
-            for row in zip(*self.result_set):
-                yield dict(zip(self.column_names, row))
-        else:
-            for row in self.result_set:
-                yield dict(zip(self.column_names, row))
+        for row in zip(*self.result_columns):
+            yield dict(zip(self.column_names, row))
 
     @property
     def row_count(self) -> int:
