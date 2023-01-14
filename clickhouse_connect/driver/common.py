@@ -1,7 +1,7 @@
 import array
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional
+from typing import Sequence, MutableSequence, Dict, Optional, Union
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
@@ -82,23 +82,6 @@ def write_leb128(value: int, dest: MutableSequence):
         dest.append(0x80 | b)
 
 
-def to_leb128(value: int) -> bytearray:
-    """
-    Create a byte array representing a LEB128 encoded integer
-    :param value: Integer value to encode
-    :return: bytearray with encoding value
-    """
-    result = bytearray()
-    while True:
-        b = value & 0x7f
-        value >>= 7
-        if value == 0:
-            result.append(b)
-            break
-        result.append(0x80 | b)
-    return result
-
-
 def decimal_size(prec: int):
     """
     Determine the bit size of a ClickHouse or Python Decimal needed to store a value of the requested precision
@@ -127,6 +110,18 @@ def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
     if update:
         copy.update(update)
     return copy
+
+
+def coerce_int(val: Optional[Union[str, int]]) -> int:
+    if not val:
+        return 0
+    return int(val)
+
+
+def coerce_bool(val: Optional[Union[str, bool]]):
+    if not val:
+        return False
+    return val in (True, 'True', 'true', '1')
 
 
 class SliceView(Sequence):

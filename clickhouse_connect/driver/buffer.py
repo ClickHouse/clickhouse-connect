@@ -63,13 +63,9 @@ class ResponseBuffer(ByteSource):
                 return sz
             shift += 7
 
-    def read_leb128_str(self, encoding: str = 'utf-8') -> str:
+    def read_leb128_str(self) -> str:
         sz = self.read_leb128()
-        x = self.read_bytes(sz)
-        try:
-            return x.decode(encoding)
-        except UnicodeDecodeError:
-            return x.hex()
+        return self.read_bytes(sz).decode()
 
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), 'little', signed=False)

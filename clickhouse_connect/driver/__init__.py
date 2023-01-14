@@ -1,4 +1,5 @@
 import logging
+from inspect import signature
 from typing import Optional, Union, Dict, Any
 from urllib.parse import urlparse, parse_qs
 
@@ -20,7 +21,7 @@ except ImportError:
     logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
 
 
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-arguments,too-many-locals,too-many-branches
 def create_client(host: str = None,
                   username: str = None,
                   password: str = '',
@@ -30,6 +31,7 @@ def create_client(host: str = None,
                   secure: Union[bool, str] = False,
                   dsn: Optional[str] = None,
                   settings: Optional[Dict[str, Any]] = None,
+                  generic_args: Optional[Dict[str, Any]] = None,
                   **kwargs) -> Client:
     if dsn:
         parsed = urlparse(dsn)
@@ -40,8 +42,7 @@ def create_client(host: str = None,
         if parsed.path and not database:
             database = parsed.path[1:].split('/')[0]
         database = database or parsed.path
-        qs_settings = dict(parse_qs(parsed.query))
-        settings = dict_copy(qs_settings, settings)
+        kwargs.update(dict(parse_qs(parsed.query)))
     use_tls = str(secure).lower() == 'true' or interface == 'https' or (not interface and port in (443, 8443))
     if not host:
         host = 'localhost'
@@ -52,11 +53,21 @@ def create_client(host: str = None,
         username = kwargs.pop('user')
     if password and username is None:
         username = 'default'
+    if 'compression' in kwargs and 'compress' not in kwargs:
+        kwargs['compress'] = kwargs.pop('compression')
+    settings = settings or {}
     if interface.startswith('http'):
-        cc_client = HttpClient(interface, host, port, username, password, database, settings=settings, **kwargs)
-    else:
-        raise ProgrammingError(f'Unrecognized client type {interface}')
-    return cc_client
+        if generic_args:
+            client_params = signature(HttpClient).parameters
+            for name, value in generic_args.items():
+                if name in client_params:
+                    kwargs[name] = value
+                else:
+                    if name.startswith('ch_'):
+                        name = name[3:]
+                    settings[name] = value
+        return HttpClient(interface, host, port, username, password, database, settings=settings, **kwargs)
+    raise ProgrammingError(f'Unrecognized client type {interface}')
 
 
 def default_port(interface: str, secure: bool):

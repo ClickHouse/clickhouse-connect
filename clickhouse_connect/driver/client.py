@@ -27,12 +27,12 @@ class Client(ABC):
     Base ClickHouse Connect client
     """
     BuffCls: Type = None
-    column_inserts = False
-    compression = None
+    compression: str = None
+    write_compression: str = None
     valid_transport_settings = set()
     optional_transport_settings = set()
 
-    def __init__(self, database: str, query_limit: int, uri: str, compression: Optional[str]):
+    def __init__(self, database: str, query_limit: int, uri: str):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
@@ -49,8 +49,6 @@ class Client(ABC):
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
-        if compression and self.server_settings.get('enable_http_compression', False):
-            self.compression = compression
         if database and not database == '__default__':
             self.database = database
         self.uri = uri

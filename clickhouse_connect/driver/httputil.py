@@ -1,12 +1,13 @@
-import atexit
 import http
+import logging
 import sys
 import socket
-from typing import Optional
 
-from requests import Response
-from requests.adapters import HTTPAdapter
-from urllib3 import poolmanager
+import certifi
+import lz4.frame
+import zstandard
+from urllib3.poolmanager import PoolManager
+from urllib3.response import HTTPResponse
 
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
@@ -25,60 +26,93 @@ core_socket_options = [
     (socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 256)
 ]
 
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-class KeepAliveAdapter(HTTPAdapter):
-    """
-    Extended HTTP adapter that sets preferred keep alive options
-    """
 
-    # pylint: disable=no-member
-    def __init__(self, **kwargs):
-        options = core_socket_options.copy()
-        interval = kwargs.pop('keep_interval', DEFAULT_KEEP_INTERVAL)
-        count = kwargs.pop('keep_count', DEFAULT_KEEP_COUNT)
-        idle = kwargs.pop('keep_idle', DEFAULT_KEEP_IDLE)
+# pylint: disable=no-member
+def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
+                     keep_count: int = DEFAULT_KEEP_COUNT,
+                     keep_idle: int = DEFAULT_KEEP_IDLE,
+                     ca_cert: str = None,
+                     verify: bool = True,
+                     client_cert: str = None,
+                     client_cert_key: str = None,
+                     **options) -> PoolManager:
+    socket_options = core_socket_options.copy()
+    if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPINTVL, keep_interval))
+    if getattr(socket, 'TCP_KEEPCNT', None) is not None:
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPCNT, keep_count))
+    if getattr(socket, 'TCP_KEEPIDLE', None) is not None:
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))
+    if sys.platform == 'darwin':
+        socket_options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), keep_interval))
+    if ca_cert == 'certifi':
+        ca_cert = certifi.where()
+    options['cert_reqs'] = 'CERT_REQUIRED' if verify else 'CERT_NONE'
+    if ca_cert:
+        options['ca_certs'] = ca_cert
+    if client_cert:
+        options['cert_file'] = client_cert
+    if client_cert_key:
+        options['key_file'] = client_cert_key
+    return PoolManager(block=False, socket_options=socket_options, **options)
 
-        if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
-            options.append((SOCKET_TCP, socket.TCP_KEEPINTVL, interval))
-        if getattr(socket, 'TCP_KEEPCNT', None) is not None:
-            options.append((SOCKET_TCP, socket.TCP_KEEPCNT, count))
-        if getattr(socket, 'TCP_KEEPIDLE', None) is not None:
-            options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, idle))
-        if sys.platform == 'darwin':
-            options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), interval))
-        self.socket_options = options
-        super().__init__(**kwargs)
 
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        self.poolmanager = poolmanager.PoolManager(
-            num_pools=connections,
-            maxsize=maxsize,
-            block=block,
-            socket_options=self.socket_options,
-            **pool_kwargs)
+def get_response_data(response: HTTPResponse) -> bytes:
+    encoding = response.headers.get('content-encoding', None)
+    if encoding == 'zstd':
+        try:
+            zstd_decom = zstandard.ZstdDecompressor()
+            return zstd_decom.stream_reader(response.data).read()
+        except zstandard.ZstdError:
+            pass
+    if encoding == 'lz4':
+        lz4_decom = lz4.frame.LZ4FrameDecompressor()
+        return lz4_decom.decompress(response.data, len(response.data))
+    return response.data
+
+
+default_pool_manager = get_pool_manager()
 
 
 class ResponseSource:
-    def __init__(self, response: Response, chunk_size: Optional[int] = None):
+    def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024):
         self.response = response
-        self.gen = response.iter_content(chunk_size)
+        compression = response.headers.get('content-encoding')
+        if compression == 'zstd':
+            zstd_decom = zstandard.ZstdDecompressor()
+            reader = zstd_decom.stream_reader(self, read_across_frames=False)
+
+            def decompress():
+                while True:
+                    chunk = reader.read()
+                    if not chunk:
+                        break
+                    yield chunk
+
+            self.gen = decompress()
+        elif compression == 'lz4':
+            lz4_decom = lz4.frame.LZ4FrameDecompressor()
+
+            def decompress():
+                while lz4_decom.needs_input:
+                    data = self.response.read(chunk_size)
+                    if lz4_decom.unused_data:
+                        data = lz4_decom.unused_data + data
+                    if not data:
+                        return
+                    chunk = lz4_decom.decompress(data)
+                    if chunk:
+                        yield chunk
+
+            self.gen = decompress()
+        else:
+            self.gen = response.stream(decode_content=True)
+
+    def read(self, amt: int) -> bytes:
+        return self.response.read(amt)
 
     def close(self):
-        if self.response.raw:
-            self.response.raw.drain_conn()
+        self.response.drain_conn()
         self.response.close()
-
-
-# Create a single HttpAdapter that will be shared by all client sessions.  This is intended to make
-# the client as thread safe as possible while sharing a single connection pool.  For the same reason we
-# don't call the Session.close() method from the client so the connection pool remains available
-default_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)
-atexit.register(default_adapter.close)
-
-
-def reset_connections():
-    """
-    Used for tests to force new connection by resetting the singleton HttpAdapter
-    """
-    global default_adapter  # pylint: disable=global-statement
-    default_adapter = KeepAliveAdapter(pool_connections=4, pool_maxsize=8, max_retries=0)

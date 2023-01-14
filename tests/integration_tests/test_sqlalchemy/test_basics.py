@@ -9,6 +9,15 @@ test_query = """
    """
 
 
+def test_dsn_config(test_engine: Engine):
+    client = test_engine.raw_connection().connection.client
+    assert client.http.connection_pool_kw['cert_reqs'] == 'CERT_REQUIRED'
+    assert 'use_skip_indexes' in client.params
+    assert 'allow_experimental_object_type' in client.params
+    assert client.query_limit == 2333
+    assert client.compression == 'zstd'
+
+
 def test_cursor(test_engine: Engine):
     raw_conn = test_engine.raw_connection()
     cursor = raw_conn.cursor()

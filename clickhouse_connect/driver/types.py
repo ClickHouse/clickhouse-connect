@@ -17,7 +17,7 @@ class ByteSource(Closable):
         pass
 
     @abstractmethod
-    def read_leb128_str(self, encoding: str = 'utf8') -> str:
+    def read_leb128_str(self) -> str:
         pass
 
     @abstractmethod
