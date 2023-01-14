@@ -1,6 +1,6 @@
 # ClickHouse Connect ChangeLog
 
-## 0.5.0, 2023-01-16
+## 0.5.0, 2023-01-14
 
 ### WARNING -- Breaking Change -- Removing get_client Arbitrary Keyword Arguments
 The clickhouse_connect `get_client` method (which proxies the driver.Client constructor) previously accepted arbitrary

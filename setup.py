@@ -8,7 +8,6 @@ try:
     from Cython.Build import cythonize
     print ('Using Cython to build cython modules')
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3')
-    C_PKG = None
 except ImportError:
     print ('Cython Not Successfully Installed, Not building C extensions')
     cythonize = None
@@ -17,8 +16,6 @@ except ImportError:
 def run_setup(try_c: bool = True):
     if try_c:
         kwargs = {'ext_modules': c_modules}
-        if C_PKG:
-            kwargs['ext_package'] = C_PKG
     else:
         kwargs = {}
 
