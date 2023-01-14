@@ -1,5 +1,4 @@
 import os
-from distutils.errors import CCompilerError, DistutilsExecError, DistutilsPlatformError
 from setuptools import setup, find_packages
 
 c_modules = []
@@ -77,6 +76,6 @@ def run_setup(try_c: bool = True):
 
 try:
     run_setup()
-except (CCompilerError, DistutilsExecError, DistutilsPlatformError, IOError, SystemExit) as e:
+except (Exception, IOError, SystemExit) as e:
     print(f'Unable to compile C extensions for faster performance due to {e}, will use pure Python')
     run_setup(False)
