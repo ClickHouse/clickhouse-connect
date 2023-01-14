@@ -10,7 +10,7 @@ from pytest import fixture
 
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
-from clickhouse_connect.driver.exceptions import ClickHouseError
+from clickhouse_connect.driver.exceptions import OperationalError
 from tests.helpers import TableContext
 
 
@@ -71,14 +71,14 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    port=test_config.port,
                                    username=test_config.username,
                                    password=test_config.password,
-                                   compress=False,
                                    send_progress=False,
+                                   compression=True,
                                    settings={
                                        'allow_suspicious_low_cardinality_types': True
                                    }
                                    )
             break
-        except ClickHouseError as ex:
+        except OperationalError as ex:
             if tries > 10:
                 raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)

@@ -1,6 +1,6 @@
 import os
 from distutils.errors import CCompilerError, DistutilsExecError, DistutilsPlatformError
-from setuptools import setup, find_packages, Extension
+from setuptools import setup, find_packages
 
 c_modules = []
 
@@ -34,6 +34,7 @@ def run_setup(try_c: bool = True):
         name='clickhouse-connect',
         author='ClickHouse Inc.',
         author_email='clients@clickhouse.com',
+        keywords=['clickhouse', 'superset', 'sqlalchemy', 'http', 'driver'],
         description='ClickHouse core driver, SqlAlchemy, and Superset libraries',
         version=version,
         long_description=long_desc,
@@ -44,16 +45,19 @@ def run_setup(try_c: bool = True):
         python_requires='~=3.7',
         license='Apache License 2.0',
         install_requires=[
-            'requests',
-            'pytz'
+            'certifi',
+            'urllib3>=1.26',
+            'pytz',
+            'zstandard',
+            'lz4'
         ],
         extras_require={
-            'sqlalchemy': ['sqlalchemy>1.3.21,<2.0'],
+            'sqlalchemy': ['sqlalchemy>1.3.21,<1.4'],
             'superset': ['apache_superset>=1.4.1'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
-            'orjson': ['orjson']
+            'orjson': ['orjson'],
         },
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',

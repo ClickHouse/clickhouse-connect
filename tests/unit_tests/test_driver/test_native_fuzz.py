@@ -1,16 +1,17 @@
+import os
 import random
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from tests.helpers import random_columns, random_data, native_transform, native_insert_block, bytes_source
 
-TEST_RUNS = 200
 TEST_COLUMNS = 12
 MAX_DATA_ROWS = 100
 
 
 # pylint: disable=duplicate-code
 def test_native_round_trips():
-    for _ in range(TEST_RUNS):
+    test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '200'))
+    for _ in range(test_runs):
         data_rows = random.randint(1, MAX_DATA_ROWS)
         col_names, col_types = random_columns(TEST_COLUMNS)
         data = random_data(col_types, data_rows)
@@ -28,7 +29,8 @@ def test_native_round_trips():
 
 
 def test_native_small():
-    for _ in range(TEST_RUNS):
+    test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '200'))
+    for _ in range(test_runs):
         col_names, col_types = random_columns(1)
         data = random_data(col_types, 2)
         col_names = ('row_id',) + col_names

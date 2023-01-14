@@ -6,7 +6,7 @@ def test_numbers_stream(test_client: Client):
     total = 0
     blocks = 0
     with query_result:
-        for x in query_result.stream_blocks():
+        for x in query_result.stream_column_blocks():
             total += len(x[0])
             blocks += 1
     assert blocks > 0

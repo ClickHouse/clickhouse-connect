@@ -1,4 +1,4 @@
-from typing import Dict, Any, Union
+from typing import Union
 
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import create_client
@@ -12,14 +12,14 @@ class Connection:
     # pylint: disable=too-many-arguments
     def __init__(self,
                  dsn: str = None,
-                 username: str = None,
-                 password: str = None,
+                 username: str = '',
+                 password: str = '',
                  host: str = None,
                  database: str = None,
                  interface: str = None,
                  port: int = 0,
                  secure: Union[bool, str] = False,
-                 settings: Dict[str, Any] = None):
+                 **kwargs):
         self.client = create_client(host=host,
                                     username=username,
                                     password=password,
@@ -28,7 +28,7 @@ class Connection:
                                     port=port,
                                     secure=secure,
                                     dsn=dsn,
-                                    settings=settings or {})
+                                    generic_args=kwargs)
         self.timezone = self.client.server_tz
 
     def close(self):
