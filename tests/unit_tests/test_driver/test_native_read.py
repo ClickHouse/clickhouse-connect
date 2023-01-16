@@ -92,7 +92,7 @@ def test_ip():
     dest = bytearray()
     ipv4_type.write_native_column(ips, dest)
     python = ipv4_type.read_native_column(bytes_source(bytes(dest)), 3)
-    assert python == [IPv4Address(ip) for ip in ips]
+    assert python == tuple(IPv4Address(ip) for ip in ips)
 
 
 def test_nested():

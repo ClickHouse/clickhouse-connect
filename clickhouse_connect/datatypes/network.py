@@ -5,6 +5,7 @@ from typing import Union, MutableSequence, Sequence
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import write_array
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.ctypes import data_conv
 
 IPV4_V6_MASK = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
 V6_NULL = bytes(b'\x00' * 16)
@@ -32,16 +33,9 @@ class IPv4(ArrayType):
             return self._from_native_str(source, num_rows)
         return self._from_native_ip(source, num_rows)
 
-    def _from_native_ip(self, source: ByteSource, num_rows: int):
-        column = source.read_array(self._array_type, num_rows)
-        fast_ip_v4 = IPv4Address.__new__
-        new_col = []
-        app = new_col.append
-        for x in column:
-            ipv4 = fast_ip_v4(IPv4Address)
-            ipv4._ip = x
-            app(ipv4)
-        return new_col
+    @staticmethod
+    def _from_native_ip(source: ByteSource, num_rows: int):
+        return data_conv.read_ipv4_col(source, num_rows)
 
     def _from_native_str(self, source: ByteSource, num_rows: int, **_):
         column = source.read_array(self._array_type, num_rows)

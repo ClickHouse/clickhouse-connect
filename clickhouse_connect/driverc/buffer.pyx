@@ -38,7 +38,7 @@ cdef class ResponseBuffer:
         self.slice = <char*>PyMem_Malloc(self.slice_sz)
 
     @cython.inline
-    cdef char * _read_bytes(self, unsigned long long sz) except NULL:
+    cdef char * read_bytes_c(self, unsigned long long sz) except NULL:
         cdef unsigned long long x, e, tail, cur_len, temp
         cdef char* ptr
         e = self.buf_sz
@@ -112,7 +112,7 @@ cdef class ResponseBuffer:
                 if (b & 0x80) == 0:
                     break
                 shift += 7
-            buf = self._read_bytes(sz)
+            buf = self.read_bytes_c(sz)
             try:
                 v = PyUnicode_Decode(buf, sz, encoding, errors)
             except UnicodeDecodeError:
@@ -124,7 +124,7 @@ cdef class ResponseBuffer:
 
     def read_leb128_str(self) -> str:
         cdef unsigned long long sz = self.read_leb128()
-        cdef char * b = self._read_bytes(sz)
+        cdef char * b = self.read_bytes_c(sz)
         if b == NULL:
             raise IndexError
         return PyUnicode_Decode(b, sz, utf8, errors)
@@ -150,7 +150,7 @@ cdef class ResponseBuffer:
 
     def read_uint64(self) -> int:
         cdef ull_wrapper* x
-        cdef char* b = self._read_bytes(8)
+        cdef char* b = self.read_bytes_c(8)
         if b == NULL:
             raise StopIteration
         if must_swap:
@@ -161,7 +161,7 @@ cdef class ResponseBuffer:
         return x.int_value
 
     def read_bytes(self, unsigned long long sz) -> bytes:
-        cdef char* b = self._read_bytes(sz)
+        cdef char* b = self.read_bytes_c(sz)
         if b == NULL:
             raise StopIteration
         return b[:sz]
@@ -173,7 +173,7 @@ cdef class ResponseBuffer:
         cdef array.array template = array_templates[t]
         cdef array.array result = array.clone(template, num_rows, 0)
         cdef unsigned long long sz = result.itemsize * num_rows
-        cdef char * b = self._read_bytes(sz)
+        cdef char * b = self.read_bytes_c(sz)
         if b == NULL:
             raise StopIteration
         memcpy(result.data.as_voidptr, b, sz)
@@ -183,7 +183,7 @@ cdef class ResponseBuffer:
 
     def read_bytes_col(self, unsigned long long sz, unsigned long long num_rows) -> Iterable[Any]:
         cdef object column = PyTuple_New(num_rows)
-        cdef char * b = self._read_bytes(sz * num_rows)
+        cdef char * b = self.read_bytes_c(sz * num_rows)
         if b == NULL:
             raise StopIteration
         for x in range(num_rows):
@@ -197,7 +197,7 @@ cdef class ResponseBuffer:
                            encoding:str ='utf8') -> Iterable[str]:
         cdef object column = PyTuple_New(num_rows)
         cdef char * enc
-        cdef char * b = self._read_bytes(sz * num_rows)
+        cdef char * b = self.read_bytes_c(sz * num_rows)
         if b == NULL:
             raise StopIteration
         cdef object v

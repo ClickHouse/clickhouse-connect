@@ -16,6 +16,7 @@ from urllib3.response import HTTPResponse
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
@@ -193,7 +194,7 @@ class HttpClient(Client):
             params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                      retries=self.query_retries)
-        byte_source = Client.BuffCls(ResponseSource(response)) # pylint: disable=not-callable
+        byte_source = RespBuffCls(ResponseSource(response)) # pylint: disable=not-callable
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:
