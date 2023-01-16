@@ -1,5 +1,10 @@
 # ClickHouse Connect ChangeLog
 
+## 0.5.1, 2023-01-16
+
+### Bug fix
+* Fix ping check in http client.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/96.
+
 ## 0.5.0, 2023-01-14
 
 ### WARNING -- Breaking Change -- Removing get_client Arbitrary Keyword Arguments
