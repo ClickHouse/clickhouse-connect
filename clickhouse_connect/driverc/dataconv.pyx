@@ -1,6 +1,6 @@
 from .buffer cimport ResponseBuffer
 from cpython cimport Py_INCREF
-from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM, PyTuple_SetItem
+from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from ipaddress import IPv4Address
 
 def read_ipv4_col(ResponseBuffer buffer, unsigned long long num_rows):

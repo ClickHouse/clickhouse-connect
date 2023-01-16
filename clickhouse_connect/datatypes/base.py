@@ -208,7 +208,7 @@ class ClickHouseType(ABC):
         key_data = source.read_uint64()
         index_sz = 2 ** (key_data & 0xff)
         key_cnt = source.read_uint64()
-        keys= self._read_native_binary(source, key_cnt)
+        keys = self._read_native_binary(source, key_cnt)
         if self.nullable:
             try:
                 keys[0] = None if use_none else self.python_null
