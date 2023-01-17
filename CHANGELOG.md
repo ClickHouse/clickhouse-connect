@@ -1,5 +1,10 @@
 # ClickHouse Connect ChangeLog
 
+## 0.5.2, 2023-01-17
+
+### Bug fix
+* Fix issue where client database is set to None (this normally only happens when deleting the initial database)
+
 ## 0.5.1, 2023-01-16
 
 ### Bug fix
