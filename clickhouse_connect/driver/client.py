@@ -294,7 +294,8 @@ class Client(ABC):
         :return: PyArrow.Table
         """
         settings = dict_copy(settings)
-        settings['database'] = self.database
+        if self.database:
+            settings['database'] = self.database
         if arrow_str_setting in self.server_settings and arrow_str_setting not in settings:
             settings[arrow_str_setting] = '1' if use_strings else '0'
         return to_arrow(self.raw_query(query, parameters, settings, 'Arrow'))
@@ -411,7 +412,8 @@ class Client(ABC):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: No return, throws an exception if the insert fails
         """
-        full_table = table if '.' in table else f'{database or self.database}.{table}'
+        database = database or self.database
+        full_table = table if '.' in table or not database else f'{database}.{table}'
         column_names, insert_block = arrow_buffer(arrow_table)
         self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
 
@@ -439,7 +441,8 @@ class Client(ABC):
         :param data: Initial dataset for insert
         :return Reusable insert context
         """
-        full_table = table if '.' in table else f'{database or self.database}.{table}'
+        database = database or self.database
+        full_table = table if '.' in table or not database else f'{database}.{table}'
         column_defs = []
         if column_types is None:
             describe_result = self.query(f'DESCRIBE TABLE {full_table}')

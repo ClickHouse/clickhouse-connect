@@ -29,11 +29,35 @@ def test_command(test_client: Client):
     assert version.startswith('2')
 
 
+def test_none_database(test_client: Client):
+    old_db = test_client.database
+    test_db = test_client.command('select database()')
+    assert test_db == old_db
+    try:
+        test_client.database = None
+        query_result = test_client.query('SELECT * FROM system.tables')
+        with query_result:
+            pass
+        test_db = test_client.command('select database()')
+        assert test_db == 'default'
+        test_client.database = old_db
+        test_db = test_client.command('select database()')
+        assert test_db == old_db
+    finally:
+        test_client.database = old_db
+
+
 def test_insert(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
-    tables_result = test_client.query('SELECT * from system.tables')
-    test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
+    old_db = test_client.database
+    test_client.database = None
+    try:
+        test_client.command('DROP TABLE IF EXISTS default.test_system_insert')
+        test_client.command(f'CREATE TABLE default.test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
+        tables_result = test_client.query('SELECT * from system.tables')
+        test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
+        test_client.command('DROP TABLE IF EXISTS default.test_system_insert')
+    finally:
+        test_client.database = old_db
 
 
 def test_raw_insert(test_client: Client, test_table_engine: str):
