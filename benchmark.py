@@ -51,7 +51,7 @@ def create_table(client: Client, col_names: List[str], rows: int):
     client.insert('benchmark_test', (row_data,) * rows)
 
 
-def check_reads(client: Client, tries: int = 100, rows: int = 10000):
+def check_reads(client: Client, tries: int = 50, rows: int = 100000):
     start_time = time.time()
     for _ in range(tries):
         result = client.query(f'SELECT * FROM benchmark_test LIMIT {rows}', column_oriented=True)
@@ -66,7 +66,7 @@ def check_reads(client: Client, tries: int = 100, rows: int = 10000):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--tries', help='Total tries for each test', type=int, default=50)
-    parser.add_argument('-r', '--rows', help='Total rows in dataset', type=int, default=10000)
+    parser.add_argument('-r', '--rows', help='Total rows in dataset', type=int, default=100000)
     parser.add_argument('-c', '--columns', help='Column types to test', type=str, nargs='+')
 
     args = parser.parse_args()
@@ -83,7 +83,7 @@ def main():
                 sys.exit()
     else:
         col_names = standard_cols
-    client = clickhouse_connect.get_client(compress=True)
+    client = clickhouse_connect.get_client(compress=False)
 
     set_default_formats('IP*', 'native', '*Int64', 'native')
     create_table(client, col_names, rows)

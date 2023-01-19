@@ -1,6 +1,10 @@
+from datetime import datetime
 from ipaddress import IPv4Address
 
 from clickhouse_connect.driver.types import ByteSource
+
+
+from_ts_naive = datetime.utcfromtimestamp
 
 
 def read_ipv4_col(source: ByteSource, num_rows: int):
@@ -13,3 +17,9 @@ def read_ipv4_col(source: ByteSource, num_rows: int):
         ipv4._ip = x  # pylint: disable=protected-access
         app(ipv4)
     return new_col
+
+
+def read_datetime_col(source: ByteSource, num_rows: int):
+    column = source.read_array('I', num_rows)
+    fts = from_ts_naive
+    return [fts(ts) for ts in column]

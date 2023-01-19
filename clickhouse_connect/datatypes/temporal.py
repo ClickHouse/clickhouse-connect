@@ -5,6 +5,7 @@ from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import  write_array, np_date_types
+from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.types import ByteSource
 
 epoch_start_date = date(1970, 1, 1)
@@ -60,11 +61,9 @@ class DateTime(ArrayType):
     nano_divisor = 1000000000
 
     def _read_native_binary(self, source: ByteSource, num_rows: int):
-        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
-            return column
-        fts = from_ts_naive
-        return [fts(ts) for ts in column]
+            return source.read_array(self._array_type, num_rows)
+        return data_conv.read_datetime_col(source, num_rows)
 
     def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
