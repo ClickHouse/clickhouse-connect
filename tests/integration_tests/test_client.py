@@ -15,6 +15,10 @@ klm,1,0
 klm,1,"""
 
 
+def test_ping(test_client: Client):
+    assert test_client.ping() is True
+
+
 def test_query(test_client: Client):
     result = test_client.query('SELECT * FROM system.tables')
     assert len(result.result_set) > 0
