@@ -28,7 +28,7 @@ class IPv4(ArrayType):
     def np_type(self, _str_len: int = 0):
         return 'U15' if self.read_format() == 'string' else 'O'
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return self._from_native_str(source, num_rows)
         return self._from_native_ip(source, num_rows)
@@ -41,7 +41,7 @@ class IPv4(ArrayType):
         column = source.read_array(self._array_type, num_rows)
         return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
@@ -70,7 +70,7 @@ class IPv6(ClickHouseType):
     def python_null(self):
         return '' if self.read_format() == 'string' else V6_NULL
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return self._read_native_str(source, num_rows)
         return self._read_native_ip(source, num_rows)
@@ -113,7 +113,7 @@ class IPv6(ClickHouseType):
                 app(tov6(af6, x))
         return new_col
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         v = V6_NULL
         first = self._first_value(column)
         v4mask = IPV4_V6_MASK

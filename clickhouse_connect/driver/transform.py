@@ -37,7 +37,7 @@ class NativeTransform:
                     else:
                         col_type = col_types[col_num]
                     context.start_column(name, col_type)
-                    result_block.append(col_type.read_native_column(source, num_rows, use_none=use_none))
+                    result_block.append(col_type.read_python_column(source, num_rows, use_none=use_none))
                 block_num += 1
                 return result_block
 
@@ -73,7 +73,7 @@ class NativeTransform:
                         output += col_type.name.encode()
                         context.start_column(col_name, col_type)
                         try:
-                            col_type.write_native_column(data, output)
+                            col_type.write_column(data, output)
                         except Exception as ex:  # pylint: disable=broad-except
                             # This is hideous, but some low level serializations can fail while streaming
                             # the insert if the user has included bad data in the column.  We need to ensure that the

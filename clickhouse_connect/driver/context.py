@@ -11,11 +11,13 @@ class BaseQueryContext:
                  settings: Optional[Dict[str, Any]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-                 encoding: Optional[str] = None):
+                 encoding: Optional[str] = None,
+                 use_numpy: bool = False):
         self.settings = settings or {}
         self.query_formats = query_formats or {}
         self.column_formats = column_formats or {}
         self.encoding = encoding
+        self.use_numpy = use_numpy
 
     def __enter__(self):
         query_settings.query_overrides = format_map(self.query_formats)

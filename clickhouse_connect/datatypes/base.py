@@ -102,7 +102,7 @@ class ClickHouseType(ABC):
     def np_type(self, _str_len: int = 0):
         return self._np_type
 
-    def write_native_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: MutableSequence):
         """
         Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
         way the ClickHouse C++ code is written, this must be done before any data is written even if the
@@ -112,7 +112,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             write_uint64(low_card_version, dest)
 
-    def read_native_prefix(self, source: ByteSource):
+    def read_column_prefix(self, source: ByteSource):
         """
         Read the low cardinality version.  Like the write method, this has to happen immediately for container classes
         :param source: The native protocol binary read buffer
@@ -123,7 +123,7 @@ class ClickHouseType(ABC):
             if v != low_card_version:
                 logger.warning('Unexpected low cardinality version %d reading type %s', v, self.name)
 
-    def read_native_column(self, source: ByteSource, num_rows: int, **kwargs) -> Sequence:
+    def read_python_column(self, source: ByteSource, num_rows: int, **kwargs) -> Sequence:
         """
         Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that
          the LowCardinality version is read for the contained types
@@ -132,10 +132,10 @@ class ClickHouseType(ABC):
         :param kwargs: Pass any extra keyword arguments to the main read_native_data function
         :return: The decoded column data as a sequence and the updated location pointer
         """
-        self.read_native_prefix(source)
-        return self.read_native_data(source, num_rows, **kwargs)
+        self.read_column_prefix(source)
+        return self.read_python_data(source, num_rows, **kwargs)
 
-    def read_native_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
+    def read_python_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
         """
         Public read method for all ClickHouseType data type columns
         :param source: Native protocol binary read buffer
@@ -145,10 +145,10 @@ class ClickHouseType(ABC):
         :return: The decoded column plus the updated location pointer
         """
         if self.low_card:
-            return self._read_native_low_card(source, num_rows, use_none)
+            return self._read_python_low_card(source, num_rows, use_none)
         if self.nullable:
             null_map = source.read_bytes(num_rows)
-            column = self._read_native_binary(source, num_rows)
+            column = self._read_column_binary(source, num_rows)
             if use_none:
                 if isinstance(column, (tuple, array.array)):
                     return [None if null_map[ix] else column[ix] for ix in range(num_rows)]
@@ -156,13 +156,13 @@ class ClickHouseType(ABC):
                     if null_map[ix]:
                         column[ix] = None
             return column
-        return self._read_native_binary(source, num_rows)
+        return self._read_column_binary(source, num_rows)
 
     # These two methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
 
     # pylint: disable=no-self-use
-    def _read_native_binary(self, _source: ByteSource, _num_rows: int) -> Union[Sequence, MutableSequence]:
+    def _read_column_binary(self, _source: ByteSource, _num_rows: int) -> Union[Sequence, MutableSequence]:
         """
         Lowest level read method for ClickHouseType native data columns
         :param _source: Native protocol binary read buffer
@@ -171,24 +171,24 @@ class ClickHouseType(ABC):
         """
         return [], 0
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         """
         Lowest level write method for ClickHouseType data columns
         :param column: Python data column
         :param dest: Native protocol write buffer
         """
 
-    def write_native_column(self, column: Sequence, dest: MutableSequence):
+    def write_column(self, column: Sequence, dest: MutableSequence):
         """
         Wrapping write method for ClickHouseTypes.  Only overridden for container types that so that
         the write_native_prefix is done at the right time for contained types
         :param column: Column/sequence of Python values to write
         :param dest: Native binary write buffer
         """
-        self.write_native_prefix(dest)
-        self.write_native_data(column, dest)
+        self.write_column_prefix(dest)
+        self.write_column_data(column, dest)
 
-    def write_native_data(self, column: Sequence, dest: MutableSequence):
+    def write_column_data(self, column: Sequence, dest: MutableSequence):
         """
         Public native write method for ClickHouseTypes.  Delegates the actual write to either the LowCardinality
         write method or the _write_native_binary method of the type
@@ -196,19 +196,19 @@ class ClickHouseType(ABC):
         :param dest: Native binary write buffer
         """
         if self.low_card:
-            self._write_native_low_card(column, dest)
+            self._write_column_low_card(column, dest)
         else:
             if self.nullable:
                 dest += bytes([1 if x is None else 0 for x in column])
-            self._write_native_binary(column, dest)
+            self._write_column_binary(column, dest)
 
-    def _read_native_low_card(self, source: ByteSource, num_rows: int, use_none=True):
+    def _read_python_low_card(self, source: ByteSource, num_rows: int, use_none=True):
         if num_rows == 0:
             return tuple()
         key_data = source.read_uint64()
         index_sz = 2 ** (key_data & 0xff)
         key_cnt = source.read_uint64()
-        keys = self._read_native_binary(source, key_cnt)
+        keys = self._read_column_binary(source, key_cnt)
         if self.nullable:
             try:
                 keys[0] = None if use_none else self.python_null
@@ -219,7 +219,7 @@ class ClickHouseType(ABC):
         index = source.read_array(array_type(index_sz, False), num_rows)
         return tuple(keys[ix] for ix in index)
 
-    def _write_native_low_card(self, column: Iterable, dest: MutableSequence):
+    def _write_column_low_card(self, column: Iterable, dest: MutableSequence):
         if not column:
             return
         index = []
@@ -255,7 +255,7 @@ class ClickHouseType(ABC):
         ix_type = int(log(len(keys), 2)) >> 3  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(keys), dest)
-        self._write_native_binary(keys, dest)
+        self._write_column_binary(keys, dest)
         write_uint64(len(index), dest)
         write_array(array_type(1 << ix_type, False), index, dest)
 
@@ -293,13 +293,13 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._struct_type = '<' + cls._array_type
             cls.byte_size = array.array(cls._array_type).itemsize
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'string':
             column = [str(x) for x in column]
         return column
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         if len(column) and self.nullable:
             first = column[0]
             try:
@@ -322,8 +322,8 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
 
-    def _read_native_binary(self, source: Sequence, num_rows: int):
+    def _read_column_binary(self, source: Sequence, num_rows: int):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         raise NotSupportedError(f'{self.name} serialization  not supported')

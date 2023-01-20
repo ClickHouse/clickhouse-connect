@@ -7,14 +7,14 @@ from clickhouse_connect.driver.types import ByteSource
 class String(ClickHouseType):
     python_null = ''
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         return source.read_str_col(num_rows, self.encoding)
 
     def np_type(self, str_len: int = 0):
         return f'<U{str_len}' if str_len else 'O'
 
     # pylint: disable=duplicate-code
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         encoding = self.encoding
         app = dest.append
         if self.nullable:
@@ -62,13 +62,13 @@ class FixedString(ClickHouseType):
     def np_type(self, _str_len: int = 0):
         return f'<U{self.byte_size}'
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return source.read_fixed_str_col(self.byte_size, num_rows, self.encoding)
         return source.read_bytes_col(self.byte_size, num_rows)
 
     # pylint: disable=too-many-branches
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         ext = dest.extend
         sz = self.byte_size
         empty = bytes((0,) * sz)

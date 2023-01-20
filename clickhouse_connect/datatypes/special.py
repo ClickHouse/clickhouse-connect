@@ -18,7 +18,7 @@ class UUID(ClickHouseType):
     def np_type(self, _str_len: int = 0):
         return 'U36' if self.read_format() == 'string' else 'O'
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return self._read_native_str(source, num_rows)
         return self._read_native_uuid(source, num_rows)
@@ -57,7 +57,7 @@ class UUID(ClickHouseType):
         return column
 
     # pylint: disable=too-many-branches
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         empty = empty_uuid_b
         if isinstance(first, str) or self.write_format() == 'string':
@@ -97,7 +97,7 @@ class Nothing(ArrayType):
         super().__init__(type_def)
         self.nullable = True
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         dest += bytes(0x30 for _ in range(len(column)))
 
 
@@ -109,11 +109,11 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
-        return self.element_type.read_native_data(source, num_rows)
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
+        return self.element_type.read_python_data(source, num_rows)
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        self.element_type.write_native_data(column, dest)
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+        self.element_type.write_column_data(column, dest)
 
 
 class AggregateFunction(UnsupportedType):

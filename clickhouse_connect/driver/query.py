@@ -44,7 +44,8 @@ class QueryContext(BaseQueryContext):
                  encoding: Optional[str] = None,
                  server_tz: tzinfo = pytz.UTC,
                  use_none: Optional[bool] = None,
-                 column_oriented: Optional[bool] = None):
+                 column_oriented: Optional[bool] = None,
+                 use_numpy: bool = False):
         """
         Initializes various configuration settings for the query context
 
@@ -63,7 +64,7 @@ class QueryContext(BaseQueryContext):
         :param column_formats: Optional dictionary
         :param use_none:
         """
-        super().__init__(settings, query_formats, column_formats, encoding)
+        super().__init__(settings, query_formats, column_formats, encoding, use_numpy)
         self.query = query
         self.parameters = parameters or {}
         self.server_tz = server_tz

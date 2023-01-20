@@ -20,13 +20,13 @@ class Date(ArrayType):
     python_null = epoch_start_date
     python_type = date
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
         return [epoch_start_date + timedelta(days) for days in column]
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format() == 'int':
             if self.nullable:
@@ -60,12 +60,12 @@ class DateTime(ArrayType):
     python_type = datetime
     nano_divisor = 1000000000
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_datetime_col(source, num_rows)
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format() == 'int':
             if self.nullable:
@@ -134,7 +134,7 @@ class DateTime64(ArrayType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format() == 'int':
             if self.nullable:
