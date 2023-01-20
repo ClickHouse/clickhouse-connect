@@ -28,7 +28,7 @@ class IPv4(ArrayType):
     def np_type(self, _str_len: int = 0):
         return 'U15' if self.read_format() == 'string' else 'O'
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_python_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return self._from_native_str(source, num_rows)
         return self._from_native_ip(source, num_rows)
@@ -70,13 +70,13 @@ class IPv6(ClickHouseType):
     def python_null(self):
         return '' if self.read_format() == 'string' else V6_NULL
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_python_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            return self._read_native_str(source, num_rows)
-        return self._read_native_ip(source, num_rows)
+            return self._read_binary_str(source, num_rows)
+        return self._read_binary_ip(source, num_rows)
 
     @staticmethod
-    def _read_native_ip(source: ByteSource, num_rows: int):
+    def _read_binary_ip(source: ByteSource, num_rows: int):
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
         with_scope_id = '_scope_id' in IPv6Address.__slots__
@@ -98,7 +98,7 @@ class IPv6(ClickHouseType):
         return new_col
 
     @staticmethod
-    def _read_native_str(source: ByteSource, num_rows: int):
+    def _read_binary_str(source: ByteSource, num_rows: int):
         new_col = []
         app = new_col.append
         v4mask = IPV4_V6_MASK

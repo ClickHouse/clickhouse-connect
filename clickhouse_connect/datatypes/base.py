@@ -134,6 +134,11 @@ class ClickHouseType(ABC):
         """
         self.read_column_prefix(source)
         return self.read_python_data(source, num_rows, **kwargs)
+    
+    def read_numpy_column(self, source: ByteSource, num_rows: int):
+        self.read_column_prefix(source)
+        self.read_numpy_data(source, num_rows)
+        
 
     def read_python_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
         """
@@ -148,7 +153,7 @@ class ClickHouseType(ABC):
             return self._read_python_low_card(source, num_rows, use_none)
         if self.nullable:
             null_map = source.read_bytes(num_rows)
-            column = self._read_column_binary(source, num_rows)
+            column = self._read_python_binary(source, num_rows)
             if use_none:
                 if isinstance(column, (tuple, array.array)):
                     return [None if null_map[ix] else column[ix] for ix in range(num_rows)]
@@ -156,13 +161,16 @@ class ClickHouseType(ABC):
                     if null_map[ix]:
                         column[ix] = None
             return column
-        return self._read_column_binary(source, num_rows)
+        return self._read_python_binary(source, num_rows)
 
-    # These two methods are really abstract, but they aren't implemented for container classes which
+    def read_numpy_data(self, source: ByteSource, num_rows):
+        return self._read_numpy_binary(source, num_rows)
+
+    # The binary methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
 
     # pylint: disable=no-self-use
-    def _read_column_binary(self, _source: ByteSource, _num_rows: int) -> Union[Sequence, MutableSequence]:
+    def _read_python_binary(self, _source: ByteSource, _num_rows: int) -> Union[Sequence, MutableSequence]:
         """
         Lowest level read method for ClickHouseType native data columns
         :param _source: Native protocol binary read buffer
@@ -170,6 +178,9 @@ class ClickHouseType(ABC):
         :return: Decoded column plus updated read buffer
         """
         return [], 0
+
+    def _read_numpy_binary(self, _source: ByteSource, _num_rows: int):
+        return None, None
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         """
@@ -208,7 +219,7 @@ class ClickHouseType(ABC):
         key_data = source.read_uint64()
         index_sz = 2 ** (key_data & 0xff)
         key_cnt = source.read_uint64()
-        keys = self._read_column_binary(source, key_cnt)
+        keys = self._read_python_binary(source, key_cnt)
         if self.nullable:
             try:
                 keys[0] = None if use_none else self.python_null
@@ -293,7 +304,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._struct_type = '<' + cls._array_type
             cls.byte_size = array.array(cls._array_type).itemsize
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_python_binary(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'string':
             column = [str(x) for x in column]
@@ -322,7 +333,7 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
 
-    def _read_column_binary(self, source: Sequence, num_rows: int):
+    def _read_python_binary(self, source: Sequence, num_rows: int):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

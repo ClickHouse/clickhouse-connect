@@ -10,8 +10,8 @@ data_conv = pydc
 
 try:
     from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
-    import clickhouse_connect.driverc.dataconv as cdc
-    data_conv = cdc
+    # import clickhouse_connect.driverc.dataconv as cdc
+    # data_conv = cdc
     RespBuffCls = CResponseBuffer
 except ImportError:
     CResponseBuffer = None

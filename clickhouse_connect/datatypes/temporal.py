@@ -20,7 +20,7 @@ class Date(ArrayType):
     python_null = epoch_start_date
     python_type = date
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_python_binary(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
@@ -60,7 +60,7 @@ class DateTime(ArrayType):
     python_type = datetime
     nano_divisor = 1000000000
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_python_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_datetime_col(source, num_rows)
@@ -92,9 +92,9 @@ class DateTime64(ArrayType):
         self.prec = 10 ** self.scale
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
-            self._read_native_binary = self._read_native_tz
+            self._read_python_binary = self._read_binary_tz
         else:
-            self._read_native_binary = self._read_native_naive
+            self._read_python_binary = self._read_binary_naive
             self.tzinfo = None
 
     def np_type(self, _str_len: int = 0):
@@ -105,7 +105,7 @@ class DateTime64(ArrayType):
     def nano_divisor(self):
         return 1000000000 // self.prec
 
-    def _read_native_tz(self, source: ByteSource, num_rows: int):
+    def _read_binary_tz(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
@@ -120,7 +120,7 @@ class DateTime64(ArrayType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _read_native_naive(self, source: ByteSource, num_rows: int):
+    def _read_binary_naive(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column
