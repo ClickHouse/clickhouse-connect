@@ -45,5 +45,9 @@ class ByteSource(Closable):
         pass
 
     @abstractmethod
+    def read_numpy_array(self, np_type: str, num_rows: int):
+        pass
+
+    @abstractmethod
     def read_byte(self) -> int:
         pass

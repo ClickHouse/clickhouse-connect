@@ -1,7 +1,9 @@
 from datetime import datetime
 from ipaddress import IPv4Address
+from typing import Sequence
 
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.options import np
 
 
 from_ts_naive = datetime.utcfromtimestamp
@@ -23,3 +25,9 @@ def read_datetime_col(source: ByteSource, num_rows: int):
     column = source.read_array('I', num_rows)
     fts = from_ts_naive
     return [fts(ts) for ts in column]
+
+
+def to_numpy_array(column: Sequence):
+    arr = np.empty((len(column),), dtype=np.object)
+    arr[:] = column
+    return arr

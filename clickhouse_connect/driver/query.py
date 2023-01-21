@@ -377,8 +377,6 @@ def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0)
     np = check_numpy()
     if result.empty:
         return np.empty(0)
-    if not result.column_oriented:
-        raise ProgrammingError('Numpy arrays should only be constructed from column oriented query results')
     np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
     first_type = np.dtype(np_types[0])
     if first_type != np.object_ and all(np.dtype(np_type) == first_type for np_type in np_types):

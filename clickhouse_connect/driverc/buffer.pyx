@@ -78,9 +78,6 @@ cdef class ResponseBuffer:
 
     @cython.inline
     cdef unsigned char _read_byte(self) except? 255:
-        if self.buf_loc < self.buf_sz:
-            self.buf_loc += 1
-            return self.buffer[self.buf_loc - 1]
         self.buf_loc = 0
         self.buf_sz = 0
         chunk = next(self.gen)
@@ -105,9 +102,13 @@ cdef class ResponseBuffer:
             sz = 0
             shift = 0
             while 1:
-                b = self._read_byte()
-                if b == 255 and PyErr_Occurred():
-                    raise StopIteration
+                if self.buf_loc < self.buf_sz:
+                    b = self.buffer[self.buf_loc]
+                    self.buf_loc += 1
+                else:
+                    b = self._read_byte()
+                    if b == 255 and PyErr_Occurred():
+                        raise StopIteration
                 sz += ((b & 0x7f) << shift)
                 if (b & 0x80) == 0:
                     break
@@ -140,9 +141,13 @@ cdef class ResponseBuffer:
             unsigned long long sz = 0, shift = 0
             unsigned char b
         while 1:
-            b = self._read_byte()
-            if b == 255 and PyErr_Occurred():
-                raise StopIteration
+            if self.buf_loc < self.buf_sz:
+                b = self.buffer[self.buf_loc]
+                self.buf_loc += 1
+            else:
+                b = self._read_byte()
+                if b == 255 and PyErr_Occurred():
+                    raise StopIteration
             sz += ((b & 0x7f) << shift)
             if (b & 0x80) == 0:
                 return sz

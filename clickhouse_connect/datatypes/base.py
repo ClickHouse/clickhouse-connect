@@ -6,6 +6,7 @@ from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Iterable
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
+from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
@@ -136,9 +137,10 @@ class ClickHouseType(ABC):
         return self.read_python_data(source, num_rows, **kwargs)
     
     def read_numpy_column(self, source: ByteSource, num_rows: int):
+        if self.python_type == 'O':
+            data_conv.to_numpy_array(self.read_python_column())
         self.read_column_prefix(source)
         self.read_numpy_data(source, num_rows)
-        
 
     def read_python_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
         """
@@ -309,6 +311,9 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         if self.read_format() == 'string':
             column = [str(x) for x in column]
         return column
+
+    def _read_numpy_binary(self, source: ByteSource, num_rows: int):
+        return source.read_numpy_array(self.np_type, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         if len(column) and self.nullable:

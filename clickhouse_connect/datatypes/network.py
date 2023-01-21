@@ -31,10 +31,6 @@ class IPv4(ArrayType):
     def _read_python_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return self._from_native_str(source, num_rows)
-        return self._from_native_ip(source, num_rows)
-
-    @staticmethod
-    def _from_native_ip(source: ByteSource, num_rows: int):
         return data_conv.read_ipv4_col(source, num_rows)
 
     def _from_native_str(self, source: ByteSource, num_rows: int, **_):

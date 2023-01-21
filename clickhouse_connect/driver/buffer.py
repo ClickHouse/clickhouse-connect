@@ -3,6 +3,7 @@ import array
 from typing import Any, Iterable
 
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.options import np
 
 must_swap = sys.byteorder == 'big'
 
@@ -113,5 +114,11 @@ class ResponseBuffer(ByteSource):
             column.byteswap()
         return column
 
+    def read_numpy_array(self, numpy_type: str, num_rows: int):
+        dtype = np.dtype(numpy_type)
+        source = self.read_bytes(dtype.itemsize * num_rows)
+        return np.frombuffer(source, dtype, num_rows)
+
     def close(self):
         self.source.close()
+
