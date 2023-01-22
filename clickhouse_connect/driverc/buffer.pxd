@@ -5,8 +5,9 @@ cdef class ResponseBuffer:
         object gen, source
         char* buffer
         char* slice
-        unsigned char _read_byte(self) except? 255
+        unsigned char _read_byte_load(self) except ?255
         char* read_bytes_c(self, unsigned long long sz) except NULL
         Py_buffer buff_source
         cdef object _read_str_col(self, unsigned long long num_rows, char * encoding = *)
+    cpdef unsigned char read_byte(self)
 

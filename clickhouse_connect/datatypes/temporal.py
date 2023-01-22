@@ -21,10 +21,9 @@ class Date(ArrayType):
     python_type = date
 
     def _read_python_binary(self, source: ByteSource, num_rows: int):
-        column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
-            return column
-        return [epoch_start_date + timedelta(days) for days in column]
+            return source.read_array(self._array_type, num_rows)
+        return data_conv.read_date_col(source, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
@@ -45,6 +44,11 @@ class Date(ArrayType):
 
 class Date32(Date):
     _array_type = 'i'
+
+    def _read_python_binary(self, source: ByteSource, num_rows: int):
+        if self.read_format() == 'int':
+            return source.read_array(self._array_type, num_rows)
+        return data_conv.read_date32_col(source, num_rows)
 
 
 from_ts_naive = datetime.utcfromtimestamp

@@ -5,8 +5,9 @@ c_modules = []
 
 try:
     from Cython.Build import cythonize
-    print ('Using Cython to build cython modules')
-    c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3')
+    from Cython import __version__ as cython_version
+    print (f'Using Cython {cython_version }to build cython modules')
+    c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
 except ImportError:
     print ('Cython Not Successfully Installed, Not building C extensions')
     cythonize = None
