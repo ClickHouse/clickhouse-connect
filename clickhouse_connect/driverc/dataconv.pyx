@@ -39,6 +39,8 @@ def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows):
     return column
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def read_date_col(ResponseBuffer buffer, unsigned long long num_rows):
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(2 * num_rows)
@@ -52,6 +54,8 @@ def read_date_col(ResponseBuffer buffer, unsigned long long num_rows):
     return column
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def read_date32_col(ResponseBuffer buffer, unsigned long long num_rows):
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(4 * num_rows)
@@ -68,12 +72,23 @@ def read_date32_col(ResponseBuffer buffer, unsigned long long num_rows):
 cdef unsigned short* MONTH_DAYS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365]
 cdef unsigned short* MONTH_DAYS_LEAP = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366]
 
+# Constants used in epoch_days_to_date
+# 47482 -- Jan 1, 2100 -- Because all years 1970-2099 divisible by 4 are leap years, some extra division can be avoided
+# 134774 -- Number of days between Jan 1 1601 and Jan 1 1970.  Adding this starts all calculations at 1601-01-01
+# 1461 -- Number of days in a 4-year cycle (365 * 4) + 1 leap day
+# 36524 -- Number of days in a 100-year cycle.  25 4-year cycles - 1 leap day for the year 100
+# 146097 -- Number of days in a 400-year cycle.  4 100 year cycles + 1 leap day for the year 400
+
+# Year and offset with in the year are determined by factoring out the largest "known" year blocks in
+# descending order (400/100/4/1 years).  Month is then (over) estimated in the "day" arrays (days / 32) and
+# adjusted down if too large (logic originally in the Python standard library)
 
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cpdef inline object epoch_days_to_date(int days):
     cdef int years, month, year, cycles400, cycles100, cycles, rem
+    cdef unsigned short prev
     cdef unsigned short* m_list
     if 0 <= days < 47482:
         cycles = (days + 365) // 1461
@@ -104,6 +119,8 @@ cpdef inline object epoch_days_to_date(int days):
         else:
             m_list = MONTH_DAYS
     month = (rem + 24) >> 5
-    while rem < m_list[month]:
+    prev = m_list[month]
+    while rem < prev:
         month -= 1
-    return date(year, month + 1, rem + 1 - m_list[month])
+        prev = m_list[month]
+    return date(year, month + 1, rem + 1 - prev)

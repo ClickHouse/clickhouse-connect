@@ -1,6 +1,6 @@
 import pytz
 
-from datetime import date, timedelta, datetime
+from datetime import date, datetime
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType

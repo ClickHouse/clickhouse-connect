@@ -135,10 +135,10 @@ class ClickHouseType(ABC):
         """
         self.read_column_prefix(source)
         return self.read_python_data(source, num_rows, **kwargs)
-    
+
     def read_numpy_column(self, source: ByteSource, num_rows: int):
         if self.python_type == 'O':
-            data_conv.to_numpy_array(self.read_python_column())
+            data_conv.to_numpy_array(self.read_python_column(source, num_rows))
         self.read_column_prefix(source)
         self.read_numpy_data(source, num_rows)
 
@@ -313,7 +313,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         return column
 
     def _read_numpy_binary(self, source: ByteSource, num_rows: int):
-        return source.read_numpy_array(self.np_type, num_rows)
+        return source.read_numpy_array(self.np_type(), num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         if len(column) and self.nullable:

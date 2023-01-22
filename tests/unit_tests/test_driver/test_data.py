@@ -1,5 +1,6 @@
 from datetime import date
 from clickhouse_connect.driver.dataconv import epoch_days_to_date as py_date
+# pylint: disable=no-name-in-module
 from clickhouse_connect.driverc.dataconv import epoch_days_to_date as c_date
 
 

@@ -114,11 +114,10 @@ class ResponseBuffer(ByteSource):
             column.byteswap()
         return column
 
-    def read_numpy_array(self, numpy_type: str, num_rows: int):
-        dtype = np.dtype(numpy_type)
+    def read_numpy_array(self, np_type: str, num_rows: int):
+        dtype = np.dtype(np_type)
         source = self.read_bytes(dtype.itemsize * num_rows)
         return np.frombuffer(source, dtype, num_rows)
 
     def close(self):
         self.source.close()
-
