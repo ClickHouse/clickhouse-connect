@@ -39,7 +39,7 @@ def epoch_days_to_date(days: int) -> date:
     year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
     if years == 4:
         return date(year - 1, 12, 31)
-    m_list = MONTH_DAYS_LEAP if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else MONTH_DAYS
+    m_list = MONTH_DAYS_LEAP if years == 3 and (year == 2000 or year % 100 != 0) else MONTH_DAYS
     month = (rem + 24) >> 5
     while rem < m_list[month]:
         month -= 1
