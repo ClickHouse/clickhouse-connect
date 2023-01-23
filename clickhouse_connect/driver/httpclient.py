@@ -173,7 +173,9 @@ class HttpClient(Client):
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
-        params = {'database': self.database}
+        params = {}
+        if self.database:
+            params['database'] = self.database
         params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
         if columns_only_re.search(context.uncommented_query):
@@ -249,7 +251,9 @@ class HttpClient(Client):
         if compression:
             headers['Content-Encoding'] = compression
         cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
-        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}', 'database': self.database}
+        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}'}
+        if self.database:
+            params['database'] =  self.database
         params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status, response.data)
@@ -278,7 +282,7 @@ class HttpClient(Client):
             payload = cmd
         elif cmd:
             params['query'] = cmd
-        if use_database:
+        if use_database and self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
         method = 'POST' if payload else 'GET'

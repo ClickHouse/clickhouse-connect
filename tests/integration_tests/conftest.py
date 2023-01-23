@@ -74,7 +74,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    send_progress=False,
                                    compression=True,
                                    settings={
-                                       'allow_suspicious_low_cardinality_types': True
+                                       'allow_suspicious_low_cardinality_types': True,
                                    }
                                    )
             break
@@ -84,6 +84,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)
+    if client.min_version('22.11'):
+        client.set_client_setting('insert_quorum', 'auto')
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
     client.database = test_db
     yield client
