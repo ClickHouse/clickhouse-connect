@@ -1,4 +1,13 @@
 from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.query import QueryResult
+
+
+def test_query_result_context():
+    """
+    Verify that the "with" statements work with QueryResult
+    """
+    with QueryResult() as query_result:
+        assert isinstance(query_result, QueryResult)
 
 
 def test_copy_context():
