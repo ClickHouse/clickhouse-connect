@@ -1,5 +1,11 @@
 # ClickHouse Connect ChangeLog
 
+## 0.5.3, 2023-01-23
+
+### Bug Fix
+* Correctly return QueryResult object when created as a context using a `with` statement.  This fixes examples and
+the preferred context syntax for processing query results.  Thanks to [John McCann Cunniff Jr](https://github.com/wabscale)
+
 ## 0.5.2, 2023-01-17
 
 ### Bug fix
