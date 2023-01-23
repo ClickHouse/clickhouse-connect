@@ -150,7 +150,7 @@ class QueryResult:
                  summary: Dict[str, Any] = None):
         self._result_rows = result_set
         self._result_columns = None
-        self._block_gen = block_gen
+        self._block_gen = block_gen or iter(())
         self._in_context = False
         self.column_names = column_names
         self.column_types = column_types
@@ -158,10 +158,6 @@ class QueryResult:
         self.source = source
         self.query_id = query_id
         self.summary = {} if summary is None else summary
-
-    @property
-    def empty(self):
-        return self.row_count == 0
 
     @property
     def result_set(self) -> Matrix:
@@ -227,16 +223,12 @@ class QueryResult:
 
     @property
     def first_item(self):
-        if self.empty:
-            return None
         if self.column_oriented:
             return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
         return dict(zip(self.column_names, self.result_set[0]))
 
     @property
     def first_row(self):
-        if self.empty:
-            return None
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
@@ -382,8 +374,6 @@ def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0)
     See doc string from client.query_np
     """
     np = check_numpy()
-    if result.empty:
-        return np.empty(0)
     np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
     first_type = np.dtype(np_types[0])
     if first_type != np.object_ and all(np.dtype(np_type) == first_type for np_type in np_types):
@@ -391,7 +381,7 @@ def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0)
         return np.array(result.result_set, first_type).transpose()
     columns = []
     has_objects = False
-    for column, col_type, np_type in zip(result.result_set, result.column_types, np_types):
+    for column, col_type, np_type in zip(result.result_columns, result.column_types, np_types):
         if np_type == 'O':
             columns.append(column)
             has_objects = True

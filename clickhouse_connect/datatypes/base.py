@@ -312,7 +312,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             column = [str(x) for x in column]
         return column
 
-    def _read_numpy_binary(self, source: ByteSource, num_rows: int):
+    def _read_numpy_binary(self, source: ByteSource, num_rows: int, *_):
         return source.read_numpy_array(self.np_type(), num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

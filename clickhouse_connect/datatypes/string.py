@@ -2,6 +2,7 @@ from typing import Sequence, MutableSequence, Union
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.options import np
 
 
 class String(ClickHouseType):
@@ -14,10 +15,8 @@ class String(ClickHouseType):
         return f'<U{str_len}' if str_len else 'O'
 
     def _read_numpy_binary(self, source: ByteSource, num_rows: int, max_str_len: int):
-        if max_str_len:
-            raise NotImplementedError
-        else:
-            return source.read_str_col(num_rows, self.encoding)
+        # TODO:  Optimize max_str_len numpy arrays
+        return np.array(source.read_str_col(num_rows, self.encoding), dtype=self.np_type(max_str_len))
 
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
