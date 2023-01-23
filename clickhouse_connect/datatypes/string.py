@@ -13,6 +13,12 @@ class String(ClickHouseType):
     def np_type(self, str_len: int = 0):
         return f'<U{str_len}' if str_len else 'O'
 
+    def _read_numpy_binary(self, source: ByteSource, num_rows: int, max_str_len: int):
+        if max_str_len:
+            raise NotImplementedError
+        else:
+            return source.read_str_col(num_rows, self.encoding)
+
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         encoding = self.encoding

@@ -109,7 +109,7 @@ class Client(ABC):
         :return: The string value of the setting, if it exists, or None
         """
 
-    # pylint: disable=duplicate-code,too-many-arguments
+    # pylint: too-many-arguments
     def query(self,
               query: str = None,
               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -119,42 +119,28 @@ class Client(ABC):
               encoding: Optional[str] = None,
               use_none: Optional[bool] = None,
               column_oriented: Optional[bool] = None,
+              use_numpy: Optional[bool] = None,
+              max_str_len: Optional[int] = None,
               context: QueryContext = None) -> QueryResult:
         """
-        Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix
-        :param query: Query statement/format string
-        :param parameters: Optional dictionary used to format the query
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param query_formats: See QueryContext __init__ docstring
-        :param column_formats: See QueryContext __init__ docstring
-        :param encoding: See QueryContext __init__ docstring
-        :param use_none: Use None for ClickHouse nulls instead of empty values
-        :param column_oriented: True if the result should be sequence of column values, False for rows
-        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
+        Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
+        parameters, see the create_insert_context method
         :return: QueryResult -- data and metadata from response
         """
-        if query and query.lower().strip().startswith('select connect_version'):
+        if query and query.lower().strip().startswith('select __connect_version'):
             return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']], None,
                                ('connect_version',), (get_from_name('String'),))
-        if context:
-            query_context = context.updated_copy(query=query,
-                                                 parameters=parameters,
-                                                 settings=settings,
-                                                 query_formats=query_formats,
-                                                 column_formats=column_formats,
-                                                 encoding=encoding,
-                                                 server_tz=self.server_tz,
-                                                 use_none=use_none,
-                                                 column_oriented=column_oriented)
-        else:
-            query_context = self.create_query_context(query=query,
-                                                      parameters=parameters,
-                                                      settings=settings,
-                                                      query_formats=query_formats,
-                                                      column_formats=column_formats,
-                                                      encoding=encoding,
-                                                      use_none=use_none,
-                                                      column_oriented=column_oriented)
+        query_context = self.create_query_context(query=query,
+                                                  parameters=parameters,
+                                                  settings=settings,
+                                                  query_formats=query_formats,
+                                                  column_formats=column_formats,
+                                                  encoding=encoding,
+                                                  use_none=use_none,
+                                                  column_oriented=column_oriented,
+                                                  use_numpy=use_numpy,
+                                                  max_str_len=max_str_len,
+                                                  context=context)
         if query_context.is_command:
             response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
             return QueryResult([response] if isinstance(response, list) else [[response]])
@@ -183,37 +169,25 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 use_none: bool = False,
-                 max_str_len: int = 0,
+                 use_none: Optional[bool] = None,
+                 max_str_len: Optional[int] = None,
                  context: QueryContext = None):
         """
-        Query method that returns the results as a numpy array
-        :param query: Query statement/format string
-        :param parameters: Optional dictionary used to format the query
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param query_formats: See QueryContext __init__ docstring
-        :param column_formats: See QueryContext __init__ docstring.
-        :param encoding: See QueryContext __init__ docstring
-        :param use_none: Interpret ClickHouse nulls as None.  This usually means the return numpy array will
-          have dtype=object since numpy arrays otherwise can't store None values.  Otherwise, ClickHouse null
-          values will be interpreted as "zero" values
-        :param max_str_len:  Limit returned ClickHouse String values to this length, which allows a Numpy
-          structured array even with ClickHouse variable length String columns
-        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
+        Query method that returns the results as a numpy array.  For parameter values, see the
+        create_query_context method
         :return: Numpy array representing the result set
         """
-        query_formats = dict_copy(query_formats, {'Date*': 'int'})
-        return np_result(self.query(query=query,
-                                    parameters=parameters,
-                                    settings=settings,
-                                    query_formats=query_formats,
-                                    column_formats=column_formats,
-                                    encoding=encoding,
-                                    use_none=use_none,
-                                    column_oriented=True,
-                                    context=context),
-                         use_none,
-                         max_str_len)
+        query_context = self.create_query_context(query=query,
+                                                  parameters=parameters,
+                                                  settings=settings,
+                                                  query_formats=query_formats,
+                                                  column_formats=column_formats,
+                                                  encoding=encoding,
+                                                  use_none=use_none,
+                                                  use_numpy=True,
+                                                  max_str_len=max_str_len,
+                                                  context=context)
+        return np_result(self._query_with_context(query_context))
 
     def query_df(self,
                  query: str = None,
@@ -222,31 +196,25 @@ class Client(ABC):
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, str]] = None,
                  encoding: Optional[str] = None,
-                 use_none: bool = True,
+                 use_none: Optional[bool] = None,
+                 max_str_len: Optional[int] = None,
                  context: QueryContext = None):
         """
-        Query method that results the results as a pandas dataframe
-        :param query: Query statement/format string
-        :param parameters: Optional dictionary used to format the query
-        :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param query_formats: See QueryContext __init__ docstring
-        :param column_formats: See QueryContext __init__ docstring
-        :param encoding: See QueryContext __init__ docstring
-        :param use_none: Interpret ClickHouse nulls as NaT/NA pandas values, otherwise the DataFrame values
-           will be the default "non-null" values such as empty string or 0
-        :param context An alternative QueryContext parameter object that contains some or all of the method arguments
-        :return: Numpy array representing the result set
+        Query method that results the results as a pandas dataframe.  For parameter values, see the
+        create_query_context method
+        :return: Pandas dataframe representing the result set
         """
-        query_formats = dict_copy(query_formats, {'Date*': 'int'})
-        return pandas_result(self.query(query,
-                                        parameters,
-                                        settings,
-                                        query_formats,
-                                        column_formats,
-                                        encoding,
-                                        use_none=use_none,
-                                        column_oriented=True,
-                                        context=context))
+        query_context = self.create_query_context(query=query,
+                                                  parameters=parameters,
+                                                  settings=settings,
+                                                  query_formats=query_formats,
+                                                  column_formats=column_formats,
+                                                  encoding=encoding,
+                                                  use_none=use_none,
+                                                  use_numpy=True,
+                                                  max_str_len=max_str_len,
+                                                  context=context)
+        return pandas_result(self.query(self._query_with_context(query_context)))
 
     def create_query_context(self,
                              query: str = None,
@@ -256,19 +224,45 @@ class Client(ABC):
                              column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                              encoding: Optional[str] = None,
                              use_none: Optional[bool] = None,
-                             column_oriented: Optional[bool] = None) -> QueryContext:
+                             column_oriented: Optional[bool] = None,
+                             use_numpy: Optional[bool] = False,
+                             max_str_len: Optional[int] = 0,
+                             context: Optional[QueryContext] = None) -> QueryContext:
         """
-        Creates a reusable query context
+        Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
         :param encoding: See QueryContext __init__ docstring
-        :param use_none: Use None for ClickHouse nulls instead of empty values
-        :param column_oriented: True if the result should be sequence of column values, False for rows:
+        :param use_none: Use None for ClickHouse NULL instead of default values.  Note that using None in Numpy
+          arrays will force the numpy array dtype to 'object', which is often inefficient.  This effect also
+          will impact the performance of Pandas dataframes.
+        :param column_oriented: Deprecated. Controls orientation of the QueryResult result_set property
+        :param use_numpy: Return QueryResult columns as one-dimensional numpy arrays
+        :param max_str_len: Limit returned ClickHouse String values to this length, which allows a Numpy
+          structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
+          String columns will always be object arrays
+        :param context: An existing QueryContext to be updated with any provided parameter values
         :return: Reusable QueryContext
         """
+        if context:
+            return context.updated_copy(query=query,
+                                        parameters=parameters,
+                                        settings=settings,
+                                        query_formats=query_formats,
+                                        column_formats=column_formats,
+                                        encoding=encoding,
+                                        server_tz=self.server_tz,
+                                        use_none=use_none,
+                                        column_oriented=column_oriented,
+                                        use_numpy=use_numpy,
+                                        max_str_len=max_str_len)
+        if use_numpy and use_none is None:
+            use_none = True
+        if use_numpy and max_str_len is None:
+            max_str_len = 0
         return QueryContext(query=query,
                             parameters=parameters,
                             settings=settings,
@@ -277,7 +271,9 @@ class Client(ABC):
                             encoding=encoding,
                             server_tz=self.server_tz,
                             use_none=use_none,
-                            column_oriented=column_oriented)
+                            column_oriented=column_oriented,
+                            use_numpy=use_numpy,
+                            max_str_len=max_str_len)
 
     def query_arrow(self,
                     query: str,

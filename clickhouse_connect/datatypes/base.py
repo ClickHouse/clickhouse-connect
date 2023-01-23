@@ -136,11 +136,11 @@ class ClickHouseType(ABC):
         self.read_column_prefix(source)
         return self.read_python_data(source, num_rows, **kwargs)
 
-    def read_numpy_column(self, source: ByteSource, num_rows: int):
-        if self.python_type == 'O':
-            data_conv.to_numpy_array(self.read_python_column(source, num_rows))
+    def read_numpy_column(self, source: ByteSource, num_rows: int, max_str_len: int):
+        if self.np_type(max_str_len) == 'O':
+            return data_conv.to_numpy_array(self.read_python_column(source, num_rows))
         self.read_column_prefix(source)
-        self.read_numpy_data(source, num_rows)
+        return self.read_numpy_data(source, num_rows, max_str_len)
 
     def read_python_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
         """
@@ -165,8 +165,8 @@ class ClickHouseType(ABC):
             return column
         return self._read_python_binary(source, num_rows)
 
-    def read_numpy_data(self, source: ByteSource, num_rows):
-        return self._read_numpy_binary(source, num_rows)
+    def read_numpy_data(self, source: ByteSource, num_rows: int, max_str_len: int):
+        return self._read_numpy_binary(source, num_rows, max_str_len)
 
     # The binary methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
@@ -181,8 +181,8 @@ class ClickHouseType(ABC):
         """
         return [], 0
 
-    def _read_numpy_binary(self, _source: ByteSource, _num_rows: int):
-        return None, None
+    def _read_numpy_binary(self, _source: ByteSource, _num_rows: int, _max_str_len: int):
+        return None, 0, 0
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         """

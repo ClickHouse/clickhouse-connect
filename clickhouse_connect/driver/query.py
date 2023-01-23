@@ -45,7 +45,8 @@ class QueryContext(BaseQueryContext):
                  server_tz: tzinfo = pytz.UTC,
                  use_none: Optional[bool] = None,
                  column_oriented: Optional[bool] = None,
-                 use_numpy: bool = False):
+                 use_numpy: bool = False,
+                 max_str_len: int = 0):
         """
         Initializes various configuration settings for the query context
 
@@ -70,6 +71,8 @@ class QueryContext(BaseQueryContext):
         self.server_tz = server_tz
         self.use_none = True if use_none is None else use_none
         self.column_oriented = False if column_oriented is None else column_oriented
+        self.use_numpy = use_numpy
+        self.max_str_len = max_str_len
         self._update_query()
 
     @property
@@ -107,7 +110,9 @@ class QueryContext(BaseQueryContext):
                      encoding: Optional[str] = None,
                      server_tz: Optional[tzinfo] = None,
                      use_none: Optional[bool] = None,
-                     column_oriented: Optional[bool] = None) -> 'QueryContext':
+                     column_oriented: Optional[bool] = None,
+                     use_numpy: Optional[bool] = None,
+                     max_str_len: Optional[int] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -119,7 +124,9 @@ class QueryContext(BaseQueryContext):
                             encoding if encoding else self.encoding,
                             server_tz if server_tz else self.server_tz,
                             self.use_none if use_none is None else use_none,
-                            self.column_oriented if column_oriented is None else column_oriented)
+                            self.column_oriented if column_oriented is None else column_oriented,
+                            self.use_numpy if use_numpy is None else use_numpy,
+                            self.max_str_len if max_str_len is None else max_str_len)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)

@@ -16,6 +16,7 @@ class NativeTransform:
             names = []
             col_types = []
             use_none = context.use_none
+            max_str_len = context.max_str_len
             block_num = 0
 
             def get_block():
@@ -37,7 +38,11 @@ class NativeTransform:
                     else:
                         col_type = col_types[col_num]
                     context.start_column(name, col_type)
-                    result_block.append(col_type.read_python_column(source, num_rows, use_none=use_none))
+                    if context.use_numpy:
+                        column = col_type.read_numpy_column(source, num_rows, max_str_len)
+                    else:
+                        column = col_type.read_python_column(source, num_rows, use_none=use_none)
+                    result_block.append(column)
                 block_num += 1
                 return result_block
 
