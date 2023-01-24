@@ -7,6 +7,7 @@ from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import  write_array, np_date_types
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.options import np
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
@@ -68,6 +69,10 @@ class DateTime(ArrayType):
         if self.read_format() == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_datetime_col(source, num_rows)
+
+    def _read_numpy_binary(self, source: ByteSource, num_rows: int, *_):
+        column = source.read_numpy_array('<u4', num_rows)
+        return column.astype('datetime64[s]')
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)

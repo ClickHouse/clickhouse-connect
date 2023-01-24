@@ -12,3 +12,8 @@ basic_ds = [('key1', 1000, 50.3, 'value1', datetime.now()),
             ('key3', -2503, 300.00, 'value3', date(2022, 10, 15))]
 basic_ds_columns = ['key', 'num', 'flt', 'str', 'dt']
 basic_ds_types = ['String', 'Int32', 'Float64', 'String', 'DateTime64(9)']
+
+dt_ds = [datetime(2020, 10, 10),
+         datetime(2021, 11, 11)]
+dt_ds_columns = ['timestamp']
+dt_ds_types = ['DateTime']

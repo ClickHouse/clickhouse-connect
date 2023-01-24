@@ -187,7 +187,7 @@ class Client(ABC):
                                                   use_numpy=True,
                                                   max_str_len=max_str_len,
                                                   context=context)
-        return np_result(self._query_with_context(query_context))
+        return self._query_with_context(query_context).result_set
 
     def query_df(self,
                  query: str = None,

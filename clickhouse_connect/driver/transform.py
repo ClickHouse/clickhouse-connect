@@ -1,6 +1,9 @@
+from typing import Union
+
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryResult, QueryContext
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.compression import get_compressor
@@ -11,11 +14,13 @@ _EMPTY_QUERY_CONTEXT = QueryContext()
 class NativeTransform:
     # pylint: disable=too-many-locals
     @staticmethod
-    def parse_response(source: ByteSource, context: QueryContext = _EMPTY_QUERY_CONTEXT) -> QueryResult:
+    def parse_response(source: ByteSource,
+                       context: QueryContext = _EMPTY_QUERY_CONTEXT) -> Union[NumpyResult, QueryResult]:
         with context:
             names = []
             col_types = []
             use_none = context.use_none
+            use_numpy = context.use_numpy
             max_str_len = context.max_str_len
             block_num = 0
 
@@ -38,8 +43,8 @@ class NativeTransform:
                     else:
                         col_type = col_types[col_num]
                     context.start_column(name, col_type)
-                    if context.use_numpy:
-                        column = col_type.read_numpy_column(source, num_rows, max_str_len)
+                    if use_numpy:
+                        column = col_type.read_numpy_column(source, num_rows, use_none, max_str_len)
                     else:
                         column = col_type.read_python_column(source, num_rows, use_none=use_none)
                     result_block.append(column)
@@ -48,7 +53,7 @@ class NativeTransform:
 
             first_block = get_block()
             if first_block is None:
-                return QueryResult([])
+                return NumpyResult() if use_numpy else QueryResult([])
 
             def gen():
                 yield first_block
@@ -58,6 +63,8 @@ class NativeTransform:
                         return
                     yield next_block
 
+        if use_numpy:
+            return NumpyResult(gen(), tuple(names), tuple(col_types), use_none, max_str_len, source)
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod

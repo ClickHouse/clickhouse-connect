@@ -10,6 +10,7 @@ from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.options import np
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -136,11 +137,11 @@ class ClickHouseType(ABC):
         self.read_column_prefix(source)
         return self.read_python_data(source, num_rows, **kwargs)
 
-    def read_numpy_column(self, source: ByteSource, num_rows: int, max_str_len: int):
+    def read_numpy_column(self, source: ByteSource, num_rows: int, use_none: bool, max_str_len: int):
         if self.np_type(max_str_len) == 'O':
-            return data_conv.to_numpy_array(self.read_python_column(source, num_rows))
+            return data_conv.to_numpy_array(self.read_python_column(source, num_rows, use_none=use_none))
         self.read_column_prefix(source)
-        return self.read_numpy_data(source, num_rows, max_str_len)
+        return self.read_numpy_data(source, num_rows, use_none, max_str_len)
 
     def read_python_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
         """
@@ -165,7 +166,22 @@ class ClickHouseType(ABC):
             return column
         return self._read_python_binary(source, num_rows)
 
-    def read_numpy_data(self, source: ByteSource, num_rows: int, max_str_len: int):
+    def read_numpy_data(self, source: ByteSource, num_rows: int, use_none: bool, max_str_len: int):
+        if self.nullable:
+            null_map = source.read_bytes(num_rows)
+            column = self._read_numpy_binary(source, num_rows, max_str_len)
+            has_nulls = False
+            if use_none:
+                new_col = []
+                for is_null, x in zip(null_map, column):
+                    if is_null:
+                        has_nulls = True
+                        new_col.append(None)
+                    else:
+                        new_col.append(x)
+                if has_nulls:
+                    return  np.array(new_col, dtype=object)
+            return column
         return self._read_numpy_binary(source, num_rows, max_str_len)
 
     # The binary methods are really abstract, but they aren't implemented for container classes which
