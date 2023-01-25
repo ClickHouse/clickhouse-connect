@@ -3,6 +3,7 @@ import logging
 import platform
 import re
 import uuid
+import threading
 from base64 import b64encode
 from http.client import RemoteDisconnected
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
@@ -134,7 +135,7 @@ class HttpClient(Client):
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
-            ch_settings['session_id'] = str(uuid.uuid1())
+            ch_settings['session_id'] = str(uuid.uuid4())
 
         if coerce_bool(compress):
             compression = ','.join(available_compression)
