@@ -14,6 +14,9 @@ from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.options import np
 
 logger = logging.getLogger(__name__)
+ch_read_formats = {}
+ch_write_formats = {}
+
 
 class TypeDef(NamedTuple):
     """
@@ -54,20 +57,17 @@ class ClickHouseType(ABC):
 
     @classmethod
     def _active_format(cls, fmt_map: Dict[Type['ClickHouseType'], str], ctx: BaseQueryContext):
-        overrides = ctx.column_overrides
-        if cls in overrides:
-            return overrides[cls]
-        overrides = ctx.query_overrides
-        if cls in overrides:
-            return overrides[cls]
+        ctx_fmt = ctx.active_fmt(cls.base_type)
+        if ctx_fmt:
+            return ctx_fmt
         return fmt_map.get(cls, 'native')
 
     @classmethod
-    def read_format(cls, ctx: QueryContext):
+    def read_format(cls, ctx: BaseQueryContext):
         return cls._active_format(ch_read_formats, ctx)
 
     @classmethod
-    def write_format(cls, ctx: InsertContext):
+    def write_format(cls, ctx: BaseQueryContext):
         return cls._active_format(ch_write_formats, ctx)
 
     def __init__(self, type_def: TypeDef):
@@ -204,22 +204,26 @@ class ClickHouseType(ABC):
             self._write_column_binary(column, dest, ctx)
 
     def _read_low_card_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        key_data = source.read_uint64()
-        index_sz = 2 ** (key_data & 0xff)
-        key_cnt = source.read_uint64()
-        keys = self._read_column_binary(source, key_cnt, ctx)
-        use_none = ctx.use_none
-        if self.nullable:
-            try:
-                keys[0] = None if use_none else self._python_null(ctx)
-            except TypeError:
-                keys = (None if use_none else self._python_null(ctx),) + tuple(keys[1:])
-        index_cnt = source.read_uint64()
-        assert index_cnt == num_rows
-        index = source.read_array(array_type(index_sz, False), num_rows)
-        if ctx.use_numpy and not (self.nullable and use_none) and not self.np_type == 'O':
-            return np.fromiter((keys[ix] for ix in index), dtype=self.np_type, count=num_rows)
-        return [keys[ix] for ix in index]
+        try:
+            key_data = source.read_uint64()
+            index_sz = 2 ** (key_data & 0xff)
+            key_cnt = source.read_uint64()
+            keys = self._read_column_binary(source, key_cnt, ctx)
+
+            use_none = ctx.use_none
+            if self.nullable:
+                try:
+                    keys[0] = None if use_none else self._python_null(ctx)
+                except TypeError:
+                    keys = (None if use_none else self._python_null(ctx),) + tuple(keys[1:])
+            index_cnt = source.read_uint64()
+            assert index_cnt == num_rows
+            index = source.read_array(array_type(index_sz, False), num_rows)
+            if ctx.use_numpy and not (self.nullable and use_none) and not self.np_type == 'O':
+                return np.fromiter((keys[ix] for ix in index), dtype=self.np_type, count=num_rows)
+            return [keys[ix] for ix in index]
+        except StopIteration:
+            pass
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
         if not column:

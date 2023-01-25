@@ -14,7 +14,7 @@ from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
 
-LOW_CARD_PERC = 0.4
+LOW_CARD_PERC = 0.95
 NULLABLE_PERC = 0.2
 TUPLE_MAX = 5
 FIXED_STR_RANGE = 256
@@ -224,7 +224,6 @@ def bytes_source(data: Union[str, bytes], chunk_size:int = 256, cls: Type = Resp
     class TestSource:
         def __init__(self):
             self.gen = gen()
-            self.context = QueryContext()
 
         def close(self):
             pass

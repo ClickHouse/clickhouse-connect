@@ -1,7 +1,6 @@
 import logging
-from typing import Generator, Sequence, Tuple, Dict, Any, Iterator
+from typing import Generator, Sequence, Tuple, Iterator
 
-from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import empty_gen
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.types import Closable
@@ -13,8 +12,8 @@ logger = logging.getLogger(__name__)
 class NumpyResult:
     def __init__(self,
                  block_gen: Generator[Sequence[np.array], None, None] = None,
-                 column_names: Tuple[str, ...] = (),
-                 column_types: Tuple[ClickHouseType, ...] = (),
+                 column_names: Tuple = (),
+                 column_types: Tuple = (),
                  d_types: Sequence[np.dtype] = (),
                  source: Closable = None):
         self.column_names = column_names

@@ -56,7 +56,7 @@ class UInt64(ArrayType):
         if ctx.use_numpy:
             np_type = '<q' if fmt == 'signed' else '<u8'
             return source.read_numpy_array(np_type, num_rows)
-        arr_type = 'Q' if fmt == 'signed' else 'q'
+        arr_type = 'q' if fmt == 'signed' else 'Q'
         return source.read_array(arr_type, num_rows)
 
 

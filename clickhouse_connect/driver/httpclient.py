@@ -196,7 +196,7 @@ class HttpClient(Client):
             params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                      retries=self.query_retries)
-        byte_source = RespBuffCls(ResponseSource(response, context))  # pylint: disable=not-callable
+        byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -220,7 +220,6 @@ class HttpClient(Client):
 
         def error_handler(response: HTTPResponse):
             # If we actually had a local exception when building the insert, throw that instead
-            context.exit()
             if context.insert_exception:
                 ex = context.insert_exception
                 context.insert_exception = None

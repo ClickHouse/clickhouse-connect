@@ -8,7 +8,6 @@ from clickhouse_connect.driver.common import write_array, np_date_types
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
-from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.options import np
 
@@ -75,7 +74,7 @@ class DateTime(ArrayType):
     nano_divisor = 1000000000
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        if query_settings.use_numpy:
+        if ctx.use_numpy:
             return source.read_numpy_array('<u4', num_rows).astype(self.np_type)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
@@ -145,7 +144,7 @@ class DateTime64(ArrayType):
         return new_col
 
     def _read_binary_naive(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        if query_settings.use_numpy:
+        if ctx.use_numpy:
             return source.read_numpy_array(self.np_type, num_rows)
         column = source.read_array(self._array_type, num_rows)
         if self.read_format(ctx) == 'int':

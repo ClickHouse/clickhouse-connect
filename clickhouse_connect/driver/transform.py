@@ -37,7 +37,7 @@ class NativeTransform:
                     col_types.append(col_type)
                 else:
                     col_type = col_types[col_num]
-                context.start_column(name, col_type)
+                context.start_column(name)
                 column = col_type.read_column(source, num_rows, context)
                 result_block.append(column)
             block_num += 1
@@ -73,7 +73,7 @@ class NativeTransform:
                     output += col_name.encode()
                     write_leb128(len(col_type.name), output)
                     output += col_type.name.encode()
-                    context.start_column(col_name, col_type)
+                    context.start_column(col_name)
                     try:
                         col_type.write_column(data, output, context)
                     except Exception as ex:  # pylint: disable=broad-except

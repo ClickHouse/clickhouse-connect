@@ -1,22 +1,22 @@
-from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union
+from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
-from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import SliceView
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.options import np, pd
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
+if TYPE_CHECKING:
+    from clickhouse_connect.datatypes.base import ClickHouseType
+
+
 DEFAULT_BLOCK_SIZE = 16834
-ch_nano_dt_type = get_from_name('DateTime64(9)')
-np_nano_dt_type = np.dtype('datetime64[ns]') if np else None
 
 
 class InsertBlock(NamedTuple):
     column_count: int
     row_count: int
     column_names: Iterable[str]
-    column_types: Iterable[ClickHouseType]
+    column_types: Iterable['ClickHouseType']
     column_data: Iterable[Sequence[Any]]
 
 
@@ -29,7 +29,7 @@ class InsertContext(BaseQueryContext):
     def __init__(self,
                  table: str,
                  column_names: Sequence[str],
-                 column_types: Sequence[ClickHouseType],
+                 column_types: Sequence['ClickHouseType'],
                  data: Any = None,
                  column_oriented: Optional[bool] = None,
                  settings: Optional[Dict[str, Any]] = None,

@@ -10,13 +10,10 @@ from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy, empty_gen
-from clickhouse_connect.driver.npquery import NumpyResult
-from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
-from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.options import np, pd, check_arrow
+from clickhouse_connect.driver.options import check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
@@ -145,8 +142,8 @@ class QueryResult:
     def __init__(self,
                  result_set: Matrix = None,
                  block_gen: Generator[Matrix, None, None] = None,
-                 column_names: Tuple[str, ...] = (),
-                 column_types: Tuple[ClickHouseType, ...] = (),
+                 column_names: Tuple = (),
+                 column_types: Tuple = (),
                  column_oriented: bool = False,
                  source: Closable = None,
                  query_id: str = None,

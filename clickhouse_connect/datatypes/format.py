@@ -2,13 +2,10 @@ import re
 
 from typing import Dict, Type, Sequence, Optional
 
-from clickhouse_connect.datatypes.base import ClickHouseType, type_map
+from clickhouse_connect.datatypes.base import ClickHouseType, type_map, ch_read_formats, ch_write_formats
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 json_re = re.compile('json', re.IGNORECASE)
-
-ch_read_formats = {}
-ch_write_formats = {}
 
 
 def set_default_formats(*args, **kwargs):
