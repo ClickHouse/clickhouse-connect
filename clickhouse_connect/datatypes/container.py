@@ -21,7 +21,7 @@ class Array(ClickHouseType):
         return self.element_type.read_column_prefix(source)
 
     # pylint: disable=too-many-locals
-    def read_python_data(self, source: ByteSource, num_rows: int, use_none: bool = True):
+    def read_column_data(self, source: ByteSource, num_rows: int, use_none: bool = True):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
@@ -34,7 +34,7 @@ class Array(ClickHouseType):
             offset_sizes.append(level_offsets)
             level_size = level_offsets[-1] if level_offsets else 0
         if level_size:
-            all_values = final_type.read_python_data(source, level_size, use_none)
+            all_values = final_type.read_column_data(source, level_size)
         else:
             all_values = []
         column = all_values if isinstance(all_values, list) else list(all_values)
@@ -96,11 +96,11 @@ class Tuple(ClickHouseType):
         for e_type in self.element_types:
             e_type.read_column_prefix(source)
 
-    def read_python_data(self, source: ByteSource, num_rows: int, use_none=True):
+    def read_column_data(self, source: ByteSource, num_rows: int):
         columns = []
         e_names = self.element_names
         for e_type in self.element_types:
-            column = e_type.read_python_data(source, num_rows, use_none)
+            column = e_type.read_column_data(source, num_rows)
             columns.append(column)
         if e_names and self.read_format() != 'tuple':
             dicts = [{} for _ in range(num_rows)]
@@ -138,11 +138,11 @@ class Map(ClickHouseType):
         self.value_type.read_column_prefix(source)
 
     # pylint: disable=too-many-locals
-    def read_python_data(self, source: ByteSource, num_rows: int, use_none=True):
+    def read_column_data(self, source: ByteSource, num_rows: int):
         offsets = source.read_array('Q', num_rows)
         total_rows = offsets[-1]
-        keys = self.key_type.read_python_data(source, total_rows, use_none)
-        values = self.value_type.read_python_data(source, total_rows, use_none)
+        keys = self.key_type.read_column_data(source, total_rows)
+        values = self.value_type.read_column_data(source, total_rows)
         all_pairs = tuple(zip(keys, values))
         column = []
         app = column.append
@@ -188,9 +188,9 @@ class Nested(ClickHouseType):
     def read_column_prefix(self, source: ByteSource):
         self.tuple_array.read_column_prefix(source)
 
-    def read_python_data(self, source: ByteSource, num_rows: int, use_none: bool = True):
+    def read_column_data(self, source: ByteSource, num_rows: int, use_none: bool = True):
         keys = self.element_names
-        data = self.tuple_array.read_python_data(source, num_rows, use_none)
+        data = self.tuple_array.read_column_data(source, num_rows, use_none)
         return [[dict(zip(keys, x)) for x in row] for row in data]
 
     def write_column_prefix(self, dest: MutableSequence):

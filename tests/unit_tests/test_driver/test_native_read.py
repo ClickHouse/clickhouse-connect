@@ -91,7 +91,7 @@ def test_ip():
     ipv4_type = registry.get_from_name('IPv4')
     dest = bytearray()
     ipv4_type.write_column(ips, dest)
-    python = ipv4_type.read_python_column(bytes_source(bytes(dest)), 3)
+    python = ipv4_type.read_column(bytes_source(bytes(dest)), 3)
     assert tuple(python) == tuple(IPv4Address(ip) for ip in ips)
 
 

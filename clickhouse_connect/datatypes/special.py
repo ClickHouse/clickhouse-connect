@@ -18,7 +18,7 @@ class UUID(ClickHouseType):
     def np_type(self, _str_len: int = 0):
         return 'U36' if self.read_format() == 'string' else 'O'
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return self._read_binary_str(source, num_rows)
         return self._read_binary_uuid(source, num_rows)
@@ -109,8 +109,8 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
-        return self.element_type.read_python_data(source, num_rows)
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
+        return self.element_type.read_column_data(source, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         self.element_type.write_column_data(column, dest)

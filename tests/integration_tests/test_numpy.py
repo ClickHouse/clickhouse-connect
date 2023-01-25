@@ -13,15 +13,15 @@ pytestmark = pytest.mark.skipif(np is None, reason='Numpy package not installed'
 
 
 def test_numpy_dates(test_client: Client, table_context: Callable):
-    np_array = np.array(dt_ds, dtype='datetime64[s]')
+    np_array = np.array(dt_ds, dtype='datetime64[s]').reshape(-1, 1)
     with table_context('test_numpy_dates', dt_ds_columns, dt_ds_types):
-        test_client.insert('test_numpy_dates', [np_array])
+        test_client.insert('test_numpy_dates', np_array)
         new_np_array = test_client.query_np('SELECT * FROM test_numpy_dates')
         assert np.array_equal(np_array, new_np_array)
 
 
 def test_numpy_record_type(test_client: Client, table_context: Callable):
-    np_array = np.array(basic_ds, dtype='U20,int32,float,U20,datetime64[ns]')
+    np_array = np.array(basic_ds, dtype='U20,int32,float,U20,datetime64[ns],U20')
     np_array.dtype.names = basic_ds_columns
     with table_context('test_numpy_basic', basic_ds_columns, basic_ds_types):
         test_client.insert('test_numpy_basic', np_array)

@@ -37,7 +37,7 @@ def epoch_days_to_date(days: int) -> date:
     cycles, rem = divmod(rem, 1461)
     years, rem = divmod(rem, 365)
     year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
-    if years == 4:
+    if years == 4 or cycles100 == 4:
         return date(year - 1, 12, 31)
     m_list = MONTH_DAYS_LEAP if years == 3 and (year == 2000 or year % 100 != 0) else MONTH_DAYS
     month = (rem + 24) >> 5

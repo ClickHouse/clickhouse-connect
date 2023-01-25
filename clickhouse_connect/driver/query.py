@@ -9,12 +9,14 @@ from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Itera
 from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.common import dict_copy, empty_gen
+from clickhouse_connect.driver.npquery import NumpyResult
+from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
+from clickhouse_connect.driver.options import np, pd, check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
@@ -45,8 +47,8 @@ class QueryContext(BaseQueryContext):
                  server_tz: tzinfo = pytz.UTC,
                  use_none: Optional[bool] = None,
                  column_oriented: Optional[bool] = None,
-                 use_numpy: bool = False,
-                 max_str_len: int = 0):
+                 use_numpy: Optional[bool] = None,
+                 max_str_len: Optional[int] = 0):
         """
         Initializes various configuration settings for the query context
 
@@ -70,9 +72,10 @@ class QueryContext(BaseQueryContext):
         self.parameters = parameters or {}
         self.server_tz = server_tz
         self.use_none = True if use_none is None else use_none
+        self.use_numpy = False if use_numpy is None else use_numpy
         self.column_oriented = False if column_oriented is None else column_oriented
         self.use_numpy = use_numpy
-        self.max_str_len = max_str_len
+        self.max_str_len = 0 if max_str_len is None else max_str_len
         self._update_query()
 
     @property
@@ -132,6 +135,19 @@ class QueryContext(BaseQueryContext):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
         self.uncommented_query = remove_sql_comments(self.final_query)
 
+    def enter(self):
+        super().enter()
+        query_settings.use_numpy = self.use_numpy
+        query_settings.use_none = self.use_none
+        query_settings.max_str_len = self.max_str_len
+
+    def exit(self):
+
+            del query_settings.use_numpy
+            del query_settings.use_none
+            del query_settings.max_str_len
+        super().exit()
+
 
 class QueryResult:
     """
@@ -150,7 +166,7 @@ class QueryResult:
                  summary: Dict[str, Any] = None):
         self._result_rows = result_set
         self._result_columns = None
-        self._block_gen = block_gen or iter(())
+        self._block_gen = block_gen or empty_gen()
         self._in_context = False
         self.column_names = column_names
         self.column_types = column_types
@@ -197,7 +213,7 @@ class QueryResult:
     def stream_column_blocks(self) -> Iterator[Matrix]:
         if not self._in_context:
             logger.warning("Streaming results should be used in a 'with' context to ensure the stream is closed")
-        if not self._block_gen:
+        if self._block_gen is None:
             raise ProgrammingError('Stream closed')
         temp = self._block_gen
         self._block_gen = None
@@ -237,6 +253,9 @@ class QueryResult:
         if self.source:
             self.source.close()
             self.source = None
+        if self._block_gen is not None:
+            self._block_gen.close()
+            self._block_gen = None
 
     def __enter__(self):
         self._in_context = True
@@ -368,62 +387,6 @@ def remove_sql_comments(sql: str) -> str:
         return match.group(1)
 
     return comment_re.sub(replacer, sql)
-
-
-def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0):
-    """
-    See doc string from client.query_np
-    """
-    np = check_numpy()
-    np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
-    first_type = np.dtype(np_types[0])
-    if first_type != np.object_ and all(np.dtype(np_type) == first_type for np_type in np_types):
-        # Optimize the underlying "matrix" array without any additional processing
-        return np.array(result.result_set, first_type).transpose()
-    columns = []
-    has_objects = False
-    for column, col_type, np_type in zip(result.result_columns, result.column_types, np_types):
-        if np_type == 'O':
-            columns.append(column)
-            has_objects = True
-        elif use_none and col_type.nullable:
-            new_col = []
-            item_array = np.empty(1, dtype=np_type)
-            for x in column:
-                if x is None:
-                    new_col.append(None)
-                    has_objects = True
-                else:
-                    item_array[0] = x
-                    new_col.append(item_array[0])
-            columns.append(new_col)
-        elif 'date' in np_type:
-            columns.append(np.array(column, dtype=np_type))
-        else:
-            columns.append(column)
-    if has_objects:
-        np_types = [np.object_] * len(result.column_names)
-    dtypes = np.dtype(list(zip(result.column_names, np_types)))
-    return np.rec.fromarrays(columns, dtypes)
-
-
-def pandas_result(result: QueryResult):
-    """
-    Convert QueryResult to a pandas dataframe
-    :param result: QueryResult from driver
-    :return: Two dimensional pandas dataframe from result
-    """
-    pd = check_pandas()
-    np = check_numpy()
-    if not result.column_oriented:
-        raise ProgrammingError('Pandas dataframes should only be constructed from column oriented query results')
-    raw = {}
-    for name, col_type, column in zip(result.column_names, result.column_types, result.result_set):
-        np_type = col_type.np_type()
-        if 'datetime' in np_type:
-            column = pd.to_datetime(np.array(column, dtype=np_type))
-        raw[name] = column
-    return pd.DataFrame(raw)
 
 
 def to_arrow(content: bytes):

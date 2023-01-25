@@ -1,9 +1,12 @@
+import logging
 from typing import Optional, Dict, Union, Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
 from clickhouse_connect.datatypes.format import format_map
 from clickhouse_connect.driver.threads import query_settings
+
+logger = logging.getLogger(__name__)
 
 
 class BaseQueryContext:
@@ -18,16 +21,24 @@ class BaseQueryContext:
         self.column_formats = column_formats or {}
         self.encoding = encoding
         self.use_numpy = use_numpy
+        self._open = False
 
-    def __enter__(self):
+    def enter(self):
+        old_context = getattr(query_settings, 'context', None)
+        if old_context:
+            logger.error('Entering new Query Context before previous context exited')
+            old_context.exit()
+        self._open = True
+        query_settings.context = self
         query_settings.query_overrides = format_map(self.query_formats)
         query_settings.query_encoding = self.encoding
-        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        query_settings.query_overrides = None
-        query_settings.column_overrides = None
-        query_settings.query_encoding = None
+    def exit(self):
+        if self._open:
+            del query_settings.context
+            del query_settings.query_overrides
+            del query_settings.query_encoding
+            self._open = False
 
     def start_column(self, name: str, ch_type: ClickHouseType):
         if name in self.column_formats:

@@ -112,6 +112,10 @@ def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
     return copy
 
 
+def empty_gen():
+    yield from ()
+
+
 def coerce_int(val: Optional[Union[str, int]]) -> int:
     if not val:
         return 0

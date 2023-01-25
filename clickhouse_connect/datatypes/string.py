@@ -1,6 +1,7 @@
 from typing import Sequence, MutableSequence, Union
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.options import np
 
@@ -8,15 +9,16 @@ from clickhouse_connect.driver.options import np
 class String(ClickHouseType):
     python_null = ''
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
-        return source.read_str_col(num_rows, self.encoding)
-
-    def np_type(self, str_len: int = 0):
+    @property
+    def np_type(self):
+        str_len = query_settings.max_str_len
         return f'<U{str_len}' if str_len else 'O'
 
-    def _read_numpy_binary(self, source: ByteSource, num_rows: int, max_str_len: int):
-        # TODO:  Optimize max_str_len numpy arrays
-        return np.array(source.read_str_col(num_rows, self.encoding), dtype=self.np_type(max_str_len))
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
+        if query_settings.use_numpy:
+            # TODO:  Optimize max_str_len numpy arrays
+            return np.array(source.read_str_col(num_rows, self.encoding), dtype=self.np_type)
+        return source.read_str_col(num_rows, self.encoding)
 
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
@@ -64,10 +66,11 @@ class FixedString(ClickHouseType):
     def python_null(self):
         return self._empty_bytes if self.read_format() == 'native' else ''
 
-    def np_type(self, _str_len: int = 0):
+    @property
+    def np_type(self):
         return f'<U{self.byte_size}'
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
             return source.read_fixed_str_col(self.byte_size, num_rows, self.encoding)
         return source.read_bytes_col(self.byte_size, num_rows)

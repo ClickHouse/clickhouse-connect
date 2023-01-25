@@ -16,64 +16,63 @@ class NativeTransform:
     @staticmethod
     def parse_response(source: ByteSource,
                        context: QueryContext = _EMPTY_QUERY_CONTEXT) -> Union[NumpyResult, QueryResult]:
-        with context:
-            names = []
-            col_types = []
-            use_none = context.use_none
-            use_numpy = context.use_numpy
-            max_str_len = context.max_str_len
-            block_num = 0
 
-            def get_block():
-                nonlocal block_num
-                result_block = []
-                try:
-                    num_cols = source.read_leb128()
-                    num_rows = source.read_leb128()
-                except (StopIteration, IndexError):
-                    source.close()
-                    return None
-                for col_num in range(num_cols):
-                    name = source.read_leb128_str()
-                    type_name = source.read_leb128_str()
-                    if block_num == 0:
-                        names.append(name)
-                        col_type = registry.get_from_name(type_name)
-                        col_types.append(col_type)
-                    else:
-                        col_type = col_types[col_num]
-                    context.start_column(name, col_type)
-                    if use_numpy:
-                        column = col_type.read_numpy_column(source, num_rows, use_none, max_str_len)
-                    else:
-                        column = col_type.read_python_column(source, num_rows, use_none=use_none)
-                    result_block.append(column)
-                block_num += 1
-                return result_block
+        context.enter()
+        names = []
+        col_types = []
+        block_num = 0
 
-            first_block = get_block()
-            if first_block is None:
-                return NumpyResult() if use_numpy else QueryResult([])
+        def get_block():
+            nonlocal block_num
+            result_block = []
+            try:
+                num_cols = source.read_leb128()
+                num_rows = source.read_leb128()
+            except (StopIteration, IndexError):
+                source.close()
+                return None
+            for col_num in range(num_cols):
+                name = source.read_leb128_str()
+                type_name = source.read_leb128_str()
+                if block_num == 0:
+                    names.append(name)
+                    col_type = registry.get_from_name(type_name)
+                    col_types.append(col_type)
+                else:
+                    col_type = col_types[col_num]
+                context.start_column(name, col_type)
+                column = col_type.read_column(source, num_rows)
+                result_block.append(column)
+            block_num += 1
+            return result_block
 
-            def gen():
+        first_block = get_block()
+        if first_block is None:
+            return NumpyResult() if context.use_numpy else QueryResult([])
+
+        def gen():
+            try:
                 yield first_block
                 while True:
                     next_block = get_block()
                     if next_block is None:
                         return
                     yield next_block
+            finally:
+                context.exit()
 
-        if use_numpy:
-            return NumpyResult(gen(), tuple(names), tuple(col_types), use_none, max_str_len, source)
+        if context.use_numpy:
+            return NumpyResult(gen(), tuple(names), tuple(col_types), [col.dtype for col in first_block], source)
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
     def build_insert(context: InsertContext):
         compressor = get_compressor(context.compression)
 
-        with context:
+        context.enter()
 
-            def chunk_gen():
+        def chunk_gen():
+            try:
                 for x in context.next_block():
                     output = bytearray()
                     write_leb128(x.column_count, output)
@@ -91,12 +90,14 @@ class NativeTransform:
                             # the insert if the user has included bad data in the column.  We need to ensure that the
                             # insert fails (using garbage data) to avoid a partial insert, and use the context to
                             # propagate the correct exception to the user
-                            context.insert_exception = ex
                             yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
+                            context.exit()
                             return
                     yield compressor.compress_block(output)
                 footer = compressor.flush()
                 if footer:
                     yield footer
+            finally:
+                context.exit()
 
         return chunk_gen()

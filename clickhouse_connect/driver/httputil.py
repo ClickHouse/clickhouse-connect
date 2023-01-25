@@ -9,6 +9,7 @@ import zstandard
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
+from clickhouse_connect.driver.query import QueryContext
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
@@ -77,8 +78,11 @@ default_pool_manager = get_pool_manager()
 
 
 class ResponseSource:
-    def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024):
+    def __init__(self, response: HTTPResponse,
+                 context: QueryContext,
+                 chunk_size: int = 1024 * 1024):
         self.response = response
+        self.context = context
         compression = response.headers.get('content-encoding')
         if compression == 'zstd':
             zstd_decom = zstandard.ZstdDecompressor()
@@ -114,5 +118,6 @@ class ResponseSource:
         return self.response.read(amt)
 
     def close(self):
+        self.context.exit()
         self.response.drain_conn()
         self.response.close()

@@ -14,7 +14,7 @@ from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, np_result, pandas_result, to_arrow, \
+from clickhouse_connect.driver.query import QueryResult, pandas_result, to_arrow, \
     QueryContext, arrow_buffer
 
 io.DEFAULT_BUFFER_SIZE = 1024 * 256
@@ -177,17 +177,30 @@ class Client(ABC):
         create_query_context method
         :return: Numpy array representing the result set
         """
-        query_context = self.create_query_context(query=query,
-                                                  parameters=parameters,
-                                                  settings=settings,
-                                                  query_formats=query_formats,
-                                                  column_formats=column_formats,
-                                                  encoding=encoding,
-                                                  use_none=use_none,
-                                                  use_numpy=True,
-                                                  max_str_len=max_str_len,
-                                                  context=context)
-        return self._query_with_context(query_context).result_set
+        kwargs = locals().copy()
+        del kwargs['self']
+        kwargs['use_numpy'] = True
+        return self._query_with_context(self.create_query_context(**kwargs)).np_result
+
+    def query_np_stream(self,
+                        query: str = None,
+                        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                        settings: Optional[Dict[str, Any]] = None,
+                        query_formats: Optional[Dict[str, str]] = None,
+                        column_formats: Optional[Dict[str, str]] = None,
+                        encoding: Optional[str] = None,
+                        use_none: Optional[bool] = None,
+                        max_str_len: Optional[int] = None,
+                        context: QueryContext = None):
+        """
+        Query method that returns the results as a stream of numpy arrays.  For parameter values, see the
+        create_query_context method
+        :return: Generator that yield a numpy array per block representing the result set
+        """
+        kwargs = locals().copy()
+        del kwargs['self']
+        kwargs['use_numpy'] = True
+        return self._query_with_context(**kwargs).stream_np_blocks()
 
     def query_df(self,
                  query: str = None,
@@ -214,7 +227,7 @@ class Client(ABC):
                                                   use_numpy=True,
                                                   max_str_len=max_str_len,
                                                   context=context)
-        return pandas_result(self.query(self._query_with_context(query_context)))
+        return pandas_result(self._query_with_context(query_context))
 
     def create_query_context(self,
                              query: str = None,

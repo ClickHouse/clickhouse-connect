@@ -115,7 +115,7 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif 'datetime' in ch_type.np_type() and pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col):
+            elif 'datetime' in ch_type.np_type and pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'
@@ -129,7 +129,7 @@ class InsertContext(BaseQueryContext):
         if np_array.dtype.names is None:
             if 'date' in str(np_array.dtype):
                 for col_name, col_type in zip(self.column_names, self.column_types):
-                    if 'date' in col_type.np_type():
+                    if 'date' in col_type.np_type:
                         self.column_formats[col_name] = 'int'
                 return np_array.astype('int').tolist()
             for col_type in self.column_types:
@@ -144,7 +144,7 @@ class InsertContext(BaseQueryContext):
             data = [np_array[col_name] for col_name in np_array.dtype.names]
         for ix, (col_name, col_type) in enumerate(zip(self.column_names, self.column_types)):
             d_type = data[ix].dtype
-            if 'date' in str(d_type) and 'date' in col_type.np_type():
+            if 'date' in str(d_type) and 'date' in col_type.np_type:
                 self.column_formats[col_name] = 'int'
                 data[ix] = data[ix].astype(int).tolist()
             elif col_type.byte_size == 0 or col_type.byte_size > d_type.itemsize:

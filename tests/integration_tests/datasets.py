@@ -7,11 +7,11 @@ null_ds_columns = ['key', 'num', 'flt', 'str', 'dt', 'd']
 null_ds_types = ['String', 'Nullable(Int32)', 'Nullable(Float64)', 'Nullable(String)', 'Nullable(DateTime)',
                  'Nullable(Date)']
 
-basic_ds = [('key1', 1000, 50.3, 'value1', datetime.now()),
-            ('key2', 2000, -532.43, 'value2', datetime(1976, 7, 4, 12, 12, 11)),
-            ('key3', -2503, 300.00, 'value3', date(2022, 10, 15))]
-basic_ds_columns = ['key', 'num', 'flt', 'str', 'dt']
-basic_ds_types = ['String', 'Int32', 'Float64', 'String', 'DateTime64(9)']
+basic_ds = [('key1', 1000, 50.3, 'value1', datetime.now(), 'lc_1'),
+            ('key2', 2000, -532.43, 'value2', datetime(1976, 7, 4, 12, 12, 11), 'lc_2'),
+            ('key3', -2503, 300.00, 'value3', date(2022, 10, 15), 'lc_99')]
+basic_ds_columns = ['key', 'num', 'flt', 'str', 'dt', 'lc_string']
+basic_ds_types = ['String', 'Int32', 'Float64', 'String', 'DateTime64(9)', 'LowCardinality(String)']
 
 dt_ds = [datetime(2020, 10, 10),
          datetime(2021, 11, 11)]

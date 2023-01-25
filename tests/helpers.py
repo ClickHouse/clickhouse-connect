@@ -8,6 +8,7 @@ import pkg_resources
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
@@ -223,6 +224,7 @@ def bytes_source(data: Union[str, bytes], chunk_size:int = 256, cls: Type = Resp
     class TestSource:
         def __init__(self):
             self.gen = gen()
+            self.context = QueryContext()
 
         def close(self):
             pass

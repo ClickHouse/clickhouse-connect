@@ -8,37 +8,37 @@ from clickhouse_connect.driver.types import ByteSource
 
 class Int8(ArrayType):
     _array_type = 'b'
-    _np_type = 'b'
+    np_type = 'b'
 
 
 class UInt8(ArrayType):
     _array_type = 'B'
-    _np_type = 'B'
+    np_type = 'B'
 
 
 class Int16(ArrayType):
     _array_type = 'h'
-    _np_type = '<i2'
+    np_type = '<i2'
 
 
 class UInt16(ArrayType):
     _array_type = 'H'
-    _np_type = '<u2'
+    np_type = '<u2'
 
 
 class Int32(ArrayType):
     _array_type = 'i'
-    _np_type = '<i4'
+    np_type = '<i4'
 
 
 class UInt32(ArrayType):
     _array_type = 'I'
-    _np_type = '<u4'
+    np_type = '<u4'
 
 
 class Int64(ArrayType):
     _array_type = 'q'
-    _np_type = '<i8'
+    np_type = '<i8'
 
 
 class UInt64(ArrayType):
@@ -48,7 +48,8 @@ class UInt64(ArrayType):
     def _array_type(self):
         return 'q' if self.read_format() == 'signed' else 'Q'
 
-    def np_type(self, _str_len: int = 0):
+    @property
+    def np_type(self):
         return '<q' if self.read_format() == 'signed' else '<u8'
 
 
@@ -56,7 +57,7 @@ class BigInt(ClickHouseType, registered=False):
     _signed = True
     valid_formats = 'string', 'native'
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         signed = self._signed
         sz = self.byte_size
         column = []
@@ -123,21 +124,21 @@ class UInt256(BigInt):
 
 class Float32(ArrayType):
     _array_type = 'f'
-    _np_type = '<f4'
+    np_type = '<f4'
     python_type = float
 
 
 class Float64(ArrayType):
     _array_type = 'd'
-    _np_type = '<f8'
+    np_type = '<f8'
     python_type = float
 
 
 class Bool(ClickHouseType):
-    _np_type = '?'
+    np_type = '?'
     python_type = bool
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         column = source.read_bytes(num_rows)
         return [b != 0 for b in column]
 
@@ -162,7 +163,7 @@ class Enum(ArrayType):
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         lookup = self._int_map.get
         return [lookup(x, None) for x in column]
@@ -214,7 +215,7 @@ class Decimal(ClickHouseType):
         self._name_suffix = f'({prec}, {scale})'
         self._array_type = array_type(self.byte_size, True)
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         column = source.read_array(self._array_type, num_rows)
         dec = decimal.Decimal
         scale = self.scale
@@ -241,7 +242,7 @@ class Decimal(ClickHouseType):
 
 
 class BigDecimal(Decimal, registered=False):
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         dec = decimal.Decimal
         scale = self.scale
         prec = self.prec

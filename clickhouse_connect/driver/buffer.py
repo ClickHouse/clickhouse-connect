@@ -120,4 +120,6 @@ class ResponseBuffer(ByteSource):
         return np.frombuffer(source, dtype, num_rows)
 
     def close(self):
-        self.source.close()
+        if self.source:
+            self.source.close()
+            self.source = None

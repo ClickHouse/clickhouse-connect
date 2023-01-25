@@ -6,8 +6,8 @@ from typing import Union, Sequence, MutableSequence
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import  write_array, np_date_types
 from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
@@ -15,13 +15,13 @@ epoch_start_datetime = datetime(1970, 1, 1)
 
 class Date(ArrayType):
     _array_type = 'H'
-    _np_type = 'datetime64[D]'
+    np_type = 'datetime64[D]'
     nano_divisor = 86400 * 1000000000
     valid_formats = 'native', 'int'
     python_null = epoch_start_date
     python_type = date
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_date_col(source, num_rows)
@@ -46,7 +46,7 @@ class Date(ArrayType):
 class Date32(Date):
     _array_type = 'i'
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_date32_col(source, num_rows)
@@ -59,20 +59,18 @@ from_ts_tz = datetime.fromtimestamp
 # pylint: disable=abstract-method
 class DateTime(ArrayType):
     _array_type = 'I'
-    _np_type = 'datetime64[s]'
+    np_type = 'datetime64[s]'
     valid_formats = 'native', 'int'
     python_null = from_ts_naive(0)
     python_type = datetime
     nano_divisor = 1000000000
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
+        if query_settings.use_numpy:
+            return source.read_numpy_array('<u4', num_rows).astype(self.np_type)
         if self.read_format() == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_datetime_col(source, num_rows)
-
-    def _read_numpy_binary(self, source: ByteSource, num_rows: int, *_):
-        column = source.read_numpy_array('<u4', num_rows)
-        return column.astype('datetime64[s]')
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         first = self._first_value(column)
@@ -101,12 +99,13 @@ class DateTime64(ArrayType):
         self.prec = 10 ** self.scale
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
-            self._read_python_binary = self._read_binary_tz
+            self._read_column_binary = self._read_binary_tz
         else:
-            self._read_python_binary = self._read_binary_naive
+            self._read_column_binary = self._read_binary_naive
             self.tzinfo = None
 
-    def np_type(self, _str_len: int = 0):
+    @property
+    def np_type(self):
         opt = np_date_types.get(self.scale)
         return f'datetime64{opt}' if opt else 'O'
 
@@ -130,6 +129,8 @@ class DateTime64(ArrayType):
         return new_col
 
     def _read_binary_naive(self, source: ByteSource, num_rows: int):
+        if query_settings.use_numpy:
+            return source.read_numpy_array(self.np_type, num_rows)
         column = source.read_array(self._array_type, num_rows)
         if self.read_format() == 'int':
             return column

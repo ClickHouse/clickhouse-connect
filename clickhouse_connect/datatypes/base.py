@@ -6,7 +6,6 @@ from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Iterable
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
-from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.threads import query_settings
 from clickhouse_connect.driver.types import ByteSource
@@ -37,7 +36,7 @@ class ClickHouseType(ABC):
     __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
     _name_suffix = ''
     _encoding = 'utf8'
-    _np_type = 'O'  # Default to Numpy Object type
+    np_type = 'O'  # Default to Numpy Object type
     nano_divisor = 0  # Only relevant for date like objects
     byte_size = 0
     valid_formats = 'native'
@@ -101,9 +100,6 @@ class ClickHouseType(ABC):
         query_encoding = getattr(query_settings, 'query_encoding', None)
         return query_encoding or self._encoding
 
-    def np_type(self, _str_len: int = 0):
-        return self._np_type
-
     def write_column_prefix(self, dest: MutableSequence):
         """
         Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
@@ -125,70 +121,49 @@ class ClickHouseType(ABC):
             if v != low_card_version:
                 logger.warning('Unexpected low cardinality version %d reading type %s', v, self.name)
 
-    def read_python_column(self, source: ByteSource, num_rows: int, **kwargs) -> Sequence:
+    def read_column(self, source: ByteSource, num_rows: int) -> Sequence:
         """
         Wrapping read method for all ClickHouseType data types.  Only overridden for container classes so that
          the LowCardinality version is read for the contained types
         :param source: Native protocol binary read buffer
         :param num_rows: Number of rows expected in the column
-        :param kwargs: Pass any extra keyword arguments to the main read_native_data function
         :return: The decoded column data as a sequence and the updated location pointer
         """
         self.read_column_prefix(source)
-        return self.read_python_data(source, num_rows, **kwargs)
+        column = self.read_column_data(source, num_rows)
+        if query_settings.use_numpy and not isinstance(column, np.ndarray):
+            np_col = np.empty(len(column), dtype=object)
+            np_col[:] = column
+            return np_col
+        return column
 
-    def read_numpy_column(self, source: ByteSource, num_rows: int, use_none: bool, max_str_len: int):
-        if self.np_type(max_str_len) == 'O':
-            return data_conv.to_numpy_array(self.read_python_column(source, num_rows, use_none=use_none))
-        self.read_column_prefix(source)
-        return self.read_numpy_data(source, num_rows, use_none, max_str_len)
-
-    def read_python_data(self, source: ByteSource, num_rows: int, use_none=True) -> Sequence:
+    def read_column_data(self, source: ByteSource, num_rows: int) -> Sequence:
         """
         Public read method for all ClickHouseType data type columns
         :param source: Native protocol binary read buffer
         :param num_rows: Number of rows expected in the column
-        :param use_none: Use the Python None type for ClickHouse nulls.  Otherwise, use the empty or zero type.
-         Allows support for pandas data frames that do not support None
         :return: The decoded column plus the updated location pointer
         """
         if self.low_card:
-            return self._read_python_low_card(source, num_rows, use_none)
+            return self._read_low_card_column(source, num_rows)
         if self.nullable:
             null_map = source.read_bytes(num_rows)
-            column = self._read_python_binary(source, num_rows)
-            if use_none:
-                if isinstance(column, (tuple, array.array)):
-                    return [None if null_map[ix] else column[ix] for ix in range(num_rows)]
-                for ix in range(num_rows):
-                    if null_map[ix]:
-                        column[ix] = None
+            column = self._read_column_binary(source, num_rows)
+            if query_settings.use_none:
+                if query_settings.use_numpy or isinstance(column, (tuple, array.array)):
+                    column = [None if null_map[ix] else column[ix] for ix in range(num_rows)]
+                else:
+                    for ix in range(num_rows):
+                        if null_map[ix]:
+                            column[ix] = None
             return column
-        return self._read_python_binary(source, num_rows)
-
-    def read_numpy_data(self, source: ByteSource, num_rows: int, use_none: bool, max_str_len: int):
-        if self.nullable:
-            null_map = source.read_bytes(num_rows)
-            column = self._read_numpy_binary(source, num_rows, max_str_len)
-            has_nulls = False
-            if use_none:
-                new_col = []
-                for is_null, x in zip(null_map, column):
-                    if is_null:
-                        has_nulls = True
-                        new_col.append(None)
-                    else:
-                        new_col.append(x)
-                if has_nulls:
-                    return  np.array(new_col, dtype=object)
-            return column
-        return self._read_numpy_binary(source, num_rows, max_str_len)
+        return self._read_column_binary(source, num_rows)
 
     # The binary methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
 
     # pylint: disable=no-self-use
-    def _read_python_binary(self, _source: ByteSource, _num_rows: int) -> Union[Sequence, MutableSequence]:
+    def _read_column_binary(self, _source: ByteSource, _num_rows: int) -> Union[Sequence, MutableSequence]:
         """
         Lowest level read method for ClickHouseType native data columns
         :param _source: Native protocol binary read buffer
@@ -196,9 +171,6 @@ class ClickHouseType(ABC):
         :return: Decoded column plus updated read buffer
         """
         return [], 0
-
-    def _read_numpy_binary(self, _source: ByteSource, _num_rows: int, _max_str_len: int):
-        return None, 0, 0
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         """
@@ -231,13 +203,12 @@ class ClickHouseType(ABC):
                 dest += bytes([1 if x is None else 0 for x in column])
             self._write_column_binary(column, dest)
 
-    def _read_python_low_card(self, source: ByteSource, num_rows: int, use_none=True):
-        if num_rows == 0:
-            return tuple()
+    def _read_low_card_column(self, source: ByteSource, num_rows: int):
         key_data = source.read_uint64()
         index_sz = 2 ** (key_data & 0xff)
         key_cnt = source.read_uint64()
-        keys = self._read_python_binary(source, key_cnt)
+        keys = self._read_column_binary(source, key_cnt)
+        use_none = query_settings.use_none
         if self.nullable:
             try:
                 keys[0] = None if use_none else self.python_null
@@ -246,7 +217,9 @@ class ClickHouseType(ABC):
         index_cnt = source.read_uint64()
         assert index_cnt == num_rows
         index = source.read_array(array_type(index_sz, False), num_rows)
-        return tuple(keys[ix] for ix in index)
+        if query_settings.use_numpy and not (self.nullable and use_none) and not self.np_type == 'O':
+            return np.fromiter((keys[ix] for ix in index), dtype=self.np_type, count=num_rows)
+        return [keys[ix] for ix in index]
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence):
         if not column:
@@ -322,14 +295,13 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls._struct_type = '<' + cls._array_type
             cls.byte_size = array.array(cls._array_type).itemsize
 
-    def _read_python_binary(self, source: ByteSource, num_rows: int):
-        column = source.read_array(self._array_type, num_rows)
+    def _read_column_binary(self, source: ByteSource, num_rows: int):
         if self.read_format() == 'string':
-            column = [str(x) for x in column]
-        return column
-
-    def _read_numpy_binary(self, source: ByteSource, num_rows: int, *_):
-        return source.read_numpy_array(self.np_type(), num_rows)
+            column = source.read_array(self._array_type, num_rows)
+            return [str(x) for x in column]
+        if query_settings.use_numpy:
+            return source.read_numpy_array(self.np_type, num_rows)
+        return source.read_array(self._array_type, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
         if len(column) and self.nullable:
@@ -354,7 +326,7 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
 
-    def _read_python_binary(self, source: Sequence, num_rows: int):
+    def _read_column_binary(self, source: Sequence, num_rows: int):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):

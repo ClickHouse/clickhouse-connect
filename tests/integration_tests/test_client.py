@@ -35,8 +35,7 @@ def test_none_database(test_client: Client):
     assert test_db == old_db
     try:
         test_client.database = None
-        query_result = test_client.query('SELECT * FROM system.tables')
-        with query_result:
+        with test_client.query('SELECT * FROM system.tables'):
             pass
         test_db = test_client.command('select database()')
         assert test_db == 'default'
@@ -197,5 +196,5 @@ def test_command_as_query(test_client: Client):
 
 
 def test_show_create(test_client: Client):
-    result = test_client.query('SHOW CREATE TABLE system.tables')
-    assert 'statement' in result.column_names
+    with test_client.query('SHOW CREATE TABLE system.tables') as result:
+        assert 'statement' in result.column_names
