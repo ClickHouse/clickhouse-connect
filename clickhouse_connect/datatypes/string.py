@@ -1,28 +1,24 @@
 from typing import Sequence, MutableSequence, Union
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
-from clickhouse_connect.driver.threads import query_settings
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.options import np
 
 
 class String(ClickHouseType):
-    python_null = ''
 
-    @property
-    def np_type(self):
-        str_len = query_settings.max_str_len
-        return f'<U{str_len}' if str_len else 'O'
-
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
-        if query_settings.use_numpy:
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if ctx.use_numpy:
             # TODO:  Optimize max_str_len numpy arrays
-            return np.array(source.read_str_col(num_rows, self.encoding), dtype=self.np_type)
+            np_type = f'<U{ctx.max_str_len}' if ctx.max_str_len else 'O'
+            return np.array(source.read_str_col(num_rows, ctx.encoding or self.encoding), dtype=np_type)
         return source.read_str_col(num_rows, self.encoding)
 
     # pylint: disable=duplicate-code
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        encoding = self.encoding
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+        encoding = ctx.encoding or self.encoding
         app = dest.append
         if self.nullable:
             for x in column:
@@ -52,6 +48,9 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += y
 
+    def _python_null(self, ctx: QueryContext):
+        return ''
+
 
 class FixedString(ClickHouseType):
     valid_formats = 'string', 'native'
@@ -62,28 +61,27 @@ class FixedString(ClickHouseType):
         self._name_suffix = type_def.arg_str
         self._empty_bytes = bytes(b'\x00' * self.byte_size)
 
-    @property
-    def python_null(self):
-        return self._empty_bytes if self.read_format() == 'native' else ''
+    def python_null(self, ctx: QueryContext):
+        return self._empty_bytes if self.read_format(ctx) == 'native' else ''
 
     @property
     def np_type(self):
         return f'<U{self.byte_size}'
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
-        if self.read_format() == 'string':
-            return source.read_fixed_str_col(self.byte_size, num_rows, self.encoding)
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if self.read_format(ctx) == 'string':
+            return source.read_fixed_str_col(self.byte_size, num_rows, ctx.encoding or self.encoding )
         return source.read_bytes_col(self.byte_size, num_rows)
 
     # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         ext = dest.extend
         sz = self.byte_size
         empty = bytes((0,) * sz)
         str_enc = str.encode
-        enc = self.encoding
+        enc = ctx.encoding or self.encoding
         first = self._first_value(column)
-        if isinstance(first, str) or self.write_format() == 'string':
+        if isinstance(first, str) or self.write_format(ctx) == 'string':
             if self.nullable:
                 for x in column:
                     if x is None:

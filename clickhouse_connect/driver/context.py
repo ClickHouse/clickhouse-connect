@@ -4,7 +4,6 @@ from typing import Optional, Dict, Union, Any
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array
 from clickhouse_connect.datatypes.format import format_map
-from clickhouse_connect.driver.threads import query_settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,26 +18,10 @@ class BaseQueryContext:
         self.settings = settings or {}
         self.query_formats = query_formats or {}
         self.column_formats = column_formats or {}
+        self.query_overrides = format_map(query_formats)
+        self.column_overrides = {}
         self.encoding = encoding
         self.use_numpy = use_numpy
-        self._open = False
-
-    def enter(self):
-        old_context = getattr(query_settings, 'context', None)
-        if old_context:
-            logger.error('Entering new Query Context before previous context exited')
-            old_context.exit()
-        self._open = True
-        query_settings.context = self
-        query_settings.query_overrides = format_map(self.query_formats)
-        query_settings.query_encoding = self.encoding
-
-    def exit(self):
-        if self._open:
-            del query_settings.context
-            del query_settings.query_overrides
-            del query_settings.query_encoding
-            self._open = False
 
     def start_column(self, name: str, ch_type: ClickHouseType):
         if name in self.column_formats:
@@ -50,6 +33,6 @@ class BaseQueryContext:
                     fmt_map = {ch_type.__class__: fmts}
             else:
                 fmt_map = format_map(fmts)
-            query_settings.column_overrides = fmt_map
+            self.column_overrides = fmt_map
         else:
-            query_settings.column_overrides = None
+            self.column_overrides = {}

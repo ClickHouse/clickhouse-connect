@@ -14,8 +14,7 @@ from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver.query import QueryResult, pandas_result, to_arrow, \
-    QueryContext, arrow_buffer
+from clickhouse_connect.driver.query import QueryResult, to_arrow, QueryContext, arrow_buffer
 
 io.DEFAULT_BUFFER_SIZE = 1024 * 256
 logger = logging.getLogger(__name__)

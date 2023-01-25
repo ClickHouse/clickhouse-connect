@@ -135,19 +135,6 @@ class QueryContext(BaseQueryContext):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
         self.uncommented_query = remove_sql_comments(self.final_query)
 
-    def enter(self):
-        super().enter()
-        query_settings.use_numpy = self.use_numpy
-        query_settings.use_none = self.use_none
-        query_settings.max_str_len = self.max_str_len
-
-    def exit(self):
-
-            del query_settings.use_numpy
-            del query_settings.use_none
-            del query_settings.max_str_len
-        super().exit()
-
 
 class QueryResult:
     """

@@ -3,6 +3,8 @@ from typing import Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
 
@@ -43,27 +45,32 @@ class Int64(ArrayType):
 
 class UInt64(ArrayType):
     valid_formats = 'signed', 'native'
+    _array_type = 'Q'
+    np_type = '<u8'
 
-    @property
-    def _array_type(self):
-        return 'q' if self.read_format() == 'signed' else 'Q'
-
-    @property
-    def np_type(self):
-        return '<q' if self.read_format() == 'signed' else '<u8'
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        fmt = self.read_format(ctx)
+        if fmt == 'string':
+            column = source.read_array(self._array_type, num_rows)
+            return [str(x) for x in column]
+        if ctx.use_numpy:
+            np_type = '<q' if fmt == 'signed' else '<u8'
+            return source.read_numpy_array(np_type, num_rows)
+        arr_type = 'Q' if fmt == 'signed' else 'q'
+        return source.read_array(arr_type, num_rows)
 
 
 class BigInt(ClickHouseType, registered=False):
     _signed = True
     valid_formats = 'string', 'native'
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         signed = self._signed
         sz = self.byte_size
         column = []
         app = column.append
         ifb = int.from_bytes
-        if self.read_format() == 'string':
+        if self.read_format(ctx) == 'string':
             for _ in range(num_rows):
                 app(str(ifb(source.read_bytes(sz), 'little', signed=signed)))
         else:
@@ -72,7 +79,7 @@ class BigInt(ClickHouseType, registered=False):
         return column
 
     # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         first = self._first_value(column)
         if not column:
             return
@@ -80,7 +87,7 @@ class BigInt(ClickHouseType, registered=False):
         signed = self._signed
         empty = bytes(b'\x00' * sz)
         ext = dest.extend
-        if isinstance(first, str) or self.write_format() == 'string':
+        if isinstance(first, str) or self.write_format(ctx) == 'string':
             if self.nullable:
                 for x in column:
                     if x:
@@ -138,11 +145,11 @@ class Bool(ClickHouseType):
     np_type = '?'
     python_type = bool
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, *_):
         column = source.read_bytes(num_rows)
         return [b != 0 for b in column]
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
         write_array('B', [1 if x else 0 for x in column], dest)
 
 
@@ -153,6 +160,7 @@ class Boolean(Bool):
 class Enum(ArrayType):
     __slots__ = '_name_map', '_int_map'
     _array_type = 'b'
+    valid_formats = 'string', 'int'
     python_type = str
 
     def __init__(self, type_def: TypeDef):
@@ -163,12 +171,14 @@ class Enum(ArrayType):
         val_str = ', '.join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f'({val_str})'
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         column = source.read_array(self._array_type, num_rows)
+        if self.read_format(ctx) == 'int':
+            return column
         lookup = self._int_map.get
         return [lookup(x, None) for x in column]
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
             if self.nullable:
@@ -215,7 +225,7 @@ class Decimal(ClickHouseType):
         self._name_suffix = f'({prec}, {scale})'
         self._array_type = array_type(self.byte_size, True)
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, *_):
         column = source.read_array(self._array_type, num_rows)
         dec = decimal.Decimal
         scale = self.scale
@@ -233,7 +243,7 @@ class Decimal(ClickHouseType):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
         mult = self._mult
         if self.nullable:
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
@@ -242,7 +252,7 @@ class Decimal(ClickHouseType):
 
 
 class BigDecimal(Decimal, registered=False):
-    def _read_column_binary(self, source: ByteSource, num_rows: int):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, *_):
         dec = decimal.Decimal
         scale = self.scale
         prec = self.prec
@@ -264,7 +274,7 @@ class BigDecimal(Decimal, registered=False):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
         with decimal.localcontext() as ctx:
             ctx.prec = self.prec
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
