@@ -20,7 +20,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, default_pool_manager
+from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -106,7 +106,7 @@ class HttpClient(Client):
                                              verify=verify,
                                              client_cert_key=client_cert_key)
         if not self.http:
-            self.http = default_pool_manager
+            self.http = get_pool_manager()
 
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()

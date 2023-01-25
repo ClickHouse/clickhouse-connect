@@ -72,10 +72,6 @@ def get_response_data(response: HTTPResponse) -> bytes:
         return lz4_decom.decompress(response.data, len(response.data))
     return response.data
 
-
-default_pool_manager = get_pool_manager()
-
-
 class ResponseSource:
     def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024):
         self.response = response
