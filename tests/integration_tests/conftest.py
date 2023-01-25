@@ -4,7 +4,7 @@ import random
 import time
 from pathlib import Path
 from subprocess import Popen, PIPE
-from typing import Iterator, NamedTuple, Sequence, Optional
+from typing import Iterator, NamedTuple, Sequence, Optional, Union
 
 from pytest import fixture
 
@@ -22,6 +22,7 @@ class TestConfig(NamedTuple):
     docker: bool
     test_database: str
     cloud: bool
+    compress: str
     __test__ = False
 
 
@@ -29,7 +30,7 @@ class TestConfig(NamedTuple):
 def test_config_fixture() -> Iterator[TestConfig]:
     host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
     docker = host == 'localhost' and \
-        os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
+             os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
         port = 10723 if docker else 8123
@@ -37,7 +38,8 @@ def test_config_fixture() -> Iterator[TestConfig]:
     username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
     test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
-    yield TestConfig(host, port, username, password, docker, test_database, cloud)
+    compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress)
 
 
 @fixture(scope='session', name='test_db')
@@ -72,7 +74,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    username=test_config.username,
                                    password=test_config.password,
                                    send_progress=False,
-                                   compression=True,
+                                   compress=test_config.compress,
                                    settings={
                                        'allow_suspicious_low_cardinality_types': True,
                                    }

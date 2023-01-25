@@ -204,26 +204,24 @@ class ClickHouseType(ABC):
             self._write_column_binary(column, dest, ctx)
 
     def _read_low_card_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        try:
-            key_data = source.read_uint64()
-            index_sz = 2 ** (key_data & 0xff)
-            key_cnt = source.read_uint64()
-            keys = self._read_column_binary(source, key_cnt, ctx)
-
-            use_none = ctx.use_none
-            if self.nullable:
-                try:
-                    keys[0] = None if use_none else self._python_null(ctx)
-                except TypeError:
-                    keys = (None if use_none else self._python_null(ctx),) + tuple(keys[1:])
-            index_cnt = source.read_uint64()
-            assert index_cnt == num_rows
-            index = source.read_array(array_type(index_sz, False), num_rows)
-            if ctx.use_numpy and not (self.nullable and use_none) and not self.np_type == 'O':
-                return np.fromiter((keys[ix] for ix in index), dtype=self.np_type, count=num_rows)
-            return [keys[ix] for ix in index]
-        except StopIteration:
-            pass
+        if num_rows == 0:
+            return []
+        key_data = source.read_uint64()
+        index_sz = 2 ** (key_data & 0xff)
+        key_cnt = source.read_uint64()
+        keys = self._read_column_binary(source, key_cnt, ctx)
+        use_none = ctx.use_none
+        if self.nullable:
+            try:
+                keys[0] = None if use_none else self._python_null(ctx)
+            except TypeError:
+                keys = (None if use_none else self._python_null(ctx),) + tuple(keys[1:])
+        index_cnt = source.read_uint64()
+        assert index_cnt == num_rows
+        index = source.read_array(array_type(index_sz, False), num_rows)
+        if ctx.use_numpy and not (self.nullable and use_none) and not self.np_type == 'O':
+            return np.fromiter((keys[ix] for ix in index), dtype=self.np_type, count=num_rows)
+        return [keys[ix] for ix in index]
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
         if not column:

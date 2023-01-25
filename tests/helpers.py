@@ -8,13 +8,12 @@ import pkg_resources
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
 from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
 
-LOW_CARD_PERC = 0.95
+LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2
 TUPLE_MAX = 5
 FIXED_STR_RANGE = 256

@@ -15,8 +15,6 @@ class BaseQueryContext:
                  encoding: Optional[str] = None,
                  use_numpy: bool = False):
         self.settings = settings or {}
-        self.query_formats = query_formats
-        self.column_formats = column_formats
         if query_formats is None:
             self.type_formats = _empty_map
         else:
@@ -33,6 +31,8 @@ class BaseQueryContext:
                 if not isinstance(fmt, str):
                     self.col_type_formats[col_name] = {re.compile(type_name.replace('*', '.*'), re.IGNORECASE): fmt
                                                        for type_name, fmt in fmt.items()}
+        self.query_formats = query_formats or {}
+        self.column_formats = column_formats or {}
         self.encoding = encoding
         self.use_numpy = use_numpy
         self._active_col_fmt = None

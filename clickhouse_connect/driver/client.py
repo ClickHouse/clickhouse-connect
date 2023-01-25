@@ -226,7 +226,7 @@ class Client(ABC):
                                                   use_numpy=True,
                                                   max_str_len=max_str_len,
                                                   context=context)
-        return pandas_result(self._query_with_context(query_context))
+        return self._query_with_context(query_context).pd_result
 
     def create_query_context(self,
                              query: str = None,
