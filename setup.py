@@ -2,20 +2,28 @@ import os
 from setuptools import setup, find_packages
 
 c_modules = []
+c_includes = []
 
 try:
     from Cython.Build import cythonize
     from Cython import __version__ as cython_version
-    print (f'Using Cython {cython_version }to build cython modules')
-    c_modules = cythonize('clickhouse_connect/driverc/*.pyx')
+    import numpy
+
+    print(f'Using Cython {cython_version}to build cython modules')
+    print(numpy.get_include())
+    c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3str')
+    c_includes = [numpy.get_include()]
 except ImportError:
-    print ('Cython Not Successfully Installed, Not building C extensions')
+    print('Cython Not Successfully Installed, Not building C extensions')
     cythonize = None
 
 
 def run_setup(try_c: bool = True):
     if try_c:
-        kwargs = {'ext_modules': c_modules}
+        kwargs = {
+            'ext_modules': c_modules,
+            'include_dirs': c_includes
+        }
     else:
         kwargs = {}
 

@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 _empty_map = {}
 
 
+# pylint: disable=too-many-instance-attributes
 class BaseQueryContext:
     def __init__(self,
                  settings: Optional[Dict[str, Any]] = None,

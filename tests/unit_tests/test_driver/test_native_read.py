@@ -3,7 +3,6 @@ from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.context import BaseQueryContext
-from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source

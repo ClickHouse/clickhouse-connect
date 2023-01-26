@@ -1,6 +1,6 @@
 import socket
 from ipaddress import IPv4Address, IPv6Address
-from typing import Union, MutableSequence, Sequence, TYPE_CHECKING
+from typing import Union, MutableSequence, Sequence
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import write_array
@@ -21,12 +21,9 @@ class IPv4(ArrayType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'string':
-            return self._from_native_str(source, num_rows)
+            column = source.read_array(self._array_type, num_rows)
+            return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
         return data_conv.read_ipv4_col(source, num_rows)
-
-    def _from_native_str(self, source: ByteSource, num_rows: int, **_):
-        column = source.read_array(self._array_type, num_rows)
-        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         first = self._first_value(column)

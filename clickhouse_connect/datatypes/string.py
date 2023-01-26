@@ -11,7 +11,6 @@ class String(ClickHouseType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            # TODO:  Optimize max_str_len numpy arrays
             np_type = f'<U{ctx.max_str_len}' if ctx.max_str_len else 'O'
             return np.array(source.read_str_col(num_rows, ctx.encoding or self.encoding), dtype=np_type)
         return source.read_str_col(num_rows, self.encoding)
@@ -48,7 +47,7 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += y
 
-    def _python_null(self, ctx: QueryContext):
+    def _python_null(self, _ctx):
         return ''
 
 

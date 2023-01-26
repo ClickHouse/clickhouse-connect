@@ -5,7 +5,7 @@ from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType
 from clickhouse_connect.driver.common import write_array, np_date_types
-from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -26,6 +26,8 @@ class Date(ArrayType):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
+        if ctx.use_numpy:
+            return numpy_conv.read_numpy_array(source, '<i2', num_rows).astype(self.np_type)
         return data_conv.read_date_col(source, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
@@ -75,7 +77,7 @@ class DateTime(ArrayType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            return source.read_numpy_array('<u4', num_rows).astype(self.np_type)
+            return numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_datetime_col(source, num_rows)
@@ -145,7 +147,7 @@ class DateTime64(ArrayType):
 
     def _read_binary_naive(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            return source.read_numpy_array(self.np_type, num_rows)
+            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
         column = source.read_array(self._array_type, num_rows)
         if self.read_format(ctx) == 'int':
             return column

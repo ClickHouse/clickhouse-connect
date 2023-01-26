@@ -4,7 +4,7 @@ import random
 import time
 from pathlib import Path
 from subprocess import Popen, PIPE
-from typing import Iterator, NamedTuple, Sequence, Optional, Union
+from typing import Iterator, NamedTuple, Sequence, Optional
 
 from pytest import fixture
 

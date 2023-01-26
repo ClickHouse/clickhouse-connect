@@ -108,7 +108,7 @@ class Client(ABC):
         :return: The string value of the setting, if it exists, or None
         """
 
-    # pylint: too-many-arguments
+    # pylint: disable=too-many-arguments
     def query(self,
               query: str = None,
               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -146,8 +146,7 @@ class Client(ABC):
         return self._query_with_context(query_context)
 
     @abstractmethod
-    def raw_query(self,
-                  query: str,
+    def raw_query(self, query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
                   fmt: str = None) -> bytes:
@@ -160,7 +159,7 @@ class Client(ABC):
         :return: bytes representing raw ClickHouse return value based on format
         """
 
-    # pylint: disable=duplicate-code
+    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_np(self,
                  query: str = None,
                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -181,6 +180,7 @@ class Client(ABC):
         kwargs['use_numpy'] = True
         return self._query_with_context(self.create_query_context(**kwargs)).np_result
 
+    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_np_stream(self,
                         query: str = None,
                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,

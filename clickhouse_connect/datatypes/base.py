@@ -7,6 +7,7 @@ from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optio
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
+from clickhouse_connect.driver.ctypes import numpy_conv
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -203,6 +204,7 @@ class ClickHouseType(ABC):
                 dest += bytes([1 if x is None else 0 for x in column])
             self._write_column_binary(column, dest, ctx)
 
+    # pylint: disable=no-member
     def _read_low_card_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if num_rows == 0:
             return []
@@ -219,8 +221,8 @@ class ClickHouseType(ABC):
         index_cnt = source.read_uint64()
         assert index_cnt == num_rows
         index = source.read_array(array_type(index_sz, False), num_rows)
-        if ctx.use_numpy and not (self.nullable and use_none) and not self.np_type == 'O':
-            return np.fromiter((keys[ix] for ix in index), dtype=self.np_type, count=num_rows)
+        if ctx.use_numpy and not (self.nullable and use_none) and keys.dtype != np.object_:
+            return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=num_rows)
         return [keys[ix] for ix in index]
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
@@ -263,7 +265,7 @@ class ClickHouseType(ABC):
         write_uint64(len(index), dest)
         write_array(array_type(1 << ix_type, False), index, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _python_null(self, _ctx: QueryContext):
         return None
 
     def _first_value(self, column: Sequence) -> Optional[Any]:
@@ -305,7 +307,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             column = source.read_array(self._array_type, num_rows)
             return [str(x) for x in column]
         if ctx.use_numpy:
-            return source.read_numpy_array(self.np_type, num_rows)
+            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
         return source.read_array(self._array_type, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
@@ -321,7 +323,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
                 column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _python_null(self, _ctx):
         return 0
 
 

@@ -96,7 +96,7 @@ class Nothing(ArrayType):
         super().__init__(type_def)
         self.nullable = True
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
         dest += bytes(0x30 for _ in range(len(column)))
 
 

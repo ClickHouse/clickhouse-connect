@@ -3,6 +3,7 @@ from typing import Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
+from clickhouse_connect.driver.ctypes import numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -55,7 +56,7 @@ class UInt64(ArrayType):
             return [str(x) for x in column]
         if ctx.use_numpy:
             np_type = '<q' if fmt == 'signed' else '<u8'
-            return source.read_numpy_array(np_type, num_rows)
+            return numpy_conv.read_numpy_array(source, np_type, num_rows)
         arr_type = 'q' if fmt == 'signed' else 'Q'
         return source.read_array(arr_type, num_rows)
 
@@ -145,11 +146,11 @@ class Bool(ClickHouseType):
     np_type = '?'
     python_type = bool
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int, *_):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext):
         column = source.read_bytes(num_rows)
         return [b != 0 for b in column]
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
+    def _write_column_binary(self, column, dest, _ctx):
         write_array('B', [1 if x else 0 for x in column], dest)
 
 
@@ -178,7 +179,7 @@ class Enum(ArrayType):
         lookup = self._int_map.get
         return [lookup(x, None) for x in column]
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
             if self.nullable:
@@ -225,7 +226,7 @@ class Decimal(ClickHouseType):
         self._name_suffix = f'({prec}, {scale})'
         self._array_type = array_type(self.byte_size, True)
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int, *_):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext):
         column = source.read_array(self._array_type, num_rows)
         dec = decimal.Decimal
         scale = self.scale
@@ -243,7 +244,7 @@ class Decimal(ClickHouseType):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
         mult = self._mult
         if self.nullable:
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
@@ -252,7 +253,7 @@ class Decimal(ClickHouseType):
 
 
 class BigDecimal(Decimal, registered=False):
-    def _read_column_binary(self, source: ByteSource, num_rows: int, *_):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx):
         dec = decimal.Decimal
         scale = self.scale
         prec = self.prec
@@ -274,7 +275,7 @@ class BigDecimal(Decimal, registered=False):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, *_):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
         with decimal.localcontext() as ctx:
             ctx.prec = self.prec
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")

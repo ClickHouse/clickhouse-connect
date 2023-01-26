@@ -81,6 +81,7 @@ class NativeTransform:
                         # the insert if the user has included bad data in the column.  We need to ensure that the
                         # insert fails (using garbage data) to avoid a partial insert, and use the context to
                         # propagate the correct exception to the user
+                        context.insert_exception = ex
                         yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
                         return
                 yield compressor.compress_block(output)

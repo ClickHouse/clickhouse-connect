@@ -5,7 +5,7 @@ from clickhouse_connect.driverc.dataconv import epoch_days_to_date as c_date
 
 
 def test_date_conv():
-    for date_func in (py_date,):
+    for date_func in (c_date, py_date,):
         assert date_func(11322) == date(2000, 12, 31)
         assert date_func(47579) == date(2100, 4, 8)
         assert date_func(0) == date(1970, 1, 1)
