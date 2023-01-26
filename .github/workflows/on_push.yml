@@ -11,6 +11,7 @@ on:
       - 'CHANGELOG.md'
       - 'VERSION'
       - 'LICENSE'
+      - '.github/*.md'
 
 jobs:
   lint:
