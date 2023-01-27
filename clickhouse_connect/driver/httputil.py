@@ -9,8 +9,6 @@ import zstandard
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
-from clickhouse_connect.driver.query import QueryContext
-
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
 
