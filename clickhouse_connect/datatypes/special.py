@@ -3,6 +3,7 @@ from uuid import UUID as PYUUID, SafeUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -20,7 +21,7 @@ class UUID(ClickHouseType):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'string':
             return self._read_binary_str(source, num_rows)
-        return self._read_binary_uuid(source, num_rows)
+        return data_conv.read_uuid_col(source, num_rows)
 
     # pylint: disable=too-many-locals
     @staticmethod

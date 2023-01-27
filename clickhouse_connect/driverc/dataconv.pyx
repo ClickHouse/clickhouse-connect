@@ -5,6 +5,8 @@ from .buffer cimport ResponseBuffer
 from cpython cimport Py_INCREF
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from ipaddress import IPv4Address
+from uuid import UUID, SafeUUID
+
 
 @cython.wraparound(False)
 @cython.boundscheck(False)
@@ -124,3 +126,22 @@ cpdef inline object epoch_days_to_date(int days):
         month -= 1
         prev = m_list[month]
     return date(year, month + 1, rem + 1 - prev)
+
+
+def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
+    cdef unsigned long long x = 0
+    cdef char * loc = buffer.read_bytes_c(16 * num_rows)
+    cdef object column = PyTuple_New(num_rows), v
+    new_uuid = UUID.__new__
+    unsafe = SafeUUID.unsafe
+    oset = object.__setattr__
+    while x < num_rows:
+        val = (int((<unsigned long long *>loc)[0]) << 64) + int((<unsigned long long *>(loc + 8))[0])
+        v = new_uuid(UUID)
+        oset(v, 'int', val)
+        oset(v, 'is_safe', unsafe)
+        PyTuple_SET_ITEM(column, x, v)
+        Py_INCREF(v)
+        loc += 16
+        x += 1
+    return column

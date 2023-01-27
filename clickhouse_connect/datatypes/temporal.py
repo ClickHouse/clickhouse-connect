@@ -58,6 +58,8 @@ class Date32(Date):
     _array_type = 'i'
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if ctx.use_numpy:
+            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_date32_col(source, num_rows)

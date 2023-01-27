@@ -1,6 +1,7 @@
 from datetime import datetime, date
 from ipaddress import IPv4Address
 from typing import Sequence
+from uuid import UUID, SafeUUID
 
 from clickhouse_connect.driver.common import int_size
 from clickhouse_connect.driver.types import ByteSource
@@ -54,6 +55,27 @@ def read_date_col(source: ByteSource, num_rows: int):
 def read_date32_col(source: ByteSource, num_rows: int):
     column = source.read_array('l' if int_size == 2 else 'i', num_rows)
     return [epoch_days_to_date(x) for x in column]
+
+
+def read_uuid_col(source: ByteSource, num_rows: int):
+    v = source.read_array('Q', num_rows * 2)
+    empty_uuid = UUID(int=0)
+    new_uuid = UUID.__new__
+    unsafe = SafeUUID.unsafe
+    oset = object.__setattr__
+    column = []
+    app = column.append
+    for i in range(num_rows):
+        ix = i << 1
+        int_value = v[ix] << 64 | v[ix + 1]
+        if int_value == 0:
+            app(empty_uuid)
+        else:
+            fast_uuid = new_uuid(UUID)
+            oset(fast_uuid, 'int', int_value)
+            oset(fast_uuid, 'is_safe', unsafe)
+            app(fast_uuid)
+    return column
 
 
 def to_numpy_array(column: Sequence):
