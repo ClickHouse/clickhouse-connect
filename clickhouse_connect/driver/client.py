@@ -108,7 +108,7 @@ class Client(ABC):
         :return: The string value of the setting, if it exists, or None
         """
 
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments,unused-argument
     def query(self,
               query: str = None,
               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -235,7 +235,6 @@ class Client(ABC):
         del kwargs['self']
         kwargs['use_numpy'] = True
         return self._query_with_context(self.create_query_context(**kwargs)).pd_stream
-
 
     def create_query_context(self,
                              query: str = None,
@@ -492,8 +491,8 @@ class Client(ABC):
     def min_version(self, version_str: str) -> bool:
         """
         Determine whether the connected server is at least the submitted version
-        :param version_str:  Version string consisting of up to 4 integers delimited by dots
-        :return:  True version_str is greater than the server_version, False if less than
+        :param version_str: A version string consisting of up to 4 integers delimited by dots
+        :return: True if version_str is greater than the server_version, False if less than
         """
         try:
             server_parts = [int(x) for x in self.server_version.split('.')]

@@ -1,6 +1,5 @@
 import json
 import logging
-import platform
 import re
 import uuid
 from base64 import b64encode
@@ -111,10 +110,7 @@ class HttpClient(Client):
 
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
-
-        client_name = client_name.strip() + ' ' if client_name else ''
-
-        self.headers['User-Agent'] = f'{client_name}clickhouse-connect/{common.version()} (py/{platform.version()})'
+        self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
 

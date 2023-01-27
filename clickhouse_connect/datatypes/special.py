@@ -1,5 +1,5 @@
 from typing import Union, Sequence, MutableSequence
-from uuid import UUID as PYUUID, SafeUUID
+from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
@@ -22,28 +22,6 @@ class UUID(ClickHouseType):
         if self.read_format(ctx) == 'string':
             return self._read_binary_str(source, num_rows)
         return data_conv.read_uuid_col(source, num_rows)
-
-    # pylint: disable=too-many-locals
-    @staticmethod
-    def _read_binary_uuid(source: ByteSource, num_rows: int):
-        v = source.read_array('Q', num_rows * 2)
-        empty_uuid = PYUUID(int=0)
-        new_uuid = PYUUID.__new__
-        unsafe = SafeUUID.unsafe
-        oset = object.__setattr__
-        column = []
-        app = column.append
-        for i in range(num_rows):
-            ix = i << 1
-            int_value = v[ix] << 64 | v[ix + 1]
-            if int_value == 0:
-                app(empty_uuid)
-            else:
-                fast_uuid = new_uuid(PYUUID)
-                oset(fast_uuid, 'int', int_value)
-                oset(fast_uuid, 'is_safe', unsafe)
-                app(fast_uuid)
-        return column
 
     @staticmethod
     def _read_binary_str(source: ByteSource, num_rows: int):

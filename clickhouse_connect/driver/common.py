@@ -1,7 +1,7 @@
 import array
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional, Union, Any, Generator
+from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.types import Closable
