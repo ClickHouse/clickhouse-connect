@@ -10,7 +10,7 @@ from clickhouse_connect import common
 from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.common import dict_copy, StreamContext
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
@@ -129,17 +129,9 @@ class Client(ABC):
         if query and query.lower().strip().startswith('select __connect_version'):
             return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']], None,
                                ('connect_version',), (get_from_name('String'),))
-        query_context = self.create_query_context(query=query,
-                                                  parameters=parameters,
-                                                  settings=settings,
-                                                  query_formats=query_formats,
-                                                  column_formats=column_formats,
-                                                  encoding=encoding,
-                                                  use_none=use_none,
-                                                  column_oriented=column_oriented,
-                                                  use_numpy=use_numpy,
-                                                  max_str_len=max_str_len,
-                                                  context=context)
+        kwargs = locals().copy()
+        del kwargs['self']
+        query_context = self.create_query_context(**kwargs)
         if query_context.is_command:
             response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
             return QueryResult([response] if isinstance(response, list) else [[response]])
@@ -190,7 +182,7 @@ class Client(ABC):
                         encoding: Optional[str] = None,
                         use_none: Optional[bool] = None,
                         max_str_len: Optional[int] = None,
-                        context: QueryContext = None):
+                        context: QueryContext = None) -> StreamContext:
         """
         Query method that returns the results as a stream of numpy arrays.  For parameter values, see the
         create_query_context method
@@ -199,8 +191,9 @@ class Client(ABC):
         kwargs = locals().copy()
         del kwargs['self']
         kwargs['use_numpy'] = True
-        return self._query_with_context(**kwargs).stream_np_blocks()
+        return self._query_with_context(**kwargs).np_stream
 
+    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_df(self,
                  query: str = None,
                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -216,17 +209,33 @@ class Client(ABC):
         create_query_context method
         :return: Pandas dataframe representing the result set
         """
-        query_context = self.create_query_context(query=query,
-                                                  parameters=parameters,
-                                                  settings=settings,
-                                                  query_formats=query_formats,
-                                                  column_formats=column_formats,
-                                                  encoding=encoding,
-                                                  use_none=use_none,
-                                                  use_numpy=True,
-                                                  max_str_len=max_str_len,
-                                                  context=context)
+        kwargs = locals().copy()
+        del kwargs['self']
+        kwargs['use_numpy'] = True
+        query_context = self.create_query_context(**kwargs)
         return self._query_with_context(query_context).pd_result
+
+    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
+    def query_df_stream(self,
+                        query: str = None,
+                        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                        settings: Optional[Dict[str, Any]] = None,
+                        query_formats: Optional[Dict[str, str]] = None,
+                        column_formats: Optional[Dict[str, str]] = None,
+                        encoding: Optional[str] = None,
+                        use_none: Optional[bool] = None,
+                        max_str_len: Optional[int] = None,
+                        context: QueryContext = None) -> StreamContext:
+        """
+        Query method that returns the results as a StreamContext.  For parameter values, see the
+        create_query_context method
+        :return: Pandas dataframe representing the result set
+        """
+        kwargs = locals().copy()
+        del kwargs['self']
+        kwargs['use_numpy'] = True
+        return self._query_with_context(self.create_query_context(**kwargs)).pd_stream
+
 
     def create_query_context(self,
                              query: str = None,

@@ -1,9 +1,10 @@
 import array
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional, Union
+from typing import Sequence, MutableSequence, Dict, Optional, Union, Any, Generator
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.types import Closable
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
@@ -129,12 +130,13 @@ def coerce_bool(val: Optional[Union[str, bool]]):
 
 
 class SliceView(Sequence):
-    slots = ('_source', '_range')
     """
     Provides a view into a sequence rather than copying.  Borrows liberally from
     https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1
     Also see the discussion on SO: https://stackoverflow.com/questions/3485475/can-i-create-a-view-on-a-python-list
     """
+    slots = ('_source', '_range')
+
     def __init__(self, source: Sequence, source_slice: Optional[slice] = None):
         if isinstance(source, SliceView):
             self._source = source._source
@@ -171,3 +173,22 @@ class SliceView(Sequence):
             if v != w:
                 return False
         return True
+
+
+class StreamContext:
+    """
+    Wraps a generator and its "source" in a Context.  This ensures that the source will be "closed" even if the
+    generator is not fully consumed or there is an exception during consumption
+    """
+    def __init__(self, source: Closable, gen: Generator):
+        self.source = source
+        self.gen = gen
+
+    def __enter__(self):
+        if not self.gen:
+            raise ProgrammingError('Stream has been closed')
+        return self.gen
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.source.close()
+        self.gen = None

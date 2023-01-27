@@ -10,10 +10,9 @@ from clickhouse_connect.driver.options import np
 class String(ClickHouseType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        if ctx.use_numpy:
-            np_type = f'<U{ctx.max_str_len}' if ctx.max_str_len else 'O'
-            return np.array(source.read_str_col(num_rows, ctx.encoding or self.encoding), dtype=np_type)
-        return source.read_str_col(num_rows, self.encoding)
+        if ctx.use_numpy and ctx.max_str_len:
+            return np.array(source.read_str_col(num_rows, ctx.encoding or self.encoding), dtype=f'<U{ctx.max_str_len}')
+        return source.read_str_col(num_rows, ctx.encoding or self.encoding)
 
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):

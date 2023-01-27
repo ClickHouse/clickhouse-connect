@@ -126,10 +126,6 @@ class ClickHouseType(ABC):
         """
         self.read_column_prefix(source)
         column = self.read_column_data(source, num_rows, ctx)
-        if ctx.use_numpy and not isinstance(column, np.ndarray):
-            np_col = np.empty(len(column), dtype=object)
-            np_col[:] = column
-            return np_col
         return column
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:

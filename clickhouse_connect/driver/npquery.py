@@ -1,7 +1,7 @@
 import logging
-from typing import Generator, Sequence, Tuple, Iterator
+from typing import Generator, Sequence, Tuple
 
-from clickhouse_connect.driver.common import empty_gen
+from clickhouse_connect.driver.common import empty_gen, StreamContext
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.types import Closable
 from clickhouse_connect.driver.options import np, pd
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 # pylint: disable=too-many-instance-attributes
-class NumpyResult:
+class NumpyResult(Closable):
     def __init__(self,
                  block_gen: Generator[Sequence, None, None] = None,
                  column_names: Tuple = (),
@@ -26,11 +26,8 @@ class NumpyResult:
         self._block_gen = block_gen or empty_gen()
         self._numpy_result = None
         self._pd_result = None
-        self._in_context = False
 
-    def stream_np_blocks(self) -> Iterator:
-        if not self._in_context:
-            logger.warning("Streaming results should be used in a 'with' context to ensure the stream is closed")
+    def _np_stream(self) -> Generator:
         if not self._block_gen:
             raise ProgrammingError('Stream closed')
 
@@ -61,9 +58,7 @@ class NumpyResult:
 
         return numpy_blocks()
 
-    def stream_pd_blocks(self) -> Iterator:
-        if not self._in_context:
-            logger.warning("Streaming results should be used in a 'with' context to ensure the stream is closed")
+    def _pd_stream(self) -> Generator:
         if not self._block_gen:
             raise ProgrammingError('Stream closed')
         block_gen = self._block_gen
@@ -76,15 +71,22 @@ class NumpyResult:
         return pd_blocks()
 
     @property
+    def np_stream(self) -> StreamContext:
+        return StreamContext(self, self._np_stream())
+
+    @property
+    def pd_stream(self) -> StreamContext:
+        return StreamContext(self, self._pd_stream())
+
+    @property
     def np_result(self):
         if self._numpy_result is None:
             if not self._block_gen:
                 raise ProgrammingError('Stream closed')
-            self._in_context = True
             chunk_size = 4
             pieces = []
             blocks = []
-            for block in self.stream_np_blocks():
+            for block in self._np_stream():
                 blocks.append(block)
                 if len(blocks) == chunk_size:
                     pieces.append(np.concatenate(blocks, dtype=self.np_types))
@@ -103,26 +105,15 @@ class NumpyResult:
     @property
     def pd_result(self):
         if self._pd_result is None:
-            if not self._block_gen:
-                raise ProgrammingError('Stream closed')
-            self._in_context = True
-            pieces = list(self.stream_pd_blocks())
+            pieces = list(self._pd_stream())
             if len(pieces) > 1:
-                self._pd_result = pd.concat(pieces)
+                self._pd_result = pd.concat(pieces, ignore_index=True)
             elif len(pieces) == 1:
                 self._pd_result = pieces[0]
             else:
                 self._pd_result = []
             self.close()
         return self._pd_result
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-        self._in_context = False
-
-    def __enter__(self):
-        self._in_context = True
-        return self
 
     def close(self):
         self._block_gen = None
