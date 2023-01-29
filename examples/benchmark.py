@@ -46,12 +46,12 @@ standard_cols = ['uint16', 'int16', 'float32', 'str', 'fstr', 'date', 'datetime'
 def create_table(client: Client, col_names: List[str], rows: int):
     if not col_names:
         col_names = columns.keys()
-    col_list = ','.join([f'{cn} {columns[cn][0]}' for cn in sorted(col_names)])
+    col_list = ','.join([f'{col_name} {columns[col_name][0]}' for col_name in sorted(col_names)])
     client.command('DROP TABLE IF EXISTS benchmark_test')
     client.command(f'CREATE TABLE benchmark_test ({col_list}) ENGINE Memory')
     insert_cols = []
-    for cn in sorted(col_names):
-        col_def = columns[cn]
+    for col_name in sorted(col_names):
+        col_def = columns[col_name]
         if isinstance(col_def[1], set):
             choices = tuple(col_def[1])
             cnt = len(choices)

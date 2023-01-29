@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
 
 
+# pylint: disable=too-many-public-methods
 class Client(ABC):
     """
     Base ClickHouse Connect client
@@ -123,10 +124,10 @@ class Client(ABC):
               context: QueryContext = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
-        parameters, see the create_insert_context method
+        parameters, see the create_query_context method
         :return: QueryResult -- data and metadata from response
         """
-        if query and query.lower().strip().startswith('select __connect_version'):
+        if query and query.lower().strip().startswith('select __connect_version__'):
             return QueryResult([[f'ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc.']], None,
                                ('connect_version',), (get_from_name('String'),))
         kwargs = locals().copy()
@@ -136,6 +137,25 @@ class Client(ABC):
             response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
             return QueryResult([response] if isinstance(response, list) else [[response]])
         return self._query_with_context(query_context)
+
+    def query_row_stream(self,
+                         query: str = None,
+                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                         settings: Optional[Dict[str, Any]] = None,
+                         query_formats: Optional[Dict[str, str]] = None,
+                         column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                         encoding: Optional[str] = None,
+                         use_none: Optional[bool] = None,
+                         column_oriented: Optional[bool] = None,
+                         use_numpy: Optional[bool] = None,
+                         max_str_len: Optional[int] = None,
+                         context: QueryContext = None):
+        """
+        Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
+        parameters, see the create_query_context method
+        :return: QueryResult -- data and metadata from response
+        """
+        return self._context_query(locals())
 
     @abstractmethod
     def raw_query(self, query: str,
@@ -167,10 +187,7 @@ class Client(ABC):
         create_query_context method
         :return: Numpy array representing the result set
         """
-        kwargs = locals().copy()
-        del kwargs['self']
-        kwargs['use_numpy'] = True
-        return self._query_with_context(self.create_query_context(**kwargs)).np_result
+        return self._context_query(locals(), use_numpy=True).np_result
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_np_stream(self,
@@ -188,10 +205,7 @@ class Client(ABC):
         create_query_context method
         :return: Generator that yield a numpy array per block representing the result set
         """
-        kwargs = locals().copy()
-        del kwargs['self']
-        kwargs['use_numpy'] = True
-        return self._query_with_context(self.create_query_context(**kwargs)).np_stream
+        return self._context_query(locals(), use_numpy=True).np_stream
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_df(self,
@@ -209,11 +223,7 @@ class Client(ABC):
         create_query_context method
         :return: Pandas dataframe representing the result set
         """
-        kwargs = locals().copy()
-        del kwargs['self']
-        kwargs['use_numpy'] = True
-        query_context = self.create_query_context(**kwargs)
-        return self._query_with_context(query_context).pd_result
+        return self._context_query(locals(), use_numpy=True).df_result
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_df_stream(self,
@@ -231,10 +241,7 @@ class Client(ABC):
         create_query_context method
         :return: Pandas dataframe representing the result set
         """
-        kwargs = locals().copy()
-        del kwargs['self']
-        kwargs['use_numpy'] = True
-        return self._query_with_context(self.create_query_context(**kwargs)).pd_stream
+        return self._context_query(locals(), use_numpy=True).df_stream
 
     def create_query_context(self,
                              query: str = None,
@@ -537,6 +544,12 @@ class Client(ABC):
         """
         Subclass implementation to close the connection to the server/deallocate the client
         """
+
+    def _context_query(self, lcls: dict, **overrides):
+        kwargs = lcls.copy()
+        kwargs.pop('self')
+        kwargs.update(overrides)
+        return self._query_with_context((self.create_query_context(**kwargs)))
 
     def __enter__(self):
         return self

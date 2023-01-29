@@ -39,6 +39,8 @@ def create_client(host: str = None,
     port = port or default_port(interface, use_tls)
     if username is None and 'user' in kwargs:
         username = kwargs.pop('user')
+    if username is None and 'user_name' in kwargs:
+        username = kwargs.pop('user_name')
     if password and username is None:
         username = 'default'
     if 'compression' in kwargs and 'compress' not in kwargs:

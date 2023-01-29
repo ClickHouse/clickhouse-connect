@@ -9,10 +9,10 @@ from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Itera
 from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.common import dict_copy, empty_gen
+from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import StreamClosedError
 from clickhouse_connect.driver.options import check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
@@ -133,9 +133,14 @@ class QueryContext(BaseQueryContext):
         self.uncommented_query = remove_sql_comments(self.final_query)
 
 
-class QueryResult:
+class QueryResult(Closable):
     """
     Wrapper class for query return values and metadata
+
+    Note that the use of this object as a Python context is deprecated and that the Context interface will be
+    removed in a future release.  Future usage of a QueryContext will be in either "closed" mode, where the
+    stream has been consumed and collected into the result_set property, or in "stream" mode, where only
+    the "stream" properties should be externally accessed.
     """
 
     # pylint: disable=too-many-arguments
@@ -168,47 +173,60 @@ class QueryResult:
     @property
     def result_columns(self) -> Matrix:
         if self._result_columns is None:
-            if self._result_rows is not None:
-                raise ProgrammingError(
-                    'result_columns referenced after result_rows.  Only one final format is supported'
-                )
             result = [[] for _ in range(len(self.column_names))]
-            for block in self._block_gen:
-                for base, added in zip(result, block):
-                    base.extend(added)
+            with self.column_block_stream as stream:
+                for block in stream:
+                    for base, added in zip(result, block):
+                        base.extend(added)
             self._result_columns = result
-            self._block_gen = None
         return self._result_columns
 
     @property
     def result_rows(self) -> Matrix:
         if self._result_rows is None:
-            if self._result_columns is not None:
-                raise ProgrammingError(
-                    'result_rows referenced after result_columns.  Only one final format is supported'
-                )
             result = []
-            for block in self._block_gen:
-                result.extend(list(zip(*block)))
+            with self.row_block_stream as stream:
+                for block in stream:
+                    result.extend(block)
             self._result_rows = result
-            self._block_gen = None
         return self._result_rows
 
-    def stream_column_blocks(self) -> Iterator[Matrix]:
-        if not self._in_context:
-            logger.warning("Streaming results should be used in a 'with' context to ensure the stream is closed")
+    def _column_block_stream(self):
         if self._block_gen is None:
-            raise ProgrammingError('Stream closed')
-        temp = self._block_gen
+            raise StreamClosedError
+        block_stream = self._block_gen
         self._block_gen = None
-        return temp
+        return block_stream
 
-    def stream_row_blocks(self):
-        return (list(zip(*block)) for block in self.stream_column_blocks())
+    def _row_block_stream(self):
+        for block in self._column_block_stream():
+            yield list(zip(*block))
 
-    def stream_rows(self) -> Iterator[Sequence]:
-        for block in self.stream_column_blocks():
-            for row in list(zip(*block)):
+    def stream_column_blocks(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+            Please use the column_block_stream property instead.  This method will be removed in a future release
+        """
+        return self._column_block_stream()
+
+    def stream_row_blocks(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+            Please use the row_block_stream property instead.  This method will be removed in a future release
+        """
+        return self._row_block_stream()
+
+    @property
+    def column_block_stream(self) -> StreamContext:
+        return StreamContext(self, self._column_block_stream())
+
+    @property
+    def row_block_stream(self):
+        return StreamContext(self, self._row_block_stream())
+
+    def stream_rows(self) -> Iterator:
+        for block in self._row_block_stream():
+            for row in block:
                 yield row
 
     def named_results(self) -> Generator[dict, None, None]:
@@ -233,21 +251,19 @@ class QueryResult:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
 
-    def close(self):
+    def close(self, ex: Exception = None):
         if self.source:
-            self.source.close()
+            self.source.close(ex)
             self.source = None
         if self._block_gen is not None:
             self._block_gen.close()
             self._block_gen = None
 
     def __enter__(self):
-        self._in_context = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-        self._in_context = False
 
 
 local_tz = datetime.now().astimezone().tzinfo

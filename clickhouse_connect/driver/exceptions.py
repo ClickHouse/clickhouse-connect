@@ -67,3 +67,10 @@ class NotSupportedError(DatabaseError):
     which is not supported by the database, e.g. requesting a
     .rollback() on a connection that does not support transaction or
     has transactions turned off."""
+
+
+class StreamClosedError(ProgrammingError):
+    """Exception raised when a stream operation is executed on a closed stream."""
+
+    def __init__(self):
+        super().__init__('Executing a streaming operation on a closed stream')
