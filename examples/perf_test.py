@@ -14,7 +14,7 @@ This script is not intended to be rigorous or scientific.  For entertainment pur
 """
 
 import time
-import clickhouse_driver
+import clickhouse_driver  # pylint: disable=import-error
 import clickhouse_connect
 
 
