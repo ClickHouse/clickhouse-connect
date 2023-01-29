@@ -23,23 +23,27 @@ class NativeTransform:
             nonlocal block_num
             result_block = []
             try:
-                num_cols = source.read_leb128()
-                num_rows = source.read_leb128()
-            except (StopIteration, IndexError):
-                source.close()
-                return None
-            for col_num in range(num_cols):
-                name = source.read_leb128_str()
-                type_name = source.read_leb128_str()
-                if block_num == 0:
-                    names.append(name)
-                    col_type = registry.get_from_name(type_name)
-                    col_types.append(col_type)
-                else:
-                    col_type = col_types[col_num]
-                context.start_column(name)
-                column = col_type.read_column(source, num_rows, context)
-                result_block.append(column)
+                try:
+                    num_cols = source.read_leb128()
+                    num_rows = source.read_leb128()
+                except (StopIteration, IndexError):
+                    source.close()
+                    return None
+                for col_num in range(num_cols):
+                    name = source.read_leb128_str()
+                    type_name = source.read_leb128_str()
+                    if block_num == 0:
+                        names.append(name)
+                        col_type = registry.get_from_name(type_name)
+                        col_types.append(col_type)
+                    else:
+                        col_type = col_types[col_num]
+                    context.start_column(name)
+                    column = col_type.read_column(source, num_rows, context)
+                    result_block.append(column)
+            except Exception as ex:
+                source.close(ex)  # Ensure that the query is closed if something unexpected happens
+                raise
             block_num += 1
             return result_block
 

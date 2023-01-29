@@ -28,7 +28,7 @@ _common_settings: Dict[str, CommonSetting] = {}
 def build_client_name(client_name: str):
     client_name = client_name.strip() + ' ' if client_name else ''
     py_version = sys.version.split(' ', maxsplit=1)[0]
-    return f'{client_name}clickhouse-connect/{version()} (lv: py/{py_version}, os:{sys.platform})'
+    return f'{client_name}clickhouse-connect/{version()} (lv:py/{py_version}, os:{sys.platform})'
 
 
 def get_setting(name: str):

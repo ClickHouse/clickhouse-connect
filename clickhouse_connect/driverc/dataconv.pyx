@@ -1,11 +1,15 @@
+import struct
 from datetime import datetime, date
 
 import cython
 from .buffer cimport ResponseBuffer
-from cpython cimport Py_INCREF
+from cpython cimport Py_INCREF, Py_DECREF
+from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
+from cython.view cimport array as cvarray
 from ipaddress import IPv4Address
 from uuid import UUID, SafeUUID
+from libc.string cimport memcpy
 
 
 @cython.wraparound(False)
@@ -135,7 +139,7 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
     new_uuid = UUID.__new__
     unsafe = SafeUUID.unsafe
     oset = object.__setattr__
-    while x < num_rows:
+    for x in range(num_rows):
         val = (int((<unsigned long long *>loc)[0]) << 64) + int((<unsigned long long *>(loc + 8))[0])
         v = new_uuid(UUID)
         oset(v, 'int', val)
@@ -143,5 +147,27 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
         PyTuple_SET_ITEM(column, x, v)
         Py_INCREF(v)
         loc += 16
-        x += 1
+    return column
+
+
+def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long long num_rows):
+    if num_rows == 0:
+        return ()
+    cdef unsigned long long x = 0
+
+    # We have to make a copy of the incoming null map because the next
+    # "read_byes_c" call could invalidate our pointer by replacing the underlying buffer
+    cdef char * null_map = <char *>PyMem_Malloc(<size_t>num_rows)
+    memcpy(<void *>null_map, <void *>buffer.read_bytes_c(num_rows), num_rows)
+
+    cdef size_t item_size = struct.calcsize(array_type)
+    cdef cvarray cy_array = cvarray((num_rows,), item_size, array_type, mode='c', allocate_buffer=False)
+    cy_array.data = buffer.read_bytes_c(num_rows * item_size)
+    cdef object column = tuple(memoryview(cy_array))
+    for x in range(num_rows):
+        if null_map[x] != 0:
+            Py_DECREF(column[x])
+            Py_INCREF(None)
+            PyTuple_SET_ITEM(column, x, None)
+    PyMem_Free(<void *>null_map)
     return column

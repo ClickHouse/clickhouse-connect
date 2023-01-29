@@ -3,7 +3,6 @@ import logging
 import re
 import uuid
 from base64 import b64encode
-from http.client import RemoteDisconnected
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
 
@@ -324,15 +323,13 @@ class HttpClient(Client):
                                                            preload_content=not stream)
             except HTTPError as ex:
                 rex_context = ex.__context__
-                if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):
-                    # See https://github.com/psf/requests/issues/4664
+                if rex_context and isinstance(rex_context.__context__, ConnectionResetError):
                     # The server closed the connection, probably because the Keep Alive has expired
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
                     # related to the Keep Alive settings
                     if attempts == 1:
                         logger.debug('Retrying remotely closed connection')
-                        attempts = 0
                         continue
                 logger.exception('Unexpected Http Driver Exception')
                 raise OperationalError(f'Error executing HTTP request {self.url}') from ex

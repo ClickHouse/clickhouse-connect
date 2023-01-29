@@ -7,7 +7,7 @@ from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optio
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
-from clickhouse_connect.driver.ctypes import numpy_conv
+from clickhouse_connect.driver.ctypes import numpy_conv, data_conv
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -139,17 +139,20 @@ class ClickHouseType(ABC):
         if self.low_card:
             return self._read_low_card_column(source, num_rows, ctx)
         if self.nullable:
-            null_map = source.read_bytes(num_rows)
-            column = self._read_column_binary(source, num_rows, ctx)
-            if ctx.use_none:
-                if ctx.use_numpy or isinstance(column, (tuple, array.array)):
-                    column = [None if null_map[ix] else column[ix] for ix in range(num_rows)]
-                else:
-                    for ix in range(num_rows):
-                        if null_map[ix]:
-                            column[ix] = None
-            return column
+            return self._read_nullable_column(source, num_rows, ctx)
         return self._read_column_binary(source, num_rows, ctx)
+
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        null_map = source.read_bytes(num_rows)
+        column = self._read_column_binary(source, num_rows, ctx)
+        if ctx.use_none:
+            if ctx.use_numpy or isinstance(column, (tuple, array.array)):
+                column = [None if null_map[ix] else column[ix] for ix in range(num_rows)]
+            else:
+                for ix in range(num_rows):
+                    if null_map[ix]:
+                        column[ix] = None
+        return column
 
     # The binary methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
@@ -305,6 +308,9 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         if ctx.use_numpy:
             return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
         return source.read_array(self._array_type, num_rows)
+
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        return data_conv.read_nullable_array(source, self._array_type, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         if len(column) and self.nullable:

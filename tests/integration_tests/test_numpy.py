@@ -1,11 +1,14 @@
 import datetime
+import logging
+import os
+import random
 from typing import Callable
 
 import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.options import np
-from tests.helpers import list_equal
+from tests.helpers import list_equal, random_query
 from tests.integration_tests.datasets import basic_ds, basic_ds_columns, basic_ds_types, null_ds, null_ds_columns, \
     null_ds_types, dt_ds, dt_ds_columns, dt_ds_types
 
@@ -77,3 +80,22 @@ def test_numpy_bigint_object(test_client: Client, table_context: Callable):
         assert list(py_result[0]) == list(source[0])
         numpy_result = test_client.query_np('SELECT * FROM test_numpy_bigint_object')
         assert list(py_result[1]) == list(numpy_result[1])
+
+
+logger = logging.getLogger(__name__)
+
+
+def test_numpy_streams(test_client: Client):
+    runs = os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250')
+    for _ in range(int(runs) // 2):
+        query_rows = random.randint(0, 5000) + 20000
+        stream_count = 0
+        row_count = 0
+        query = random_query(query_rows)
+        stream = test_client.query_np_stream(query, settings={'max_block_size': 5000})
+        with stream:
+            for np_array in stream:
+                stream_count += 1
+                row_count += np_array.shape[0]
+        assert row_count == query_rows
+        assert stream_count > 2

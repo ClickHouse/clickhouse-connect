@@ -20,7 +20,7 @@ if int_size == 2:
 array_sizes = {v: k for k, v in array_map.items()}
 array_sizes['f'] = 4
 array_sizes['d'] = 8
-np_date_types = {3: '[ms]', 6: '[us]', 9: '[ns]'}
+np_date_types = {0: '[s]', 3: '[ms]', 6: '[us]', 9: '[ns]'}
 
 
 def array_type(size: int, signed: bool):
@@ -180,15 +180,28 @@ class StreamContext:
     Wraps a generator and its "source" in a Context.  This ensures that the source will be "closed" even if the
     generator is not fully consumed or there is an exception during consumption
     """
+    __slots__ = 'source', 'gen', '_in_context'
+
     def __init__(self, source: Closable, gen: Generator):
         self.source = source
         self.gen = gen
+        self._in_context = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self._in_context:
+            raise ProgrammingError('Stream should be used within a context')
+        return next(self.gen)
 
     def __enter__(self):
         if not self.gen:
             raise ProgrammingError('Stream has been closed')
-        return self.gen
+        self._in_context = True
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.source.close()
+        self._in_context = False
+        self.source.close(exc_val)
         self.gen = None

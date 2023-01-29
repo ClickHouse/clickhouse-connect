@@ -9,6 +9,8 @@ import zstandard
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
+logger = logging.getLogger(__name__)
+
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
 
@@ -113,6 +115,8 @@ class ResponseSource:
     def read(self, amt: int) -> bytes:
         return self.response.read(amt)
 
-    def close(self):
+    def close(self, ex: Exception = None):
+        if ex:
+            logger.warning('Closed HTTP response due to unexpected exception')
         self.response.drain_conn()
         self.response.close()

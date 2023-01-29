@@ -115,8 +115,8 @@ class NumpyResult(Closable):
             self.close()
         return self._pd_result
 
-    def close(self):
+    def close(self, ex: Exception = None):
         self._block_gen = None
         if self.source:
-            self.source.close()
+            self.source.close(ex)
             self.source = None

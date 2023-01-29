@@ -78,6 +78,12 @@ def read_uuid_col(source: ByteSource, num_rows: int):
     return column
 
 
+def read_nullable_array(source: ByteSource, array_type: str, num_rows: int):
+    null_map = source.read_bytes(num_rows)
+    column = source.read_array(array_type, num_rows)
+    return [None if null_map[ix] else column[ix] for ix in range(num_rows)]
+
+
 def to_numpy_array(column: Sequence):
     arr = np.empty((len(column),), dtype=np.object)
     arr[:] = column

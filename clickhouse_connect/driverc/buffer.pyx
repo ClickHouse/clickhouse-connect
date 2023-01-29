@@ -37,6 +37,9 @@ cdef class ResponseBuffer:
         self.buffer = NULL
         self.slice = <char*>PyMem_Malloc(self.slice_sz)
 
+    # Note that return char * return from this method is only good until the next call to _read_bytes_c or
+    # _read_byte_load, since it points into self.buffer which can be replaced with the next chunk from the stream
+    # Accordingly, that memory MUST be copied/processed into another buffer/PyObject immediately
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef inline char * read_bytes_c(self, unsigned long long sz) except NULL:
@@ -240,9 +243,9 @@ cdef class ResponseBuffer:
             b += sz
         return column
 
-    def close(self):
+    def close(self, ex: Exception = None):
         if self.source:
-            self.source.close()
+            self.source.close(ex)
             self.source = None
 
     def __dealloc__(self):

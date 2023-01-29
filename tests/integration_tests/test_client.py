@@ -29,6 +29,12 @@ def test_command(test_client: Client):
     assert version.startswith('2')
 
 
+def test_client_name(test_client: Client):
+    user_agent = test_client.headers['User-Agent']
+    assert 'test' in user_agent
+    assert 'py/' in user_agent
+
+
 def test_none_database(test_client: Client):
     old_db = test_client.database
     test_db = test_client.command('select database()')

@@ -3,7 +3,7 @@ from typing import Union, Type, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
-from clickhouse_connect.driver.ctypes import numpy_conv
+from clickhouse_connect.driver.ctypes import numpy_conv, data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -48,6 +48,7 @@ class UInt64(ArrayType):
     valid_formats = 'signed', 'native'
     _array_type = 'Q'
     np_type = '<u8'
+    python_type = int
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         fmt = self.read_format(ctx)
@@ -59,6 +60,9 @@ class UInt64(ArrayType):
             return numpy_conv.read_numpy_array(source, np_type, num_rows)
         arr_type = 'q' if fmt == 'signed' else 'Q'
         return source.read_array(arr_type, num_rows)
+
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        return data_conv.read_nullable_array(source, self._array_type, num_rows)
 
 
 class BigInt(ClickHouseType, registered=False):
@@ -158,7 +162,7 @@ class Boolean(Bool):
     pass
 
 
-class Enum(ArrayType):
+class Enum(ClickHouseType):
     __slots__ = '_name_map', '_int_map'
     _array_type = 'b'
     valid_formats = 'string', 'int'

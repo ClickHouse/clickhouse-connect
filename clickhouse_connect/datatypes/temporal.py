@@ -3,8 +3,8 @@ import pytz
 from datetime import date, datetime
 from typing import Union, Sequence, MutableSequence
 
-from clickhouse_connect.datatypes.base import TypeDef, ArrayType
-from clickhouse_connect.driver.common import write_array, np_date_types
+from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
+from clickhouse_connect.driver.common import write_array, np_date_types, int_size
 from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -15,7 +15,7 @@ epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
 
 
-class Date(ArrayType):
+class Date(ClickHouseType):
     _array_type = 'H'
     np_type = 'datetime64[D]'
     nano_divisor = 86400 * 1000000000
@@ -55,11 +55,11 @@ class Date(ArrayType):
 
 
 class Date32(Date):
-    _array_type = 'i'
+    _array_type = 'l' if int_size == 2 else 'i'
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
+            return numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_date32_col(source, num_rows)
@@ -70,8 +70,8 @@ from_ts_tz = datetime.fromtimestamp
 
 
 # pylint: disable=abstract-method
-class DateTime(ArrayType):
-    _array_type = 'I'
+class DateTime(ClickHouseType):
+    _array_type = 'L' if int_size == 2 else 'I'
     np_type = 'datetime64[s]'
     valid_formats = 'native', 'int'
     python_type = datetime
@@ -104,9 +104,8 @@ class DateTime(ArrayType):
         return epoch_start_datetime
 
 
-class DateTime64(ArrayType):
+class DateTime64(ClickHouseType):
     __slots__ = 'scale', 'prec', 'tzinfo'
-    _array_type = 'Q'
     valid_formats = 'native', 'int'
     python_null = epoch_start_date
     python_type = datetime
@@ -133,7 +132,7 @@ class DateTime64(ArrayType):
         return 1000000000 // self.prec
 
     def _read_binary_tz(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        column = source.read_array(self._array_type, num_rows)
+        column = source.read_array('Q', num_rows)
         if self.read_format(ctx) == 'int':
             return column
         new_col = []
@@ -150,7 +149,7 @@ class DateTime64(ArrayType):
     def _read_binary_naive(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
             return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
-        column = source.read_array(self._array_type, num_rows)
+        column = source.read_array('Q', num_rows)
         if self.read_format(ctx) == 'int':
             return column
         new_col = []
@@ -175,7 +174,7 @@ class DateTime64(ArrayType):
                           for x in column]
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
-        write_array(self._array_type, column, dest)
+        write_array('Q', column, dest)
 
     def _python_null(self, ctx: QueryContext):
         if ctx.use_numpy:

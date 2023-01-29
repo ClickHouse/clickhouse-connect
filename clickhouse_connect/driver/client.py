@@ -191,7 +191,7 @@ class Client(ABC):
         kwargs = locals().copy()
         del kwargs['self']
         kwargs['use_numpy'] = True
-        return self._query_with_context(**kwargs).np_stream
+        return self._query_with_context(self.create_query_context(**kwargs)).np_stream
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_df(self,

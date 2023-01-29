@@ -27,7 +27,7 @@ weighted_types = (('Int8', 1), ('UInt8', 1), ('Int16', 1), ('UInt16', 1), ('Int3
                   ('Bool', 1), ('UUID', 2), ('Date', 2), ('Date32', 1), ('DateTime', 4), ('DateTime64', 2), ('IPv4', 2),
                   ('IPv6', 2), ('Array', 16), ('Tuple', 10), ('Map', 10), ('Nested', 4))
 all_types, all_weights = tuple(zip(*weighted_types))
-nested_types = ['Array', 'Tuple', 'Map', 'Nested']
+nested_types = ('Array', 'Tuple', 'Map', 'Nested')
 terminal_types = set(all_types) - set(nested_types)
 total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
@@ -176,6 +176,18 @@ def list_equal(a: Sequence, b: Sequence) -> bool:
     return True
 
 
+def random_query(row_count: int = 10000, col_count: int = 10, date32: bool = True):
+    columns = []
+    max_cols = random.randint(1, col_count)
+    while len(columns) < max_cols:
+        col_type = random_type(NESTED_DEPTH, low_card_perc=0, nullable_perc=0).name
+        if 'Enum' in col_type or 'IP' in col_type or (not date32 and 'Date32' in col_type):
+            continue
+        columns.append(f'col_{chr(len(columns) + 97)} {col_type}')
+    columns = ', '.join(columns)
+    return f"SELECT * FROM generateRandom('{columns}') LIMIT {row_count}"
+
+
 class TableContext:
     def __init__(self, client: Client,
                  table: str,
@@ -208,7 +220,7 @@ class TableContext:
         self.client.command(f'DROP TABLE IF EXISTS {self.table}')
 
 
-def bytes_source(data: Union[str, bytes], chunk_size:int = 256, cls: Type = ResponseBuffer):
+def bytes_source(data: Union[str, bytes], chunk_size: int = 256, cls: Type = ResponseBuffer):
     if isinstance(data, str):
         data = bytes.fromhex(data)
 
@@ -224,7 +236,7 @@ def bytes_source(data: Union[str, bytes], chunk_size:int = 256, cls: Type = Resp
         def __init__(self):
             self.gen = gen()
 
-        def close(self):
+        def close(self, ex: Exception = None):
             pass
 
     return cls(TestSource())

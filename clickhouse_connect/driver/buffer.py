@@ -113,7 +113,7 @@ class ResponseBuffer(ByteSource):
             column.byteswap()
         return column
 
-    def close(self):
+    def close(self, ex: Exception = None):
         if self.source:
-            self.source.close()
+            self.source.close(ex)
             self.source = None

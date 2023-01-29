@@ -2,8 +2,8 @@ import socket
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
-from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import write_array
+from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.common import write_array, int_size
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -14,8 +14,8 @@ V6_NULL = bytes(b'\x00' * 16)
 
 
 # pylint: disable=protected-access
-class IPv4(ArrayType):
-    _array_type = 'I'
+class IPv4(ClickHouseType):
+    _array_type = 'L' if int_size == 2 else 'I'
     valid_formats = 'string', 'native', 'int'
     python_type = IPv4Address
 
