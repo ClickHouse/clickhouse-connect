@@ -38,7 +38,7 @@ class ClickHouseType(ABC):
     """
     __slots__ = 'nullable', 'low_card', 'wrappers', 'type_def', '__dict__'
     _name_suffix = ''
-    encoding = 'utf-8'
+    encoding = 'utf8'
     np_type = 'O'  # Default to Numpy Object type
     nano_divisor = 0  # Only relevant for date like objects
     byte_size = 0

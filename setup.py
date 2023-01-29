@@ -10,7 +10,6 @@ try:
     import numpy
 
     print(f'Using Cython {cython_version}to build cython modules')
-    print(numpy.get_include())
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3str')
     c_includes = [numpy.get_include()]
 except ImportError:

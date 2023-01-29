@@ -49,6 +49,7 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
     if sys.platform == 'darwin':
         socket_options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), keep_interval))
     options['maxsize'] = options.get('maxsize', 8)
+    options['retries'] = options.get('retries', 1)
     if ca_cert == 'certifi':
         ca_cert = certifi.where()
     options['cert_reqs'] = 'CERT_REQUIRED' if verify else 'CERT_NONE'

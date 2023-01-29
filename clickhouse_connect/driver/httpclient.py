@@ -322,8 +322,7 @@ class HttpClient(Client):
                                                            retries=self.http_retries,
                                                            preload_content=not stream)
             except HTTPError as ex:
-                rex_context = ex.__context__
-                if rex_context and isinstance(rex_context.__context__, ConnectionResetError):
+                if isinstance(ex.__context__, ConnectionResetError):
                     # The server closed the connection, probably because the Keep Alive has expired
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
