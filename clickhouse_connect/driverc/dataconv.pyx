@@ -132,6 +132,8 @@ cpdef inline object epoch_days_to_date(int days):
     return date(year, month + 1, rem + 1 - prev)
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(16 * num_rows)
@@ -150,6 +152,8 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
     return column
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long long num_rows):
     if num_rows == 0:
         return ()

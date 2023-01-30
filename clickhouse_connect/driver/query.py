@@ -202,20 +202,6 @@ class QueryResult(Closable):
         for block in self._column_block_stream():
             yield list(zip(*block))
 
-    def stream_column_blocks(self) -> Iterator:
-        """
-        .. deprecated:: 0.5.4
-            Please use the column_block_stream property instead.  This method will be removed in a future release
-        """
-        return self._column_block_stream()
-
-    def stream_row_blocks(self) -> Iterator:
-        """
-        .. deprecated:: 0.5.4
-            Please use the row_block_stream property instead.  This method will be removed in a future release
-        """
-        return self._row_block_stream()
-
     @property
     def column_block_stream(self) -> StreamContext:
         return StreamContext(self, self._column_block_stream())
@@ -224,10 +210,14 @@ class QueryResult(Closable):
     def row_block_stream(self):
         return StreamContext(self, self._row_block_stream())
 
-    def stream_rows(self) -> Iterator:
-        for block in self._row_block_stream():
-            for row in block:
-                yield row
+    @property
+    def rows_stream(self) -> StreamContext:
+        def stream():
+            for block in self._row_block_stream():
+                for row in block:
+                    yield row
+
+        return StreamContext(self, stream())
 
     def named_results(self) -> Generator[dict, None, None]:
         for row in zip(*self.result_columns):
@@ -250,6 +240,29 @@ class QueryResult(Closable):
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
+
+    def stream_column_blocks(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+            Please use the column_block_stream property instead.  This method will be removed in a future release
+        """
+        return self._column_block_stream()
+
+    def stream_row_blocks(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+            Please use the row_block_stream property instead.  This method will be removed in a future release
+        """
+        return self._row_block_stream()
+
+    def stream_rows(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+           Please use the row_block_stream property instead.  This method will be removed in a future release
+        """
+        for block in self._row_block_stream():
+            for row in block:
+                yield row
 
     def close(self, ex: Exception = None):
         if self.source:

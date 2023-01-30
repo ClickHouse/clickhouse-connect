@@ -28,39 +28,34 @@ cd_client = clickhouse_driver.Client(host='localhost')
 
 
 def read_python(query):
-    print('\n\tPython Batch:')
+    print('\n\tPython Batch (column oriented):')
     start = time.time()
-    rows = cc_client.query(query).result_rows
-    print(time.time() - start)
-    print(rows)
+    columns = cc_client.query(query).result_columns
+    _print_result(start, len(columns[0]))
 
 
 def read_python_stream(query):
     print('\n\tPython Stream:')
     rows = 0
     start = time.time()
-    with cc_client.query(query) as query_result:
-        for block in query_result.stream_column_blocks():
+    with cc_client.query_column_block_stream(query) as stream:
+        for block in stream:
             rows += len(block[0])
-    print(time.time() - start)
-    print(rows)
+    _print_result(start, rows)
 
 
 def read_numpy(query):
     print('\n\tNumpy Batch:')
     start = time.time()
     arr = cc_client.query_np(query, max_str_len=100)
-    rows = len(arr)
-    print(time.time() - start)
-    print(rows)
+    _print_result(start, len(arr))
 
 
 def read_pandas(query):
     print('\n\tPandas Batch:')
     start = time.time()
     rows = len(cc_client.query_df(query))
-    print(time.time() - start)
-    print(rows)
+    _print_result(start, rows)
 
 
 def read_pandas_stream(query):
@@ -70,16 +65,14 @@ def read_pandas_stream(query):
     with cc_client.query_df_stream(query) as stream:
         for data_frame in stream:
             rows += len(data_frame)
-    print(time.time() - start)
-    print(rows)
+    _print_result(start, rows)
 
 
 def dr_read_python(query):
-    print('\n\tclickhouse-driver Python Batch:')
+    print('\n\tclickhouse-driver Python Batch (column oriented):')
     start = time.time()
-    result = cd_client.execute(query)
-    print(time.time() - start)
-    print(len(result))
+    result = cd_client.execute(query, columnar=True)
+    _print_result(start, len(result[0]))
 
 
 def dr_read_python_stream(query):
@@ -88,23 +81,26 @@ def dr_read_python_stream(query):
     rows = 0
     for block in cd_client.execute_iter(query):
         rows += len(block)
-    print(time.time() - start)
-    print(rows)
+    _print_result(start, rows)
 
 
 def dr_read_pandas(query):
-    print('\n\tclickhouse-driver Pandas:')
+    print('\n\tclickhouse-driver Pandas Batch:')
     start = time.time()
     data_frame = cd_client.query_dataframe(query)
-    print(time.time() - start)
-    print(len(data_frame))
+    _print_result(start, len(data_frame))
+
+
+def _print_result(start, rows):
+    total_time = time.time() - start
+    print(f'\t\tTime: {total_time:.4f} sec  rows: {rows}  rows/sec {rows // total_time}')
 
 
 def main():
     for query in queries:
         print(f'\n{query}')
         read_python(query)
-        read_python_stream(query)
+        # read_python_stream(query)
         # read_pandas_streaming(query)
         # read_numpy(query)
         read_pandas(query)

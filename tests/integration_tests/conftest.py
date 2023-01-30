@@ -74,6 +74,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    username=test_config.username,
                                    password=test_config.password,
                                    send_progress=False,
+                                   query_limit=0,
                                    compress=test_config.compress,
                                    client_name='int_tests/test',
                                    settings={

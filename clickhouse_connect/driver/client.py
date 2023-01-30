@@ -138,24 +138,53 @@ class Client(ABC):
             return QueryResult([response] if isinstance(response, list) else [[response]])
         return self._query_with_context(query_context)
 
-    def query_row_stream(self,
-                         query: str = None,
-                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-                         settings: Optional[Dict[str, Any]] = None,
-                         query_formats: Optional[Dict[str, str]] = None,
-                         column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-                         encoding: Optional[str] = None,
-                         use_none: Optional[bool] = None,
-                         column_oriented: Optional[bool] = None,
-                         use_numpy: Optional[bool] = None,
-                         max_str_len: Optional[int] = None,
-                         context: QueryContext = None):
+    def query_column_block_stream(self,
+                                  query: str = None,
+                                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                                  settings: Optional[Dict[str, Any]] = None,
+                                  query_formats: Optional[Dict[str, str]] = None,
+                                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                                  encoding: Optional[str] = None,
+                                  use_none: Optional[bool] = None,
+                                  context: QueryContext = None) -> StreamContext:
         """
-        Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
-        parameters, see the create_query_context method
-        :return: QueryResult -- data and metadata from response
+        Variation of main query method that returns a stream of column oriented blocks. For
+        parameters, see the create_query_context method.
+        :return: StreamContext -- Iterable stream context that returns column oriented blocks
         """
-        return self._context_query(locals())
+        return self._context_query(locals(), use_numpy=False).column_block_stream
+
+    def query_row_block_stream(self,
+                               query: str = None,
+                               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                               settings: Optional[Dict[str, Any]] = None,
+                               query_formats: Optional[Dict[str, str]] = None,
+                               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                               encoding: Optional[str] = None,
+                               use_none: Optional[bool] = None,
+                               context: QueryContext = None) -> StreamContext:
+        """
+        Variation of main query method that returns a stream of row oriented blocks. For
+        parameters, see the create_query_context method.
+        :return: StreamContext -- Iterable stream context that returns blocks of rows
+        """
+        return self._context_query(locals(), use_numpy=False).row_block_stream
+
+    def query_rows_stream(self,
+                               query: str = None,
+                               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                               settings: Optional[Dict[str, Any]] = None,
+                               query_formats: Optional[Dict[str, str]] = None,
+                               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                               encoding: Optional[str] = None,
+                               use_none: Optional[bool] = None,
+                               context: QueryContext = None) -> StreamContext:
+        """
+        Variation of main query method that returns a stream of row oriented blocks. For
+        parameters, see the create_query_context method.
+        :return: StreamContext -- Iterable stream context that returns blocks of rows
+        """
+        return self._context_query(locals(), use_numpy=False).rows_stream
 
     @abstractmethod
     def raw_query(self, query: str,
@@ -286,8 +315,10 @@ class Client(ABC):
                                         column_oriented=column_oriented,
                                         use_numpy=use_numpy,
                                         max_str_len=max_str_len)
+        # By default, a numpy context doesn't use None/NULL.  If NULL values are allowed, all numpy arrays must
+        # be inefficient Object arrays
         if use_numpy and use_none is None:
-            use_none = True
+            use_none = False
         if use_numpy and max_str_len is None:
             max_str_len = 0
         return QueryContext(query=query,

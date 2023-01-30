@@ -3,7 +3,7 @@ import sys
 
 from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.types import Closable
 
 # pylint: disable=invalid-name
@@ -197,7 +197,7 @@ class StreamContext:
 
     def __enter__(self):
         if not self.gen:
-            raise ProgrammingError('Stream has been closed')
+            raise StreamClosedError
         self._in_context = True
         return self
 
