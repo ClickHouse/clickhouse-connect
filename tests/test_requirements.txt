@@ -9,7 +9,7 @@ pytest-mock
 pytest-dotenv
 numpy~=1.19.0; python_version == '3.7'
 numpy~=1.22.0; python_version >= '3.8' and python_version <= '3.10'
-humpy~=1.24.0; python_version == '3.11'
+numpy~=1.24.0; python_version == '3.11'
 pandas
 zstandard
 lz4
