@@ -12,8 +12,11 @@ try:
     print(f'Using Cython {cython_version}to build cython modules')
     c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3str')
     c_includes = [numpy.get_include()]
-except ImportError:
-    print('Cython Not Successfully Installed, Not building C extensions')
+except ImportError as ex:
+    print('Cython Install Failed, Not Building C Extensions: ', ex)
+    cythonize = None
+except Exception as ex:
+    print('Cython Build Failed, Not Building C Extensions: ', ex)
     cythonize = None
 
 
