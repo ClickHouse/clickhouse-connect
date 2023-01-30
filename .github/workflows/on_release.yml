@@ -8,7 +8,7 @@ on:
       - '*build*'
 
 env:
-  CIBW_SKIP: 'cp36-*'
+  CIBW_SKIP: 'cp36-* cp37-* pp37-*'
 
 jobs:
   build_x86_linux_wheels:
