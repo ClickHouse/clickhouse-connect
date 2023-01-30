@@ -69,4 +69,3 @@ def test_stream_errors(test_client: Client):
             assert sum(row[0] for row in stream) == 3882
     except StreamClosedError:
         pass
-

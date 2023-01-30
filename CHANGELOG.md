@@ -42,7 +42,9 @@ should reduce connection errors related to ClickHouse closing expired KeepAlive 
 when querying streams.
 * Previous versions used `threading.local()` variables to store context information during query processing.  The architecture
 has been changed to pass the relevant Query or Insert Context to transformation methods instead of relying on thread local
-variables.  This is significantly safer in a multithreaded environment.
+variables.  This is significantly safer in a multithreading environment.
+* Per query formatting logic has moved from `ClickHouseType` to the `QueryContext`.
+* `ClickHouseType` methods have been renamed to remove unnecessary references to `native` format.
 
 ## 0.5.3, 2023-01-23
 
