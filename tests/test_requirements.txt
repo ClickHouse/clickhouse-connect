@@ -7,7 +7,7 @@ pyarrow
 pytest
 pytest-mock
 pytest-dotenv
-numpy
+numpy==1.22
 pandas
 zstandard
 lz4

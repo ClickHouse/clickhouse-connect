@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Type
 
+from flask import current_app
 from flask_babel import gettext as __
 from marshmallow import Schema, fields
 from marshmallow.validate import Range
@@ -16,6 +17,7 @@ from superset.utils.network import is_hostname_valid, is_port_open
 from superset.models.core import Database
 
 from clickhouse_connect import driver_name
+from clickhouse_connect.common import set_setting
 from clickhouse_connect.driver import default_port
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_superset.datatypes import configure_types
@@ -24,6 +26,7 @@ from clickhouse_connect.driver.exceptions import ClickHouseError
 logger = logging.getLogger(__name__)
 
 configure_types()
+set_setting('product_name', f"superset/{current_app.config.get('VERSION_STRING', 'dev')}")
 
 
 class ClickHouseParametersSchema(Schema):

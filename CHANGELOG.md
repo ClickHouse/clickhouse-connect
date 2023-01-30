@@ -21,7 +21,8 @@ streaming response is properly closed/consumed.)  For simple examples, see the b
   * `query_np_stream` -- returns a generator where each ClickHouse data block is transformed into a Numpy array
   * `query_df_stream` -- returns a generator where each ClickHouse data block is transformed into a Pandas Dataframe
 * The `client_name` is now reported in a standardized way to ClickHouse (as the `http_user_agent`).  For better tracking of your
-Python application, set the `get_client` `client_name` parameter to "<your-app-name>/<app-version>".
+Python application, use the new `product_name` common setting or set `client_name` `get_client` parameter to identify your product
+as "<your-product-name>/<app-version>".
 
 ### Performance Improvements
 * C/Cython optimizations for transforming ClickHouse data to Python types have been improved, and additional datatypes have been
@@ -42,9 +43,11 @@ should reduce connection errors related to ClickHouse closing expired KeepAlive 
 when querying streams.
 * Previous versions used `threading.local()` variables to store context information during query processing.  The architecture
 has been changed to pass the relevant Query or Insert Context to transformation methods instead of relying on thread local
-variables.  This is significantly safer in a multithreading environment.
+variables.  This is significantly safer in an environment where multiple queries can conceivably be open at the same on the
+same thread (for example, if using async functions).
 * Per query formatting logic has moved from `ClickHouseType` to the `QueryContext`.
-* `ClickHouseType` methods have been renamed to remove unnecessary references to `native` format.
+* `ClickHouseType` methods have been renamed to remove outdated references to `native` format (everything is native now)
+* Upgraded Cython Build to 3.0.11alpha release
 
 ## 0.5.3, 2023-01-23
 

@@ -9,7 +9,7 @@ on:
 
 env:
   CIBW_SKIP: 'cp36-*'
-  CIBW_BEFORE_BUILD: pip install "cython==3.0.0a11"
+  CIBW_BEFORE_BUILD: pip install "cython==3.0.0a11" && pip install "numpy==1.22"
 
 jobs:
   build_x86_linux_wheels:
