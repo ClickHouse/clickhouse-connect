@@ -137,14 +137,16 @@ cpdef inline object epoch_days_to_date(int days):
 def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(16 * num_rows)
+    cdef char[16] temp
     cdef object column = PyTuple_New(num_rows), v
     new_uuid = UUID.__new__
     unsafe = SafeUUID.unsafe
     oset = object.__setattr__
     for x in range(num_rows):
-        val = (int((<unsigned long long *>loc)[0]) << 64) + int((<unsigned long long *>(loc + 8))[0])
+        memcpy (<void *>temp, <void *>(loc + 8), 8)
+        memcpy (<void *>(temp + 8), <void *>loc, 8)
         v = new_uuid(UUID)
-        oset(v, 'int', val)
+        oset(v, 'int', int.from_bytes(temp[:16], 'little'))
         oset(v, 'is_safe', unsafe)
         PyTuple_SET_ITEM(column, x, v)
         Py_INCREF(v)
