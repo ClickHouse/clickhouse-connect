@@ -99,13 +99,13 @@ def _print_result(start, rows):
 def main():
     for query in queries:
         print(f'\n{query}')
-        read_python(query)
-        # read_python_stream(query)
+        # read_python(query)
+        read_python_stream(query)
         # read_pandas_streaming(query)
         # read_numpy(query)
-        read_pandas(query)
-        dr_read_python(query)
-        dr_read_pandas(query)
+        # read_pandas(query)
+        # dr_read_python(query)
+        # dr_read_pandas(query)
 
 
 if __name__ == '__main__':
