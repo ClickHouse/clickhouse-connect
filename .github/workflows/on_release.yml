@@ -8,12 +8,14 @@ on:
       - '*build*'
 
 env:
-  CIBW_SKIP: 'cp36-* cp37-* pp37-*'
+  CIBW_SKIP: 'cp36-*'
 
 jobs:
-  build_x86_linux_wheels:
-    name: Build x86 wheels on Linux
+  build_x86_manylinux_wheels:
+    name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
+    env:
+      CIBW_SKIP: 'cp36-* *-musllinux*'
     steps:
       - uses: actions/checkout@v3
       - name: Build wheels
@@ -22,11 +24,62 @@ jobs:
         with:
           path: ./wheelhouse/*.whl
 
-  build_nonx86_wheels:
-    name: Build non x86 wheels
+  build_x86_musllinux_wheels:
+    name: Build x86 musllinux wheels on Linux
+    runs-on: ubuntu-latest
+    env:
+      CIBW_SKIP: 'cp36-* *-manylinux*'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.11.2
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_aarch64_manylinux_wheels:
+    name: Build aarch64 manylinux wheels
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
+      CIBW_SKIP: 'cp36-* pp* *-musllinux*'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: all
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.11.2
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_aarch64_musllinux_wheels:
+    name: Build aarch64 musllinux wheels
+    runs-on: ubuntu-latest
+    env:
+      CIBW_ARCHS_LINUX: aarch64
+      CIBW_SKIP: 'cp36-* pp* *-manylinux*'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: all
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.11.2
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_aarch64_pypy_wheels:
+    name: Build aarch64 PyPy wheels
+    runs-on: ubuntu-latest
+    env:
+      CIBW_ARCHS_LINUX: aarch64
+      CIBW_SKIP: 'cp*'
+      CIPW_BUILD: 'pp*'
     steps:
       - uses: actions/checkout@v3
       - name: Set up QEMU
@@ -53,7 +106,7 @@ jobs:
           path: ./wheelhouse/*.whl
 
   build_windows_wheels:
-    name: Build x86 wheels on Windows
+    name: Build wheels on Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
@@ -67,8 +120,11 @@ jobs:
     needs:
       - build_macos_wheels
       - build_windows_wheels
-      - build_x86_linux_wheels
-      - build_nonx86_wheels
+      - build_x86_musllinux_wheels
+      - build_x86_manylinux_wheels
+      - build_aarch64_musllinux_wheels
+      - build_aarch64_manylinux_wheels
+      - build_aarch64_pypy_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
     steps:
