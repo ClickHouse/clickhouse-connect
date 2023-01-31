@@ -51,9 +51,9 @@ jobs:
         clickhouse-version:
           - '22.3'
           - '22.8'
-          - '22.10'
           - '22.11'
           - '22.12'
+          - '23.1'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
@@ -117,6 +117,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_FUZZ: 10
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
+          CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM: 3
           CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
           CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
         run: pytest tests/integration_tests

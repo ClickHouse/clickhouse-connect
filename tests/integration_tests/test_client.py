@@ -1,5 +1,6 @@
 from decimal import Decimal
 from time import sleep
+from typing import Callable
 
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.client import Client
@@ -56,7 +57,7 @@ def test_insert(test_client: Client, test_table_engine: str):
     old_db = test_client.database
     test_client.database = None
     try:
-        test_client.command('DROP TABLE IF EXISTS default.test_system_insert')
+        test_client.command('DROP TABLE IF EXISTS default.test_system_insert SYNC')
         test_client.command(f'CREATE TABLE default.test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
         tables_result = test_client.query('SELECT * from system.tables')
         test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
@@ -65,31 +66,27 @@ def test_insert(test_client: Client, test_table_engine: str):
         test_client.database = old_db
 
 
-def test_raw_insert(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS test_raw_insert')
-    test_client.command(f"CREATE TABLE test_raw_insert (`weir'd` String, value String) Engine {test_table_engine}" +
-                        " ORDER BY `weir'd`")
-    csv = 'value1\nvalue2'
-    test_client.raw_insert('test_raw_insert', ['"weir\'d"'], csv.encode(), fmt='CSV')
-    result = test_client.query('SELECT * FROM test_raw_insert')
-    assert result.result_set[1][0] == 'value2'
+def test_raw_insert(test_client: Client, table_context: Callable):
+    with table_context('test_raw_insert', ["`weir'd` String", 'value String']):
+        csv = 'value1\nvalue2'
+        test_client.raw_insert('test_raw_insert', ['"weir\'d"'], csv.encode(), fmt='CSV')
+        result = test_client.query('SELECT * FROM test_raw_insert')
+        assert result.result_set[1][0] == 'value2'
 
-    test_client.command('TRUNCATE TABLE test_raw_insert')
-    tsv = 'weird1\tvalue__`2\nweird2\tvalue77'
-    test_client.raw_insert('test_raw_insert', ["`weir'd`", 'value'], tsv, fmt='TSV')
-    result = test_client.query('SELECT * FROM test_raw_insert')
-    assert result.result_set[0][1] == 'value__`2'
-    assert result.result_set[1][1] == 'value77'
+        test_client.command('TRUNCATE TABLE test_raw_insert')
+        tsv = 'weird1\tvalue__`2\nweird2\tvalue77'
+        test_client.raw_insert('test_raw_insert', ["`weir'd`", 'value'], tsv, fmt='TSV')
+        result = test_client.query('SELECT * FROM test_raw_insert')
+        assert result.result_set[0][1] == 'value__`2'
+        assert result.result_set[1][1] == 'value77'
 
 
-def test_decimal_conv(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS test_num_conv')
-    test_client.command('CREATE TABLE test_num_conv (col1 UInt64, col2 Int32, f1 Float64)' +
-                        f' Engine {test_table_engine} ORDER BY col1')
-    data = [[Decimal(5), Decimal(-182), Decimal(55.2)], [Decimal(57238478234), Decimal(77), Decimal(-29.5773)]]
-    test_client.insert('test_num_conv', data)
-    result = test_client.query('SELECT * FROM test_num_conv').result_set
-    assert result == [(5, -182, 55.2), (57238478234, 77, -29.5773)]
+def test_decimal_conv(test_client: Client, table_context: Callable):
+    with table_context('test_num_conv', ['col1 UInt64', 'col2 Int32', 'f1 Float64']):
+        data = [[Decimal(5), Decimal(-182), Decimal(55.2)], [Decimal(57238478234), Decimal(77), Decimal(-29.5773)]]
+        test_client.insert('test_num_conv', data)
+        result = test_client.query('SELECT * FROM test_num_conv').result_set
+        assert result == [(5, -182, 55.2), (57238478234, 77, -29.5773)]
 
 
 def test_session_params(test_config: TestConfig):

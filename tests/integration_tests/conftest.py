@@ -23,6 +23,7 @@ class TestConfig(NamedTuple):
     test_database: str
     cloud: bool
     compress: str
+    insert_quorum: int
     __test__ = False
 
 
@@ -39,7 +40,8 @@ def test_config_fixture() -> Iterator[TestConfig]:
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
     test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
-    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress)
+    insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum)
 
 
 @fixture(scope='session', name='test_db')
@@ -88,8 +90,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)
-    if client.min_version('22.11'):
-        client.set_client_setting('insert_quorum', 'auto')
+    if test_config.insert_quorum:
+        client.set_client_setting('insert_quorum', test_config.insert_quorum)
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
     client.database = test_db
     yield client
