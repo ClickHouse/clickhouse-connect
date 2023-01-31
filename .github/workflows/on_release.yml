@@ -78,8 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: 'cp*'
-      CIPW_BUILD: 'pp*'
+      CIBW_BUILD: 'pp*'
     steps:
       - uses: actions/checkout@v3
       - name: Set up QEMU
