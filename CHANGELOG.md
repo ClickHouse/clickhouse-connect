@@ -22,7 +22,7 @@ streaming response is properly closed/consumed.)  For simple examples, see the b
   * `query_df_stream` -- returns a generator where each ClickHouse data block is transformed into a Pandas Dataframe
 * The `client_name` is now reported in a standardized way to ClickHouse (as the `http_user_agent`).  For better tracking of your
 Python application, use the new `product_name` common setting or set `client_name` `get_client` parameter to identify your product
-as "<your-product-name>/<app-version>".
+as `<your-product-name>/<product-version>`.
 
 ### Performance Improvements
 * C/Cython optimizations for transforming ClickHouse data to Python types have been improved, and additional datatypes have been
