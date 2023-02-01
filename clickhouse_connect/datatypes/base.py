@@ -220,7 +220,7 @@ class ClickHouseType(ABC):
         index_cnt = source.read_uint64()
         assert index_cnt == num_rows
         index = source.read_array(array_type(index_sz, False), num_rows)
-        if ctx.use_numpy and not (self.nullable and use_none) and keys.dtype != np.object_:
+        if ctx.use_numpy and hasattr(keys, 'dtype') and keys.dtype != np.object_:
             return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=num_rows)
         return [keys[ix] for ix in index]
 

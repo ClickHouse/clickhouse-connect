@@ -30,6 +30,17 @@ def test_numpy_record_type(test_client: Client, table_context: Callable):
         test_client.insert('test_numpy_basic', np_array)
         new_np_array = test_client.query_np('SELECT * FROM test_numpy_basic', max_str_len=20)
         assert np.array_equal(np_array, new_np_array)
+        empty_np_array = test_client.query_np("SELECT * FROM test_numpy_basic WHERE key = 'NOT A KEY' ")
+        assert len(empty_np_array) == 0
+
+
+def test_numpy_object_type(test_client: Client, table_context: Callable):
+    np_array = np.array(basic_ds, dtype='O,int32,float,O,datetime64[ns],O')
+    np_array.dtype.names = basic_ds_columns
+    with table_context('test_numpy_basic', basic_ds_columns, basic_ds_types):
+        test_client.insert('test_numpy_basic', np_array)
+        new_np_array = test_client.query_np('SELECT * FROM test_numpy_basic')
+        assert np.array_equal(np_array, new_np_array)
 
 
 def test_numpy_nulls(test_client: Client, table_context: Callable):

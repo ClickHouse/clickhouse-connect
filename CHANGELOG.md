@@ -1,9 +1,7 @@
 # ClickHouse Connect ChangeLog
 
-## 0.5.4, 2023-01-31
-
 ### Deprecation Warning -- Context interface and stream* methods to be removed from QueryResult
-In 0.5.x releases, streaming was implemented by returning generators from the QueryResult methods
+In v0.5.0-0.5.3 releases, streaming was implemented by returning generators from the QueryResult methods
 `stream_column_blocks`, `stream_row_blocks`, and `stream_rows`.  Safe usage of these methods required executing them
 within a Python context created `with` the QueryResult itself.  Otherwise, the HTTP response could be left open in the
 case of an exception or other failure to consume the stream.
@@ -11,6 +9,15 @@ case of an exception or other failure to consume the stream.
 Using QueryResult as a context is unintuitive, and that usage pattern is deprecated and will be completely disabled in
 a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
 under New Features, below.
+
+## 0.5.5, 2023-02-01
+
+### Bug Fix
+- Queries of LowCardinality columns using pandas or numpy query methods would result in an exception.  https://github.com/ClickHouse/clickhouse-connect/issues/108
+This has been fixed.
+
+
+## 0.5.4, 2023-01-31
 
 ### New Features
 * Several streaming query methods have been added to the core ClickHouse Connect client.  Each of these methods returns a StreamContext object, which must be used as a Python `with` Context to stream data (this ensures the underlying
