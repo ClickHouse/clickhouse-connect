@@ -23,6 +23,8 @@ def test_pandas_basic(test_client: Client, test_table_engine: str):
     new_df = test_client.query_df('SELECT * FROM test_system_insert_pd')
     test_client.command('DROP TABLE IF EXISTS test_system_insert_pd')
     assert new_df.columns.all() == df.columns.all()
+    df = test_client.query_df("SELECT * FROM system.tables WHERE engine = 'not_a_thing'")
+    assert len(df) == 0
 
 
 def test_pandas_nulls(test_client: Client, table_context: Callable):
@@ -76,6 +78,22 @@ def test_pandas_context_inserts(test_client: Client, table_context: Callable):
             columns=null_ds_columns)
         test_client.insert_df(df=next_df, context=insert_context)
         assert test_client.command('SELECT count() FROM test_pandas_multiple') == 4
+
+
+def test_pandas_low_card(test_client: Client, table_context: Callable):
+    with table_context('test_pandas_low_card', ['key String',
+                                                'value LowCardinality(String)',
+                                                'date_value LowCardinality(DateTime)',
+                                                'int_value LowCardinality(Int32)']):
+        df = pd.DataFrame([['key1', 'test_string_0', datetime(2022, 10, 15, 4, 25), -372],
+                           ['key2', 'test_string_1', datetime.now(), 4777288]],
+                          columns=['key', 'value', 'date_value', 'int_value'])
+        test_client.insert_df('test_pandas_low_card', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_low_card')
+        assert result_df.iloc[0]['value'] == 'test_string_0'
+        assert result_df.iloc[1]['value'] == 'test_string_1'
+        assert result_df.iloc[0]['date_value'] == pd.Timestamp(2022, 10, 15, 4, 25)
+        assert result_df.iloc[1]['int_value'] == 4777288
 
 
 def test_pandas_large_types(test_client: Client, table_context: Callable):
