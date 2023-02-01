@@ -2,52 +2,30 @@ import socket
 from ipaddress import IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence
 
-from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import write_array
+from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.common import write_array, int_size
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.ctypes import data_conv
 
 IPV4_V6_MASK = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff'
 V6_NULL = bytes(b'\x00' * 16)
-V4_NULL = IPv4Address(0)
 
 
 # pylint: disable=protected-access
-class IPv4(ArrayType):
-    _array_type = 'I'
-    valid_formats = 'string', 'native'
+class IPv4(ClickHouseType):
+    _array_type = 'L' if int_size == 2 else 'I'
+    valid_formats = 'string', 'native', 'int'
+    python_type = IPv4Address
 
-    @property
-    def python_type(self):
-        return str if self.read_format() == 'string' else IPv4Address
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if self.read_format(ctx) == 'string':
+            column = source.read_array(self._array_type, num_rows)
+            return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
+        return data_conv.read_ipv4_col(source, num_rows)
 
-    @property
-    def python_null(self):
-        return '' if self.read_format() == 'string' else V4_NULL
-
-    def np_type(self, _str_len: int = 0):
-        return 'U15' if self.read_format() == 'string' else 'O'
-
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
-        if self.read_format() == 'string':
-            return self._from_native_str(source, num_rows)
-        return self._from_native_ip(source, num_rows)
-
-    def _from_native_ip(self, source: ByteSource, num_rows: int):
-        column = source.read_array(self._array_type, num_rows)
-        fast_ip_v4 = IPv4Address.__new__
-        new_col = []
-        app = new_col.append
-        for x in column:
-            ipv4 = fast_ip_v4(IPv4Address)
-            ipv4._ip = x
-            app(ipv4)
-        return new_col
-
-    def _from_native_str(self, source: ByteSource, num_rows: int, **_):
-        column = source.read_array(self._array_type, num_rows)
-        return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
-
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
@@ -60,29 +38,27 @@ class IPv4(ArrayType):
                 column = [x._ip for x in column]
         write_array(self._array_type, column, dest)
 
+    def _python_null(self, ctx: QueryContext):
+        fmt = self.read_format(ctx)
+        if fmt == 'string':
+            return '0.0.0.0'
+        if fmt == 'int':
+            return 0
+        return None
+
 
 # pylint: disable=protected-access
 class IPv6(ClickHouseType):
     valid_formats = 'string', 'native'
+    python_type = IPv6Address
 
-    @property
-    def python_type(self):
-        return str if self.read_format() == 'string' else IPv6Address
-
-    def np_type(self, _str_len: int = 0):
-        return 'U39' if self.read_format() == 'string' else 'O'
-
-    @property
-    def python_null(self):
-        return '' if self.read_format() == 'string' else V6_NULL
-
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
-        if self.read_format() == 'string':
-            return self._read_native_str(source, num_rows)
-        return self._read_native_ip(source, num_rows)
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if self.read_format(ctx) == 'string':
+            return self._read_binary_str(source, num_rows)
+        return self._read_binary_ip(source, num_rows)
 
     @staticmethod
-    def _read_native_ip(source: ByteSource, num_rows: int):
+    def _read_binary_ip(source: ByteSource, num_rows: int):
         fast_ip_v6 = IPv6Address.__new__
         fast_ip_v4 = IPv4Address.__new__
         with_scope_id = '_scope_id' in IPv6Address.__slots__
@@ -104,7 +80,7 @@ class IPv6(ClickHouseType):
         return new_col
 
     @staticmethod
-    def _read_native_str(source: ByteSource, num_rows: int):
+    def _read_binary_str(source: ByteSource, num_rows: int):
         new_col = []
         app = new_col.append
         v4mask = IPV4_V6_MASK
@@ -119,7 +95,7 @@ class IPv6(ClickHouseType):
                 app(tov6(af6, x))
         return new_col
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         v = V6_NULL
         first = self._first_value(column)
         v4mask = IPV4_V6_MASK
@@ -140,3 +116,6 @@ class IPv6(ClickHouseType):
                 else:
                     b = x.packed
                     dest += b if len(b) == 16 else (v4mask + b)
+
+    def _python_null(self, ctx):
+        return '::' if self.read_format(ctx) == 'string' else V6_NULL

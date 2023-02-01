@@ -22,6 +22,8 @@ class TestConfig(NamedTuple):
     docker: bool
     test_database: str
     cloud: bool
+    compress: str
+    insert_quorum: int
     __test__ = False
 
 
@@ -29,7 +31,7 @@ class TestConfig(NamedTuple):
 def test_config_fixture() -> Iterator[TestConfig]:
     host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
     docker = host == 'localhost' and \
-        os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
+             os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
         port = 10723 if docker else 8123
@@ -37,7 +39,9 @@ def test_config_fixture() -> Iterator[TestConfig]:
     username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
     test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
-    yield TestConfig(host, port, username, password, docker, test_database, cloud)
+    compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
+    insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum)
 
 
 @fixture(scope='session', name='test_db')
@@ -72,7 +76,9 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    username=test_config.username,
                                    password=test_config.password,
                                    send_progress=False,
-                                   compression=True,
+                                   query_limit=0,
+                                   compress=test_config.compress,
+                                   client_name='int_tests/test',
                                    settings={
                                        'allow_suspicious_low_cardinality_types': True,
                                    }
@@ -84,8 +90,10 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)
-    if client.min_version('22.11'):
-        client.set_client_setting('insert_quorum', 'auto')
+    if client.min_version('22.8'):
+        client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
+    if test_config.insert_quorum:
+        client.set_client_setting('insert_quorum', test_config.insert_quorum)
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
     client.database = test_db
     yield client

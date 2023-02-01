@@ -1,3 +1,5 @@
+#!/usr/bin/env python3 -u
+
 from datetime import datetime, timedelta
 
 from clickhouse_connect.driver.query import finalize_query

@@ -6,7 +6,7 @@ Matrix = Sequence[Sequence[Any]]
 
 class Closable(ABC):
     @abstractmethod
-    def close(self):
+    def close(self, ex: Exception = None):
         pass
 
 

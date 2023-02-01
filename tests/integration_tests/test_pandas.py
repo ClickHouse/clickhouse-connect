@@ -1,3 +1,5 @@
+import os
+import random
 from datetime import datetime, date
 from typing import Callable
 from io import StringIO
@@ -6,6 +8,7 @@ import pytest
 
 from clickhouse_connect.driver import Client, ProgrammingError
 from clickhouse_connect.driver.options import np, pd
+from tests.helpers import random_query
 from tests.integration_tests.datasets import null_ds, null_ds_columns, null_ds_types
 
 pytestmark = pytest.mark.skipif(pd is None, reason='Pandas package not installed')
@@ -85,16 +88,36 @@ def test_pandas_large_types(test_client: Client, table_context: Callable):
 
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):
-    with table_context('test_pandas_dt64', ['key String', 'value DateTime64(9)']):
+    nano_timestamp = pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
+    milli_timestamp = pd.Timestamp(2022, 5, 3, 10, 44)
+    with table_context('test_pandas_dt64', ['key String', 'nanos DateTime64(9)', 'millis DateTime64(3)']):
         now = datetime.now()
-        df = pd.DataFrame([['key1', now], ['key2', pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)]],
-                          columns=['key', 'value'])
+        df = pd.DataFrame([['key1', now, now],
+                           ['key2', nano_timestamp, milli_timestamp]],
+                          columns=['key', 'nanos', 'millis'])
         test_client.insert_df('test_pandas_dt64', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_dt64')
-        assert result_df.iloc[0]['value'] == now
-        assert result_df.iloc[1]['value'] == pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
+        assert result_df.iloc[0]['nanos'] == now
+        assert result_df.iloc[1]['nanos'] == nano_timestamp
+        assert result_df.iloc[1]['millis'] == milli_timestamp
         test_dt = np.array(['2017-11-22 15:42:58.270000+00:00'][0])
-        df = pd.DataFrame([['key3', pd.to_datetime(test_dt)]], columns=['key', 'value'])
+        df = pd.DataFrame([['key3', pd.to_datetime(test_dt)]], columns=['key', 'nanos'])
         test_client.insert_df('test_pandas_dt64', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_dt64 WHERE key = %s', parameters=('key3',))
-        assert result_df.iloc[0]['value'].second == 58
+        assert result_df.iloc[0]['nanos'].second == 58
+
+
+def test_pandas_streams(test_client: Client):
+    runs = os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250')
+    for _ in range(int(runs) // 2):
+        query_rows = random.randint(0, 5000) + 20000
+        stream_count = 0
+        row_count = 0
+        query = random_query(query_rows, date32=False)
+        stream = test_client.query_df_stream(query, settings={'max_block_size': 5000})
+        with stream:
+            for df in stream:
+                stream_count += 1
+                row_count += len(df)
+        assert row_count == query_rows
+        assert stream_count > 2

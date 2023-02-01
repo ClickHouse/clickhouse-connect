@@ -1,24 +1,12 @@
-import logging
 from inspect import signature
 from typing import Optional, Union, Dict, Any
 from urllib.parse import urlparse, parse_qs
 
-from clickhouse_connect.driver.buffer import ResponseBuffer
-
-from clickhouse_connect.driver.common import dict_copy
-
-from clickhouse_connect.driver.exceptions import ProgrammingError
+import clickhouse_connect.driver.ctypes
 from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient
-
-logger = logging.getLogger(__name__)
-Client.BuffCls = ResponseBuffer
-try:
-    from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
-    Client.BuffCls = CResponseBuffer
-except ImportError:
-    CResponseBuffer = None
-    logger.warning('Unable to connect optimized C driver functions, falling back to pure Python', exc_info=True)
 
 
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
@@ -51,6 +39,8 @@ def create_client(host: str = None,
     port = port or default_port(interface, use_tls)
     if username is None and 'user' in kwargs:
         username = kwargs.pop('user')
+    if username is None and 'user_name' in kwargs:
+        username = kwargs.pop('user_name')
     if password and username is None:
         username = 'default'
     if 'compression' in kwargs and 'compress' not in kwargs:

@@ -5,16 +5,23 @@ c_modules = []
 
 try:
     from Cython.Build import cythonize
-    print ('Using Cython to build cython modules')
-    c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3')
-except ImportError:
-    print ('Cython Not Successfully Installed, Not building C extensions')
+    from Cython import __version__ as cython_version
+
+    print(f'Using Cython {cython_version}to build cython modules')
+    c_modules = cythonize('clickhouse_connect/driverc/*.pyx', language_level='3str')
+except ImportError as ex:
+    print('Cython Install Failed, Not Building C Extensions: ', ex)
+    cythonize = None
+except Exception as ex:
+    print('Cython Build Failed, Not Building C Extensions: ', ex)
     cythonize = None
 
 
 def run_setup(try_c: bool = True):
     if try_c:
-        kwargs = {'ext_modules': c_modules}
+        kwargs = {
+            'ext_modules': c_modules,
+        }
     else:
         kwargs = {}
 

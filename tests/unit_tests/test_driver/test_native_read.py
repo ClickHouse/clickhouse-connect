@@ -2,6 +2,8 @@ from ipaddress import IPv4Address
 from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
+from clickhouse_connect.driver.context import BaseQueryContext
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
@@ -90,9 +92,9 @@ def test_ip():
     ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
     ipv4_type = registry.get_from_name('IPv4')
     dest = bytearray()
-    ipv4_type.write_native_column(ips, dest)
-    python = ipv4_type.read_native_column(bytes_source(bytes(dest)), 3)
-    assert python == [IPv4Address(ip) for ip in ips]
+    ipv4_type.write_column(ips, dest, BaseQueryContext())
+    python = ipv4_type.read_column(bytes_source(bytes(dest)), 3, QueryContext())
+    assert tuple(python) == tuple(IPv4Address(ip) for ip in ips)
 
 
 def test_nested():

@@ -1,8 +1,11 @@
 from typing import Union, Sequence, MutableSequence
-from uuid import UUID as PYUUID, SafeUUID
+from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
 empty_uuid_b = bytes(b'\x00' * 16)
@@ -10,43 +13,18 @@ empty_uuid_b = bytes(b'\x00' * 16)
 
 class UUID(ClickHouseType):
     valid_formats = 'string', 'native'
+    np_type = 'U36'
 
-    @property
-    def python_null(self):
-        return '' if self.read_format() == 'string' else PYUUID(int=0)
+    def python_null(self, ctx):
+        return '' if self.read_format(ctx) == 'string' else PYUUID(int=0)
 
-    def np_type(self, _str_len: int = 0):
-        return 'U36' if self.read_format() == 'string' else 'O'
-
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
-        if self.read_format() == 'string':
-            return self._read_native_str(source, num_rows)
-        return self._read_native_uuid(source, num_rows)
-
-    # pylint: disable=too-many-locals
-    @staticmethod
-    def _read_native_uuid(source: ByteSource, num_rows: int):
-        v = source.read_array('Q', num_rows * 2)
-        empty_uuid = PYUUID(int=0)
-        new_uuid = PYUUID.__new__
-        unsafe = SafeUUID.unsafe
-        oset = object.__setattr__
-        column = []
-        app = column.append
-        for i in range(num_rows):
-            ix = i << 1
-            int_value = v[ix] << 64 | v[ix + 1]
-            if int_value == 0:
-                app(empty_uuid)
-            else:
-                fast_uuid = new_uuid(PYUUID)
-                oset(fast_uuid, 'int', int_value)
-                oset(fast_uuid, 'is_safe', unsafe)
-                app(fast_uuid)
-        return column
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if self.read_format(ctx) == 'string':
+            return self._read_binary_str(source, num_rows)
+        return data_conv.read_uuid_col(source, num_rows)
 
     @staticmethod
-    def _read_native_str(source: ByteSource, num_rows: int):
+    def _read_binary_str(source: ByteSource, num_rows: int):
         v = source.read_array('Q', num_rows * 2)
         column = []
         app = column.append
@@ -57,10 +35,10 @@ class UUID(ClickHouseType):
         return column
 
     # pylint: disable=too-many-branches
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         first = self._first_value(column)
         empty = empty_uuid_b
-        if isinstance(first, str) or self.write_format() == 'string':
+        if isinstance(first, str) or self.write_format(ctx) == 'string':
             for v in column:
                 if v:
                     x = int(v, 16)
@@ -97,7 +75,7 @@ class Nothing(ArrayType):
         super().__init__(type_def)
         self.nullable = True
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
         dest += bytes(0x30 for _ in range(len(column)))
 
 
@@ -109,11 +87,11 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
-    def _read_native_binary(self, source: ByteSource, num_rows: int):
-        return self.element_type.read_native_data(source, num_rows)
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        return self.element_type.read_column_data(source, num_rows, ctx)
 
-    def _write_native_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence):
-        self.element_type.write_native_data(column, dest)
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+        self.element_type.write_column_data(column, dest, ctx)
 
 
 class AggregateFunction(UnsupportedType):

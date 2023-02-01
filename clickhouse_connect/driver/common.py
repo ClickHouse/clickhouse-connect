@@ -1,9 +1,10 @@
 import array
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional, Union
+from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
+from clickhouse_connect.driver.types import Closable
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
@@ -19,7 +20,7 @@ if int_size == 2:
 array_sizes = {v: k for k, v in array_map.items()}
 array_sizes['f'] = 4
 array_sizes['d'] = 8
-np_date_types = {3: '[ms]', 6: '[us]', 9: '[ns]'}
+np_date_types = {0: '[s]', 3: '[ms]', 6: '[us]', 9: '[ns]'}
 
 
 def array_type(size: int, signed: bool):
@@ -112,6 +113,10 @@ def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
     return copy
 
 
+def empty_gen():
+    yield from ()
+
+
 def coerce_int(val: Optional[Union[str, int]]) -> int:
     if not val:
         return 0
@@ -125,12 +130,13 @@ def coerce_bool(val: Optional[Union[str, bool]]):
 
 
 class SliceView(Sequence):
-    slots = ('_source', '_range')
     """
     Provides a view into a sequence rather than copying.  Borrows liberally from
     https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1
     Also see the discussion on SO: https://stackoverflow.com/questions/3485475/can-i-create-a-view-on-a-python-list
     """
+    slots = ('_source', '_range')
+
     def __init__(self, source: Sequence, source_slice: Optional[slice] = None):
         if isinstance(source, SliceView):
             self._source = source._source
@@ -167,3 +173,35 @@ class SliceView(Sequence):
             if v != w:
                 return False
         return True
+
+
+class StreamContext:
+    """
+    Wraps a generator and its "source" in a Context.  This ensures that the source will be "closed" even if the
+    generator is not fully consumed or there is an exception during consumption
+    """
+    __slots__ = 'source', 'gen', '_in_context'
+
+    def __init__(self, source: Closable, gen: Generator):
+        self.source = source
+        self.gen = gen
+        self._in_context = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self._in_context:
+            raise ProgrammingError('Stream should be used within a context')
+        return next(self.gen)
+
+    def __enter__(self):
+        if not self.gen:
+            raise StreamClosedError
+        self._in_context = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._in_context = False
+        self.source.close(exc_val)
+        self.gen = None
