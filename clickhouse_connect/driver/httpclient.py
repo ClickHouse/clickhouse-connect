@@ -1,10 +1,8 @@
 import json
 import logging
-import platform
 import re
 import uuid
 from base64 import b64encode
-from http.client import RemoteDisconnected
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
 
@@ -16,6 +14,7 @@ from urllib3.response import HTTPResponse
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
@@ -110,10 +109,7 @@ class HttpClient(Client):
 
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
-
-        client_name = client_name.strip() + ' ' if client_name else ''
-
-        self.headers['User-Agent'] = f'{client_name}clickhouse-connect/{common.version()} (py/{platform.version()})'
+        self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
 
@@ -195,7 +191,7 @@ class HttpClient(Client):
             params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context), params, headers, stream=True,
                                      retries=self.query_retries)
-        byte_source = Client.BuffCls(ResponseSource(response)) # pylint: disable=not-callable
+        byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -326,16 +322,13 @@ class HttpClient(Client):
                                                            retries=self.http_retries,
                                                            preload_content=not stream)
             except HTTPError as ex:
-                rex_context = ex.__context__
-                if rex_context and isinstance(rex_context.__context__, RemoteDisconnected):
-                    # See https://github.com/psf/requests/issues/4664
+                if isinstance(ex.__context__, ConnectionResetError):
                     # The server closed the connection, probably because the Keep Alive has expired
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
                     # related to the Keep Alive settings
                     if attempts == 1:
                         logger.debug('Retrying remotely closed connection')
-                        attempts = 0
                         continue
                 logger.exception('Unexpected Http Driver Exception')
                 raise OperationalError(f'Error executing HTTP request {self.url}') from ex

@@ -9,6 +9,7 @@ import zstandard
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
+logger = logging.getLogger(__name__)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access
@@ -47,6 +48,8 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
         socket_options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))
     if sys.platform == 'darwin':
         socket_options.append((SOCKET_TCP, getattr(socket, 'TCP_KEEPALIVE', 0x10), keep_interval))
+    options['maxsize'] = options.get('maxsize', 8)
+    options['retries'] = options.get('retries', 1)
     if ca_cert == 'certifi':
         ca_cert = certifi.where()
     options['cert_reqs'] = 'CERT_REQUIRED' if verify else 'CERT_NONE'
@@ -113,6 +116,8 @@ class ResponseSource:
     def read(self, amt: int) -> bytes:
         return self.response.read(amt)
 
-    def close(self):
+    def close(self, ex: Exception = None):
+        if ex:
+            logger.warning('Closed HTTP response due to unexpected exception')
         self.response.drain_conn()
         self.response.close()

@@ -9,12 +9,11 @@ from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Itera
 from datetime import date, datetime, tzinfo
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
-from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.options import check_pandas, check_numpy, check_arrow
+from clickhouse_connect.driver.exceptions import StreamClosedError
+from clickhouse_connect.driver.options import check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,9 @@ class QueryContext(BaseQueryContext):
                  encoding: Optional[str] = None,
                  server_tz: tzinfo = pytz.UTC,
                  use_none: Optional[bool] = None,
-                 column_oriented: Optional[bool] = None):
+                 column_oriented: Optional[bool] = None,
+                 use_numpy: Optional[bool] = None,
+                 max_str_len: Optional[int] = 0):
         """
         Initializes various configuration settings for the query context
 
@@ -63,12 +64,15 @@ class QueryContext(BaseQueryContext):
         :param column_formats: Optional dictionary
         :param use_none:
         """
-        super().__init__(settings, query_formats, column_formats, encoding)
+        super().__init__(settings, query_formats, column_formats, encoding, use_numpy)
         self.query = query
         self.parameters = parameters or {}
         self.server_tz = server_tz
         self.use_none = True if use_none is None else use_none
+        self.use_numpy = False if use_numpy is None else use_numpy
         self.column_oriented = False if column_oriented is None else column_oriented
+        self.use_numpy = use_numpy
+        self.max_str_len = 0 if max_str_len is None else max_str_len
         self._update_query()
 
     @property
@@ -106,7 +110,9 @@ class QueryContext(BaseQueryContext):
                      encoding: Optional[str] = None,
                      server_tz: Optional[tzinfo] = None,
                      use_none: Optional[bool] = None,
-                     column_oriented: Optional[bool] = None) -> 'QueryContext':
+                     column_oriented: Optional[bool] = None,
+                     use_numpy: Optional[bool] = None,
+                     max_str_len: Optional[int] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -118,31 +124,38 @@ class QueryContext(BaseQueryContext):
                             encoding if encoding else self.encoding,
                             server_tz if server_tz else self.server_tz,
                             self.use_none if use_none is None else use_none,
-                            self.column_oriented if column_oriented is None else column_oriented)
+                            self.column_oriented if column_oriented is None else column_oriented,
+                            self.use_numpy if use_numpy is None else use_numpy,
+                            self.max_str_len if max_str_len is None else max_str_len)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
         self.uncommented_query = remove_sql_comments(self.final_query)
 
 
-class QueryResult:
+class QueryResult(Closable):
     """
     Wrapper class for query return values and metadata
+
+    Note that the use of this object as a Python context is deprecated and that the Context interface will be
+    removed in a future release.  Future usage of a QueryContext will be in either "closed" mode, where the
+    stream has been consumed and collected into the result_set property, or in "stream" mode, where only
+    the "stream" properties should be externally accessed.
     """
 
     # pylint: disable=too-many-arguments
     def __init__(self,
                  result_set: Matrix = None,
                  block_gen: Generator[Matrix, None, None] = None,
-                 column_names: Tuple[str, ...] = (),
-                 column_types: Tuple[ClickHouseType, ...] = (),
+                 column_names: Tuple = (),
+                 column_types: Tuple = (),
                  column_oriented: bool = False,
                  source: Closable = None,
                  query_id: str = None,
                  summary: Dict[str, Any] = None):
         self._result_rows = result_set
         self._result_columns = None
-        self._block_gen = block_gen
+        self._block_gen = block_gen or empty_gen()
         self._in_context = False
         self.column_names = column_names
         self.column_types = column_types
@@ -150,10 +163,6 @@ class QueryResult:
         self.source = source
         self.query_id = query_id
         self.summary = {} if summary is None else summary
-
-    @property
-    def empty(self):
-        return self.row_count == 0
 
     @property
     def result_set(self) -> Matrix:
@@ -164,48 +173,51 @@ class QueryResult:
     @property
     def result_columns(self) -> Matrix:
         if self._result_columns is None:
-            if self._result_rows is not None:
-                raise ProgrammingError(
-                    'result_columns referenced after result_rows.  Only one final format is supported'
-                )
             result = [[] for _ in range(len(self.column_names))]
-            for block in self._block_gen:
-                for base, added in zip(result, block):
-                    base.extend(added)
+            with self.column_block_stream as stream:
+                for block in stream:
+                    for base, added in zip(result, block):
+                        base.extend(added)
             self._result_columns = result
-            self._block_gen = None
         return self._result_columns
 
     @property
     def result_rows(self) -> Matrix:
         if self._result_rows is None:
-            if self._result_columns is not None:
-                raise ProgrammingError(
-                    'result_rows referenced after result_columns.  Only one final format is supported'
-                )
             result = []
-            for block in self._block_gen:
-                result.extend(list(zip(*block)))
+            with self.row_block_stream as stream:
+                for block in stream:
+                    result.extend(block)
             self._result_rows = result
-            self._block_gen = None
         return self._result_rows
 
-    def stream_column_blocks(self) -> Iterator[Matrix]:
-        if not self._in_context:
-            logger.warning("Streaming results should be used in a 'with' context to ensure the stream is closed")
-        if not self._block_gen:
-            raise ProgrammingError('Stream closed')
-        temp = self._block_gen
+    def _column_block_stream(self):
+        if self._block_gen is None:
+            raise StreamClosedError
+        block_stream = self._block_gen
         self._block_gen = None
-        return temp
+        return block_stream
 
-    def stream_row_blocks(self):
-        return (list(zip(*block)) for block in self.stream_column_blocks())
+    def _row_block_stream(self):
+        for block in self._column_block_stream():
+            yield list(zip(*block))
 
-    def stream_rows(self) -> Iterator[Sequence]:
-        for block in self.stream_column_blocks():
-            for row in list(zip(*block)):
-                yield row
+    @property
+    def column_block_stream(self) -> StreamContext:
+        return StreamContext(self, self._column_block_stream())
+
+    @property
+    def row_block_stream(self):
+        return StreamContext(self, self._row_block_stream())
+
+    @property
+    def rows_stream(self) -> StreamContext:
+        def stream():
+            for block in self._row_block_stream():
+                for row in block:
+                    yield row
+
+        return StreamContext(self, stream())
 
     def named_results(self) -> Generator[dict, None, None]:
         for row in zip(*self.result_columns):
@@ -219,32 +231,52 @@ class QueryResult:
 
     @property
     def first_item(self):
-        if self.empty:
-            return None
         if self.column_oriented:
             return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
         return dict(zip(self.column_names, self.result_set[0]))
 
     @property
     def first_row(self):
-        if self.empty:
-            return None
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
 
-    def close(self):
+    def stream_column_blocks(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+            Please use the column_block_stream property instead.  This method will be removed in a future release
+        """
+        return self._column_block_stream()
+
+    def stream_row_blocks(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+            Please use the row_block_stream property instead.  This method will be removed in a future release
+        """
+        return self._row_block_stream()
+
+    def stream_rows(self) -> Iterator:
+        """
+        .. deprecated:: 0.5.4
+           Please use the row_block_stream property instead.  This method will be removed in a future release
+        """
+        for block in self._row_block_stream():
+            for row in block:
+                yield row
+
+    def close(self, ex: Exception = None):
         if self.source:
-            self.source.close()
+            self.source.close(ex)
             self.source = None
+        if self._block_gen is not None:
+            self._block_gen.close()
+            self._block_gen = None
 
     def __enter__(self):
-        self._in_context = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-        self._in_context = False
 
 
 local_tz = datetime.now().astimezone().tzinfo
@@ -368,66 +400,6 @@ def remove_sql_comments(sql: str) -> str:
         return match.group(1)
 
     return comment_re.sub(replacer, sql)
-
-
-def np_result(result: QueryResult, use_none: bool = False, max_str_len: int = 0):
-    """
-    See doc string from client.query_np
-    """
-    np = check_numpy()
-    if result.empty:
-        return np.empty(0)
-    if not result.column_oriented:
-        raise ProgrammingError('Numpy arrays should only be constructed from column oriented query results')
-    np_types = [col_type.np_type(max_str_len) for col_type in result.column_types]
-    first_type = np.dtype(np_types[0])
-    if first_type != np.object_ and all(np.dtype(np_type) == first_type for np_type in np_types):
-        # Optimize the underlying "matrix" array without any additional processing
-        return np.array(result.result_set, first_type).transpose()
-    columns = []
-    has_objects = False
-    for column, col_type, np_type in zip(result.result_set, result.column_types, np_types):
-        if np_type == 'O':
-            columns.append(column)
-            has_objects = True
-        elif use_none and col_type.nullable:
-            new_col = []
-            item_array = np.empty(1, dtype=np_type)
-            for x in column:
-                if x is None:
-                    new_col.append(None)
-                    has_objects = True
-                else:
-                    item_array[0] = x
-                    new_col.append(item_array[0])
-            columns.append(new_col)
-        elif 'date' in np_type:
-            columns.append(np.array(column, dtype=np_type))
-        else:
-            columns.append(column)
-    if has_objects:
-        np_types = [np.object_] * len(result.column_names)
-    dtypes = np.dtype(list(zip(result.column_names, np_types)))
-    return np.rec.fromarrays(columns, dtypes)
-
-
-def pandas_result(result: QueryResult):
-    """
-    Convert QueryResult to a pandas dataframe
-    :param result: QueryResult from driver
-    :return: Two dimensional pandas dataframe from result
-    """
-    pd = check_pandas()
-    np = check_numpy()
-    if not result.column_oriented:
-        raise ProgrammingError('Pandas dataframes should only be constructed from column oriented query results')
-    raw = {}
-    for name, col_type, column in zip(result.column_names, result.column_types, result.result_set):
-        np_type = col_type.np_type()
-        if 'datetime' in np_type:
-            column = pd.to_datetime(np.array(column, dtype=np_type))
-        raw[name] = column
-    return pd.DataFrame(raw)
 
 
 def to_arrow(content: bytes):

@@ -1,15 +1,11 @@
 import re
 
-from typing import Dict, Type, Sequence
+from typing import Dict, Type, Sequence, Optional
 
 from clickhouse_connect.datatypes.base import ClickHouseType, type_map, ch_read_formats, ch_write_formats
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 json_re = re.compile('json', re.IGNORECASE)
-
-
-def default_encoding(encoding: str):
-    ClickHouseType._encoding = encoding  # pylint: disable=protected-access
 
 
 def set_default_formats(*args, **kwargs):
@@ -50,7 +46,7 @@ def clear_read_format(pattern: str):
         ch_read_formats.pop(ch_type, None)
 
 
-def format_map(fmt_map: Dict[str, str]) -> Dict[Type[ClickHouseType], str]:
+def format_map(fmt_map: Optional[Dict[str, str]]) -> Dict[Type[ClickHouseType], str]:
     if not fmt_map:
         return {}
     final_map = {}

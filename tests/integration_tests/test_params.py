@@ -13,11 +13,15 @@ def test_params(test_client: Client, table_context: callable):
 
     first_date = datetime.strptime('Jun 1 2005  1:33PM', '%b %d %Y %I:%M%p')
     second_date = datetime.strptime('Dec 25 2022  5:00AM', '%b %d %Y %I:%M%p')
-    with table_context('test_bind_params', ['key UInt64', 'dt DateTime']):
-        test_client.insert('test_bind_params', [[1, first_date], [2, second_date], [3, datetime.now()]])
+    with table_context('test_bind_params', ['key UInt64', 'dt DateTime', 'value String']):
+        test_client.insert('test_bind_params', [[1, first_date, 'v11'], [2, second_date, 'v21'],
+                                                [3, datetime.now(), 'v31']])
         result = test_client.query('SELECT * FROM test_bind_params WHERE dt = {dt:DateTime}',
                                    parameters={'dt': second_date})
         assert result.first_item['key'] == 2
         result = test_client.query('SELECT * FROM test_bind_params WHERE dt = %(dt)s',
                                    parameters={'dt': first_date})
         assert result.first_item['key'] == 1
+        result = test_client.query("SELECT * FROM test_bind_params WHERE value != %(v)s AND value like '%%1'",
+                                   parameters={'v': 'v11'})
+        assert result.row_count == 2

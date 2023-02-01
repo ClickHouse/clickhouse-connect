@@ -1,5 +1,54 @@
 # ClickHouse Connect ChangeLog
 
+## 0.5.4, 2023-01-31
+
+### Deprecation Warning -- Context interface and stream* methods to be removed from QueryResult
+In 0.5.x releases, streaming was implemented by returning generators from the QueryResult methods
+`stream_column_blocks`, `stream_row_blocks`, and `stream_rows`.  Safe usage of these methods required executing them
+within a Python context created `with` the QueryResult itself.  Otherwise, the HTTP response could be left open in the
+case of an exception or other failure to consume the stream.
+
+Using QueryResult as a context is unintuitive, and that usage pattern is deprecated and will be completely disabled in
+a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
+under New Features, below.
+
+### New Features
+* Several streaming query methods have been added to the core ClickHouse Connect client.  Each of these methods returns a StreamContext object, which must be used as a Python `with` Context to stream data (this ensures the underlying
+streaming response is properly closed/consumed.)  For simple examples, see the basic [tests](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_streaming.py).
+  * `query_column_block_stream` -- returns a generator of blocks in column oriented (Native) format.  Fastest method for retrieving data in native Python format
+  * `query_row_block_stream` -- returns a generator of blocks in row oriented format.  Used for processing data in a "batch" of rows at time while limiting memory usage
+  * `query_rows_stream` -- returns a convenience generator to process rows one at a time (data is still loaded in ClickHouse blocks to preserve memory)
+  * `query_np_stream` -- returns a generator where each ClickHouse data block is transformed into a Numpy array
+  * `query_df_stream` -- returns a generator where each ClickHouse data block is transformed into a Pandas Dataframe
+* The `client_name` is now reported in a standardized way to ClickHouse (as the `http_user_agent`).  For better tracking of your
+Python application, use the new `product_name` common setting or set `client_name` `get_client` parameter to identify your product
+as "<your-product-name>/<app-version>".
+
+### Performance Improvements
+* C/Cython optimizations for transforming ClickHouse data to Python types have been improved, and additional datatypes have been
+optimized in Cython.  The performance increase over the previous 0.5.x version is approximately 10% for "normal" read queries.
+* Transformation of Numpy arrays and Pandas Dataframes has been completely rewritten to avoid an intermediate conversion to
+Python types.  As a result, querying in Numpy format, and especially Pandas format, has been **significantly** improved -- from 2x
+for small datasets to 5x or more for very large Pandas DataFrames (even without streaming).  Queries including Numpy datetime64 or
+Pandas Timestamp objects have particularly benefited from the new implementation.
+
+### Bug Fixes
+* The default `maxsize` for concurrent HTTP connections to a single host was accidentally dropped in the 0.5.x release.  It
+has been restored to 8 for better performance when using multiple client objects.
+* A single low level retry has been restored for HTTP connections on ConnectionReset or RemoteDisconnected exceptions.  This
+should reduce connection errors related to ClickHouse closing expired KeepAlive connections.
+
+### Internal Changes
+* As noted above, streaming, contexts and exception handling have been tightened up to avoid leaving HTTP responses open
+when querying streams.
+* Previous versions used `threading.local()` variables to store context information during query processing.  The architecture
+has been changed to pass the relevant Query or Insert Context to transformation methods instead of relying on thread local
+variables.  This is significantly safer in an environment where multiple queries can conceivably be open at the same on the
+same thread (for example, if using async functions).
+* Per query formatting logic has moved from `ClickHouseType` to the `QueryContext`.
+* `ClickHouseType` methods have been renamed to remove outdated references to `native` format (everything is native now)
+* Upgraded Cython Build to 3.0.11alpha release
+
 ## 0.5.3, 2023-01-23
 
 ### Bug Fix
@@ -189,7 +238,6 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 
 ### Bug Fixes
 * Update QueryContext.updated_copy method to preserve settings, parameters, etc.  https://github.com/ClickHouse/clickhouse-connect/issues/65
-
 
 
 ## 0.3.5, 2022-10-28

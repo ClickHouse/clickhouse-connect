@@ -1,22 +1,22 @@
-from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union
+from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
-from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import SliceView
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.options import np, pd
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
+if TYPE_CHECKING:
+    from clickhouse_connect.datatypes.base import ClickHouseType
+
+
 DEFAULT_BLOCK_SIZE = 16834
-ch_nano_dt_type = get_from_name('DateTime64(9)')
-np_nano_dt_type = np.dtype('datetime64[ns]') if np else None
 
 
 class InsertBlock(NamedTuple):
     column_count: int
     row_count: int
     column_names: Iterable[str]
-    column_types: Iterable[ClickHouseType]
+    column_types: Iterable['ClickHouseType']
     column_data: Iterable[Sequence[Any]]
 
 
@@ -29,7 +29,7 @@ class InsertContext(BaseQueryContext):
     def __init__(self,
                  table: str,
                  column_names: Sequence[str],
-                 column_types: Sequence[ClickHouseType],
+                 column_types: Sequence['ClickHouseType'],
                  data: Any = None,
                  column_oriented: Optional[bool] = None,
                  settings: Optional[Dict[str, Any]] = None,
@@ -115,7 +115,7 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif 'datetime' in ch_type.np_type() and pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col):
+            elif 'datetime' in ch_type.np_type and pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'
@@ -129,7 +129,7 @@ class InsertContext(BaseQueryContext):
         if np_array.dtype.names is None:
             if 'date' in str(np_array.dtype):
                 for col_name, col_type in zip(self.column_names, self.column_types):
-                    if 'date' in col_type.np_type():
+                    if 'date' in col_type.np_type:
                         self.column_formats[col_name] = 'int'
                 return np_array.astype('int').tolist()
             for col_type in self.column_types:
@@ -144,7 +144,7 @@ class InsertContext(BaseQueryContext):
             data = [np_array[col_name] for col_name in np_array.dtype.names]
         for ix, (col_name, col_type) in enumerate(zip(self.column_names, self.column_types)):
             d_type = data[ix].dtype
-            if 'date' in str(d_type) and 'date' in col_type.np_type():
+            if 'date' in str(d_type) and 'date' in col_type.np_type:
                 self.column_formats[col_name] = 'int'
                 data[ix] = data[ix].astype(int).tolist()
             elif col_type.byte_size == 0 or col_type.byte_size > d_type.itemsize:
