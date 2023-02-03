@@ -16,6 +16,7 @@ pytestmark = pytest.mark.skipif(pd is None, reason='Pandas package not installed
 
 def test_pandas_basic(test_client: Client, test_table_engine: str):
     df = test_client.query_df('SELECT * FROM system.tables')
+    source_df = df.copy()
     test_client.command('DROP TABLE IF EXISTS test_system_insert_pd')
     test_client.command(f'CREATE TABLE test_system_insert_pd as system.tables Engine {test_table_engine}'
                         f' ORDER BY (database, name)')
@@ -23,15 +24,18 @@ def test_pandas_basic(test_client: Client, test_table_engine: str):
     new_df = test_client.query_df('SELECT * FROM test_system_insert_pd')
     test_client.command('DROP TABLE IF EXISTS test_system_insert_pd')
     assert new_df.columns.all() == df.columns.all()
+    assert df.equals(source_df)
     df = test_client.query_df("SELECT * FROM system.tables WHERE engine = 'not_a_thing'")
     assert len(df) == 0
 
 
 def test_pandas_nulls(test_client: Client, table_context: Callable):
+    df = pd.DataFrame(null_ds, columns=['key', 'num', 'flt', 'str', 'dt', 'd'])
+    source_df= df.copy()
+    insert_columns = ['key', 'num', 'flt', 'str', 'dt', 'day_col']
     with table_context('test_pandas_nulls_bad', ['key String', 'num Int32', 'flt Float32',
                                                  'str String', 'dt DateTime', 'day_col Date']):
-        df = pd.DataFrame(null_ds, columns=['key', 'num', 'flt', 'str', 'dt', 'd'])
-        insert_columns = ['key', 'num', 'flt', 'str', 'dt', 'day_col']
+
         try:
             test_client.insert_df('test_pandas_nulls_bad', df, column_names=insert_columns)
         except ProgrammingError:
@@ -45,6 +49,7 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
         assert result_df.iloc[1]['day_col'] == pd.Timestamp(year=1976, month=5, day=5)
         assert pd.isna(result_df.iloc[2]['flt'])
         assert result_df.iloc[2]['str'] == 'value3'
+        assert df.equals(source_df)
 
 
 def test_pandas_csv(test_client: Client, table_context: Callable):
@@ -56,7 +61,7 @@ key2,6666,,string2,,
     csv_file = StringIO(csv)
     df = pd.read_csv(csv_file, parse_dates=['dt', 'd'], date_parser=pd.Timestamp)
     df[['num', 'flt']] = df[['num', 'flt']].astype('Float32')
-
+    source_df = df.copy()
     with table_context('test_pandas_csv', null_ds_columns, null_ds_types):
         test_client.insert_df('test_pandas_csv', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_csv')
@@ -64,11 +69,13 @@ key2,6666,,string2,,
         assert pd.isna(result_df.iloc[1]['flt'])
         result_df = test_client.query('SELECT * FROM test_pandas_csv')
         assert result_df.result_set[1][2] is None
+        assert df.equals(source_df)
 
 
 def test_pandas_context_inserts(test_client: Client, table_context: Callable):
     with table_context('test_pandas_multiple', null_ds_columns, null_ds_types):
         df = pd.DataFrame(null_ds, columns=null_ds_columns)
+        source_df = df.copy()
         insert_context = test_client.create_insert_context('test_pandas_multiple', df.columns)
         insert_context.data = df
         test_client.data_insert(insert_context)
@@ -78,6 +85,7 @@ def test_pandas_context_inserts(test_client: Client, table_context: Callable):
             columns=null_ds_columns)
         test_client.insert_df(df=next_df, context=insert_context)
         assert test_client.command('SELECT count() FROM test_pandas_multiple') == 4
+        assert df.equals(source_df)
 
 
 def test_pandas_low_card(test_client: Client, table_context: Callable):
@@ -88,21 +96,25 @@ def test_pandas_low_card(test_client: Client, table_context: Callable):
         df = pd.DataFrame([['key1', 'test_string_0', datetime(2022, 10, 15, 4, 25), -372],
                            ['key2', 'test_string_1', datetime.now(), 4777288]],
                           columns=['key', 'value', 'date_value', 'int_value'])
+        source_df = df.copy()
         test_client.insert_df('test_pandas_low_card', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_low_card')
         assert result_df.iloc[0]['value'] == 'test_string_0'
         assert result_df.iloc[1]['value'] == 'test_string_1'
         assert result_df.iloc[0]['date_value'] == pd.Timestamp(2022, 10, 15, 4, 25)
         assert result_df.iloc[1]['int_value'] == 4777288
+        assert df.equals(source_df)
 
 
 def test_pandas_large_types(test_client: Client, table_context: Callable):
     with table_context('test_pandas_big_int', ['key String', 'value Int256']):
         df = pd.DataFrame([['key1', 2000, ], ['key2', 30000000000000000000000000000000000]], columns=['key', 'value'])
+        source_df = df.copy()
         test_client.insert_df('test_pandas_big_int', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_big_int')
         assert result_df.iloc[0]['value'] == 2000
         assert result_df.iloc[1]['value'] == 30000000000000000000000000000000000
+        assert df.equals(source_df)
 
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):
@@ -113,12 +125,14 @@ def test_pandas_datetime64(test_client: Client, table_context: Callable):
         df = pd.DataFrame([['key1', now, now],
                            ['key2', nano_timestamp, milli_timestamp]],
                           columns=['key', 'nanos', 'millis'])
+        source_df = df.copy()
         test_client.insert_df('test_pandas_dt64', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_dt64')
         assert result_df.iloc[0]['nanos'] == now
         assert result_df.iloc[1]['nanos'] == nano_timestamp
         assert result_df.iloc[1]['millis'] == milli_timestamp
         test_dt = np.array(['2017-11-22 15:42:58.270000+00:00'][0])
+        assert df.equals(source_df)
         df = pd.DataFrame([['key3', pd.to_datetime(test_dt)]], columns=['key', 'nanos'])
         test_client.insert_df('test_pandas_dt64', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_dt64 WHERE key = %s', parameters=('key3',))
