@@ -121,7 +121,7 @@ class InsertContext(BaseQueryContext):
                 self.column_formats[col_name] = 'int'
                 continue
             if ch_type.nullable:
-                df_col.replace({np.nan: None}, inplace=True)
+                df_col = df_col.replace({np.nan: None})
             data.append(df_col.tolist())
         return data
 

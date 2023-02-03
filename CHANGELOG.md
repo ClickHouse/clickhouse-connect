@@ -10,6 +10,12 @@ Using QueryResult as a context is unintuitive, and that usage pattern is depreca
 a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
 under New Features, below.
 
+## 0.5.6, 2023-02-01
+
+### Bug Fix
+- Dataframe inserts would incorrectly modify null-like elements of the inserted dataframe.  https://github.com/ClickHouse/clickhouse-connect/issues/112.
+This should be fixed
+
 ## 0.5.5, 2023-02-01
 
 ### Bug Fix
