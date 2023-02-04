@@ -24,6 +24,7 @@ class TestConfig(NamedTuple):
     cloud: bool
     compress: str
     insert_quorum: int
+    proxy_address: str
     __test__ = False
 
 
@@ -41,7 +42,9 @@ def test_config_fixture() -> Iterator[TestConfig]:
     test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
-    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum)
+    proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum,
+                     proxy_address)
 
 
 @fixture(scope='session', name='test_db')
