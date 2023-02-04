@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import uuid
 from base64 import b64encode
@@ -19,7 +20,8 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, default_pool_manager
+from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
+    default_pool_manager, get_proxy_manager
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -58,7 +60,9 @@ class HttpClient(Client):
                  client_cert_key: Optional[str] = None,
                  session_id: Optional[str] = None,
                  settings: Optional[Dict[str, Any]] = None,
-                 pool_mgr: Optional[PoolManager] = None):
+                 pool_mgr: Optional[PoolManager] = None,
+                 http_proxy: Optional[str] = None,
+                 https_proxy: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
         :param interface: http or https
@@ -93,19 +97,27 @@ class HttpClient(Client):
         ch_settings = settings or {}
         self.http = pool_mgr
         if interface == 'https':
+            if not https_proxy and 'HTTPS_PROXY' in os.environ:
+                https_proxy = os.environ['HTTPS_PROXY']
             if client_cert:
                 if not username:
                     raise ProgrammingError('username parameter is required for Mutual TLS authentication')
                 self.headers['X-ClickHouse-User'] = username
                 self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
             verify = coerce_bool(verify)
-            if not self.http and (ca_cert or client_cert or not verify):
+            if not self.http and (ca_cert or client_cert or not verify or https_proxy):
                 self.http = get_pool_manager(ca_cert=ca_cert,
                                              client_cert=client_cert,
                                              verify=verify,
-                                             client_cert_key=client_cert_key)
+                                             client_cert_key=client_cert_key,
+                                             https_proxy=https_proxy)
         if not self.http:
-            self.http = default_pool_manager
+            if not http_proxy and 'HTTP_PROXY' in os.environ:
+                http_proxy = os.environ['HTTP_PROXY']
+            if http_proxy:
+                self.http = get_proxy_manager(host, http_proxy)
+            else:
+                self.http = default_pool_manager
 
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()

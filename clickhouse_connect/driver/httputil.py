@@ -6,8 +6,10 @@ import socket
 import certifi
 import lz4.frame
 import zstandard
-from urllib3.poolmanager import PoolManager
+from urllib3.poolmanager import PoolManager, ProxyManager
 from urllib3.response import HTTPResponse
+
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +30,10 @@ core_socket_options = [
 ]
 
 logging.getLogger('urllib3').setLevel(logging.WARNING)
+_proxy_managers = {}
 
 
-# pylint: disable=no-member
+# pylint: disable=no-member,too-many-arguments,too-many-branches
 def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                      keep_count: int = DEFAULT_KEEP_COUNT,
                      keep_idle: int = DEFAULT_KEEP_IDLE,
@@ -38,6 +41,8 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                      verify: bool = True,
                      client_cert: str = None,
                      client_cert_key: str = None,
+                     http_proxy: str = None,
+                     https_proxy: str = None,
                      **options) -> PoolManager:
     socket_options = core_socket_options.copy()
     if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
@@ -59,7 +64,26 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
         options['cert_file'] = client_cert
     if client_cert_key:
         options['key_file'] = client_cert_key
+    if http_proxy:
+        if https_proxy:
+            raise ProgrammingError('Only one of http_proxy or https_proxy should be specified')
+        if not http_proxy.startswith('http'):
+            http_proxy = f'http://{http_proxy}'
+        return ProxyManager(http_proxy, block=False, socket_options=socket_options, **options)
+    if https_proxy:
+        if not https_proxy.startswith('http'):
+            https_proxy = f'https://{https_proxy}'
+        return ProxyManager(https_proxy, block=False, socket_options=socket_options, **options)
     return PoolManager(block=False, socket_options=socket_options, **options)
+
+
+def get_proxy_manager(host: str, http_proxy):
+    key = f'{host}__{http_proxy}'
+    if key in _proxy_managers:
+        return _proxy_managers[key]
+    proxy_manager = get_pool_manager(http_proxy=http_proxy)
+    _proxy_managers[key] = proxy_manager
+    return proxy_manager
 
 
 def get_response_data(response: HTTPResponse) -> bytes:

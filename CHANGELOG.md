@@ -10,6 +10,14 @@ Using QueryResult as a context is unintuitive, and that usage pattern is depreca
 a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
 under New Features, below.
 
+## 0.5.7, 2023-02-01
+
+### Bug Fix
+- Http proxies did not work after removing the requests library. https://github.com/ClickHouse/clickhouse-connect/issues/114.
+This should be fixed.  Note that socks proxies are still not supported directly, but can be added by creating a correctly
+configured urllib3 SOCKSProxyManager and using it as the `pool_mgr` argument to teh `clickhouse_connect.create_client` method.
+
+
 ## 0.5.6, 2023-02-01
 
 ### Bug Fix
