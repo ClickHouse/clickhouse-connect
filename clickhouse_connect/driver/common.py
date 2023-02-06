@@ -135,14 +135,16 @@ class SliceView(Sequence):
     https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1
     Also see the discussion on SO: https://stackoverflow.com/questions/3485475/can-i-create-a-view-on-a-python-list
     """
-    slots = ('_source', '_range')
+    slots = ('_source', '_range', '_source_type')
 
-    def __init__(self, source: Sequence, source_slice: Optional[slice] = None):
+    def __init__(self, source: Sequence, source_slice: Optional[slice] = None, source_type=None):
         if isinstance(source, SliceView):
             self._source = source._source
+            self._source_type = source._source_type
             self._range = source._range[source_slice]
         else:
             self._source = source
+            self._source_type = source_type
             if source_slice is None:
                 self._range = range(len(source))
             else:

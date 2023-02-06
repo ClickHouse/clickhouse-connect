@@ -122,7 +122,7 @@ class InsertContext(BaseQueryContext):
                 continue
             if ch_type.nullable:
                 df_col = df_col.replace({np.nan: None})
-            data.append(df_col.tolist())
+            data.append(df_col)
         return data
 
     def _convert_numpy(self, np_array):
