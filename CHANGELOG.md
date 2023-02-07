@@ -10,6 +10,12 @@ Using QueryResult as a context is unintuitive, and that usage pattern is depreca
 a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
 under New Features, below.
 
+## 0.5.8, Not yet released
+
+### Bug Fix
+- Return empty dataframe instead of empty list when no records returned from `query_df` method  Fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/118
+
 ## 0.5.7, 2023-02-01
 
 ### Bug Fix
