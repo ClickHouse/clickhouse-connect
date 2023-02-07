@@ -18,9 +18,10 @@ import clickhouse_driver  # pylint: disable=import-error
 import clickhouse_connect
 
 
-queries = ['SELECT trip_id, pickup, dropoff, pickup_longitude, pickup_latitude FROM taxis',
-           'SELECT number from numbers(500000000)',
-           'SELECT * FROM datasets.hits_100m_obfuscated'
+queries = [#'SELECT trip_id, pickup, dropoff, pickup_longitude, pickup_latitude FROM taxis',
+           #'SELECT number from numbers(500000000)',
+           #'SELECT * FROM datasets.hits_100m_obfuscated'
+           "SELECT * FROM perftest.ontime WHERE FlightDate < '2017-02-18'"
            ]
 
 cc_client = clickhouse_connect.get_client(send_progress=False, query_limit=0, compress=False)
@@ -28,14 +29,21 @@ cd_client = clickhouse_driver.Client(host='localhost')
 
 
 def read_python(query):
-    print('\n\tPython Batch (column oriented):')
+    print('\n\tclickhouse-connect Python Batch (column oriented):')
     start = time.time()
     columns = cc_client.query(query).result_columns
     _print_result(start, len(columns[0]))
 
 
+def read_python_rows(query):
+    print('\n\tclickhouse-connect Python Batch (row oriented):')
+    start = time.time()
+    rows = cc_client.query(query).result_rows
+    _print_result(start, len(rows))
+
+
 def read_python_stream(query):
-    print('\n\tPython Stream:')
+    print('\n\tclickhouse-connect Python Stream (column blocks):')
     rows = 0
     start = time.time()
     with cc_client.query_column_block_stream(query) as stream:
@@ -44,22 +52,32 @@ def read_python_stream(query):
     _print_result(start, rows)
 
 
+def read_python_stream_rows(query):
+    print('\n\tclickhouse-connect Python Stream (row blocks):')
+    rows = 0
+    start = time.time()
+    with cc_client.query_row_block_stream(query) as stream:
+        for block in stream:
+            rows += len(block)
+    _print_result(start, rows)
+
+
 def read_numpy(query):
-    print('\n\tNumpy Batch:')
+    print('\n\tclickhouse connect Numpy Batch:')
     start = time.time()
     arr = cc_client.query_np(query, max_str_len=100)
     _print_result(start, len(arr))
 
 
 def read_pandas(query):
-    print('\n\tPandas Batch:')
+    print('\n\tclickhouse connect Pandas Batch:')
     start = time.time()
     rows = len(cc_client.query_df(query))
     _print_result(start, rows)
 
 
 def read_pandas_stream(query):
-    print('\n\tPandas stream version')
+    print('\n\tclickhouse-connect Pandas Stream')
     start = time.time()
     rows = 0
     with cc_client.query_df_stream(query) as stream:
@@ -73,6 +91,13 @@ def dr_read_python(query):
     start = time.time()
     result = cd_client.execute(query, columnar=True)
     _print_result(start, len(result[0]))
+
+
+def dr_read_python_rows(query):
+    print('\n\tclickhouse-driver Python Batch (row oriented):')
+    start = time.time()
+    result = cd_client.execute(query)
+    _print_result(start, len(result))
 
 
 def dr_read_python_stream(query):
@@ -99,13 +124,16 @@ def _print_result(start, rows):
 def main():
     for query in queries:
         print(f'\n{query}')
-        # read_python(query)
-        read_python_stream(query)
+        read_python(query)
+        read_python_rows(query)
+        read_python_stream_rows(query)
+        # read_python_stream(query)
         # read_pandas_streaming(query)
         # read_numpy(query)
-        # read_pandas(query)
-        # dr_read_python(query)
-        # dr_read_pandas(query)
+        read_pandas(query)
+        dr_read_python(query)
+        dr_read_python_rows(query)
+        dr_read_pandas(query)
 
 
 if __name__ == '__main__':
