@@ -27,6 +27,7 @@ def test_pandas_basic(test_client: Client, test_table_engine: str):
     assert df.equals(source_df)
     df = test_client.query_df("SELECT * FROM system.tables WHERE engine = 'not_a_thing'")
     assert len(df) == 0
+    assert isinstance(df, pd.DataFrame)
 
 
 def test_pandas_nulls(test_client: Client, table_context: Callable):

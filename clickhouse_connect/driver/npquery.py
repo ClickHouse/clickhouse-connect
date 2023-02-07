@@ -99,7 +99,7 @@ class NumpyResult(Closable):
         elif len(pieces) == 1:
             self._df_result = pieces[0]
         else:
-            self._df_result = []
+            self._df_result = pd.DataFrame()
         self.close()
         return self
 
