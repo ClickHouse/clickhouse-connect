@@ -90,19 +90,21 @@ def test_pandas_context_inserts(test_client: Client, table_context: Callable):
 
 def test_pandas_low_card(test_client: Client, table_context: Callable):
     with table_context('test_pandas_low_card', ['key String',
-                                                'value LowCardinality(String)',
+                                                'value LowCardinality(Nullable(String))',
                                                 'date_value LowCardinality(DateTime)',
                                                 'int_value LowCardinality(Int32)']):
         df = pd.DataFrame([['key1', 'test_string_0', datetime(2022, 10, 15, 4, 25), -372],
-                           ['key2', 'test_string_1', datetime.now(), 4777288]],
+                           ['key2', 'test_string_1', datetime.now(), 4777288],
+                           ['key3', None, datetime.now(), 4777288]],
                           columns=['key', 'value', 'date_value', 'int_value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_low_card', df)
-        result_df = test_client.query_df('SELECT * FROM test_pandas_low_card')
+        result_df = test_client.query_df('SELECT * FROM test_pandas_low_card', use_none=True)
         assert result_df.iloc[0]['value'] == 'test_string_0'
         assert result_df.iloc[1]['value'] == 'test_string_1'
         assert result_df.iloc[0]['date_value'] == pd.Timestamp(2022, 10, 15, 4, 25)
         assert result_df.iloc[1]['int_value'] == 4777288
+        assert result_df.iloc[2]['value'] is None
         assert df.equals(source_df)
 
 
