@@ -1,14 +1,12 @@
-from datetime import datetime, date
+from datetime import datetime, date, tzinfo
 from ipaddress import IPv4Address
-from typing import Sequence
+from typing import Sequence, Optional
 from uuid import UUID, SafeUUID
 
 from clickhouse_connect.driver.common import int_size
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.options import np
 
-
-from_ts_naive = datetime.utcfromtimestamp
 
 MONTH_DAYS = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365)
 MONTH_DAYS_LEAP = (0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366)
@@ -26,10 +24,13 @@ def read_ipv4_col(source: ByteSource, num_rows: int):
     return new_col
 
 
-def read_datetime_col(source: ByteSource, num_rows: int):
-    column = source.read_array('I', num_rows)
-    fts = from_ts_naive
-    return [fts(ts) for ts in column]
+def read_datetime_col(source: ByteSource, num_rows: int, tz_info: Optional[tzinfo]):
+    src_array = source.read_array('I', num_rows)
+    if tz_info is None:
+        fts = datetime.utcfromtimestamp
+        return [fts(ts) for ts in src_array]
+    fts = datetime.fromtimestamp
+    return [fts(ts, tz_info) for ts in src_array]
 
 
 def epoch_days_to_date(days: int) -> date:

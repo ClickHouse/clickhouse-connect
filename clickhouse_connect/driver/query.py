@@ -8,11 +8,13 @@ from enum import Enum
 from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Iterator
 from datetime import date, datetime, tzinfo
 
+from pytz.exceptions import UnknownTimeZoneError
+
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
-from clickhouse_connect.driver.exceptions import StreamClosedError
+from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
 from clickhouse_connect.driver.options import check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
@@ -33,7 +35,7 @@ class QueryContext(BaseQueryContext):
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
 
-    # pylint: disable=duplicate-code,too-many-arguments
+    # pylint: disable=duplicate-code,too-many-arguments,too-many-locals
     def __init__(self,
                  query: str = '',
                  parameters: Optional[Dict[str, Any]] = None,
@@ -45,7 +47,9 @@ class QueryContext(BaseQueryContext):
                  use_none: Optional[bool] = None,
                  column_oriented: Optional[bool] = None,
                  use_numpy: Optional[bool] = None,
-                 max_str_len: Optional[int] = 0):
+                 max_str_len: Optional[int] = 0,
+                 query_tz: Optional[Union[str, tzinfo]] = None,
+                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None):
         """
         Initializes various configuration settings for the query context
 
@@ -62,7 +66,16 @@ class QueryContext(BaseQueryContext):
           secondary dictionary can be used for nested column types such as Tuples or Maps
         :param encoding: Optional string encoding for this query, such as 'latin-1'
         :param column_formats: Optional dictionary
-        :param use_none:
+        :param use_none: Use a Python None for ClickHouse NULL values in nullable columns.  Otherwise the default
+          value of the column (such as 0 for numbers) will be returned in the result_set
+        :param max_str_len Limit returned ClickHouse String values to this length, which allows a Numpy
+          structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
+          String columns will always be object arrays
+        :param query_tz  Either a string or a pytz tzinfo object.  (Strings will be converted to tzinfo objects).
+          Values for any DateTime or DateTime64 column in the query will be converted to Python datetime.datetime
+          objects with the selected timezone
+        :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
+          tzinfo objects).  The timezone will be applied to datetime objects returned in the query
         """
         super().__init__(settings, query_formats, column_formats, encoding, use_numpy)
         self.query = query
@@ -73,6 +86,23 @@ class QueryContext(BaseQueryContext):
         self.column_oriented = False if column_oriented is None else column_oriented
         self.use_numpy = use_numpy
         self.max_str_len = 0 if max_str_len is None else max_str_len
+        if query_tz is not None:
+            if isinstance(query_tz, str):
+                try:
+                    query_tz = pytz.timezone(query_tz)
+                except UnknownTimeZoneError as ex:
+                    raise ProgrammingError('query_tz is not recognized') from ex
+        self.query_tz = query_tz
+        self.active_tz = query_tz
+        if column_tzs is not None:
+            for col_name, timezone in column_tzs.items():
+                if isinstance(timezone, str):
+                    try:
+                        timezone = pytz.timezone(timezone)
+                        column_tzs[col_name] = timezone
+                    except UnknownTimeZoneError as ex:
+                        raise ProgrammingError('query_tz is not recognized') from ex
+        self.column_tzs = column_tzs
         self._update_query()
 
     @property
@@ -101,6 +131,13 @@ class QueryContext(BaseQueryContext):
         self.parameters[key] = value
         self._update_query()
 
+    def start_column(self, name: str):
+        super().start_column(name)
+        if self.column_tzs and name in self.column_tzs:
+            self.active_tz = self.column_tzs[name]
+        else:
+            self.active_tz = self.query_tz
+
     def updated_copy(self,
                      query: Optional[str] = None,
                      parameters: Optional[Dict[str, Any]] = None,
@@ -112,7 +149,9 @@ class QueryContext(BaseQueryContext):
                      use_none: Optional[bool] = None,
                      column_oriented: Optional[bool] = None,
                      use_numpy: Optional[bool] = None,
-                     max_str_len: Optional[int] = None) -> 'QueryContext':
+                     max_str_len: Optional[int] = None,
+                     query_tz: [Optional[Union[str, tzinfo]]] = None,
+                     column_tzs: [Optional[Dict[str, Union[str, tzinfo]]]] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -126,7 +165,9 @@ class QueryContext(BaseQueryContext):
                             self.use_none if use_none is None else use_none,
                             self.column_oriented if column_oriented is None else column_oriented,
                             self.use_numpy if use_numpy is None else use_numpy,
-                            self.max_str_len if max_str_len is None else max_str_len)
+                            self.max_str_len if max_str_len is None else max_str_len,
+                            self.query_tz if query_tz is None else query_tz,
+                            self.column_tzs if column_tzs is None else column_tzs)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)

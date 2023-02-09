@@ -10,11 +10,19 @@ Using QueryResult as a context is unintuitive, and that usage pattern is depreca
 a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
 under New Features, below.
 
-## 0.5.8, Not yet released
+## 0.5.8, 2023-02-10
 
 ### Bug Fix
 - Return empty dataframe instead of empty list when no records returned from `query_df` method  Fixes
 https://github.com/ClickHouse/clickhouse-connect/issues/118
+
+### New Feature
+- Allow client side control of datetime.datetime timezones for query results.  The client `query` methods for native
+Python results now accept two new parameters: `query_tz` is the timezone to be assigned for any DateTime or DateTime64
+objects in the results, while timezones can be set per column using the `column_tzs` dictionary of column names to
+timezones.  See the [test file](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_timezones.py)
+for simple examples.  This is a workaround for https://github.com/ClickHouse/clickhouse-connect/issues/120 and the
+underlying ClickHouse issue https://github.com/ClickHouse/ClickHouse/issues/40397
 
 ## 0.5.7, 2023-02-01
 

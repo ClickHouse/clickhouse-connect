@@ -82,7 +82,7 @@ class DateTime(ClickHouseType):
             return numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
-        return data_conv.read_datetime_col(source, num_rows)
+        return data_conv.read_datetime_col(source, num_rows, ctx.active_tz)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         first = self._first_value(column)

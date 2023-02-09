@@ -1,5 +1,7 @@
 import io
 import logging
+from datetime import tzinfo
+
 import pytz
 
 from abc import ABC, abstractmethod
@@ -109,7 +111,7 @@ class Client(ABC):
         :return: The string value of the setting, if it exists, or None
         """
 
-    # pylint: disable=too-many-arguments,unused-argument
+    # pylint: disable=too-many-arguments,unused-argument,too-many-locals
     def query(self,
               query: str = None,
               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -121,7 +123,9 @@ class Client(ABC):
               column_oriented: Optional[bool] = None,
               use_numpy: Optional[bool] = None,
               max_str_len: Optional[int] = None,
-              context: QueryContext = None) -> QueryResult:
+              context: QueryContext = None,
+              query_tz: Optional[Union[str, tzinfo]] = None,
+              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
         parameters, see the create_query_context method
@@ -146,7 +150,9 @@ class Client(ABC):
                                   column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                                   encoding: Optional[str] = None,
                                   use_none: Optional[bool] = None,
-                                  context: QueryContext = None) -> StreamContext:
+                                  context: QueryContext = None,
+                                  query_tz: Optional[Union[str, tzinfo]] = None,
+                                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of column oriented blocks. For
         parameters, see the create_query_context method.
@@ -162,7 +168,9 @@ class Client(ABC):
                                column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                                encoding: Optional[str] = None,
                                use_none: Optional[bool] = None,
-                               context: QueryContext = None) -> StreamContext:
+                               context: QueryContext = None,
+                               query_tz: Optional[Union[str, tzinfo]] = None,
+                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks. For
         parameters, see the create_query_context method.
@@ -171,14 +179,16 @@ class Client(ABC):
         return self._context_query(locals(), use_numpy=False).row_block_stream
 
     def query_rows_stream(self,
-                               query: str = None,
-                               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-                               settings: Optional[Dict[str, Any]] = None,
-                               query_formats: Optional[Dict[str, str]] = None,
-                               column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-                               encoding: Optional[str] = None,
-                               use_none: Optional[bool] = None,
-                               context: QueryContext = None) -> StreamContext:
+                          query: str = None,
+                          parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                          settings: Optional[Dict[str, Any]] = None,
+                          query_formats: Optional[Dict[str, str]] = None,
+                          column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+                          encoding: Optional[str] = None,
+                          use_none: Optional[bool] = None,
+                          context: QueryContext = None,
+                          query_tz: Optional[Union[str, tzinfo]] = None,
+                          column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks. For
         parameters, see the create_query_context method.
@@ -283,7 +293,9 @@ class Client(ABC):
                              column_oriented: Optional[bool] = None,
                              use_numpy: Optional[bool] = False,
                              max_str_len: Optional[int] = 0,
-                             context: Optional[QueryContext] = None) -> QueryContext:
+                             context: Optional[QueryContext] = None,
+                             query_tz: Optional[Union[str, tzinfo]] = None,
+                             column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -301,6 +313,11 @@ class Client(ABC):
           structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
           String columns will always be object arrays
         :param context: An existing QueryContext to be updated with any provided parameter values
+        :param query_tz  Either a string or a pytz tzinfo object.  (Strings will be converted to tzinfo objects).
+          Values for any DateTime or DateTime64 column in the query will be converted to Python datetime.datetime
+          objects with the selected timezone.
+        :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
+          tzinfo objects).  The timezone will be applied to datetime objects returned in the query
         :return: Reusable QueryContext
         """
         if context:
@@ -314,7 +331,9 @@ class Client(ABC):
                                         use_none=use_none,
                                         column_oriented=column_oriented,
                                         use_numpy=use_numpy,
-                                        max_str_len=max_str_len)
+                                        max_str_len=max_str_len,
+                                        query_tz=query_tz,
+                                        column_tzs=column_tzs)
         # By default, a numpy context doesn't use None/NULL.  If NULL values are allowed, all numpy arrays must
         # be inefficient Object arrays
         if use_numpy and use_none is None:
@@ -331,7 +350,9 @@ class Client(ABC):
                             use_none=use_none,
                             column_oriented=column_oriented,
                             use_numpy=use_numpy,
-                            max_str_len=max_str_len)
+                            max_str_len=max_str_len,
+                            query_tz=query_tz,
+                            column_tzs=column_tzs)
 
     def query_arrow(self,
                     query: str,

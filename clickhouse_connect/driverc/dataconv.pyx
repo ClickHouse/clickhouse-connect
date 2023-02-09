@@ -10,6 +10,7 @@ from cython.view cimport array as cvarray
 from ipaddress import IPv4Address
 from uuid import UUID, SafeUUID
 from libc.string cimport memcpy
+from datetime import tzinfo
 
 
 @cython.wraparound(False)
@@ -31,17 +32,26 @@ def read_ipv4_col(ResponseBuffer buffer, unsigned long long num_rows):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows):
+def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows, tzinfo: tzinfo):
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(4 * num_rows)
     cdef object column = PyTuple_New(num_rows), v
-    fts = datetime.utcfromtimestamp
-    while x < num_rows:
-        v = fts((<unsigned int*>loc)[0])
-        PyTuple_SET_ITEM(column, x, v)
-        Py_INCREF(v)
-        loc += 4
-        x += 1
+    if tzinfo is None:
+        fts = datetime.utcfromtimestamp
+        while x < num_rows:
+            v = fts((<unsigned int*>loc)[0])
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
+            loc += 4
+            x += 1
+    else:
+        fts = datetime.fromtimestamp
+        while x < num_rows:
+            v = fts((<unsigned int*>loc)[0], tzinfo)
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
+            loc += 4
+            x += 1
     return column
 
 
