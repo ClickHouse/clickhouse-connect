@@ -35,7 +35,7 @@ class HttpClient(Client):
     params = {}
     valid_transport_settings = {'database', 'buffer_size', 'session_id', 'compress', 'decompress',
                                 'session_timeout', 'session_check', 'query_id', 'quota_key', 'wait_end_of_query',
-                                }
+                                'clickhouse_protocol_version'}
     optional_transport_settings = {'send_progress_in_http_headers', 'http_headers_progress_interval_ms',
                                    'enable_http_compression'}
 
@@ -48,7 +48,7 @@ class HttpClient(Client):
                  password: str,
                  database: str,
                  compress: Union[bool, str] = True,
-                 query_limit: int = 5000,
+                 query_limit: int = 0,
                  query_retries: int = 2,
                  connect_timeout: int = 10,
                  send_receive_timeout: int = 300,
@@ -65,32 +65,7 @@ class HttpClient(Client):
                  https_proxy: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
-        :param interface: http or https
-        :param host: hostname
-        :param port: host port
-        :param username: ClickHouse user
-        :param password: ClickHouse password
-        :param database: Default database for the connection
-        :param compress: Accept compressed HTTP type from server (brotli or gzip)
-        :param query_limit: Default LIMIT on returned rows
-        :param connect_timeout:  Timeout in seconds for the http connection
-        :param send_receive_timeout: Read timeout in seconds for http connection
-        :param client_name: Http user agent header value
-        :param send_progress: Ask ClickHouse to send progress headers.  Used for summary and keep alive
-        :param verify: Verify the server certificate in secure/https mode
-        :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
-         certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
-         certificate is trusted by the operating system.  To trust the maintained list of "global" public root
-         certificates maintained by the Python 'certifi' package, set ca_cert to 'certifi'
-        :param client_cert: File path to a TLS Client certificate in .pem format.  This file should contain any
-          applicable intermediate certificates
-        :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
-          is not included the Client Certificate key file
-        :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
-          is True, the client will generate a UUID1 session id
-        :param settings Optional dictionary of ClickHouse setting values (str/value) for every connection request
-        :param pool_mgr Optional urllib3 PoolManager for this client.  Useful for creating separate connection
-          pools for multiple client endpoints for applications with many clients
+        See clickhouse_connect.get_client for parameters
         """
         self.url = f'{interface}://{host}:{port}'
         self.headers = {}
@@ -162,6 +137,7 @@ class HttpClient(Client):
         if comp_setting and (comp_setting.value == '1' or comp_setting.readonly != 1):
             self.compression = compression
         self.params = self._validate_settings(ch_settings)
+        self.protocol_version = common.get_setting('native_protocol_version')
 
     def set_client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
@@ -183,6 +159,9 @@ class HttpClient(Client):
         params = {}
         if self.database:
             params['database'] = self.database
+        if self.protocol_version:
+            params['client_protocol_version'] = self.protocol_version
+            context.block_info = True
         params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
         if columns_only_re.search(context.uncommented_query):
@@ -343,7 +322,7 @@ class HttpClient(Client):
                         logger.debug('Retrying remotely closed connection')
                         continue
                 logger.exception('Unexpected Http Driver Exception')
-                raise OperationalError(f'Error executing HTTP request {self.url}') from ex
+                raise OperationalError(f'Error {ex} executing HTTP request {self.url}') from ex
             if 200 <= response.status < 300:
                 return response
             if response.status in (429, 503, 504):
