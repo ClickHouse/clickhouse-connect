@@ -16,13 +16,18 @@ under New Features, below.
 - Return empty dataframe instead of empty list when no records returned from `query_df` method  Fixes
 https://github.com/ClickHouse/clickhouse-connect/issues/118
 
+### Default parameter change
+- The client `query_limit` now defaults to 0 (unlimited rows returned), since the previous default of 5000 was unintuitive
+and led to confusion when limited results were returned.
+
 ### New Feature
 - Allow client side control of datetime.datetime timezones for query results.  The client `query` methods for native
 Python results now accept two new parameters: `query_tz` is the timezone to be assigned for any DateTime or DateTime64
 objects in the results, while timezones can be set per column using the `column_tzs` dictionary of column names to
 timezones.  See the [test file](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_timezones.py)
 for simple examples.  This is a workaround for https://github.com/ClickHouse/clickhouse-connect/issues/120 and the
-underlying ClickHouse issue https://github.com/ClickHouse/ClickHouse/issues/40397
+underlying ClickHouse issue https://github.com/ClickHouse/ClickHouse/issues/40397  Note that this issue only affects DateTime
+columns, not DateTime64, although the query context parameters will override the returned DateTime64 timezone as well.
 
 ## 0.5.7, 2023-02-01
 

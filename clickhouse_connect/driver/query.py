@@ -103,6 +103,7 @@ class QueryContext(BaseQueryContext):
                     except UnknownTimeZoneError as ex:
                         raise ProgrammingError('query_tz is not recognized') from ex
         self.column_tzs = column_tzs
+        self.block_info = False
         self._update_query()
 
     @property

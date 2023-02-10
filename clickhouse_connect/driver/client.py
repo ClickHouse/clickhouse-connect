@@ -30,6 +30,7 @@ class Client(ABC):
     """
     compression: str = None
     write_compression: str = None
+    protocol_version = 0
     valid_transport_settings = set()
     optional_transport_settings = set()
 

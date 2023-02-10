@@ -24,6 +24,8 @@ class NativeTransform:
             result_block = []
             try:
                 try:
+                    if context.block_info:
+                        source.read_bytes(8)
                     num_cols = source.read_leb128()
                     num_rows = source.read_leb128()
                 except (StopIteration, IndexError):

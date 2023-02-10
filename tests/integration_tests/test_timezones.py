@@ -3,6 +3,7 @@ from datetime import datetime
 import pytz
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect import common
 
 
 def test_basic_timezones(test_client: Client):
@@ -33,3 +34,11 @@ def test_column_timezones(test_client: Client):
     china_tz = pytz.timezone('Asia/Shanghai').localize(datetime(2024, 12, 4, 10, 5, 5)).tzinfo
     assert row[0].tzinfo == chicago_tz
     assert row[1].tzinfo == china_tz
+
+    row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
+                            "toDateTime64('2023-01-02 15:44:22.7832', 6, 'Asia/Shanghai') as china").first_row
+    if common.get_setting('native_protocol_version'):
+        assert row[0].tzinfo == chicago_tz
+    else:
+        assert row[0].tzinfo is None
+    assert row[1].tzinfo == china_tz  # DateTime64 columns work correctly

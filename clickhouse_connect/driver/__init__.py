@@ -21,6 +21,51 @@ def create_client(host: str = None,
                   settings: Optional[Dict[str, Any]] = None,
                   generic_args: Optional[Dict[str, Any]] = None,
                   **kwargs) -> Client:
+    """
+    The preferred method to get a ClickHouse Connect Client instance
+
+    :param host: The hostname or IP address of the ClickHouse server. If not set, localhost will be used.
+    :param username: The ClickHouse username. If not set, the default ClickHouse user will be used.
+    :param password: The password for username.
+    :param database:  The default database for the connection. If not set, ClickHouse Connect will use the
+     default database for username.
+    :param interface: Must be http or https.  Defaults to http, or to https if port is set to 8443 or 443
+    :param port: The ClickHouse HTTP or HTTPS port. If not set will default to 8123, or to 8443 if secure=True
+      or interface=https.
+    :param secure: Use https/TLS. This overrides inferred values from the interface or port arguments.
+    :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
+      will be extracted from this string if not set otherwise.
+    :param settings: ClickHouse server settings to be used with the session/every request
+    :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
+      It is not recommended to use this parameter externally.
+
+    :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
+
+    :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
+      compression method (lz4).  A str of 'lz4', 'zstd', 'brotli', or 'gzip' can be used to use a specific compression type
+    :param query_limit: Default LIMIT on returned rows.  0 means no limit
+    :param connect_timeout:  Timeout in seconds for the http connection
+    :param send_receive_timeout: Read timeout in seconds for http connection
+    :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
+      in the ClickHouse system.query_log.
+    :param send_progress: Ask ClickHouse to send progress headers.  Used for summary and keep alive
+    :param verify: Verify the server certificate in secure/https mode
+    :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
+     certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
+     certificate is trusted by the operating system.  To trust the maintained list of "global" public root
+     certificates maintained by the Python 'certifi' package, set ca_cert to 'certifi'
+    :param client_cert: File path to a TLS Client certificate in .pem format.  This file should contain any
+      applicable intermediate certificates
+    :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
+      is not included the Client Certificate key file
+    :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
+      is True, the client will generate a UUID1 session id
+    :param pool_mgr Optional urllib3 PoolManager for this client.  Useful for creating separate connection
+      pools for multiple client endpoints for applications with many clients
+    :param http_proxy  http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
+    :param https_proxy https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
+    :return: ClickHouse Connect Client instance
+    """
     if dsn:
         parsed = urlparse(dsn)
         username = username or parsed.username

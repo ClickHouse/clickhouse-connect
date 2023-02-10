@@ -1,6 +1,6 @@
 import pytz
 
-from datetime import date, datetime
+from datetime import date, datetime, tzinfo
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
@@ -69,20 +69,28 @@ from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
 
 
-# pylint: disable=abstract-method
 class DateTime(ClickHouseType):
+    __slots__ = ('tzinfo',)
     _array_type = 'L' if int_size == 2 else 'I'
     np_type = 'datetime64[s]'
     valid_formats = 'native', 'int'
     python_type = datetime
     nano_divisor = 1000000000
 
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self._name_suffix = type_def.arg_str
+        if len(type_def.values) > 0:
+            self.tzinfo = pytz.timezone(type_def.values[0][1:-1])
+        else:
+            self.tzinfo = None
+
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
             return numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
-        return data_conv.read_datetime_col(source, num_rows, ctx.active_tz)
+        return data_conv.read_datetime_col(source, num_rows, ctx.active_tz or self.tzinfo)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         first = self._first_value(column)
@@ -117,9 +125,7 @@ class DateTime64(ClickHouseType):
         self.prec = 10 ** self.scale
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
-            self._read_column_binary = self._read_binary_tz
         else:
-            self._read_column_binary = self._read_binary_naive
             self.tzinfo = None
 
     @property
@@ -131,10 +137,18 @@ class DateTime64(ClickHouseType):
     def nano_divisor(self):
         return 1000000000 // self.prec
 
-    def _read_binary_tz(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if ctx.use_numpy:
+            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
         column = source.read_array('Q', num_rows)
         if self.read_format(ctx) == 'int':
             return column
+        tz_info = ctx.active_tz or self.tzinfo
+        if tz_info:
+            return self._read_binary_tz(column, tz_info)
+        return self._read_binary_naive(column)
+
+    def _read_binary_tz(self, column: Sequence, tz_info: tzinfo):
         new_col = []
         app = new_col.append
         dt_from = datetime.fromtimestamp
@@ -146,12 +160,7 @@ class DateTime64(ClickHouseType):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _read_binary_naive(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
-        column = source.read_array('Q', num_rows)
-        if self.read_format(ctx) == 'int':
-            return column
+    def _read_binary_naive(self, column: Sequence):
         new_col = []
         app = new_col.append
         dt_from = datetime.utcfromtimestamp
