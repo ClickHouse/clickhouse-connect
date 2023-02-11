@@ -48,7 +48,7 @@ def create_client(host: str = None,
     :param send_receive_timeout: Read timeout in seconds for http connection
     :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
       in the ClickHouse system.query_log.
-    :param send_progress: Ask ClickHouse to send progress headers.  Used for summary and keep alive
+    :param send_progress: Deprecated, has no effect.  Previous functionality is now automatically determined
     :param verify: Verify the server certificate in secure/https mode
     :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
      certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server

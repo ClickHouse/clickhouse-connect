@@ -199,5 +199,10 @@ def test_command_as_query(test_client: Client):
 
 
 def test_show_create(test_client: Client):
-    with test_client.query('SHOW CREATE TABLE system.tables') as result:
-        assert 'statement' in result.column_names
+    result = test_client.query('SHOW CREATE TABLE system.tables')
+    result.close()
+    assert 'statement' in result.column_names
+
+
+def test_empty_result(test_client: Client):
+    assert len(test_client.query("SELECT * FROM system.tables WHERE name = '_NOT_A THING'").result_rows) == 0

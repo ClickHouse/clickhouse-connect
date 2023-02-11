@@ -108,15 +108,14 @@ class ResponseSource:
         self.response = response
         compression = response.headers.get('content-encoding')
         if compression == 'zstd':
-            zstd_decom = zstandard.ZstdDecompressor()
-            reader = zstd_decom.stream_reader(self, read_across_frames=False)
+            zstd_decom = zstandard.ZstdDecompressor().decompressobj()
 
             def decompress():
                 while True:
-                    chunk = reader.read()
+                    chunk = response.read(chunk_size)
                     if not chunk:
                         break
-                    yield chunk
+                    yield zstd_decom.decompress(chunk)
 
             self.gen = decompress()
         elif compression == 'lz4':
@@ -135,13 +134,8 @@ class ResponseSource:
 
             self.gen = decompress()
         else:
-            self.gen = response.stream(decode_content=True)
+            self.gen = response.stream(amt=chunk_size, decode_content=True)
 
-    def read(self, amt: int) -> bytes:
-        return self.response.read(amt)
-
-    def close(self, ex: Exception = None):
-        if ex:
-            logger.warning('Closed HTTP response due to unexpected exception')
+    def close(self):
         self.response.drain_conn()
         self.response.close()

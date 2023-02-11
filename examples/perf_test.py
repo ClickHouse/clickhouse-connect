@@ -18,17 +18,17 @@ import clickhouse_driver  # pylint: disable=import-error
 import clickhouse_connect
 
 
-queries = [#'SELECT trip_id, pickup, dropoff, pickup_longitude, pickup_latitude FROM taxis',
+queries = ['SELECT trip_id, pickup, dropoff, pickup_longitude, pickup_latitude FROM taxis',
            #'SELECT number from numbers(500000000)',
-           #'SELECT * FROM datasets.hits_100m_obfuscated'
+           #'SELECT * FROM datasets.hits_100m_obfuscated',
            "SELECT * FROM perftest.ontime WHERE FlightDate < '2017-02-18'"
            ]
 
-cc_client = clickhouse_connect.get_client(send_progress=False, query_limit=0, compress=False)
+cc_client = clickhouse_connect.get_client(compress=False)
 cd_client = clickhouse_driver.Client(host='localhost')
 
 
-def read_python(query):
+def read_python_columns(query):
     print('\n\tclickhouse-connect Python Batch (column oriented):')
     start = time.time()
     columns = cc_client.query(query).result_columns
@@ -42,7 +42,7 @@ def read_python_rows(query):
     _print_result(start, len(rows))
 
 
-def read_python_stream(query):
+def read_python_stream_columns(query):
     print('\n\tclickhouse-connect Python Stream (column blocks):')
     rows = 0
     start = time.time()
@@ -124,15 +124,15 @@ def _print_result(start, rows):
 def main():
     for query in queries:
         print(f'\n{query}')
-        read_python(query)
+        read_python_columns(query)
         read_python_rows(query)
-        read_python_stream_rows(query)
-        # read_python_stream(query)
-        # read_pandas_streaming(query)
+        # read_python_stream_rows(query)
+        read_python_stream_columns(query)
+        read_pandas_stream(query)
         # read_numpy(query)
         read_pandas(query)
         dr_read_python(query)
-        dr_read_python_rows(query)
+        # dr_read_python_rows(query)
         dr_read_pandas(query)
 
 

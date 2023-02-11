@@ -6,11 +6,12 @@ Matrix = Sequence[Sequence[Any]]
 
 class Closable(ABC):
     @abstractmethod
-    def close(self, ex: Exception = None):
+    def close(self):
         pass
 
 
 class ByteSource(Closable):
+    last_message = None
 
     @abstractmethod
     def read_leb128(self) -> int:

@@ -203,5 +203,5 @@ class StreamContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._in_context = False
-        self.source.close(exc_val)
+        self.source.close()
         self.gen = None
