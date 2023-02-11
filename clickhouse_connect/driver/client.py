@@ -49,7 +49,7 @@ class Client(ABC):
             self.server_tz = pytz.timezone(server_tz)
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
-        server_settings = self.query('SELECT name, value, changed, description, type, readonly FROM system.settings')
+        server_settings = self.query('SELECT name, value, readonly FROM system.settings LIMIT 10000')
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
         if database and not database == '__default__':
             self.database = database

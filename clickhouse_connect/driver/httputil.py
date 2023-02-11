@@ -142,6 +142,6 @@ class ResponseSource:
 
     def close(self, ex: Exception = None):
         if ex:
-            logger.warning('Closed HTTP response due to unexpected exception')
+            logger.warning('Closed HTTP response due to unexpected exception', ex)
         self.response.drain_conn()
         self.response.close()

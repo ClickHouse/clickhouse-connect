@@ -26,7 +26,4 @@ class SettingDef(NamedTuple):
     """
     name: str
     value: str
-    changed: int
-    description: str
     readonly: int
-    type: str
