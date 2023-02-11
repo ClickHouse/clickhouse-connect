@@ -123,10 +123,10 @@ class NumpyResult(Closable):
     def df_stream(self) -> StreamContext:
         return StreamContext(self, self._df_stream())
 
-    def close(self, ex: Exception = None):
+    def close(self):
         if self._block_gen is not None:
             self._block_gen.close()
             self._block_gen = None
         if self.source:
-            self.source.close(ex)
+            self.source.close()
             self.source = None

@@ -1,5 +1,5 @@
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
+from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError, StreamFailureError
 
 
 # This is deprecated version
@@ -69,3 +69,17 @@ def test_stream_errors(test_client: Client):
             assert sum(row[0] for row in stream) == 3882
     except StreamClosedError:
         pass
+
+
+def test_stream_failure(test_client: Client):
+    with test_client.query_row_block_stream('SELECT toString(cityHash64(number)) FROM numbers(10000000)' +
+                                            ' where intDiv(1,number-300000)>-100000000') as stream:
+        blocks = 0
+        failed = False
+        try:
+            for _ in stream:
+                blocks += 1
+        except StreamFailureError as ex:
+            failed = True
+            assert 'DIVISION' in str(ex)
+    assert failed

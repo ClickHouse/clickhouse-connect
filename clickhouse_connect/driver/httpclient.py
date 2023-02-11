@@ -39,7 +39,7 @@ class HttpClient(Client):
     optional_transport_settings = {'send_progress_in_http_headers', 'http_headers_progress_interval_ms',
                                    'enable_http_compression'}
 
-    # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
+    # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
     def __init__(self,
                  interface: str,
                  host: str,
@@ -98,21 +98,13 @@ class HttpClient(Client):
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
+        self._progress_interval =  str(min(120000, (send_receive_timeout - 5) * 1000))
         self._transform = NativeTransform()
 
         connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
         self.query_retries = coerce_int(query_retries)
         self.http_retries = 1
-
-        if coerce_bool(send_progress):
-            ch_settings['wait_end_of_query'] = '1'
-            # We can't actually read the progress headers, but we enable them so ClickHouse sends data
-            # to keep the connection alive when waiting for long-running queries that don't return data
-            # Accordingly we make sure it's always less than the read timeout
-            ch_settings['send_progress_in_http_headers'] = '1'
-            progress_interval = min(120000, (send_receive_timeout - 5) * 1000)
-            ch_settings['http_headers_progress_interval_ms'] = str(progress_interval)
 
         if session_id:
             ch_settings['session_id'] = session_id
@@ -180,8 +172,12 @@ class HttpClient(Client):
         if self.compression:
             headers['Accept-Encoding'] = self.compression
             params['enable_http_compression'] = '1'
-        response = self._raw_request(self._prep_query(context), params, headers, stream=True,
-                                     retries=self.query_retries)
+        response = self._raw_request(self._prep_query(context),
+                                     params,
+                                     headers,
+                                     stream=True,
+                                     retries=self.query_retries,
+                                     server_wait=not context.streaming)
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
@@ -239,7 +235,7 @@ class HttpClient(Client):
         cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
         params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}'}
         if self.database:
-            params['database'] =  self.database
+            params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
         response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
         logger.debug('Insert response code: %d, content: %s', response.status, response.data)
@@ -297,12 +293,20 @@ class HttpClient(Client):
                      method: str = 'POST',
                      retries: int = 0,
                      stream: bool = False,
+                     server_wait: bool = True,
                      error_handler: Callable = None) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
         headers = dict_copy(self.headers, headers)
         url = f'{self.url}?{urlencode(dict_copy(self.params, params))}'
         attempts = 0
+        if server_wait:
+            params['wait_end_of_query'] = '1'
+        # We can't actually read the progress headers, but we enable them so ClickHouse sends something
+        # to keep the connection alive when waiting for long-running queries and (2) to get summary information
+        # if not streaming
+        params['send_progress_in_http_headers'] = '1'
+        params['http_headers_progress_interval_ms'] = self._progress_interval
         while True:
             attempts += 1
             try:

@@ -2,6 +2,7 @@ import sys
 import array
 from typing import Any, Iterable
 
+from clickhouse_connect.driver.exceptions import StreamCompleteException
 from clickhouse_connect.driver.types import ByteSource
 
 must_swap = sys.byteorder == 'big'
@@ -27,7 +28,9 @@ class ResponseBuffer(ByteSource):
         self.buf_loc = 0
         self.buf_sz = 0
         while len(bridge) < sz:
-            chunk = next(self.gen)
+            chunk = next(self.gen, None)
+            if not chunk:
+                raise StreamCompleteException
             x = len(chunk)
             if len(bridge) + x <= sz:
                 bridge.extend(chunk)
@@ -45,7 +48,9 @@ class ResponseBuffer(ByteSource):
             return self.buffer[self.buf_loc - 1]
         self.buf_sz = 0
         self.buf_loc = 0
-        chunk = next(self.gen)
+        chunk = next(self.gen, None)
+        if not chunk:
+            raise StreamCompleteException
         x = len(chunk)
         if x > 1:
             self.buffer = chunk
@@ -113,7 +118,13 @@ class ResponseBuffer(ByteSource):
             column.byteswap()
         return column
 
-    def close(self, ex: Exception = None):
+    @property
+    def last_message(self):
+        if len(self.buffer) == 0:
+            return None
+        return self.buffer.decode()
+
+    def close(self):
         if self.source:
-            self.source.close(ex)
+            self.source.close()
             self.source = None

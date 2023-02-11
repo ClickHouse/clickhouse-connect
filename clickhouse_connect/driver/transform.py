@@ -2,6 +2,7 @@ from typing import Union
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
+from clickhouse_connect.driver.exceptions import StreamCompleteException, StreamFailureError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryResult, QueryContext
@@ -27,10 +28,9 @@ class NativeTransform:
                     if context.block_info:
                         source.read_bytes(8)
                     num_cols = source.read_leb128()
-                    num_rows = source.read_leb128()
-                except (StopIteration, IndexError):
-                    source.close()
+                except StreamCompleteException:
                     return None
+                num_rows = source.read_leb128()
                 for col_num in range(num_cols):
                     name = source.read_leb128_str()
                     type_name = source.read_leb128_str()
@@ -44,7 +44,11 @@ class NativeTransform:
                     column = col_type.read_column(source, num_rows, context)
                     result_block.append(column)
             except Exception as ex:
-                source.close(ex)  # Ensure that the query is closed if something unexpected happens
+                source.close()
+                if isinstance(ex, StreamCompleteException):
+                    # We ran out of data before it was expected, this could be ClickHouse reporting an error
+                    # in the response
+                    raise StreamFailureError(source.last_message) from None
                 raise
             block_num += 1
             return result_block
