@@ -102,8 +102,8 @@ class ClickHouseEngineSpec(BaseEngineSpec, BasicParametersMixin):
             return cls._function_names
         try:
             names = database.get_df(
-                'SELECT name FROM system.functions UNION ALL SELECT name FROM system.table_functions LIMIT 10000')
-            ['name'].tolist()
+                'SELECT name FROM system.functions UNION ALL ' +
+                'SELECT name FROM system.table_functions LIMIT 10000')['name'].tolist()
             cls._function_names = names
             return names
         except ClickHouseError:

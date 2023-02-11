@@ -8,7 +8,26 @@ case of an exception or other failure to consume the stream.
 
 Using QueryResult as a context is unintuitive, and that usage pattern is deprecated and will be completely disabled in
 a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
-under New Features, below.
+under New Features in the 0.5.4 release, below.
+
+### Deprecation Warning -- send_progress Client argument now ignored
+The `send_progress` keyword argument to the get_client method has been deprecated.  It now does nothing and will be removed
+in a future release.  Starting with 0.5.9 the driver now requests ClickHouse progress headers in all cases to provide
+"keep alive" functionality for both long-running streaming query result processing, and long-running insert/DDL queries.
+The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
+on whether the query is streaming or not.
+
+## 0.5.9, 2023-02-11
+
+### Bug Fixes
+- Large query results using `zstd` compression incorrectly buffered all incoming data at the start of the query,
+consuming an excessive amount of memory. This has been fixed. https://github.com/ClickHouse/clickhouse-connect/issues/122
+Big thanks to [Denny Crane](https://github.com/den-crane) for his detailed investigation of the problem.  Note that
+this affected large queries using the default `compress=True` client setting, as ClickHouse would prefer `zstd` compression
+in those cases.
+- Fixed an issue where a small query_limit would break client initialization due to an incomplete read of the `system.settings`
+table.  https://github.com/ClickHouse/clickhouse-connect/issues/123
+
 
 ## 0.5.8, 2023-02-10
 

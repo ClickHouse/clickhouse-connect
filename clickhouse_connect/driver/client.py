@@ -159,7 +159,7 @@ class Client(ABC):
         parameters, see the create_query_context method.
         :return: StreamContext -- Iterable stream context that returns column oriented blocks
         """
-        return self._context_query(locals(), use_numpy=False).column_block_stream
+        return self._context_query(locals(), use_numpy=False, streaming=True).column_block_stream
 
     def query_row_block_stream(self,
                                query: str = None,
@@ -177,7 +177,7 @@ class Client(ABC):
         parameters, see the create_query_context method.
         :return: StreamContext -- Iterable stream context that returns blocks of rows
         """
-        return self._context_query(locals(), use_numpy=False).row_block_stream
+        return self._context_query(locals(), use_numpy=False, streaming=True).row_block_stream
 
     def query_rows_stream(self,
                           query: str = None,
@@ -195,7 +195,7 @@ class Client(ABC):
         parameters, see the create_query_context method.
         :return: StreamContext -- Iterable stream context that returns blocks of rows
         """
-        return self._context_query(locals(), use_numpy=False).rows_stream
+        return self._context_query(locals(), use_numpy=False, streaming=True).rows_stream
 
     @abstractmethod
     def raw_query(self, query: str,
@@ -245,7 +245,7 @@ class Client(ABC):
         create_query_context method
         :return: Generator that yield a numpy array per block representing the result set
         """
-        return self._context_query(locals(), use_numpy=True).np_stream
+        return self._context_query(locals(), use_numpy=True, streaming=True).np_stream
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_df(self,
@@ -281,7 +281,7 @@ class Client(ABC):
         create_query_context method
         :return: Pandas dataframe representing the result set
         """
-        return self._context_query(locals(), use_numpy=True).df_stream
+        return self._context_query(locals(), use_numpy=True, streaming=True).df_stream
 
     def create_query_context(self,
                              query: str = None,
@@ -296,7 +296,8 @@ class Client(ABC):
                              max_str_len: Optional[int] = 0,
                              context: Optional[QueryContext] = None,
                              query_tz: Optional[Union[str, tzinfo]] = None,
-                             column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> QueryContext:
+                             column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                             streaming: bool = False) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -319,6 +320,7 @@ class Client(ABC):
           objects with the selected timezone.
         :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
           tzinfo objects).  The timezone will be applied to datetime objects returned in the query
+        :param streaming Marker used to correctly configure streaming queries
         :return: Reusable QueryContext
         """
         if context:
@@ -334,7 +336,8 @@ class Client(ABC):
                                         use_numpy=use_numpy,
                                         max_str_len=max_str_len,
                                         query_tz=query_tz,
-                                        column_tzs=column_tzs)
+                                        column_tzs=column_tzs,
+                                        streaming=streaming)
         # By default, a numpy context doesn't use None/NULL.  If NULL values are allowed, all numpy arrays must
         # be inefficient Object arrays
         if use_numpy and use_none is None:
@@ -353,7 +356,8 @@ class Client(ABC):
                             use_numpy=use_numpy,
                             max_str_len=max_str_len,
                             query_tz=query_tz,
-                            column_tzs=column_tzs)
+                            column_tzs=column_tzs,
+                            streaming=streaming)
 
     def query_arrow(self,
                     query: str,

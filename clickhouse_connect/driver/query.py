@@ -49,7 +49,8 @@ class QueryContext(BaseQueryContext):
                  use_numpy: Optional[bool] = None,
                  max_str_len: Optional[int] = 0,
                  query_tz: Optional[Union[str, tzinfo]] = None,
-                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None):
+                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                 streaming: bool = False):
         """
         Initializes various configuration settings for the query context
 
@@ -104,6 +105,7 @@ class QueryContext(BaseQueryContext):
                         raise ProgrammingError('query_tz is not recognized') from ex
         self.column_tzs = column_tzs
         self.block_info = False
+        self.streaming = streaming
         self._update_query()
 
     @property
@@ -152,7 +154,8 @@ class QueryContext(BaseQueryContext):
                      use_numpy: Optional[bool] = None,
                      max_str_len: Optional[int] = None,
                      query_tz: [Optional[Union[str, tzinfo]]] = None,
-                     column_tzs: [Optional[Dict[str, Union[str, tzinfo]]]] = None) -> 'QueryContext':
+                     column_tzs: [Optional[Dict[str, Union[str, tzinfo]]]] = None,
+                     streaming: bool = False) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -168,7 +171,8 @@ class QueryContext(BaseQueryContext):
                             self.use_numpy if use_numpy is None else use_numpy,
                             self.max_str_len if max_str_len is None else max_str_len,
                             self.query_tz if query_tz is None else query_tz,
-                            self.column_tzs if column_tzs is None else column_tzs)
+                            self.column_tzs if column_tzs is None else column_tzs,
+                            streaming)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
