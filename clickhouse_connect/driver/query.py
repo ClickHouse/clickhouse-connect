@@ -310,9 +310,9 @@ class QueryResult(Closable):
             for row in block:
                 yield row
 
-    def close(self, ex: Exception = None):
+    def close(self):
         if self.source:
-            self.source.close(ex)
+            self.source.close()
             self.source = None
         if self._block_gen is not None:
             self._block_gen.close()

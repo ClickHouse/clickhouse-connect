@@ -28,6 +28,10 @@ in those cases.
 - Fixed an issue where a small query_limit would break client initialization due to an incomplete read of the `system.settings`
 table.  https://github.com/ClickHouse/clickhouse-connect/issues/123
 
+### Improvement
+- Stream error handling has been improved so exceptions thrown while consuming a stream should be correctly propagated.
+This includes unexpected stream closures by the ClickHouse server.  Errors inserted into the HTTP response by ClickHouse
+during a query should also be reported as part of a StreamFailureError
 
 ## 0.5.8, 2023-02-10
 

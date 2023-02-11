@@ -134,10 +134,8 @@ class ResponseSource:
 
             self.gen = decompress()
         else:
-            self.gen = response.stream(decode_content=True)
+            self.gen = response.stream(amt=chunk_size, decode_content=True)
 
-    def close(self, ex: Exception = None):
-        if ex:
-            logger.warning('Closed HTTP response due to unexpected exception %s', str(ex))
+    def close(self):
         self.response.drain_conn()
         self.response.close()

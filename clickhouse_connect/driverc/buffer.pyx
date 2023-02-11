@@ -9,9 +9,10 @@ from cpython.unicode cimport PyUnicode_Decode
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_ANY_CONTIGUOUS, PyBUF_SIMPLE
-from cpython.exc cimport PyErr_Occurred
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from libc.string cimport memcpy
+
+from clickhouse_connect.driver.exceptions import StreamCompleteException
 
 cdef union ull_wrapper:
     char* source
@@ -42,7 +43,7 @@ cdef class ResponseBuffer:
     # Accordingly, that memory MUST be copied/processed into another buffer/PyObject immediately
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef inline char * read_bytes_c(self, unsigned long long sz) except NULL:
+    cdef char * read_bytes_c(self, unsigned long long sz) except NULL:
         cdef unsigned long long x, e, tail, cur_len, temp
         cdef char* ptr
         e = self.buf_sz
@@ -63,7 +64,9 @@ cdef class ResponseBuffer:
         self.buf_loc = 0
         self.buf_sz = 0
         while cur_len < sz:
-            chunk = next(self.gen)
+            chunk = next(self.gen, None)
+            if not chunk:
+                raise StreamCompleteException
             x = len(chunk)
             ptr = <char *> chunk
             if cur_len + x <= sz:
@@ -82,13 +85,13 @@ cdef class ResponseBuffer:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef inline unsigned char _read_byte_load(self) except? 255:
+    cdef inline unsigned char _read_byte_load(self) except ?255:
         self.buf_loc = 0
         self.buf_sz = 0
-        chunk = next(self.gen)
+        chunk = next(self.gen, None)
+        if not chunk:
+            raise StreamCompleteException
         x = len(chunk)
-        if x == 0:
-            raise IndexError
         py_chunk = chunk
         if x > 1:
             PyBuffer_Release(&self.buff_source)
@@ -114,8 +117,6 @@ cdef class ResponseBuffer:
                     self.buf_loc += 1
                 else:
                     b = self._read_byte_load()
-                    if b == 255 and PyErr_Occurred():
-                        raise StopIteration
                 sz += ((b & 0x7f) << shift)
                 if (b & 0x80) == 0:
                     break
@@ -132,21 +133,17 @@ cdef class ResponseBuffer:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cpdef unsigned char read_byte(self):
+    def  read_byte(self) -> int:
         if self.buf_loc < self.buf_sz:
             b = self.buffer[self.buf_loc]
             self.buf_loc += 1
             return b
         b = self._read_byte_load()
-        if b == 255 and PyErr_Occurred():
-            raise StopIteration
         return b
 
     def read_leb128_str(self) -> str:
         cdef unsigned long long sz = self.read_leb128()
         cdef char * b = self.read_bytes_c(sz)
-        if b == NULL:
-            raise StopIteration
         return PyUnicode_Decode(b, sz, utf8, errors)
 
     @cython.boundscheck(False)
@@ -161,8 +158,6 @@ cdef class ResponseBuffer:
                 self.buf_loc += 1
             else:
                 b = self._read_byte_load()
-                if b == 255 and PyErr_Occurred():
-                    raise StopIteration
             sz += ((b & 0x7f) << shift)
             if (b & 0x80) == 0:
                 return sz
@@ -173,8 +168,6 @@ cdef class ResponseBuffer:
     def read_uint64(self) -> int:
         cdef ull_wrapper* x
         cdef char* b = self.read_bytes_c(8)
-        if b == NULL:
-            raise StopIteration
         if must_swap:
             memcpy(swapper.data.as_voidptr, b, 8)
             swapper.byteswap()
@@ -186,8 +179,6 @@ cdef class ResponseBuffer:
     @cython.wraparound(False)
     def read_bytes(self, unsigned long long sz) -> bytes:
         cdef char* b = self.read_bytes_c(sz)
-        if b == NULL:
-            raise StopIteration
         return b[:sz]
 
     def read_str_col(self, unsigned long long num_rows, encoding: str = 'utf8') -> Iterable[str]:
@@ -200,8 +191,6 @@ cdef class ResponseBuffer:
         cdef array.array result = array.clone(template, num_rows, 0)
         cdef unsigned long long sz = result.itemsize * num_rows
         cdef char * b = self.read_bytes_c(sz)
-        if b == NULL:
-            raise StopIteration
         memcpy(result.data.as_voidptr, b, sz)
         if must_swap:
             result.byteswap()
@@ -212,8 +201,6 @@ cdef class ResponseBuffer:
     def read_bytes_col(self, unsigned long long sz, unsigned long long num_rows) -> Iterable[Any]:
         cdef object column = PyTuple_New(num_rows)
         cdef char * b = self.read_bytes_c(sz * num_rows)
-        if b == NULL:
-            raise StopIteration
         for x in range(num_rows):
             v = PyBytes_FromStringAndSize(b, sz)
             b += sz
@@ -228,8 +215,6 @@ cdef class ResponseBuffer:
         cdef object column = PyTuple_New(num_rows)
         cdef char * enc
         cdef char * b = self.read_bytes_c(sz * num_rows)
-        if b == NULL:
-            raise StopIteration
         cdef object v
         pyenc = encoding.encode()
         enc = pyenc
@@ -243,10 +228,16 @@ cdef class ResponseBuffer:
             b += sz
         return column
 
-    def close(self, ex: Exception = None):
+    def close(self):
         if self.source:
-            self.source.close(ex)
+            self.source.close()
             self.source = None
+
+    @property
+    def last_message(self):
+        if self.buffer == NULL:
+            return None
+        return self.buffer[self.buf_sz:].decode()
 
     def __dealloc__(self):
         self.close()

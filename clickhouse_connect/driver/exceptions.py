@@ -76,5 +76,9 @@ class StreamClosedError(ProgrammingError):
         super().__init__('Executing a streaming operation on a closed stream')
 
 
-class StreamEmptyException(Exception):
+class StreamCompleteException(Exception):
     """ Internal exception used to indicate the end of a ClickHouse query result stream."""
+
+
+class StreamFailureError(Exception):
+    """ Stream failed unexpectedly """
