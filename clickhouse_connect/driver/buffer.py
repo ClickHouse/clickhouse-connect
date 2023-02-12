@@ -75,13 +75,17 @@ class ResponseBuffer(ByteSource):
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), 'little', signed=False)
 
-    def read_str_col(self, num_rows: int, encoding: str = 'utf8', nullable: bool = False) -> Iterable[str]:
+    def read_str_col(self, num_rows: int,
+                     encoding: str = 'utf8',
+                     nullable: bool = False,
+                     use_none: bool = True) -> Iterable[str]:
         column = []
         app = column.append
+        null_map = None
         if nullable:
-            null_map = self.read_bytes(num_rows)
-        else:
-            null_map = None
+            nulls = self.read_bytes(num_rows)
+            if use_none:
+                null_map = nulls
         for ix in range(num_rows):
             sz = 0
             shift = 0

@@ -17,6 +17,16 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
+## 0.5.10, Not yet released
+
+### Bug Fix
+- When reading native Python integer columns, the `use_none=False` query parameter would not be respected,
+and ClickHouse NULLS would be returned as None instead of 0.  `use_none=False` should now work correctly for
+Nullable(*Int*) columns
+
+### Improvement
+- Reading Nullable(String) columns has been optimized and should be approximately 2x faster
+
 ## 0.5.9, 2023-02-11
 
 ### Bug Fixes

@@ -166,24 +166,28 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long long num_rows):
+def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long long num_rows, bint use_none = True):
     if num_rows == 0:
         return ()
     cdef unsigned long long x = 0
 
     # We have to make a copy of the incoming null map because the next
     # "read_byes_c" call could invalidate our pointer by replacing the underlying buffer
-    cdef char * null_map = <char *>PyMem_Malloc(<size_t>num_rows)
-    memcpy(<void *>null_map, <void *>buffer.read_bytes_c(num_rows), num_rows)
-
+    cdef char * null_map = NULL
+    if use_none:
+        null_map = <char *>PyMem_Malloc(<size_t>num_rows)
+        memcpy(<void *>null_map, <void *>buffer.read_bytes_c(num_rows), num_rows)
+    else:
+        buffer.read_bytes_c(num_rows)
     cdef size_t item_size = struct.calcsize(array_type)
     cdef cvarray cy_array = cvarray((num_rows,), item_size, array_type, mode='c', allocate_buffer=False)
     cy_array.data = buffer.read_bytes_c(num_rows * item_size)
     cdef object column = tuple(memoryview(cy_array))
-    for x in range(num_rows):
-        if null_map[x] != 0:
-            Py_DECREF(column[x])
-            Py_INCREF(None)
-            PyTuple_SET_ITEM(column, x, None)
+    if null_map:
+        for x in range(num_rows):
+            if null_map[x] != 0:
+                Py_DECREF(column[x])
+                Py_INCREF(None)
+                PyTuple_SET_ITEM(column, x, None)
     PyMem_Free(<void *>null_map)
     return column

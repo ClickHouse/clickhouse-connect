@@ -62,7 +62,7 @@ class UInt64(ArrayType):
         return source.read_array(arr_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        return data_conv.read_nullable_array(source, self._array_type, num_rows)
+        return data_conv.read_nullable_array(source, self._array_type, num_rows, use_none=ctx.use_none)
 
 
 class BigInt(ClickHouseType, registered=False):
