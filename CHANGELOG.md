@@ -19,13 +19,16 @@ on whether the query is streaming or not.
 
 ## 0.5.10, Not yet released
 
+### Improvement
+- Reading Nullable(String) columns has been optimized and should be approximately 2x faster
+- Extraction of ClickHouse error messages included in the HTTP Response has been improved
+
 ### Bug Fix
 - When reading native Python integer columns, the `use_none=False` query parameter would not be respected,
 and ClickHouse NULLS would be returned as None instead of 0.  `use_none=False` should now work correctly for
 Nullable(*Int*) columns
 
-### Improvement
-- Reading Nullable(String) columns has been optimized and should be approximately 2x faster
+
 
 ## 0.5.9, 2023-02-11
 
