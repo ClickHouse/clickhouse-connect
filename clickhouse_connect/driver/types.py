@@ -30,7 +30,7 @@ class ByteSource(Closable):
         pass
 
     @abstractmethod
-    def read_str_col(self, num_rows: int, encoding: str):
+    def read_str_col(self, num_rows: int, encoding: str, nullable: bool = False):
         pass
 
     @abstractmethod
