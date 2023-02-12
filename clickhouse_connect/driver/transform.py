@@ -51,7 +51,7 @@ class NativeTransform:
                     message = source.last_message
                     if len(message) > 1024:
                         message = message[-1024:]
-                    error_start = message.find('Code')
+                    error_start = message.find('Code: ')
                     if error_start != -1:
                         message = message[error_start:]
                     raise StreamFailureError(message) from None
