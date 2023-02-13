@@ -5,6 +5,7 @@ import random
 from typing import Callable
 
 import pytest
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.options import np
@@ -25,6 +26,13 @@ def test_numpy_dates(test_client: Client, table_context: Callable):
         new_np_array = test_client.query_np('SELECT * FROM test_numpy_dates')
         assert np.array_equal(np_array, new_np_array)
         assert np.array_equal(source_arr, np_array)
+
+
+def test_invalid_date(test_client):
+    try:
+        test_client.query_df("SELECT cast(now64(), 'DateTime64(1)')")
+    except ProgrammingError as ex:
+        assert 'milliseconds' in str(ex)
 
 
 def test_numpy_record_type(test_client: Client, table_context: Callable):
