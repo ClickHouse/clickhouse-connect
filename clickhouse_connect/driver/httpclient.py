@@ -368,4 +368,5 @@ class HttpClient(Client):
 
     def close(self):
         if self._owns_pool_manager:
+            self.http.clear()
             all_managers.remove(self.http)
