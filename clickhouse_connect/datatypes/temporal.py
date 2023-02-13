@@ -5,6 +5,7 @@ from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
 from clickhouse_connect.driver.common import write_array, np_date_types, int_size
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -131,7 +132,10 @@ class DateTime64(ClickHouseType):
     @property
     def np_type(self):
         opt = np_date_types.get(self.scale)
-        return f'datetime64{opt}' if opt else 'O'
+        if opt:
+            return f'datetime64{opt}'
+        raise ProgrammingError(f'Cannot use {self.name} as a numpy or Pandas datatype.  Only milliseconds(3),' +
+                               'microseconds(6) or nanoseconds(9) are supported for numpy based queries.')
 
     @property
     def nano_divisor(self):
