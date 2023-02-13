@@ -8,13 +8,26 @@ from clickhouse_connect.datatypes.format import set_default_formats, clear_defau
 from clickhouse_connect.driver import Client
 
 
-def test_low_card(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS native_test')
-    test_client.command('CREATE TABLE native_test (key LowCardinality(Int32), value_1 LowCardinality(String)) ' +
-                        f'Engine {test_table_engine} ORDER BY key')
-    test_client.insert('native_test', [[55, 'TV1'], [-578328, 'TV38882'], [57372, 'Kabc/defXX']])
-    result = test_client.query("SELECT * FROM native_test WHERE value_1 LIKE '%abc/def%'")
-    assert len(result.result_set) == 1
+def test_low_card(test_client: Client, table_context: Callable):
+    with table_context('native_test', ['key LowCardinality(Int32)', 'value_1 LowCardinality(String)']):
+        test_client.insert('native_test', [[55, 'TV1'], [-578328, 'TV38882'], [57372, 'Kabc/defXX']])
+        result = test_client.query("SELECT * FROM native_test WHERE value_1 LIKE '%abc/def%'")
+        assert len(result.result_set) == 1
+
+
+def test_nulls(test_client: Client, table_context: Callable):
+    with table_context('nullable_test', ['key UInt32', 'null_str Nullable(String)', 'null_int Nullable(Int64)']):
+        test_client.insert('nullable_test', [[1, None, None],
+                                             [2, 'nonnull', -57382882345666],
+                                             [3, None, 5882374747732834],
+                                             [4, 'nonnull2', None]])
+        result = test_client.query('SELECT * FROM nullable_test ORDER BY key', use_none=False).result_rows
+        assert result[2] == (3, '', 5882374747732834)
+        assert result[3] == (4, 'nonnull2', 0)
+        result = test_client.query('SELECT * FROM nullable_test ORDER BY key').result_rows
+        assert result[1] == (2, 'nonnull', -57382882345666)
+        assert result[2] == (3, None, 5882374747732834)
+        assert result[3] == (4, 'nonnull2', None)
 
 
 def test_json(test_client: Client, table_context: Callable):

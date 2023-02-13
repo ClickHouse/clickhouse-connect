@@ -1,3 +1,4 @@
+import atexit
 import http
 import logging
 import sys
@@ -31,6 +32,13 @@ core_socket_options = [
 
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 _proxy_managers = {}
+all_managers = set()
+
+
+@atexit.register
+def close_managers():
+    for manager in all_managers:
+        manager.clear()
 
 
 # pylint: disable=no-member,too-many-arguments,too-many-branches
@@ -69,12 +77,15 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
             raise ProgrammingError('Only one of http_proxy or https_proxy should be specified')
         if not http_proxy.startswith('http'):
             http_proxy = f'http://{http_proxy}'
-        return ProxyManager(http_proxy, block=False, socket_options=socket_options, **options)
-    if https_proxy:
+        manager = ProxyManager(http_proxy, block=False, socket_options=socket_options, **options)
+    elif https_proxy:
         if not https_proxy.startswith('http'):
             https_proxy = f'https://{https_proxy}'
-        return ProxyManager(https_proxy, block=False, socket_options=socket_options, **options)
-    return PoolManager(block=False, socket_options=socket_options, **options)
+        manager = ProxyManager(https_proxy, block=False, socket_options=socket_options, **options)
+    else:
+        manager = PoolManager(block=False, socket_options=socket_options, **options)
+    all_managers.add(manager)
+    return manager
 
 
 def get_proxy_manager(host: str, http_proxy):

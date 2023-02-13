@@ -21,7 +21,7 @@ from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
-    default_pool_manager, get_proxy_manager
+    default_pool_manager, get_proxy_manager, all_managers
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -38,6 +38,7 @@ class HttpClient(Client):
                                 'clickhouse_protocol_version'}
     optional_transport_settings = {'send_progress_in_http_headers', 'http_headers_progress_interval_ms',
                                    'enable_http_compression'}
+    _owns_pool_manager = False
 
     # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
     def __init__(self,
@@ -86,6 +87,7 @@ class HttpClient(Client):
                                              verify=verify,
                                              client_cert_key=client_cert_key,
                                              https_proxy=https_proxy)
+                self._owns_pool_manager = True
         if not self.http:
             if not http_proxy and 'HTTP_PROXY' in os.environ:
                 http_proxy = os.environ['HTTP_PROXY']
@@ -363,3 +365,8 @@ class HttpClient(Client):
         params = self._validate_settings(settings or {})
         params.update(bind_params)
         return self._raw_request(final_query, params).data
+
+    def close(self):
+        if self._owns_pool_manager:
+            self.http.clear()
+            all_managers.remove(self.http)

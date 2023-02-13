@@ -14,6 +14,11 @@ class String(ClickHouseType):
             return np.array(source.read_str_col(num_rows, ctx.encoding or self.encoding), dtype=f'<U{ctx.max_str_len}')
         return source.read_str_col(num_rows, ctx.encoding or self.encoding)
 
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        if ctx.use_numpy:
+            return super()._read_nullable_column(source, num_rows, ctx)
+        return source.read_str_col(num_rows, ctx.encoding or self.encoding, nullable=True, use_none=ctx.use_none)
+
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         encoding = ctx.encoding or self.encoding
