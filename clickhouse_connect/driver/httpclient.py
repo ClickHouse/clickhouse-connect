@@ -35,7 +35,7 @@ class HttpClient(Client):
     params = {}
     valid_transport_settings = {'database', 'buffer_size', 'session_id', 'compress', 'decompress',
                                 'session_timeout', 'session_check', 'query_id', 'quota_key', 'wait_end_of_query',
-                                'clickhouse_protocol_version'}
+                                'client_protocol_version'}
     optional_transport_settings = {'send_progress_in_http_headers', 'http_headers_progress_interval_ms',
                                    'enable_http_compression'}
     _owns_pool_manager = False

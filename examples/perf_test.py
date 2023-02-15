@@ -19,9 +19,9 @@ import clickhouse_connect
 
 
 queries = ['SELECT trip_id, pickup, dropoff, pickup_longitude, pickup_latitude FROM taxis',
-           #'SELECT number from numbers(500000000)',
-           #'SELECT * FROM datasets.hits_100m_obfuscated',
-           "SELECT * FROM perftest.ontime WHERE FlightDate < '2017-02-18'"
+           'SELECT number from numbers(500000000)',
+           'SELECT * FROM datasets.hits_100m_obfuscated',
+           #"SELECT * FROM perftest.ontime WHERE FlightDate < '2017-02-18'"
            ]
 
 cc_client = clickhouse_connect.get_client(compress=False)
