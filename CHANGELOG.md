@@ -17,6 +17,24 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
+## 0.5.11, 2023-02-15
+
+### Bug Fix
+- Referencing the QueryResult `named_results` property after other properties such as `row_count` would incorrectly
+raise a StreamClosedError.  Thanks to [Stas](https://github.com/reijnnn) for the fix.
+
+### Improvement
+- A better error message is returned when trying to read a "non-standard" DateTime64 column function for a numpy array
+or Pandas DataFrame.  "non-standard" means a DateTime64 precision not conforming to seconds, milliseconds, microseconds,
+or nanoseconds (0, 3, 6, or 9 respectively).  These DateTime64 types are not supported for numpy or Pandas because there is
+no corresponding standard numpy datetime64 type and conversion would be unacceptably slow (supported numpy types are 
+`datetime64[s]`, `datetime64[ms]`, `datetime64[us]`, and `datetime64[ns]`).  A workaround is to cast the DateTime64 type
+to a supported type, i.e. `SELECT toDateTime64(col_name, 3)` for a millisecond column.
+- The base configuration required for a urllib PoolManager has been broken out into its own help method,
+`clickhouse_connect.driver.http_util.get_pool_manager_options`.  This makes it simpler to configure a SOCKSProxyManager
+as in the new example file https://github.com/ClickHouse/clickhouse-connect/blob/main/examples/ssh_tunnels.py
+
+
 ## 0.5.10, 2023-02-13
 
 ### Improvement

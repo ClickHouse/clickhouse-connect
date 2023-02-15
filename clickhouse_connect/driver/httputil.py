@@ -3,6 +3,7 @@ import http
 import logging
 import sys
 import socket
+from typing import Dict, Any
 
 import certifi
 import lz4.frame
@@ -42,16 +43,14 @@ def close_managers():
 
 
 # pylint: disable=no-member,too-many-arguments,too-many-branches
-def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
-                     keep_count: int = DEFAULT_KEEP_COUNT,
-                     keep_idle: int = DEFAULT_KEEP_IDLE,
-                     ca_cert: str = None,
-                     verify: bool = True,
-                     client_cert: str = None,
-                     client_cert_key: str = None,
-                     http_proxy: str = None,
-                     https_proxy: str = None,
-                     **options) -> PoolManager:
+def get_pool_manager_options(keep_interval: int = DEFAULT_KEEP_INTERVAL,
+                             keep_count: int = DEFAULT_KEEP_COUNT,
+                             keep_idle: int = DEFAULT_KEEP_IDLE,
+                             ca_cert: str = None,
+                             verify: bool = True,
+                             client_cert: str = None,
+                             client_cert_key: str = None,
+                             **options) -> Dict[str, Any]:
     socket_options = core_socket_options.copy()
     if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
         socket_options.append((SOCKET_TCP, socket.TCP_KEEPINTVL, keep_interval))
@@ -72,18 +71,41 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
         options['cert_file'] = client_cert
     if client_cert_key:
         options['key_file'] = client_cert_key
+    options['socket_options'] = socket_options
+    options['block'] = options.get('block', False)
+    return options
+
+
+def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
+                     keep_count: int = DEFAULT_KEEP_COUNT,
+                     keep_idle: int = DEFAULT_KEEP_IDLE,
+                     ca_cert: str = None,
+                     verify: bool = True,
+                     client_cert: str = None,
+                     client_cert_key: str = None,
+                     http_proxy: str = None,
+                     https_proxy: str = None,
+                     **options):
+    options = get_pool_manager_options(keep_interval,
+                                       keep_count,
+                                       keep_idle,
+                                       ca_cert,
+                                       verify,
+                                       client_cert,
+                                       client_cert_key,
+                                       **options)
     if http_proxy:
         if https_proxy:
             raise ProgrammingError('Only one of http_proxy or https_proxy should be specified')
         if not http_proxy.startswith('http'):
             http_proxy = f'http://{http_proxy}'
-        manager = ProxyManager(http_proxy, block=False, socket_options=socket_options, **options)
+        manager = ProxyManager(http_proxy, **options)
     elif https_proxy:
         if not https_proxy.startswith('http'):
             https_proxy = f'https://{https_proxy}'
-        manager = ProxyManager(https_proxy, block=False, socket_options=socket_options, **options)
+        manager = ProxyManager(https_proxy, **options)
     else:
-        manager = PoolManager(block=False, socket_options=socket_options, **options)
+        manager = PoolManager(**options)
     all_managers.add(manager)
     return manager
 
