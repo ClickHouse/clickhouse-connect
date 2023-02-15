@@ -134,8 +134,8 @@ class DateTime64(ClickHouseType):
         opt = np_date_types.get(self.scale)
         if opt:
             return f'datetime64{opt}'
-        raise ProgrammingError(f'Cannot use {self.name} as a numpy or Pandas datatype.  Only milliseconds(3),' +
-                               'microseconds(6) or nanoseconds(9) are supported for numpy based queries.')
+        raise ProgrammingError(f'Cannot use {self.name} as a numpy or Pandas datatype. Only milliseconds(3), ' +
+                               'microseconds(6), or nanoseconds(9) are supported for numpy based queries.')
 
     @property
     def nano_divisor(self):
