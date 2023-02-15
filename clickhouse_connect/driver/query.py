@@ -266,7 +266,7 @@ class QueryResult(Closable):
         return StreamContext(self, stream())
 
     def named_results(self) -> Generator[dict, None, None]:
-        for row in zip(*self.result_columns):
+        for row in zip(*self.result_set) if self.column_oriented else self.result_set:
             yield dict(zip(self.column_names, row))
 
     @property

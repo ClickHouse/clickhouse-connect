@@ -23,6 +23,8 @@ def test_ping(test_client: Client):
 def test_query(test_client: Client):
     result = test_client.query('SELECT * FROM system.tables')
     assert len(result.result_set) > 0
+    assert result.row_count > 0
+    assert result.first_item == next(result.named_results())
 
 
 def test_command(test_client: Client):
