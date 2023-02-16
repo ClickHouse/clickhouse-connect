@@ -120,6 +120,7 @@ def test_dsn_config(test_config: TestConfig):
     client = create_client(dsn=dsn)
     assert client.get_client_setting('session_id') == 'TEST_DSN_SESSION'
     count = client.command('SELECT count() from system.tables')
+    assert client.database == test_config.test_database
     assert count > 0
     client.close()
 
