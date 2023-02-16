@@ -7,6 +7,7 @@ from typing import Dict, Any
 
 import certifi
 import lz4.frame
+import urllib3
 import zstandard
 from urllib3.poolmanager import PoolManager, ProxyManager
 from urllib3.response import HTTPResponse
@@ -14,6 +15,9 @@ from urllib3.response import HTTPResponse
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 logger = logging.getLogger(__name__)
+
+# We disable this warning.  Verify must explicitly set to false, so we assume the user knows what they're doing
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
 http._MAXHEADERS = 10000  # pylint: disable=protected-access

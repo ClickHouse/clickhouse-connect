@@ -63,7 +63,8 @@ class HttpClient(Client):
                  settings: Optional[Dict[str, Any]] = None,
                  pool_mgr: Optional[PoolManager] = None,
                  http_proxy: Optional[str] = None,
-                 https_proxy: Optional[str] = None):
+                 https_proxy: Optional[str] = None,
+                 server_host_name: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -81,12 +82,19 @@ class HttpClient(Client):
                 self.headers['X-ClickHouse-User'] = username
                 self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
             verify = coerce_bool(verify)
-            if not self.http and (ca_cert or client_cert or not verify or https_proxy):
-                self.http = get_pool_manager(ca_cert=ca_cert,
-                                             client_cert=client_cert,
-                                             verify=verify,
-                                             client_cert_key=client_cert_key,
-                                             https_proxy=https_proxy)
+            # pylint: disable=too-many-boolean-expressions
+            if not self.http and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
+                options = {
+                    'ca_cert': ca_cert,
+                    'client_cert': client_cert,
+                    'verify': verify,
+                    'client_cert_key': client_cert_key
+                }
+                if server_host_name:
+                    if verify:
+                        options['assert_hostname'] = server_host_name
+                    options['server_hostname'] = server_host_name
+                self.http = get_pool_manager(https_proxy=https_proxy, **options)
                 self._owns_pool_manager = True
         if not self.http:
             if not http_proxy and 'HTTP_PROXY' in os.environ:
@@ -100,8 +108,9 @@ class HttpClient(Client):
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
-        self._progress_interval =  str(min(120000, (send_receive_timeout - 5) * 1000))
+        self._progress_interval = str(min(120000, (send_receive_timeout - 5) * 1000))
         self._transform = NativeTransform()
+        self._server_host_name = server_host_name
 
         connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
@@ -309,15 +318,19 @@ class HttpClient(Client):
         # if not streaming
         params['send_progress_in_http_headers'] = '1'
         params['http_headers_progress_interval_ms'] = self._progress_interval
+        kwargs = {
+            'headers': headers,
+            'timeout': self.timeout,
+            'body': data,
+            'retries': self.http_retries,
+            'preload_content': not stream
+        }
+        if self._server_host_name:
+            kwargs['assert_same_host'] = False
         while True:
             attempts += 1
             try:
-                response: HTTPResponse = self.http.request(method, url,
-                                                           headers=headers,
-                                                           timeout=self.timeout,
-                                                           body=data,
-                                                           retries=self.http_retries,
-                                                           preload_content=not stream)
+                response: HTTPResponse = self.http.request(method, url, **kwargs)
             except HTTPError as ex:
                 if isinstance(ex.__context__, ConnectionResetError):
                     # The server closed the connection, probably because the Keep Alive has expired

@@ -64,6 +64,9 @@ def create_client(host: str = None,
       pools for multiple client endpoints for applications with many clients
     :param http_proxy  http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
     :param https_proxy https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
+    :param server_host_name  This is the server host name that will be checked against a TLS certificate for
+      validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
+      where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
     :return: ClickHouse Connect Client instance
     """
     if dsn:

@@ -17,6 +17,19 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
+
+## 0.5.12, 2023-02-16
+### Improvement
+- A new keyword parameter `server_host_name` is now recognized by the `clickhouse_connect.get_client` method.  This identifies
+the "real" ClickHouse server hostname that should be used for HTTPS/TLS certificate validation, in cases where access to
+the server is through an ssh tunnel or other proxy with a different hostname.  For examples of how to use the new parameter,
+see the updated file https://github.com/ClickHouse/clickhouse-connect/blob/main/examples/ssh_tunnels.py.
+
+### Bug fix
+- The `database` element of a DSN was not recognized when present in the `dsn` parameter of `clickhouse_connect.get_client`.
+This has been fixed.
+
+
 ## 0.5.11, 2023-02-15
 
 ### Bug Fix
