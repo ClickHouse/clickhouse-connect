@@ -72,7 +72,7 @@ def create_client(host: str = None,
         password = password or parsed.password
         host = host or parsed.hostname
         port = port or parsed.port
-        if parsed.path and not database:
+        if parsed.path and (not database or database == '__default__'):
             database = parsed.path[1:].split('/')[0]
         database = database or parsed.path
         kwargs.update(dict(parse_qs(parsed.query)))
