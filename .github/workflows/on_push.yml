@@ -12,6 +12,7 @@ on:
       - 'VERSION'
       - 'LICENSE'
       - '.github/*.md'
+      - 'examples'
 
 jobs:
   lint:

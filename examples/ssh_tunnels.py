@@ -35,7 +35,7 @@ def create_tunnel():
         (os.environ.get('CLICKHOUSE_TUNNEL_JUMP_HOST'), 22),  # Create an ssh tunnel to your jump host/port
         ssh_username=os.environ.get('CLICKHOUSE_TUNNEL_USER', 'ubuntu'),  # Set the user for the remote/jump host
         ssh_pkey=os.environ.get('CLICKHOUSE_TUNNEL_KEY_FILE', '~/.ssh/id_rsa'),  # The private key file to use
-        ssh_private_key_password=('CLICKHOUSE_TUNNEL_KEY_PASSWORD', None), # Private key password
+        ssh_private_key_password=os.environ.get('CLICKHOUSE_TUNNEL_KEY_PASSWORD', None),  # Private key password
         remote_bind_address=('play.clickhouse.com', 443),  # The ClickHouse server and port you want to reach
         local_bind_address=('localhost', 1443)  # The local address and port to bind the tunnel to
     )
