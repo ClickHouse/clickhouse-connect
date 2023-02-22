@@ -1,38 +1,39 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Something not working right?  Help us fix it!
 title: ''
-labels: ''
+labels: 'bug'
 assignees: ''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+<!-- delete unnecessary items -->
+### Describe the bug
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+### Steps to reproduce
+1.
+2.
+3.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+### Expected behaviour
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+### Code example
+```python
+import clickhouse_connect
+```
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+### clickhouse-connect and/or ClickHouse server logs
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+### Configuration
+#### Environment
+* clickhouse-connect version:
+* Python version:
+* Operating system:
 
-**Additional context**
-Add any other context about the problem here.
+
+#### ClickHouse server
+* ClickHouse Server version:
+* ClickHouse Server non-default settings, if any:
+* `CREATE TABLE` statements for tables involved:
+* Sample data for these tables, use [clickhouse-obfuscator](https://github.com/ClickHouse/ClickHouse/blob/master/programs/obfuscator/Obfuscator.cpp#L42-L80) if necessary
+

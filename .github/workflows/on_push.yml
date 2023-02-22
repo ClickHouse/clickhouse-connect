@@ -7,11 +7,9 @@ on:
       - '*_dev'
       - '*_build'
     paths-ignore:
-      - 'README.md'
-      - 'CHANGELOG.md'
       - 'VERSION'
       - 'LICENSE'
-      - '.github/*.md'
+      - '**.md'
       - 'examples'
 
 jobs:
@@ -52,7 +50,6 @@ jobs:
         clickhouse-version:
           - '22.3'
           - '22.8'
-          - '22.11'
           - '22.12'
           - '23.1'
           - latest
