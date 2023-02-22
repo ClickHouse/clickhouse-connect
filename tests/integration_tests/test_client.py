@@ -56,7 +56,7 @@ def test_none_database(test_client: Client):
 
 
 def test_insert(test_client: Client, test_table_engine: str):
-    test_client.command(f'DROP TABLE IF EXISTS test_system_insert SYNC')
+    test_client.command('DROP TABLE IF EXISTS test_system_insert SYNC')
     test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
     tables_result = test_client.query('SELECT * from system.tables')
     test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
