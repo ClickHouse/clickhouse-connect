@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: What would you like to add to clickhouse-connect
+about: What would you like to add to clickhouse-connect?
 title: ''
 labels: 'enhancement'
 assignees: ''
