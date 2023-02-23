@@ -50,6 +50,7 @@ class QueryContext(BaseQueryContext):
                  max_str_len: Optional[int] = 0,
                  query_tz: Optional[Union[str, tzinfo]] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                 as_pandas: bool = False,
                  streaming: bool = False):
         """
         Initializes various configuration settings for the query context
@@ -105,6 +106,7 @@ class QueryContext(BaseQueryContext):
                         raise ProgrammingError('query_tz is not recognized') from ex
         self.column_tzs = column_tzs
         self.block_info = False
+        self.as_pandas = as_pandas
         self.streaming = streaming
         self._update_query()
 
@@ -155,6 +157,7 @@ class QueryContext(BaseQueryContext):
                      max_str_len: Optional[int] = None,
                      query_tz: [Optional[Union[str, tzinfo]]] = None,
                      column_tzs: [Optional[Dict[str, Union[str, tzinfo]]]] = None,
+                     as_pandas: bool = False,
                      streaming: bool = False) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
@@ -172,6 +175,7 @@ class QueryContext(BaseQueryContext):
                             self.max_str_len if max_str_len is None else max_str_len,
                             self.query_tz if query_tz is None else query_tz,
                             self.column_tzs if column_tzs is None else column_tzs,
+                            as_pandas,
                             streaming)
 
     def _update_query(self):

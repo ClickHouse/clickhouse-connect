@@ -122,18 +122,24 @@ def test_pandas_large_types(test_client: Client, table_context: Callable):
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):
     nano_timestamp = pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
-    milli_timestamp = pd.Timestamp(2022, 5, 3, 10, 44)
-    with table_context('test_pandas_dt64', ['key String', 'nanos DateTime64(9)', 'millis DateTime64(3)']):
+    milli_timestamp = pd.Timestamp(2022, 5, 3, 10, 44, 10, 55000)
+    chicago_timestamp = milli_timestamp.tz_localize('America/Chicago')
+    with table_context('test_pandas_dt64', ['key String',
+                                            'nanos DateTime64(9)',
+                                            'millis DateTime64(3)',
+                                            "chicago DateTime64(3, 'America/Chicago')"]):
         now = datetime.now()
-        df = pd.DataFrame([['key1', now, now],
-                           ['key2', nano_timestamp, milli_timestamp]],
-                          columns=['key', 'nanos', 'millis'])
+        df = pd.DataFrame([['key1', now, now, now],
+                           ['key2', nano_timestamp, milli_timestamp, chicago_timestamp]],
+                          columns=['key', 'nanos', 'millis', 'chicago'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_dt64', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_dt64')
         assert result_df.iloc[0]['nanos'] == now
         assert result_df.iloc[1]['nanos'] == nano_timestamp
         assert result_df.iloc[1]['millis'] == milli_timestamp
+        assert result_df.iloc[1]['chicago'] == chicago_timestamp
+        assert isinstance(result_df['chicago'].dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         test_dt = np.array(['2017-11-22 15:42:58.270000+00:00'][0])
         assert df.equals(source_df)
         df = pd.DataFrame([['key3', pd.to_datetime(test_dt)]], columns=['key', 'nanos'])

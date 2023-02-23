@@ -12,7 +12,7 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np
+from clickhouse_connect.driver.options import np, pd
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -125,8 +125,7 @@ class ClickHouseType(ABC):
         :return: The decoded column data as a sequence and the updated location pointer
         """
         self.read_column_prefix(source)
-        column = self.read_column_data(source, num_rows, ctx)
-        return column
+        return self.read_column_data(source, num_rows, ctx)
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         """

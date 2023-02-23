@@ -65,7 +65,7 @@ class NumpyResult(Closable):
 
         def pd_blocks():
             for block in block_gen:
-                yield pd.DataFrame.from_dict(dict(zip(self.column_names, block)))
+                yield pd.DataFrame({name: column for name, column in zip(self.column_names, block)})
 
         self._block_gen = None
         return pd_blocks()

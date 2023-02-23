@@ -263,7 +263,7 @@ class Client(ABC):
         create_query_context method
         :return: Pandas dataframe representing the result set
         """
-        return self._context_query(locals(), use_numpy=True).df_result
+        return self._context_query(locals(), use_numpy=True, as_pandas=True).df_result
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
     def query_df_stream(self,
@@ -281,7 +281,9 @@ class Client(ABC):
         create_query_context method
         :return: Pandas dataframe representing the result set
         """
-        return self._context_query(locals(), use_numpy=True, streaming=True).df_stream
+        return self._context_query(locals(), use_numpy=True,
+                                   as_pandas=True,
+                                   streaming=True).df_stream
 
     def create_query_context(self,
                              query: str = None,
@@ -297,7 +299,8 @@ class Client(ABC):
                              context: Optional[QueryContext] = None,
                              query_tz: Optional[Union[str, tzinfo]] = None,
                              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                             streaming: bool = False) -> QueryContext:
+                             streaming: bool = False,
+                             as_pandas: bool = False) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -320,6 +323,7 @@ class Client(ABC):
           objects with the selected timezone.
         :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
           tzinfo objects).  The timezone will be applied to datetime objects returned in the query
+        :param as_pandas Return the result columns as pandas.Series objects
         :param streaming Marker used to correctly configure streaming queries
         :return: Reusable QueryContext
         """
@@ -337,6 +341,7 @@ class Client(ABC):
                                         max_str_len=max_str_len,
                                         query_tz=query_tz,
                                         column_tzs=column_tzs,
+                                        as_pandas=as_pandas,
                                         streaming=streaming)
         # By default, a numpy context doesn't use None/NULL.  If NULL values are allowed, all numpy arrays must
         # be inefficient Object arrays
@@ -357,6 +362,7 @@ class Client(ABC):
                             max_str_len=max_str_len,
                             query_tz=query_tz,
                             column_tzs=column_tzs,
+                            as_pandas=as_pandas,
                             streaming=streaming)
 
     def query_arrow(self,

@@ -10,7 +10,7 @@ from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np
+from clickhouse_connect.driver.options import np, pd
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
@@ -88,7 +88,12 @@ class DateTime(ClickHouseType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
+            np_array = numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
+            if ctx.as_pandas:
+                tz_info = ctx.active_tz or self.tzinfo
+                if tz_info:
+                    return pd.DatetimeIndex(np_array, tz='UTC').tz_convert(tz_info)
+            return np_array
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_datetime_col(source, num_rows, ctx.active_tz or self.tzinfo)
@@ -114,7 +119,7 @@ class DateTime(ClickHouseType):
 
 
 class DateTime64(ClickHouseType):
-    __slots__ = 'scale', 'prec', 'tzinfo'
+    __slots__ = 'scale', 'prec', 'tzinfo', 'unit'
     valid_formats = 'native', 'int'
     python_null = epoch_start_date
     python_type = datetime
@@ -124,6 +129,7 @@ class DateTime64(ClickHouseType):
         self._name_suffix = type_def.arg_str
         self.scale = type_def.values[0]
         self.prec = 10 ** self.scale
+        self.unit = np_date_types.get(self.scale)
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
         else:
@@ -131,9 +137,8 @@ class DateTime64(ClickHouseType):
 
     @property
     def np_type(self):
-        opt = np_date_types.get(self.scale)
-        if opt:
-            return f'datetime64{opt}'
+        if self.unit:
+            return f'datetime64{self.unit}'
         raise ProgrammingError(f'Cannot use {self.name} as a numpy or Pandas datatype. Only milliseconds(3), ' +
                                'microseconds(6), or nanoseconds(9) are supported for numpy based queries.')
 
@@ -143,7 +148,12 @@ class DateTime64(ClickHouseType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
+            np_array = numpy_conv.read_numpy_array(source, self.np_type, num_rows)
+            if ctx.as_pandas:
+                tz_info = ctx.active_tz or self.tzinfo
+                if tz_info:
+                    return pd.DatetimeIndex(np_array, tz='UTC').tz_convert(tz_info)
+            return np_array
         column = source.read_array('Q', num_rows)
         if self.read_format(ctx) == 'int':
             return column
