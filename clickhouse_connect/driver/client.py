@@ -13,6 +13,7 @@ from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import dict_copy, StreamContext
+from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_DATETIME
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
@@ -53,6 +54,8 @@ class Client(ABC):
         self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
         if database and not database == '__default__':
             self.database = database
+        if self.min_version(CH_VERSION_WITH_PROTOCOL):
+            self.protocol_version = PROTOCOL_VERSION_WITH_DATETIME
         self.uri = uri
 
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -275,6 +278,7 @@ class Client(ABC):
                         encoding: Optional[str] = None,
                         use_none: Optional[bool] = None,
                         max_str_len: Optional[int] = None,
+                        use_na_values: Optional[bool] = None,
                         context: QueryContext = None) -> StreamContext:
         """
         Query method that returns the results as a StreamContext.  For parameter values, see the
@@ -299,6 +303,7 @@ class Client(ABC):
                              context: Optional[QueryContext] = None,
                              query_tz: Optional[Union[str, tzinfo]] = None,
                              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                             use_na_values: Optional[bool] = None,
                              streaming: bool = False,
                              as_pandas: bool = False) -> QueryContext:
         """
@@ -342,6 +347,7 @@ class Client(ABC):
                                         query_tz=query_tz,
                                         column_tzs=column_tzs,
                                         as_pandas=as_pandas,
+                                        use_na_values=use_na_values,
                                         streaming=streaming)
         # By default, a numpy context doesn't use None/NULL.  If NULL values are allowed, all numpy arrays must
         # be inefficient Object arrays
@@ -349,6 +355,8 @@ class Client(ABC):
             use_none = False
         if use_numpy and max_str_len is None:
             max_str_len = 0
+        if use_numpy and use_na_values is None:
+            use_na_values = True
         return QueryContext(query=query,
                             parameters=parameters,
                             settings=settings,
@@ -362,6 +370,7 @@ class Client(ABC):
                             max_str_len=max_str_len,
                             query_tz=query_tz,
                             column_tzs=column_tzs,
+                            use_na_values=use_na_values,
                             as_pandas=as_pandas,
                             streaming=streaming)
 

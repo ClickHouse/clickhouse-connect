@@ -1,6 +1,6 @@
 from datetime import datetime, date, tzinfo
 from ipaddress import IPv4Address
-from typing import Sequence, Optional
+from typing import Sequence, Optional, Any
 from uuid import UUID, SafeUUID
 
 from clickhouse_connect.driver.common import int_size
@@ -79,11 +79,15 @@ def read_uuid_col(source: ByteSource, num_rows: int):
     return column
 
 
-def read_nullable_array(source: ByteSource, array_type: str, num_rows: int, use_none: bool = True):
+def read_nullable_array(source: ByteSource,
+                        array_type: str,
+                        num_rows: int,
+                        use_null: bool,
+                        null_obj: Any = None):
     null_map = source.read_bytes(num_rows)
     column = source.read_array(array_type, num_rows)
-    if use_none:
-        return [None if null_map[ix] else column[ix] for ix in range(num_rows)]
+    if use_null:
+        return [null_obj if null_map[ix] else column[ix] for ix in range(num_rows)]
     return column
 
 

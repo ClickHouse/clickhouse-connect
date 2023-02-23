@@ -166,7 +166,11 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long long num_rows, bint use_none = True):
+def read_nullable_array(ResponseBuffer buffer,
+                        array_type: str,
+                        unsigned long long num_rows,
+                        bint use_null,
+                        object null_obj = None):
     if num_rows == 0:
         return ()
     cdef unsigned long long x = 0
@@ -174,7 +178,7 @@ def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long lo
     # We have to make a copy of the incoming null map because the next
     # "read_byes_c" call could invalidate our pointer by replacing the underlying buffer
     cdef char * null_map = NULL
-    if use_none:
+    if use_null:
         null_map = <char *>PyMem_Malloc(<size_t>num_rows)
         memcpy(<void *>null_map, <void *>buffer.read_bytes_c(num_rows), num_rows)
     else:
@@ -187,7 +191,7 @@ def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long lo
         for x in range(num_rows):
             if null_map[x] != 0:
                 Py_DECREF(column[x])
-                Py_INCREF(None)
-                PyTuple_SET_ITEM(column, x, None)
+                Py_INCREF(null_obj)
+                PyTuple_SET_ITEM(column, x, null_obj)
     PyMem_Free(<void *>null_map)
     return column

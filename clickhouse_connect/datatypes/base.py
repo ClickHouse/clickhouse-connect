@@ -309,10 +309,25 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         return source.read_array(self._array_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        return data_conv.read_nullable_array(source,
-                                             self._array_type,
-                                             num_rows,
-                                             use_none=ctx.use_none or self.python_type == float)
+        return self._read_nullable_int_column(self._array_type, self.read_format(ctx), self.np_type,
+                                              source, num_rows, ctx)
+
+    def _read_nullable_int_column(self, arr_type: str,
+                                  fmt: str,
+                                  np_type: str,
+                                  source: ByteSource,
+                                  num_rows: int, ctx:QueryContext) -> Sequence:
+        if fmt == 'string':
+            column = data_conv.read_nullable_array(source, arr_type, num_rows, use_null=ctx.use_none)
+            return [str(x) for x in column]
+        if ctx.as_pandas and ctx.use_na_values and not pd.__version__.startswith('0'):
+            return data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=pd.NA)
+        if ctx.use_none:
+            return data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=None)
+        source.read_bytes(num_rows)  # Throw away the null map, we will just read the default value (0)
+        if ctx.use_numpy:
+            return numpy_conv.read_numpy_array(source, np_type, num_rows)
+        return source.read_array(arr_type, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         if len(column) and self.nullable:

@@ -44,8 +44,6 @@ def test_config_fixture() -> Iterator[TestConfig]:
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
     proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
-    protocol_version = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PROTOCOL_VERSION', '0'))
-    clickhouse_connect.common.set_setting('native_protocol_version', protocol_version)
     yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum,
                      proxy_address)
 
