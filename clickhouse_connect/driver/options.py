@@ -7,8 +7,10 @@ except ImportError:
 
 try:
     import pandas as pd
+    pd_has_na = not pd.__version__.startswith('0')
 except ImportError:
     pd = None
+    pd_has_na = False
 
 try:
     import pyarrow as arrow

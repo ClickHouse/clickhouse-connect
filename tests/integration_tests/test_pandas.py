@@ -47,6 +47,7 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
         test_client.insert_df('test_pandas_nulls_good', df, column_names=insert_columns)
         result_df = test_client.query_df('SELECT * FROM test_pandas_nulls_good')
         assert result_df.iloc[0]['num'] == 1000
+        assert pd.isna(result_df.iloc[2]['num'])
         assert result_df.iloc[1]['day_col'] == pd.Timestamp(year=1976, month=5, day=5)
         assert pd.isna(result_df.iloc[2]['flt'])
         assert result_df.iloc[2]['str'] == 'value3'

@@ -1,3 +1,4 @@
+import array
 from datetime import datetime, date, tzinfo
 from ipaddress import IPv4Address
 from typing import Sequence, Optional, Any
@@ -88,6 +89,16 @@ def read_nullable_array(source: ByteSource,
     column = source.read_array(array_type, num_rows)
     if use_null:
         return [null_obj if null_map[ix] else column[ix] for ix in range(num_rows)]
+    return column
+
+
+def read_lc_nulls_column(keys: Sequence, index: array.array, null_obj: Any):
+    column = []
+    for ix in index:
+        if ix == 0:
+            column.append(null_obj)
+        else:
+            column.append(keys[ix])
     return column
 
 

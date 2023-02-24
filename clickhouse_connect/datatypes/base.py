@@ -12,7 +12,7 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np, pd
+from clickhouse_connect.driver.options import np, pd, pd_has_na
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -210,18 +210,17 @@ class ClickHouseType(ABC):
         index_sz = 2 ** (key_data & 0xff)
         key_cnt = source.read_uint64()
         keys = self._read_column_binary(source, key_cnt, ctx)
-        use_none = ctx.use_none
-        if self.nullable:
-            try:
-                keys[0] = None if use_none else self._python_null(ctx)
-            except TypeError:
-                keys = (None if use_none else self._python_null(ctx),) + tuple(keys[1:])
         index_cnt = source.read_uint64()
-        assert index_cnt == num_rows
-        index = source.read_array(array_type(index_sz, False), num_rows)
+        index = source.read_array(array_type(index_sz, False), index_cnt)
+        if self.nullable:
+            return self._read_lc_nullable_column(keys, index, ctx)
         if ctx.use_numpy and hasattr(keys, 'dtype') and keys.dtype != np.object_:
             return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=num_rows)
         return [keys[ix] for ix in index]
+
+    def _read_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+        null_obj = None if ctx.use_none else self._active_null(ctx)
+        return data_conv.read_lc_nulls_column(keys, index, null_obj)
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
         if not column:
@@ -263,7 +262,7 @@ class ClickHouseType(ABC):
         write_uint64(len(index), dest)
         write_array(array_type(1 << ix_type, False), index, dest)
 
-    def _python_null(self, _ctx: QueryContext):
+    def _active_null(self, _ctx: QueryContext):
         return None
 
     def _first_value(self, column: Sequence) -> Optional[Any]:
@@ -321,10 +320,11 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             column = data_conv.read_nullable_array(source, arr_type, num_rows, use_null=ctx.use_none)
             return [str(x) for x in column]
         if ctx.as_pandas and ctx.use_na_values and not pd.__version__.startswith('0'):
-            return data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=pd.NA)
+            return pd.array(data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=pd.NA),
+                            dtype=self.base_type)
         if ctx.use_none:
             return data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=None)
-        source.read_bytes(num_rows)  # Throw away the null map, we will just read the default value (0)
+        source.read_bytes(num_rows)  # Throw away the null map, we will just read and use the default value (0)
         if ctx.use_numpy:
             return numpy_conv.read_numpy_array(source, np_type, num_rows)
         return source.read_array(arr_type, num_rows)
@@ -342,7 +342,11 @@ class ArrayType(ClickHouseType, ABC, registered=False):
                 column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, _ctx):
+    def _active_null(self, ctx: QueryContext):
+        if ctx.as_pandas and ctx.use_na_values:
+            return pd.NA
+        if ctx.use_none:
+            return None
         return 0
 
 

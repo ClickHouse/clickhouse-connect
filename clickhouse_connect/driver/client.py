@@ -13,7 +13,7 @@ from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import dict_copy, StreamContext
-from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_DATETIME
+from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
@@ -55,7 +55,7 @@ class Client(ABC):
         if database and not database == '__default__':
             self.database = database
         if self.min_version(CH_VERSION_WITH_PROTOCOL):
-            self.protocol_version = PROTOCOL_VERSION_WITH_DATETIME
+            self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
         self.uri = uri
 
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:

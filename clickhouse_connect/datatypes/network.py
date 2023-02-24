@@ -38,7 +38,7 @@ class IPv4(ClickHouseType):
                 column = [x._ip for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
         if fmt == 'string':
             return '0.0.0.0'
@@ -117,5 +117,5 @@ class IPv6(ClickHouseType):
                     b = x.packed
                     dest += b if len(b) == 16 else (v4mask + b)
 
-    def _python_null(self, ctx):
+    def _active_null(self, ctx):
         return '::' if self.read_format(ctx) == 'string' else V6_NULL

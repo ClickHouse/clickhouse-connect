@@ -47,7 +47,7 @@ class Date(ClickHouseType):
                 column = [(x - esd).days for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
         if ctx.use_numpy:
             return np.datetime64(0)
         if self.read_format(ctx) == 'int':
@@ -110,7 +110,7 @@ class DateTime(ClickHouseType):
                 column = [int(x.timestamp()) for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
         if ctx.use_numpy:
             return np.datetime64(0)
         if self.read_format(ctx) == 'int':
@@ -199,7 +199,7 @@ class DateTime64(ClickHouseType):
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
         write_array('Q', column, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
         if ctx.use_numpy:
             return np.datetime64(0)
         if self.read_format(ctx) == 'int':

@@ -1,4 +1,7 @@
 import struct
+from typing import Sequence
+
+import array
 from datetime import datetime, date
 
 import cython
@@ -194,4 +197,20 @@ def read_nullable_array(ResponseBuffer buffer,
                 Py_INCREF(null_obj)
                 PyTuple_SET_ITEM(column, x, null_obj)
     PyMem_Free(<void *>null_map)
+    return column
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def read_lc_nulls_column(keys: Sequence, index: array.array, object null_obj):
+    cdef unsigned long long num_rows = len(index), x, y
+    cdef object column = PyTuple_New(num_rows), v
+    for x in range(num_rows):
+        y = index[x]
+        if y == 0:
+            v = null_obj
+        else:
+            v = keys[y]
+        Py_INCREF(v)
+        PyTuple_SET_ITEM(column, x, v)
     return column

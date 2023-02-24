@@ -51,7 +51,7 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += y
 
-    def _python_null(self, _ctx):
+    def _active_null(self, _ctx):
         return ''
 
 

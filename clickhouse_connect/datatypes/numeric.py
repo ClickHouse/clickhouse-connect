@@ -162,7 +162,7 @@ class Float(ArrayType, registered=False):
             return [str(x)for x in column]
         return column
 
-    def _python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
         return nan if ctx.use_na_values else 0.0
 
 
