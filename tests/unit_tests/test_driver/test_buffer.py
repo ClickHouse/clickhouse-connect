@@ -23,7 +23,7 @@ def test_read_strings():
         buff = bytes_source('04 43 44 4d 41', cls=cls)
         assert buff.read_leb128_str() == 'CDMA'
         try:
-            buff.read_str_col(2)
+            buff.read_str_col(2, 'utf8')
         except StreamCompleteException:
             pass
 

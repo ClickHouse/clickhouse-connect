@@ -40,6 +40,8 @@ class IPv4(ClickHouseType):
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
+        if ctx.use_none:
+            return None
         if fmt == 'string':
             return '0.0.0.0'
         if fmt == 'int':
@@ -118,4 +120,6 @@ class IPv6(ClickHouseType):
                     dest += b if len(b) == 16 else (v4mask + b)
 
     def _active_null(self, ctx):
+        if ctx.use_none:
+            return None
         return '::' if self.read_format(ctx) == 'string' else V6_NULL

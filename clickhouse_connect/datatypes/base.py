@@ -144,14 +144,8 @@ class ClickHouseType(ABC):
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         null_map = source.read_bytes(num_rows)
         column = self._read_column_binary(source, num_rows, ctx)
-        if ctx.use_none:
-            if ctx.use_numpy or isinstance(column, (tuple, array.array)):
-                column = [None if null_map[ix] else column[ix] for ix in range(num_rows)]
-            else:
-                for ix in range(num_rows):
-                    if null_map[ix]:
-                        column[ix] = None
-        return column
+        null_obj = self._active_null(ctx)
+        return data_conv.update_nullable_column(column, null_map, null_obj)
 
     # The binary methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
@@ -213,14 +207,13 @@ class ClickHouseType(ABC):
         index_cnt = source.read_uint64()
         index = source.read_array(array_type(index_sz, False), index_cnt)
         if self.nullable:
-            return self._read_lc_nullable_column(keys, index, ctx)
+            return self._update_lc_nullable_column(keys, index, ctx)
         if ctx.use_numpy and hasattr(keys, 'dtype') and keys.dtype != np.object_:
             return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=num_rows)
         return [keys[ix] for ix in index]
 
-    def _read_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
-        null_obj = None if ctx.use_none else self._active_null(ctx)
-        return data_conv.read_lc_nulls_column(keys, index, null_obj)
+    def _update_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+        return data_conv.update_lc_nullable_column(keys, index, self._active_null(ctx))
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
         if not column:
@@ -308,26 +301,14 @@ class ArrayType(ClickHouseType, ABC, registered=False):
         return source.read_array(self._array_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        return self._read_nullable_int_column(self._array_type, self.read_format(ctx), self.np_type,
-                                              source, num_rows, ctx)
-
-    def _read_nullable_int_column(self, arr_type: str,
-                                  fmt: str,
-                                  np_type: str,
-                                  source: ByteSource,
-                                  num_rows: int, ctx:QueryContext) -> Sequence:
-        if fmt == 'string':
-            column = data_conv.read_nullable_array(source, arr_type, num_rows, use_null=ctx.use_none)
+        column = data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
+        if self.read_format(ctx) == 'string':
             return [str(x) for x in column]
-        if ctx.as_pandas and ctx.use_na_values and not pd.__version__.startswith('0'):
-            return pd.array(data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=pd.NA),
-                            dtype=self.base_type)
-        if ctx.use_none:
-            return data_conv.read_nullable_array(source, arr_type, num_rows, use_null=True, null_obj=None)
-        source.read_bytes(num_rows)  # Throw away the null map, we will just read and use the default value (0)
-        if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, np_type, num_rows)
-        return source.read_array(arr_type, num_rows)
+        if ctx.as_pandas and ctx.use_pandas_na:
+            return pd.array(column, dtype=self.base_type)
+        if ctx.use_numpy and not ctx.use_none:
+            return np.array(column, dtype=self.np_type)
+        return column
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         if len(column) and self.nullable:

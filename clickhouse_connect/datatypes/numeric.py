@@ -67,9 +67,17 @@ class UInt64(ArrayType):
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         fmt = self.read_format(ctx)
-        arr_type = 'q' if fmt == 'signed' else 'Q'
-        np_type = '<q' if fmt == 'signed' else '<u8'
-        return self._read_nullable_int_column(arr_type, fmt, np_type, source, num_rows, ctx)
+        column = data_conv.read_nullable_array(source,
+                                               'q' if fmt == 'signed' else 'Q',
+                                               num_rows,
+                                               self._active_null(ctx))
+        if self.read_format(ctx) == 'string':
+            return [str(x) for x in column]
+        if ctx.as_pandas and ctx.use_pandas_na:
+            return pd.array(column, dtype=self.base_type)
+        if ctx.use_numpy and not ctx.use_none:
+            return np.array(column, dtype='<q' if fmt == 'signed' else '<u8')
+        return column
 
 
 class BigInt(ClickHouseType, registered=False):
@@ -146,24 +154,19 @@ class Float(ArrayType, registered=False):
     python_type = float
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        if ctx.use_na_values:  # We have to convert all nulls to nan
-            column = data_conv.read_nullable_array(source, self._array_type, num_rows, use_null=True, null_obj=nan)
-            if ctx.use_numpy:  # Now there should be no Nones, so creating a numpy array should work
-                column = np.array(column, dtype=self.np_type)
-        elif ctx.use_none:
-            column = data_conv.read_nullable_array(source, self._array_type, num_rows, use_null=True, null_obj=None)
-        else:
-            source.read_bytes(num_rows)  # Throw away the null map, we will just use the ClickHouse default value
-            if ctx.use_numpy:
-                column = numpy_conv.read_numpy_array(source, self.np_type, num_rows)
-            else:
-                column = source.read_array(self._array_type, num_rows)
+        column = data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
         if self.read_format(ctx) == 'string':
-            return [str(x)for x in column]
+            return [str(x) for x in column]
+        if ctx.use_numpy and self:  # Nulls should be nan, so creating a numpy array should work
+            return np.array(column, dtype=self.np_type)
         return column
 
     def _active_null(self, ctx: QueryContext):
-        return nan if ctx.use_na_values else 0.0
+        if ctx.use_na_values or ctx.use_numpy:
+            return nan
+        if ctx.use_none:
+            return None
+        return 0.0
 
 
 class Float32(Float):

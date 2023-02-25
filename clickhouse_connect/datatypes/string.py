@@ -15,9 +15,7 @@ class String(ClickHouseType):
         return source.read_str_col(num_rows, ctx.encoding or self.encoding)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        if ctx.use_numpy:
-            return super()._read_nullable_column(source, num_rows, ctx)
-        return source.read_str_col(num_rows, ctx.encoding or self.encoding, nullable=True, use_none=ctx.use_none)
+        return source.read_str_col(num_rows, ctx.encoding or self.encoding, True, self._active_null(ctx))
 
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
@@ -51,8 +49,8 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += y
 
-    def _active_null(self, _ctx):
-        return ''
+    def _active_null(self, ctx):
+        return None if ctx.use_none else ''
 
 
 class FixedString(ClickHouseType):
@@ -64,7 +62,9 @@ class FixedString(ClickHouseType):
         self._name_suffix = type_def.arg_str
         self._empty_bytes = bytes(b'\x00' * self.byte_size)
 
-    def python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
+        if ctx.use_none:
+            return None
         return self._empty_bytes if self.read_format(ctx) == 'native' else ''
 
     @property

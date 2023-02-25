@@ -15,7 +15,7 @@ from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
-from clickhouse_connect.driver.options import check_arrow
+from clickhouse_connect.driver.options import check_arrow, pd_has_na
 from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,7 @@ class QueryContext(BaseQueryContext):
         self.column_tzs = column_tzs
         self.block_info = False
         self.as_pandas = as_pandas
+        self.use_pandas_na = as_pandas and pd_has_na
         self.streaming = streaming
         self._update_query()
 

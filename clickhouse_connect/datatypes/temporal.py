@@ -21,7 +21,6 @@ class Date(ClickHouseType):
     np_type = 'datetime64[D]'
     nano_divisor = 86400 * 1000000000
     valid_formats = 'native', 'int'
-    python_null = epoch_start_date
     python_type = date
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
@@ -48,10 +47,15 @@ class Date(ClickHouseType):
         write_array(self._array_type, column, dest)
 
     def _active_null(self, ctx: QueryContext):
+        fmt = self.read_format(ctx)
+        if ctx.use_pandas_na:
+            return pd.NA if fmt == 'int' else pd.NaT
+        if ctx.use_none:
+            return None
+        if fmt == 'int':
+            return 0
         if ctx.use_numpy:
             return np.datetime64(0)
-        if self.read_format(ctx) == 'int':
-            return 0
         return epoch_start_date
 
 
@@ -70,12 +74,27 @@ from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
 
 
-class DateTime(ClickHouseType):
+class DateTimeBase(ClickHouseType, registered=False):
     __slots__ = ('tzinfo',)
-    _array_type = 'L' if int_size == 2 else 'I'
-    np_type = 'datetime64[s]'
     valid_formats = 'native', 'int'
     python_type = datetime
+
+    def _active_null(self, ctx: QueryContext):
+        fmt = self.read_format(ctx)
+        if ctx.use_pandas_na:
+            return pd.NA if fmt == 'int' else pd.NaT
+        if ctx.use_none:
+            return None
+        if self.read_format(ctx) == 'int':
+            return 0
+        if ctx.use_numpy:
+            return np.datetime64(0)
+        return epoch_start_datetime
+
+
+class DateTime(DateTimeBase):
+    _array_type = 'L' if int_size == 2 else 'I'
+    np_type = 'datetime64[s]'
     nano_divisor = 1000000000
 
     def __init__(self, type_def: TypeDef):
@@ -110,19 +129,9 @@ class DateTime(ClickHouseType):
                 column = [int(x.timestamp()) for x in column]
         write_array(self._array_type, column, dest)
 
-    def _active_null(self, ctx: QueryContext):
-        if ctx.use_numpy:
-            return np.datetime64(0)
-        if self.read_format(ctx) == 'int':
-            return 0
-        return epoch_start_datetime
 
-
-class DateTime64(ClickHouseType):
-    __slots__ = 'scale', 'prec', 'tzinfo', 'unit'
-    valid_formats = 'native', 'int'
-    python_null = epoch_start_date
-    python_type = datetime
+class DateTime64(DateTimeBase):
+    __slots__ = 'scale', 'prec', 'unit'
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -198,10 +207,3 @@ class DateTime64(ClickHouseType):
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
         write_array('Q', column, dest)
-
-    def _active_null(self, ctx: QueryContext):
-        if ctx.use_numpy:
-            return np.datetime64(0)
-        if self.read_format(ctx) == 'int':
-            return 0
-        return epoch_start_datetime

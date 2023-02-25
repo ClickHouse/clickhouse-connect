@@ -80,19 +80,17 @@ def read_uuid_col(source: ByteSource, num_rows: int):
     return column
 
 
-def read_nullable_array(source: ByteSource,
-                        array_type: str,
-                        num_rows: int,
-                        use_null: bool,
-                        null_obj: Any = None):
+def read_nullable_array(source: ByteSource, array_type: str, num_rows: int, null_obj: Any):
     null_map = source.read_bytes(num_rows)
     column = source.read_array(array_type, num_rows)
-    if use_null:
-        return [null_obj if null_map[ix] else column[ix] for ix in range(num_rows)]
-    return column
+    return [null_obj if null_map[ix] else column[ix] for ix in range(num_rows)]
 
 
-def read_lc_nulls_column(keys: Sequence, index: array.array, null_obj: Any):
+def update_nullable_column(source: Sequence, null_map: bytes, null_obj: Any):
+    return [source[ix] if null_map[ix] == 0 else null_obj for ix in range(len(source))]
+
+
+def update_lc_nullable_column(keys: Sequence, index: array.array, null_obj: Any):
     column = []
     for ix in index:
         if ix == 0:
