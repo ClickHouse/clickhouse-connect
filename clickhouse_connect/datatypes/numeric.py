@@ -56,9 +56,6 @@ class UInt64(ArrayType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         fmt = self.read_format(ctx)
-        if fmt == 'string':
-            column = source.read_array(self._array_type, num_rows)
-            return [str(x) for x in column]
         if ctx.use_numpy:
             np_type = '<q' if fmt == 'signed' else '<u8'
             return numpy_conv.read_numpy_array(source, np_type, num_rows)
@@ -66,16 +63,16 @@ class UInt64(ArrayType):
         return source.read_array(arr_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        return data_conv.read_nullable_array(source, 'q' if self.read_format(ctx) == 'signed' else 'Q',
+                                             num_rows, self._active_null(ctx))
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         fmt = self.read_format(ctx)
-        column = data_conv.read_nullable_array(source,
-                                               'q' if fmt == 'signed' else 'Q',
-                                               num_rows,
-                                               self._active_null(ctx))
-        if self.read_format(ctx) == 'string':
+        if fmt == 'string':
             return [str(x) for x in column]
-        if ctx.as_pandas and ctx.use_pandas_na:
-            return pd.array(column, dtype=self.base_type)
-        if ctx.use_numpy and not ctx.use_none:
+        if ctx.use_pandas_na and self.nullable:
+            return pd.array(column, dtype='Int64' if fmt == 'signed' else 'UInt64')
+        if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype='<q' if fmt == 'signed' else '<u8')
         return column
 
@@ -153,19 +150,18 @@ class Float(ArrayType, registered=False):
     _array_type = 'f'
     python_type = float
 
-    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        column = data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if self.read_format(ctx) == 'string':
             return [str(x) for x in column]
-        if ctx.use_numpy and self:  # Nulls should be nan, so creating a numpy array should work
+        if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype=self.np_type)
         return column
 
     def _active_null(self, ctx: QueryContext):
-        if ctx.use_na_values or ctx.use_numpy:
-            return nan
         if ctx.use_none:
             return None
+        if ctx.use_numpy:
+            return nan
         return 0.0
 
 
@@ -186,6 +182,11 @@ class Bool(ClickHouseType):
         column = source.read_bytes(num_rows)
         return [b != 0 for b in column]
 
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if ctx.use_numpy:
+            return np.array(column)
+        return column
+
     def _write_column_binary(self, column, dest, _ctx):
         write_array('B', [1 if x else 0 for x in column], dest)
 
@@ -197,7 +198,7 @@ class Boolean(Bool):
 class Enum(ClickHouseType):
     __slots__ = '_name_map', '_int_map'
     _array_type = 'b'
-    valid_formats = 'string', 'int'
+    valid_formats = 'native', 'int'
     python_type = str
 
     def __init__(self, type_def: TypeDef):
@@ -286,6 +287,13 @@ class Decimal(ClickHouseType):
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
         else:
             write_array(self._array_type, [int(x * mult) for x in column], dest)
+
+    def _active_null(self, ctx: QueryContext):
+        if ctx.use_none:
+            return None
+        digits = str('0').rjust(self.prec, '0')
+        scale = self.scale
+        return decimal.Decimal(f'{digits[:-scale]}.{digits[-scale:]}')
 
 
 class BigDecimal(Decimal, registered=False):

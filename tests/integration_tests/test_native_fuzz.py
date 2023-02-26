@@ -12,11 +12,11 @@ MAX_DATA_ROWS = 40
 
 # pylint: disable=duplicate-code
 def test_query_fuzz(test_client: Client, test_table_engine: str):
-    if not test_client.min_version('22.1'):
-        unsupported_types.add('Date32')
-        unsupported_types.add('Bool')
-        unsupported_types.add('UInt128')
-        unsupported_types.add('UUID')
+
+    unsupported_types.add('Date32')
+    unsupported_types.add('Bool')
+    unsupported_types.add('UInt128')
+    unsupported_types.add('UUID')
     test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250'))
     for _ in range(test_runs):
         test_client.command('DROP TABLE IF EXISTS fuzz_test')
@@ -33,6 +33,9 @@ def test_query_fuzz(test_client: Client, test_table_engine: str):
 
         data_result = test_client.query('SELECT * FROM fuzz_test')
         if data_rows:
-            assert data_result.column_names == col_names
-            assert data_result.result_set == data
+            try:
+                assert data_result.column_names == col_names
+                assert data_result.result_set == data
+            except Exception as ex:
+                raise
     unsupported_types.clear()

@@ -20,6 +20,8 @@ class IPv4(ClickHouseType):
     python_type = IPv4Address
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if self.read_format(ctx) == 'int':
+            return source.read_array(self._array_type, num_rows)
         if self.read_format(ctx) == 'string':
             column = source.read_array(self._array_type, num_rows)
             return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]

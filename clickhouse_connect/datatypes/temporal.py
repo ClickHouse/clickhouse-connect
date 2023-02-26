@@ -58,6 +58,13 @@ class Date(ClickHouseType):
             return np.datetime64(0)
         return epoch_start_date
 
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.read_format(ctx) == 'int':
+            return column
+        if ctx.use_numpy and self.nullable and not ctx.use_none:
+            return np.array(column, dtype=self.np_type)
+        return column
+
 
 class Date32(Date):
     _array_type = 'l' if int_size == 2 else 'i'

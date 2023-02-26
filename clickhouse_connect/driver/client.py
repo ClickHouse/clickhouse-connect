@@ -204,13 +204,16 @@ class Client(ABC):
     def raw_query(self, query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
-                  fmt: str = None) -> bytes:
+                  fmt: str = None,
+                  use_database: bool = True) -> bytes:
         """
         Query method that simply returns the raw ClickHouse format bytes
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param fmt: ClickHouse output format
+        :param use_database  Send the database parameter to ClickHouse so the command will be executed in the client
+         database context.
         :return: bytes representing raw ClickHouse return value based on format
         """
 
@@ -349,13 +352,9 @@ class Client(ABC):
                                         as_pandas=as_pandas,
                                         use_na_values=use_na_values,
                                         streaming=streaming)
-        # By default, a numpy context doesn't use None/NULL.  If NULL values are allowed, all numpy arrays must
-        # be inefficient Object arrays
-        if use_numpy and use_none is None:
-            use_none = False
         if use_numpy and max_str_len is None:
             max_str_len = 0
-        if use_numpy and use_na_values is None:
+        if as_pandas and use_na_values is None:
             use_na_values = True
         return QueryContext(query=query,
                             parameters=parameters,
@@ -407,8 +406,8 @@ class Client(ABC):
         :param parameters: Optional dictionary of key/values pairs to be formatted
         :param data: Optional 'data' for the command (for INSERT INTO in particular)
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :param use_database: Send the database parameter to ClickHouse so the command will be executed in that database
-         context.  Otherwise, no database will be specified with the command.  This is useful for determining
+        :param use_database: Send the database parameter to ClickHouse so the command will be executed in the client
+         database context.  Otherwise, no database will be specified with the command.  This is useful for determining
          the default user database
         :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
         """

@@ -367,7 +367,8 @@ class HttpClient(Client):
                   query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
-                  fmt: str = None) -> bytes:
+                  fmt: str = None,
+                  use_database: bool = True) -> bytes:
         """
         See BaseClient doc_string for this method
         """
@@ -375,6 +376,8 @@ class HttpClient(Client):
         if fmt:
             final_query += f'\n FORMAT {fmt}'
         params = self._validate_settings(settings or {})
+        if use_database and self.database:
+            params['database'] = self.database
         params.update(bind_params)
         return self._raw_request(final_query, params).data
 
