@@ -60,6 +60,11 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
         assert df.equals(source_df)
 
 
+def test_pandas_all_null_float(test_client: Client):
+    df = test_client.query_df("SELECT number, cast(NULL, 'Nullable(Float64)') as flt FROM numbers(500)")
+    assert df['flt'].dtype.name == 'float64'
+
+
 def test_pandas_csv(test_client: Client, table_context: Callable):
     csv = """
 key,num,flt,str,dt,d
@@ -68,7 +73,7 @@ key2,6666,,string2,,
 """
     csv_file = StringIO(csv)
     df = pd.read_csv(csv_file, parse_dates=['dt', 'd'], date_parser=pd.Timestamp)
-    df[['num', 'flt']] = df[['num', 'flt']].astype('Float32')
+    df = df[['num', 'flt']].astype('Float32')
     source_df = df.copy()
     with table_context('test_pandas_csv', null_ds_columns, null_ds_types):
         test_client.insert_df('test_pandas_csv', df)

@@ -18,6 +18,29 @@ The secondary effect of the `send_progress` argument -- to set `wait_end_of_quer
 on whether the query is streaming or not.
 
 
+## 0.5.13, 2023-02-27
+
+### Improvements
+- By default, reading Pandas Dataframes with query_df and query_df_stream now sets a new QueryContext property
+of `use_pandas_na` to `True`.  When `use_pandas_na` is True, clickhouse_connect will attempt to use Pandas "missing"
+values, such as pandas.NaT and pandas.NA, for ClickHouse NULLs (in Nullable columns only), and use the associated
+extended Pandas dtype.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/132
+- There are new low level optimizations for reading some Nullable columns, and writing Pandas dataframes
+
+### Bug Fixes
+- Timezone information from ClickHouse DateTime columns with a timezone was lost.  There was a workaround implemented
+for this issue in v0.5.8 that allowed assigned timezones to the query or columns on the client side.  ClickHouse now
+support sending this timezone data with the column, but only in server versions 23.2 and later.  If such a version is
+detected, clickhouse-connect will return timezone aware DateTime values without a workaround.  Fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/120
+- For certain queries, an incorrect, non-zero "zero value" would be returned for queries where `use_none` was set
+to `False`.  All NULL values are now properly converted.
+- Timezone data was lost when a DateTime64 column with a timezone was converted to a Pandas DataFrame.  This has been
+fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/136
+- send_progress headers were not being correctly requested, which could result in unexpected timeouts for long-running
+queries.  This has been fixed.
+
+
 ## 0.5.12, 2023-02-16
 ### Improvement
 - A new keyword parameter `server_host_name` is now recognized by the `clickhouse_connect.get_client` method.  This identifies

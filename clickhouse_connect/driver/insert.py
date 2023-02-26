@@ -126,7 +126,8 @@ class InsertContext(BaseQueryContext):
                     #  https://github.com/pandas-dev/pandas/issues/29024
                     df_col = df_col.replace({pd.NaT: None}).replace({np.nan: None})
                 elif 'Float' in ch_type.base_type:
-                    df_col = df_col.replace({pd.NaT: np.nan})
+                    #  This seems to be the only way to convert any null looking things to nan
+                    df_col = df_col.astype(ch_type.np_type)
                 else:
                     df_col = df_col.replace({np.nan: None})
             data.append(df_col)

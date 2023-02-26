@@ -157,6 +157,8 @@ class Float(ArrayType, registered=False):
         return column
 
     def _active_null(self, ctx: QueryContext):
+        if ctx.use_pandas_na:
+            return nan
         if ctx.use_none:
             return None
         if ctx.use_numpy:
