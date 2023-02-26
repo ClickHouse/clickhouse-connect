@@ -1,16 +1,15 @@
 import decimal
-
-import numpy as np
-from math import nan
 from typing import Union, Type, Sequence, MutableSequence
+
+from math import nan
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
 from clickhouse_connect.driver.ctypes import numpy_conv, data_conv
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.options import pd, np
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import pd
 
 
 class Int8(ArrayType):

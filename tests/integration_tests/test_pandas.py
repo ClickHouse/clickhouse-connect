@@ -32,7 +32,7 @@ def test_pandas_basic(test_client: Client, test_table_engine: str):
 
 def test_pandas_nulls(test_client: Client, table_context: Callable):
     df = pd.DataFrame(null_ds, columns=['key', 'num', 'flt', 'str', 'dt', 'd'])
-    source_df= df.copy()
+    source_df = df.copy()
     insert_columns = ['key', 'num', 'flt', 'str', 'dt', 'day_col']
     with table_context('test_pandas_nulls_bad', ['key String', 'num Int32', 'flt Float32',
                                                  'str String', 'dt DateTime', 'day_col Date']):
@@ -43,13 +43,19 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
             pass
     with table_context('test_pandas_nulls_good',
                        ['key String', 'num Nullable(Int32)', 'flt Nullable(Float32)',
-                        'str Nullable(String)', 'dt Nullable(DateTime)', 'day_col Nullable(Date)']):
+                        'str Nullable(String)', "dt Nullable(DateTime('America/Denver'))", 'day_col Nullable(Date)']):
         test_client.insert_df('test_pandas_nulls_good', df, column_names=insert_columns)
         result_df = test_client.query_df('SELECT * FROM test_pandas_nulls_good')
         assert result_df.iloc[0]['num'] == 1000
         assert pd.isna(result_df.iloc[2]['num'])
         assert result_df.iloc[1]['day_col'] == pd.Timestamp(year=1976, month=5, day=5)
+        assert pd.isna(result_df.iloc[0]['day_col'])
+        assert pd.isna(result_df.iloc[1]['dt'])
         assert pd.isna(result_df.iloc[2]['flt'])
+        assert pd.isna(result_df.iloc[2]['num'])
+        assert result_df['num'].dtype.name == 'Int32'
+        if test_client.protocol_version:
+            assert isinstance(result_df['dt'].dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         assert result_df.iloc[2]['str'] == 'value3'
         assert df.equals(source_df)
 
@@ -70,7 +76,7 @@ key2,6666,,string2,,
         assert np.isclose(result_df.iloc[0]['flt'], 25.44)
         assert pd.isna(result_df.iloc[1]['flt'])
         result_df = test_client.query('SELECT * FROM test_pandas_csv')
-        assert result_df.result_set[1][2] is None
+        assert pd.isna(result_df.result_set[1][2])
         assert df.equals(source_df)
 
 
@@ -94,12 +100,15 @@ def test_pandas_low_card(test_client: Client, table_context: Callable):
     with table_context('test_pandas_low_card', ['key String',
                                                 'value LowCardinality(Nullable(String))',
                                                 'date_value LowCardinality(Nullable(DateTime))',
-                                                'int_value LowCardinality(Int32)']):
-        df = pd.DataFrame([['key1', 'test_string_0', datetime(2022, 10, 15, 4, 25), -372],
-                           ['key2', 'test_string_1', datetime.now(), 4777288],
-                           ['key3', None, datetime.now(), 4777288],
-                           ['key4', 'test_string', pd.NaT, -5837274]],
-                          columns=['key', 'value', 'date_value', 'int_value'])
+                                                'int_value LowCardinality(Nullable(Int32))']):
+        df = pd.DataFrame([
+            ['key1', 'test_string_0', datetime(2022, 10, 15, 4, 25), -372],
+            ['key2', 'test_string_1', datetime.now(), 4777288],
+            ['key3', None, datetime.now(), 4777288],
+            ['key4', 'test_string', pd.NaT, -5837274],
+            ['key5', pd.NA, pd.NA, None]
+        ],
+            columns=['key', 'value', 'date_value', 'int_value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_low_card', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_low_card', use_none=True)
@@ -109,7 +118,7 @@ def test_pandas_low_card(test_client: Client, table_context: Callable):
         assert result_df.iloc[1]['int_value'] == 4777288
         assert pd.isna(result_df.iloc[3]['date_value'])
         assert pd.isna(result_df.iloc[2]['value'])
-        assert isinstance(result_df['date_value'].dtype, pd.core.dtypes.dtypes.DatetimeType)
+        assert pd.api.types.is_datetime64_any_dtype(result_df['date_value'].dtype)
         assert df.equals(source_df)
 
 

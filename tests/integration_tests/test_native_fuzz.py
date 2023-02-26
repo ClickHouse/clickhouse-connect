@@ -33,9 +33,6 @@ def test_query_fuzz(test_client: Client, test_table_engine: str):
 
         data_result = test_client.query('SELECT * FROM fuzz_test')
         if data_rows:
-            try:
-                assert data_result.column_names == col_names
-                assert data_result.result_set == data
-            except Exception as ex:
-                raise
+            assert data_result.column_names == col_names
+            assert data_result.result_set == data
     unsupported_types.clear()

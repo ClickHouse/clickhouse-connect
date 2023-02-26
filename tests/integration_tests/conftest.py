@@ -8,7 +8,6 @@ from typing import Iterator, NamedTuple, Sequence, Optional
 
 from pytest import fixture
 
-import clickhouse_connect.common
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.exceptions import OperationalError

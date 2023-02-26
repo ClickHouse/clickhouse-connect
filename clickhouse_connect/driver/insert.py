@@ -121,8 +121,15 @@ class InsertContext(BaseQueryContext):
                 self.column_formats[col_name] = 'int'
                 continue
             if ch_type.nullable:
-                df_col = df_col.replace({np.nan: None})
-            data.append(df_col.tolist())
+                if d_type == 'object':
+                    #  This is ugly, but the multiple replaces seem required as a result of this bug:
+                    #  https://github.com/pandas-dev/pandas/issues/29024
+                    df_col = df_col.replace({pd.NaT: None}).replace({np.nan: None})
+                elif 'Float' in ch_type.base_type:
+                    df_col = df_col.replace({pd.NaT: np.nan})
+                else:
+                    df_col = df_col.replace({np.nan: None})
+            data.append(df_col)
         return data
 
     def _convert_numpy(self, np_array):

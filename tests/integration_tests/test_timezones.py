@@ -3,7 +3,6 @@ from datetime import datetime
 import pytz
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect import common
 
 
 def test_basic_timezones(test_client: Client):

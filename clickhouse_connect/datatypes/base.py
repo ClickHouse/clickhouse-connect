@@ -12,7 +12,7 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np, pd, pd_has_na
+from clickhouse_connect.driver.options import np, pd
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -215,7 +215,7 @@ class ClickHouseType(ABC):
             return self._build_lc_nullable_column(keys, index, ctx)
         return self._build_lc_column(keys, index, ctx)
 
-    def _build_lc_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+    def _build_lc_column(self, keys: Sequence, index: array.array, _ctx: QueryContext):
         return [keys[ix] for ix in index]
 
     def _build_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
@@ -261,7 +261,7 @@ class ClickHouseType(ABC):
         write_uint64(len(index), dest)
         write_array(array_type(1 << ix_type, False), index, dest)
 
-    def _active_null(self, _ctx: QueryContext):
+    def _active_null(self, _ctx: QueryContext) -> Any:
         return None
 
     def _first_value(self, column: Sequence) -> Optional[Any]:

@@ -21,16 +21,16 @@ except ImportError:
 def check_numpy():
     if np:
         return np
-    raise NotSupportedError("Numpy package is not installed")
+    raise NotSupportedError('Numpy package is not installed')
 
 
 def check_pandas():
     if pd:
         return pd
-    raise NotSupportedError("Pandas package is not installed")
+    raise NotSupportedError('Pandas package is not installed')
 
 
 def check_arrow():
     if arrow:
         return arrow
-    raise NotSupportedError("PyArrow package is not installed")
+    raise NotSupportedError('PyArrow package is not installed')

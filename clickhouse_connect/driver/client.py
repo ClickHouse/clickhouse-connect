@@ -16,7 +16,7 @@ from clickhouse_connect.driver.common import dict_copy, StreamContext
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.models import ColumnDef, SettingDef
+from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, QueryContext, arrow_buffer
 
 io.DEFAULT_BUFFER_SIZE = 1024 * 256
@@ -88,6 +88,12 @@ class Client(ABC):
         if isinstance(value, bool):
             return '1' if value else '0'
         return str(value)
+
+    def _setting_status(self, key: str) -> SettingStatus:
+        comp_setting = self.server_settings[key]
+        if not comp_setting:
+            return SettingStatus(False, False)
+        return SettingStatus(comp_setting != '0', comp_setting.readonly != 1)
 
     def _prep_query(self, context: QueryContext):
         if context.is_select and not context.has_limit and self.query_limit:
