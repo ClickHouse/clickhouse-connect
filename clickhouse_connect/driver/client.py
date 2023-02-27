@@ -269,6 +269,7 @@ class Client(ABC):
                  encoding: Optional[str] = None,
                  use_none: Optional[bool] = None,
                  max_str_len: Optional[int] = None,
+                 use_na_values: Optional[bool] = None,
                  context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe.  For parameter values, see the
@@ -337,6 +338,8 @@ class Client(ABC):
           objects with the selected timezone.
         :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
           tzinfo objects).  The timezone will be applied to datetime objects returned in the query
+        :param use_na_values:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
+          pandas.NA and pandas.NaT for ClickHouse NULL values.  Defaulted to True for query_df methods
         :param as_pandas Return the result columns as pandas.Series objects
         :param streaming Marker used to correctly configure streaming queries
         :return: Reusable QueryContext
