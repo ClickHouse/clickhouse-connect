@@ -75,17 +75,14 @@ class ResponseBuffer(ByteSource):
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), 'little', signed=False)
 
-    def read_str_col(self, num_rows: int,
-                     encoding: str = 'utf8',
+    def read_str_col(self,
+                     num_rows: int,
+                     encoding: str,
                      nullable: bool = False,
-                     use_none: bool = True) -> Iterable[str]:
+                     null_obj: Any = None) -> Iterable[str]:
         column = []
         app = column.append
-        null_map = None
-        if nullable:
-            nulls = self.read_bytes(num_rows)
-            if use_none:
-                null_map = nulls
+        null_map = self.read_bytes(num_rows) if nullable else None
         for ix in range(num_rows):
             sz = 0
             shift = 0
@@ -95,10 +92,10 @@ class ResponseBuffer(ByteSource):
                 if (b & 0x80) == 0:
                     break
                 shift += 7
+            x = self.read_bytes(sz)
             if null_map and null_map[ix]:
-                app(None)
+                app(null_obj)
             else:
-                x = self.read_bytes(sz)
                 try:
                     app(x.decode(encoding))
                 except UnicodeDecodeError:

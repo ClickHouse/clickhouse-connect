@@ -1,10 +1,13 @@
 import decimal
 from typing import Union, Type, Sequence, MutableSequence
 
+from math import nan
+
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
 from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
 from clickhouse_connect.driver.ctypes import numpy_conv, data_conv
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.options import pd, np
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
@@ -52,9 +55,6 @@ class UInt64(ArrayType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         fmt = self.read_format(ctx)
-        if fmt == 'string':
-            column = source.read_array(self._array_type, num_rows)
-            return [str(x) for x in column]
         if ctx.use_numpy:
             np_type = '<q' if fmt == 'signed' else '<u8'
             return numpy_conv.read_numpy_array(source, np_type, num_rows)
@@ -62,7 +62,18 @@ class UInt64(ArrayType):
         return source.read_array(arr_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        return data_conv.read_nullable_array(source, self._array_type, num_rows, use_none=ctx.use_none)
+        return data_conv.read_nullable_array(source, 'q' if self.read_format(ctx) == 'signed' else 'Q',
+                                             num_rows, self._active_null(ctx))
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        fmt = self.read_format(ctx)
+        if fmt == 'string':
+            return [str(x) for x in column]
+        if ctx.use_pandas_na and self.nullable:
+            return pd.array(column, dtype='Int64' if fmt == 'signed' else 'UInt64')
+        if ctx.use_numpy and self.nullable and (not ctx.use_none):
+            return np.array(column, dtype='<q' if fmt == 'signed' else '<u8')
+        return column
 
 
 class BigInt(ClickHouseType, registered=False):
@@ -134,16 +145,34 @@ class UInt256(BigInt):
     _signed = False
 
 
-class Float32(ArrayType):
+class Float(ArrayType, registered=False):
     _array_type = 'f'
-    np_type = '<f4'
     python_type = float
 
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.read_format(ctx) == 'string':
+            return [str(x) for x in column]
+        if ctx.use_numpy and self.nullable and (not ctx.use_none):
+            return np.array(column, dtype=self.np_type)
+        return column
 
-class Float64(ArrayType):
+    def _active_null(self, ctx: QueryContext):
+        if ctx.use_pandas_na:
+            return nan
+        if ctx.use_none:
+            return None
+        if ctx.use_numpy:
+            return nan
+        return 0.0
+
+
+class Float32(Float):
+    np_type = '<f4'
+
+
+class Float64(Float):
     _array_type = 'd'
     np_type = '<f8'
-    python_type = float
 
 
 class Bool(ClickHouseType):
@@ -153,6 +182,11 @@ class Bool(ClickHouseType):
     def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext):
         column = source.read_bytes(num_rows)
         return [b != 0 for b in column]
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if ctx.use_numpy:
+            return np.array(column)
+        return column
 
     def _write_column_binary(self, column, dest, _ctx):
         write_array('B', [1 if x else 0 for x in column], dest)
@@ -165,7 +199,7 @@ class Boolean(Bool):
 class Enum(ClickHouseType):
     __slots__ = '_name_map', '_int_map'
     _array_type = 'b'
-    valid_formats = 'string', 'int'
+    valid_formats = 'native', 'int'
     python_type = str
 
     def __init__(self, type_def: TypeDef):
@@ -254,6 +288,13 @@ class Decimal(ClickHouseType):
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
         else:
             write_array(self._array_type, [int(x * mult) for x in column], dest)
+
+    def _active_null(self, ctx: QueryContext):
+        if ctx.use_none:
+            return None
+        digits = str('0').rjust(self.prec, '0')
+        scale = self.scale
+        return decimal.Decimal(f'{digits[:-scale]}.{digits[-scale:]}')
 
 
 class BigDecimal(Decimal, registered=False):
