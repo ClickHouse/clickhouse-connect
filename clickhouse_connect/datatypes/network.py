@@ -20,6 +20,8 @@ class IPv4(ClickHouseType):
     python_type = IPv4Address
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if self.read_format(ctx) == 'int':
+            return source.read_array(self._array_type, num_rows)
         if self.read_format(ctx) == 'string':
             column = source.read_array(self._array_type, num_rows)
             return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
@@ -38,8 +40,10 @@ class IPv4(ClickHouseType):
                 column = [x._ip for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
+        if ctx.use_none:
+            return None
         if fmt == 'string':
             return '0.0.0.0'
         if fmt == 'int':
@@ -117,5 +121,7 @@ class IPv6(ClickHouseType):
                     b = x.packed
                     dest += b if len(b) == 16 else (v4mask + b)
 
-    def _python_null(self, ctx):
+    def _active_null(self, ctx):
+        if ctx.use_none:
+            return None
         return '::' if self.read_format(ctx) == 'string' else V6_NULL

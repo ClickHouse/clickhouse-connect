@@ -1,6 +1,7 @@
+import array
 from datetime import datetime, date, tzinfo
 from ipaddress import IPv4Address
-from typing import Sequence, Optional
+from typing import Sequence, Optional, Any
 from uuid import UUID, SafeUUID
 
 from clickhouse_connect.driver.common import int_size
@@ -79,11 +80,23 @@ def read_uuid_col(source: ByteSource, num_rows: int):
     return column
 
 
-def read_nullable_array(source: ByteSource, array_type: str, num_rows: int, use_none: bool = True):
+def read_nullable_array(source: ByteSource, array_type: str, num_rows: int, null_obj: Any):
     null_map = source.read_bytes(num_rows)
     column = source.read_array(array_type, num_rows)
-    if use_none:
-        return [None if null_map[ix] else column[ix] for ix in range(num_rows)]
+    return [null_obj if null_map[ix] else column[ix] for ix in range(num_rows)]
+
+
+def build_nullable_column(source: Sequence, null_map: bytes, null_obj: Any):
+    return [source[ix] if null_map[ix] == 0 else null_obj for ix in range(len(source))]
+
+
+def build_lc_nullable_column(keys: Sequence, index: array.array, null_obj: Any):
+    column = []
+    for ix in index:
+        if ix == 0:
+            column.append(null_obj)
+        else:
+            column.append(keys[ix])
     return column
 
 

@@ -12,7 +12,7 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np
+from clickhouse_connect.driver.options import np, pd
 
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
@@ -125,8 +125,7 @@ class ClickHouseType(ABC):
         :return: The decoded column data as a sequence and the updated location pointer
         """
         self.read_column_prefix(source)
-        column = self.read_column_data(source, num_rows, ctx)
-        return column
+        return self.read_column_data(source, num_rows, ctx)
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         """
@@ -137,22 +136,18 @@ class ClickHouseType(ABC):
         :return: The decoded column plus the updated location pointer
         """
         if self.low_card:
-            return self._read_low_card_column(source, num_rows, ctx)
-        if self.nullable:
-            return self._read_nullable_column(source, num_rows, ctx)
-        return self._read_column_binary(source, num_rows, ctx)
+            column = self._read_low_card_column(source, num_rows, ctx)
+        elif self.nullable:
+            column = self._read_nullable_column(source, num_rows, ctx)
+        else:
+            column = self._read_column_binary(source, num_rows, ctx)
+        return self._finalize_column(column, ctx)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         null_map = source.read_bytes(num_rows)
         column = self._read_column_binary(source, num_rows, ctx)
-        if ctx.use_none:
-            if ctx.use_numpy or isinstance(column, (tuple, array.array)):
-                column = [None if null_map[ix] else column[ix] for ix in range(num_rows)]
-            else:
-                for ix in range(num_rows):
-                    if null_map[ix]:
-                        column[ix] = None
-        return column
+        null_obj = self._active_null(ctx)
+        return data_conv.build_nullable_column(column, null_map, null_obj)
 
     # The binary methods are really abstract, but they aren't implemented for container classes which
     # delegate binary operations to their elements
@@ -168,6 +163,9 @@ class ClickHouseType(ABC):
         :return: Decoded column plus updated read buffer
         """
         return [], 0
+
+    def _finalize_column(self, column: Sequence, _ctx: QueryContext) -> Sequence:
+        return column
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         """
@@ -211,18 +209,17 @@ class ClickHouseType(ABC):
         index_sz = 2 ** (key_data & 0xff)
         key_cnt = source.read_uint64()
         keys = self._read_column_binary(source, key_cnt, ctx)
-        use_none = ctx.use_none
-        if self.nullable:
-            try:
-                keys[0] = None if use_none else self._python_null(ctx)
-            except TypeError:
-                keys = (None if use_none else self._python_null(ctx),) + tuple(keys[1:])
         index_cnt = source.read_uint64()
-        assert index_cnt == num_rows
-        index = source.read_array(array_type(index_sz, False), num_rows)
-        if ctx.use_numpy and hasattr(keys, 'dtype') and keys.dtype != np.object_:
-            return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=num_rows)
+        index = source.read_array(array_type(index_sz, False), index_cnt)
+        if self.nullable:
+            return self._build_lc_nullable_column(keys, index, ctx)
+        return self._build_lc_column(keys, index, ctx)
+
+    def _build_lc_column(self, keys: Sequence, index: array.array, _ctx: QueryContext):
         return [keys[ix] for ix in index]
+
+    def _build_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+        return data_conv.build_lc_nullable_column(keys, index, self._active_null(ctx))
 
     def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
         if not column:
@@ -264,7 +261,7 @@ class ClickHouseType(ABC):
         write_uint64(len(index), dest)
         write_array(array_type(1 << ix_type, False), index, dest)
 
-    def _python_null(self, _ctx: QueryContext):
+    def _active_null(self, _ctx: QueryContext) -> Any:
         return None
 
     def _first_value(self, column: Sequence) -> Optional[Any]:
@@ -302,18 +299,26 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             cls.byte_size = array.array(cls._array_type).itemsize
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        if self.read_format(ctx) == 'string':
-            column = source.read_array(self._array_type, num_rows)
-            return [str(x) for x in column]
         if ctx.use_numpy:
             return numpy_conv.read_numpy_array(source, self.np_type, num_rows)
         return source.read_array(self._array_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        return data_conv.read_nullable_array(source,
-                                             self._array_type,
-                                             num_rows,
-                                             use_none=ctx.use_none or self.python_type == float)
+        return data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
+
+    def _build_lc_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+        if ctx.use_numpy:
+            return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=len(index))
+        return super()._build_lc_column(keys, index, ctx)
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.read_format(ctx) == 'string':
+            return [str(x) for x in column]
+        if ctx.use_pandas_na and self.nullable:
+            return pd.array(column, dtype=self.base_type)
+        if ctx.use_numpy and self.nullable and (not ctx.use_none):
+            return np.array(column, dtype=self.np_type)
+        return column
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         if len(column) and self.nullable:
@@ -328,7 +333,11 @@ class ArrayType(ClickHouseType, ABC, registered=False):
                 column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
 
-    def _python_null(self, _ctx):
+    def _active_null(self, ctx: QueryContext):
+        if ctx.as_pandas and ctx.use_na_values:
+            return pd.NA
+        if ctx.use_none:
+            return None
         return 0
 
 

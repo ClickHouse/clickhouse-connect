@@ -76,6 +76,13 @@ def read_pandas(query):
     _print_result(start, rows)
 
 
+def read_arrow(query):
+    print('\n\tclickhouse connect Arrow:')
+    start = time.time()
+    rows = len(cc_client.query_arrow(query))
+    _print_result(start, rows)
+
+
 def read_pandas_stream(query):
     print('\n\tclickhouse-connect Pandas Stream')
     start = time.time()
@@ -124,16 +131,17 @@ def _print_result(start, rows):
 def main():
     for query in queries:
         print(f'\n{query}')
-        read_python_columns(query)
-        read_python_rows(query)
-        # read_python_stream_rows(query)
+        # read_python_columns(query)
+        #read_python_rows(query)
+        #read_python_stream_rows(query)
         read_python_stream_columns(query)
-        read_pandas_stream(query)
+        #read_pandas_stream(query)
         # read_numpy(query)
-        read_pandas(query)
-        dr_read_python(query)
+        #read_pandas(query)
+        read_arrow(query)
+        #dr_read_python(query)
         # dr_read_python_rows(query)
-        dr_read_pandas(query)
+        #dr_read_pandas(query)
 
 
 if __name__ == '__main__':

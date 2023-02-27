@@ -108,7 +108,6 @@ class HttpClient(Client):
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
-        self._progress_interval = str(min(120000, (send_receive_timeout - 5) * 1000))
         self._transform = NativeTransform()
         self._server_host_name = server_host_name
 
@@ -116,6 +115,9 @@ class HttpClient(Client):
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
         self.query_retries = coerce_int(query_retries)
         self.http_retries = 1
+        self._send_progress = None
+        self._send_comp_header = False
+        self._progress_interval = None
 
         if session_id:
             ch_settings['session_id'] = session_id
@@ -134,13 +136,16 @@ class HttpClient(Client):
             compression = None
 
         super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
-
-        comp_setting = self.server_settings['enable_http_compression']
-        # We only set the header for the query method so no need to modify headers or settings here
-        if comp_setting and (comp_setting.value == '1' or comp_setting.readonly != 1):
-            self.compression = compression
         self.params = self._validate_settings(ch_settings)
-        self.protocol_version = common.get_setting('native_protocol_version')
+        comp_setting = self._setting_status('enable_http_compression')
+        self._send_comp_header = not comp_setting.is_set and comp_setting.is_writable
+        if comp_setting.is_set or comp_setting.is_writable:
+            self.compression = compression
+        send_setting = self._setting_status('send_progress_in_http_headers')
+        self._send_progress = not send_setting.is_set and send_setting.is_writable
+        if (send_setting.is_set or send_setting.is_writable) and \
+                self._setting_status('http_headers_progress_interval_ms').is_writable:
+            self._progress_interval = str(min(120000, (send_receive_timeout - 5) * 1000))
 
     def set_client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
@@ -182,7 +187,8 @@ class HttpClient(Client):
 
         if self.compression:
             headers['Accept-Encoding'] = self.compression
-            params['enable_http_compression'] = '1'
+            if self._send_comp_header:
+                params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context),
                                      params,
                                      headers,
@@ -309,15 +315,18 @@ class HttpClient(Client):
         if isinstance(data, str):
             data = data.encode()
         headers = dict_copy(self.headers, headers)
-        url = f'{self.url}?{urlencode(dict_copy(self.params, params))}'
         attempts = 0
         if server_wait:
             params['wait_end_of_query'] = '1'
         # We can't actually read the progress headers, but we enable them so ClickHouse sends something
         # to keep the connection alive when waiting for long-running queries and (2) to get summary information
         # if not streaming
-        params['send_progress_in_http_headers'] = '1'
-        params['http_headers_progress_interval_ms'] = self._progress_interval
+        if self._send_progress:
+            params['send_progress_in_http_headers'] = '1'
+        if self._progress_interval:
+            params['http_headers_progress_interval_ms'] = self._progress_interval
+        final_params = dict_copy(self.params, params)
+        url = f'{self.url}?{urlencode(final_params)}'
         kwargs = {
             'headers': headers,
             'timeout': self.timeout,
@@ -368,7 +377,8 @@ class HttpClient(Client):
                   query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
-                  fmt: str = None) -> bytes:
+                  fmt: str = None,
+                  use_database: bool = True) -> bytes:
         """
         See BaseClient doc_string for this method
         """
@@ -376,6 +386,8 @@ class HttpClient(Client):
         if fmt:
             final_query += f'\n FORMAT {fmt}'
         params = self._validate_settings(settings or {})
+        if use_database and self.database:
+            params['database'] = self.database
         params.update(bind_params)
         return self._raw_request(final_query, params).data
 

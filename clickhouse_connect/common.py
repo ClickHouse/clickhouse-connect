@@ -6,7 +6,6 @@ import pkg_resources
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
-
 def version():
     try:
         return pkg_resources.get_distribution('clickhouse-connect').version
@@ -60,4 +59,3 @@ _init_common('autogenerate_session_id', (True, False), True)
 _init_common('dict_parameter_format', ('json', 'map'), 'json')
 _init_common('invalid_setting_action', ('send', 'drop', 'error'), 'error')
 _init_common('product_name', (), '')
-_init_common('native_protocol_version', (0, 54337), 0)

@@ -27,3 +27,11 @@ class SettingDef(NamedTuple):
     name: str
     value: str
     readonly: int
+
+
+class SettingStatus(NamedTuple):
+    """
+    Get the setting "status" from a ClickHouse server setting
+    """
+    is_set: bool
+    is_writable: bool

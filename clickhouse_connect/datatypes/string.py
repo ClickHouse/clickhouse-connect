@@ -1,5 +1,7 @@
 from typing import Sequence, MutableSequence, Union
 
+import pandas as pd
+
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -10,14 +12,17 @@ from clickhouse_connect.driver.options import np
 class String(ClickHouseType):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        if ctx.use_numpy and ctx.max_str_len:
-            return np.array(source.read_str_col(num_rows, ctx.encoding or self.encoding), dtype=f'<U{ctx.max_str_len}')
         return source.read_str_col(num_rows, ctx.encoding or self.encoding)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        if ctx.use_numpy:
-            return super()._read_nullable_column(source, num_rows, ctx)
-        return source.read_str_col(num_rows, ctx.encoding or self.encoding, nullable=True, use_none=ctx.use_none)
+        return source.read_str_col(num_rows, ctx.encoding or self.encoding, True, self._active_null(ctx))
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if ctx.use_na_values:
+            return pd.array(column, dtype=pd.StringDtype())
+        if ctx.use_numpy and ctx.max_str_len:
+            return np.array(column, dtype=f'<U{ctx.max_str_len}')
+        return column
 
     # pylint: disable=duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
@@ -51,8 +56,8 @@ class String(ClickHouseType):
                     app(0x80 | b)
                 dest += y
 
-    def _python_null(self, _ctx):
-        return ''
+    def _active_null(self, ctx):
+        return None if ctx.use_none else ''
 
 
 class FixedString(ClickHouseType):
@@ -64,7 +69,9 @@ class FixedString(ClickHouseType):
         self._name_suffix = type_def.arg_str
         self._empty_bytes = bytes(b'\x00' * self.byte_size)
 
-    def python_null(self, ctx: QueryContext):
+    def _active_null(self, ctx: QueryContext):
+        if ctx.use_none:
+            return None
         return self._empty_bytes if self.read_format(ctx) == 'native' else ''
 
     @property

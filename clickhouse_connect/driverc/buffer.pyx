@@ -103,7 +103,7 @@ cdef class ResponseBuffer:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef inline object _read_str_col(self, unsigned long long num_rows, char* encoding = 'utf8'):
+    cdef inline object _read_str_col(self, unsigned long long num_rows, char * encoding):
         cdef object column = PyTuple_New(num_rows), v
         cdef unsigned long long x = 0, sz, shift
         cdef unsigned char b
@@ -133,47 +133,39 @@ cdef class ResponseBuffer:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef inline object _read_nullable_str_col(self,
-                                              unsigned long long num_rows,
-                                              char * encoding = 'utf8',
-                                              bint use_none = True):
+    cdef inline object _read_nullable_str_col(self, unsigned long long num_rows, char * encoding, object null_obj):
         cdef object column = PyTuple_New(num_rows), v
         cdef unsigned long long x = 0, sz, shift
         cdef unsigned char b
         cdef char * buf
-        cdef char * null_map = NULL
-        if use_none:
-            null_map = <char *> PyMem_Malloc(<size_t> num_rows)
-            memcpy(<void *> null_map, <void *> self.read_bytes_c(num_rows), num_rows)
-        else:
-            self.read_bytes_c(num_rows)
+        cdef char * null_map = <char *> PyMem_Malloc(<size_t> num_rows)
+        memcpy(<void *> null_map, <void *> self.read_bytes_c(num_rows), num_rows)
         for x in range(num_rows):
             if self.buf_loc < self.buf_sz:
                 b = self.buffer[self.buf_loc]
                 self.buf_loc += 1
             else:
                 b = self._read_byte_load()
-            if null_map and null_map[x]:
-                Py_INCREF(None)
-                PyTuple_SET_ITEM(column, x, None)
+            shift = 0
+            sz = b & 0x7f
+            while b & 0x80:
+                shift += 7
+                if self.buf_loc < self.buf_sz:
+                    b = self.buffer[self.buf_loc]
+                    self.buf_loc += 1
+                else:
+                    b = self._read_byte_load()
+                sz += ((b & 0x7f) << shift)
+            buf = self.read_bytes_c(sz)
+            if null_map[x]:
+                v = null_obj
             else:
-                shift = 0
-                sz = b & 0x7f
-                while b & 0x80:
-                    shift += 7
-                    if self.buf_loc < self.buf_sz:
-                        b = self.buffer[self.buf_loc]
-                        self.buf_loc += 1
-                    else:
-                        b = self._read_byte_load()
-                    sz += ((b & 0x7f) << shift)
-                buf = self.read_bytes_c(sz)
                 try:
                     v = PyUnicode_Decode(buf, sz, encoding, errors)
                 except UnicodeDecodeError:
                     v = PyBytes_FromStringAndSize(buf, sz).hex()
-                PyTuple_SET_ITEM(column, x, v)
-                Py_INCREF(v)
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
         PyMem_Free(<void *> null_map)
         return column
 
@@ -229,11 +221,11 @@ cdef class ResponseBuffer:
 
     def read_str_col(self,
                      unsigned long long num_rows,
-                     encoding: str = 'utf8',
+                     encoding: str,
                      nullable: bool = False,
-                     use_none: bool = True) -> Iterable[str]:
+                     null_object: Any = None) -> Iterable[str]:
         if nullable:
-            return self._read_nullable_str_col(num_rows, encoding.encode(), use_none)
+            return self._read_nullable_str_col(num_rows, encoding.encode(), null_object)
         return self._read_str_col(num_rows, encoding.encode())
 
     @cython.boundscheck(False)
