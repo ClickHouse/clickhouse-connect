@@ -16,18 +16,21 @@ if coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_USE_C', True)):
     try:
         from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
         import clickhouse_connect.driverc.dataconv as cdc
+
         data_conv = cdc
         RespBuffCls = CResponseBuffer
         logger.info('Successfully imported ClickHouse Connect C data optimizations')
-    except ImportError:
+    except ImportError as ex:
         CResponseBuffer = None
-        logger.warning('Unable to connect optimized C data functions, falling back to pure Python', exc_info=True)
+        logger.warning('Unable to connect optimized C data functions [%s], falling back to pure Python',
+                       str(ex))
     try:
         import clickhouse_connect.driverc.npconv as cnc
+
         numpy_conv = cnc
         logger.info('Successfully import ClickHouse Connect C/Numpy optimizations')
-    except ImportError:
-        logger.warning('Unable to connect ClickHouse Connect C to Numpy API, falling back to Pure Python',
-                       exc_info=True)
+    except ImportError as ex:
+        logger.warning('Unable to connect ClickHouse Connect C to Numpy API [%s], falling back to pure Python',
+                       str(ex))
 else:
     logger.info('ClickHouse Connect C optimizations disabled')
