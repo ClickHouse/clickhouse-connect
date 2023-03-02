@@ -1,12 +1,10 @@
 from typing import Sequence, MutableSequence, Union
 
-import pandas as pd
-
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np
+from clickhouse_connect.driver.options import np, pd
 
 
 class String(ClickHouseType):

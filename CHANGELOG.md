@@ -18,6 +18,12 @@ The secondary effect of the `send_progress` argument -- to set `wait_end_of_quer
 on whether the query is streaming or not.
 
 
+## 0.5.14, 2023-01-02
+### Bug Fix
+- Remove direct pandas import that caused an unrecoverable error when pandas was not installed.
+https://github.com/ClickHouse/clickhouse-connect/issues/139
+
+
 ## 0.5.13, 2023-02-27
 
 ### Improvements
