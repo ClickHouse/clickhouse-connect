@@ -82,14 +82,12 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                                    query_limit=0,
                                    compress=test_config.compress,
                                    client_name='int_tests/test',
-                                   settings={
-                                       'allow_suspicious_low_cardinality_types': True,
-                                   }
+                                   settings={'allow_suspicious_low_cardinality_types': True}  # noqa: E501
                                    )
             break
         except OperationalError as ex:
             if tries > 10:
-                raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
+                raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex  # noqa: E501
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)
