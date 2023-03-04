@@ -24,3 +24,5 @@ test.env
 
 # C extensions
 *.pyd
+
+playtest_custom.py

@@ -339,6 +339,7 @@ class HttpClient(Client):
         }
         if self._server_host_name:
             kwargs['assert_same_host'] = False
+            kwargs['headers'].update({'Host': self._server_host_name})
         while True:
             attempts += 1
             try:
