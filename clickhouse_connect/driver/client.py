@@ -45,25 +45,33 @@ class Client(ABC):
         self.query_limit = query_limit
         self.server_tz = pytz.UTC
         self.server_version, server_tz, self.database = \
-            tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))  # noqa: E501
+            tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
         try:
             self.server_tz = pytz.timezone(server_tz)
         except UnknownTimeZoneError:
-            logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)  # noqa: E501
-        server_settings = self.query('SELECT ss.name, ss.value, ss."readonly" FROM system.settings ss LIMIT 10000')  # noqa: E501
-        self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}  # noqa: E501
+            logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
+        if self.min_version('22.3'):
+            server_settings = self.query('SELECT name, value, readonly FROM system.settings LIMIT 10000')
+            self.server_settings = {row['name']: SettingDef(**row) for row in server_settings.named_results()}
+        else:
+            server_settings = self.query('SELECT name, value FROM system.settings LIMIT 10000')
+            readonly = common.get_setting('readonly')
+            self.server_settings = {
+                row['name']: SettingDef(**row, readonly=readonly)
+                for row in server_settings.named_results()
+            }
         if database and not database == '__default__':
             self.database = database
         if self.min_version(CH_VERSION_WITH_PROTOCOL):
             self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
         self.uri = uri
 
-    def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:  # noqa: E501
+    def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """
         This strips any ClickHouse settings that are not recognized or are read only.
         :param settings:  Dictionary of setting name and values
         :return: A filtered dictionary of settings with values rendered as strings
-        """  # noqa: E501
+        """
         validated = {}
         invalid_action = common.get_setting('invalid_setting_action')
         for key, value in settings.items():
@@ -72,7 +80,7 @@ class Client(ABC):
                 validated[key] = value
         return validated
 
-    def _validate_setting(self, key: str, value: Any, invalid_action: str) -> Optional[str]:  # noqa: E501
+    def _validate_setting(self, key: str, value: Any, invalid_action: str) -> Optional[str]:
         if key not in self.valid_transport_settings:
             setting_def = self.server_settings.get(key)
             if setting_def is None or setting_def.readonly:
@@ -580,14 +588,14 @@ class Client(ABC):
         Determine whether the connected server is at least the submitted version
         :param version_str: A version string consisting of up to 4 integers delimited by dots
         :return: True if version_str is greater than the server_version, False if less than
-        """  # noqa: E501
+        """
         try:
             server_parts = [int(x) for x in self.server_version.split('.')]
             server_parts.extend([0] * (4 - len(server_parts)))
             version_parts = [int(x) for x in version_str.split('.')]
             version_parts.extend([0] * (4 - len(version_parts)))
         except ValueError:
-            logger.warning('Server %s or requested version %s does not match format of numbers separated by dots',  # noqa: E501
+            logger.warning('Server %s or requested version %s does not match format of numbers separated by dots',
                            self.server_version, version_str)
             return False
         for x, y in zip(server_parts, version_parts):

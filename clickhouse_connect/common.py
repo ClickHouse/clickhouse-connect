@@ -30,7 +30,7 @@ def build_client_name(client_name: str):
     product_name = product_name.strip() + ' ' if product_name else ''
     client_name = client_name.strip() + ' ' if client_name else ''
     py_version = sys.version.split(' ', maxsplit=1)[0]
-    return f'{client_name}{product_name}clickhouse-connect/{version()} (lv:py/{py_version}; os:{sys.platform})'  # noqa: E501
+    return f'{client_name}{product_name}clickhouse-connect/{version()} (lv:py/{py_version}; os:{sys.platform})'
 
 
 def get_setting(name: str):
@@ -60,3 +60,4 @@ _init_common('autogenerate_session_id', (True, False), True)
 _init_common('dict_parameter_format', ('json', 'map'), 'json')
 _init_common('invalid_setting_action', ('send', 'drop', 'error'), 'error')
 _init_common('product_name', (), '')
+_init_common('readonly', (0, 1, 2), 0)
