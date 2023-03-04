@@ -7,8 +7,7 @@ from clickhouse_connect import common
 
 
 def main():
-    # print(f'\nClickHouse Connect installed version: {clickhouse_connect.version()}')
-    # print(build_client_name('Clickhouse client'))
+    print(f'\nClickHouse Connect installed version: {common.version()}')
     common.set_setting('readonly', 1)
     client = clickhouse_connect.get_client(host='localhost',
                                            user='default',
