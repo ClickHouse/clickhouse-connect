@@ -1,7 +1,5 @@
 from enum import Enum as PyEnum
 
-from clickhouse_connect import common
-
 import sqlalchemy as db
 from sqlalchemy import MetaData
 
@@ -10,6 +8,7 @@ from sqlalchemy.ext.declarative import declarative_base
 
 from tests import helpers
 from tests.integration_tests.conftest import TestConfig
+from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
     FixedString, String, UInt64, UUID, DateTime, DateTime64, LowCardinality, Nullable, Array, AggregateFunction, \
     UInt32, IPv4
