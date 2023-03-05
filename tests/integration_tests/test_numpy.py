@@ -10,8 +10,8 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.options import np
 from tests.helpers import list_equal, random_query
-from tests.integration_tests.datasets import basic_ds, basic_ds_columns, basic_ds_types, null_ds, null_ds_columns, \
-    null_ds_types, dt_ds, dt_ds_columns, dt_ds_types
+from tests.integration_tests.datasets import basic_ds, basic_ds_columns, basic_ds_types, basic_ds_types_ver19, \
+    null_ds, null_ds_columns, null_ds_types, dt_ds, dt_ds_columns, dt_ds_types
 
 
 logger = logging.getLogger(__name__)
@@ -30,16 +30,25 @@ def test_numpy_dates(test_client: Client, table_context: Callable):
 
 def test_invalid_date(test_client):
     try:
-        test_client.query_df("SELECT cast(now64(), 'DateTime64(1)')")
+        sql = "SELECT cast(now64(), 'DateTime64(1)')"
+        if not test_client.min_version('20'):
+            sql = "SELECT cast(now(), 'DateTime')"
+        test_client.query_df(sql)
     except ProgrammingError as ex:
         assert 'milliseconds' in str(ex)
 
 
 def test_numpy_record_type(test_client: Client, table_context: Callable):
-    np_array = np.array(basic_ds, dtype='U20,int32,float,U20,datetime64[ns],U20')
+    dt_type = 'datetime64[ns]'
+    ds_types = basic_ds_types
+    if not test_client.min_version('20'):
+        dt_type = 'datetime64[s]'
+        ds_types = basic_ds_types_ver19
+
+    np_array = np.array(basic_ds, dtype=f'U20,int32,float,U20,{dt_type},U20')
     source_arr = np_array.copy()
     np_array.dtype.names = basic_ds_columns
-    with table_context('test_numpy_basic', basic_ds_columns, basic_ds_types):
+    with table_context('test_numpy_basic', basic_ds_columns, ds_types):
         test_client.insert('test_numpy_basic', np_array)
         new_np_array = test_client.query_np('SELECT * FROM test_numpy_basic', max_str_len=20)
         assert np.array_equal(np_array, new_np_array)
@@ -49,10 +58,16 @@ def test_numpy_record_type(test_client: Client, table_context: Callable):
 
 
 def test_numpy_object_type(test_client: Client, table_context: Callable):
-    np_array = np.array(basic_ds, dtype='O,int32,float,O,datetime64[ns],O')
+    dt_type = 'datetime64[ns]'
+    ds_types = basic_ds_types
+    if not test_client.min_version('20'):
+        dt_type = 'datetime64[s]'
+        ds_types = basic_ds_types_ver19
+
+    np_array = np.array(basic_ds, dtype=f'O,int32,float,O,{dt_type},O')
     np_array.dtype.names = basic_ds_columns
     source_arr = np_array.copy()
-    with table_context('test_numpy_basic', basic_ds_columns, basic_ds_types):
+    with table_context('test_numpy_basic', basic_ds_columns, ds_types):
         test_client.insert('test_numpy_basic', np_array)
         new_np_array = test_client.query_np('SELECT * FROM test_numpy_basic')
         assert np.array_equal(np_array, new_np_array)
@@ -94,7 +109,10 @@ def test_numpy_bigint_matrix(test_client: Client, table_context: Callable):
     source_array = np.array(source, dtype='int64')
     matrix = source_array.reshape((5, 3))
     matrix_copy = matrix.copy()
-    with table_context('test_numpy_bigint_matrix', ['col1 UInt256', 'col2 Int64', 'col3 Int128']):
+    columns = ['col1 UInt256', 'col2 Int64', 'col3 Int128']
+    if not test_client.min_version('21'):
+        columns = ['col1 UInt64', 'col2 Int64', 'col3 Int64']
+    with table_context('test_numpy_bigint_matrix', columns):
         test_client.insert('test_numpy_bigint_matrix', matrix)
         py_result = test_client.query('SELECT * FROM test_numpy_bigint_matrix').result_set
         assert list(py_result[1]) == [25000, -37283, 4000]
@@ -108,7 +126,10 @@ def test_numpy_bigint_object(test_client: Client, table_context: Callable):
               ('key2', '348147832478', datetime.datetime.now())]
     np_array = np.array(source, dtype='O,uint64,datetime64[s]')
     source_arr = np_array.copy()
-    with table_context('test_numpy_bigint_object', ['key String', 'big_value UInt256', 'dt DateTime']):
+    columns = ['key String', 'big_value UInt256', 'dt DateTime']
+    if not test_client.min_version('21'):
+        columns = ['key String', 'big_value UInt64', 'dt DateTime']
+    with table_context('test_numpy_bigint_object', columns):
         test_client.insert('test_numpy_bigint_object', np_array)
         py_result = test_client.query('SELECT * FROM test_numpy_bigint_object').result_set
         assert list(py_result[0]) == list(source[0])
@@ -118,6 +139,8 @@ def test_numpy_bigint_object(test_client: Client, table_context: Callable):
 
 
 def test_numpy_streams(test_client: Client):
+    if not test_client.min_version('22'):
+        pytest.skip(f'generateRandom is not supported in this server version {test_client.server_version}')
     runs = os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250')
     for _ in range(int(runs) // 2):
         query_rows = random.randint(0, 5000) + 20000

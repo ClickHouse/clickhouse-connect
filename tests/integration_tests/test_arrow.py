@@ -9,6 +9,8 @@ from clickhouse_connect.driver.options import arrow
 def test_arrow(test_client: Client, table_context: Callable):
     if not arrow:
         pytest.skip('PyArrow package not available')
+    if not test_client.min_version('21'):
+        pytest.skip(f'PyArrow is not supported in this server version {test_client.server_version}')
     with table_context('test_arrow_insert', ['animal String', 'legs Int64']):
         n_legs = arrow.array([2, 4, 5, 100])
         animals = arrow.array(['Flamingo', 'Horse', 'Brittle stars', 'Centipede'])

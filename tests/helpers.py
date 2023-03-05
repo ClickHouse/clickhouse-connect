@@ -35,7 +35,7 @@ unsupported_types = set()
 native_transform = NativeTransform()
 
 
-def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,
+def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,  # noqa: C901
                 nullable_perc: float = NULLABLE_PERC, parent_type: str = None):
     base_type = random.choices(all_types, all_weights)[0]
     low_card_ok = True
@@ -211,7 +211,10 @@ class TableContext:
         self.order_by = self.column_names[0] if order_by is None else order_by
 
     def __enter__(self):
-        self.client.command(f'DROP TABLE IF EXISTS {self.table} SYNC')
+        if self.client.min_version('19'):
+            self.client.command(f'DROP TABLE IF EXISTS {self.table}')
+        else:
+            self.client.command(f'DROP TABLE IF EXISTS {self.table} SYNC')
         col_defs = ','.join(f'{name} {col_type}' for name, col_type in zip(self.column_names, self.column_types))
         self.client.command(f'CREATE TABLE {self.table} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}')
         return self

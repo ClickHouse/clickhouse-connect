@@ -43,7 +43,7 @@ class HttpClient(Client):
     _owns_pool_manager = False
 
     # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
-    def __init__(self,
+    def __init__(self,  # noqa: C901
                  interface: str,
                  host: str,
                  port: int,
@@ -137,8 +137,7 @@ class HttpClient(Client):
         else:
             compression = None
 
-        super().__init__(database=database, uri=self.url,
-                         query_limit=coerce_int(query_limit))
+        super().__init__(database=database, uri=self.url, query_limit=coerce_int(query_limit))
         self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
         self._send_comp_header = not comp_setting.is_set and comp_setting.is_writable
@@ -226,7 +225,7 @@ class HttpClient(Client):
                 ex = context.insert_exception
                 context.insert_exception = None
                 raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
-                                       'in an inserted row or column') from ex
+                                       'in an inserted row or column') from ex  # type: ignore
             self._error_handler(response)
 
         self.raw_insert(context.table,
@@ -306,7 +305,7 @@ class HttpClient(Client):
             err_str = f':{err_str}\n {err_msg[0:240]}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
-    def _raw_request(self,
+    def _raw_request(self,  # noqa: C901
                      data,
                      params: Dict[str, str],
                      headers: Optional[Dict[str, Any]] = None,

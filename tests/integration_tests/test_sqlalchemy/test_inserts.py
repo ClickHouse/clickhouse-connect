@@ -16,13 +16,13 @@ from clickhouse_connect.driver import Client
 
 
 @fixture(scope='module', autouse=True, name='test_model')
-def test_model_fixture(test_client: Client, test_engine: Engine, test_db: str, test_table_engine:str):
+def test_model_fixture(test_client: Client, test_engine: Engine, test_db: str, test_table_engine: str):
     if not test_client.min_version('22.6.1'):
         yield None
         return
     engine_cls = engine_map[test_table_engine]
 
-    Base = declarative_base(metadata=MetaData(schema=test_db)) # pylint: disable=invalid-name
+    Base = declarative_base(metadata=MetaData(schema=test_db))  # pylint: disable=invalid-name
 
     class Model(Base):
         __tablename__ = 'insert_model'
@@ -75,7 +75,7 @@ def test_multiple_insert(test_engine: Engine, test_model):
     session.commit()
 
 
-def test_bulk_insert(test_engine:Engine, test_model):
+def test_bulk_insert(test_engine: Engine, test_model):
     if not test_model:
         pytest.skip('Could not create test model - probably no JSON support in ClickHouse version')
     session = Session(test_engine)

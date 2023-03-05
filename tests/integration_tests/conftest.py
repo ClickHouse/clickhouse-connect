@@ -43,8 +43,8 @@ def test_config_fixture() -> Iterator[TestConfig]:
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
     proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
-    yield TestConfig(host, port, username, password, docker, test_database,
-                     cloud, compress, insert_quorum, proxy_address)
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress,
+                     insert_quorum, proxy_address)
 
 
 @fixture(scope='session', name='test_db')
@@ -58,7 +58,7 @@ def test_table_engine_fixture() -> Iterator[str]:
 
 
 @fixture(scope='session', autouse=True, name='test_client')
-def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
+def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:  # noqa: C901
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
     if test_config.docker:
         run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])

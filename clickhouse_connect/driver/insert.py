@@ -133,7 +133,7 @@ class InsertContext(BaseQueryContext):
             data.append(df_col)
         return data
 
-    def _convert_numpy(self, np_array):
+    def _convert_numpy(self, np_array):  # noqa: C901
         if np_array.dtype.names is None:
             if 'date' in str(np_array.dtype):
                 for col_name, col_type in zip(self.column_names, self.column_types):

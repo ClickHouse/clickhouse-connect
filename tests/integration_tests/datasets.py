@@ -12,6 +12,7 @@ basic_ds = [('key1', 1000, 50.3, 'value1', datetime.now(), 'lc_1'),
             ('key3', -2503, 300.00, 'value3', date(2022, 10, 15), 'lc_99')]
 basic_ds_columns = ['key', 'num', 'flt', 'str', 'dt', 'lc_string']
 basic_ds_types = ['String', 'Int32', 'Float64', 'String', 'DateTime64(9)', 'LowCardinality(String)']
+basic_ds_types_ver19 = ['String', 'Int32', 'Float64', 'String', 'DateTime', 'LowCardinality(String)']
 
 dt_ds = [datetime(2020, 10, 10),
          datetime(2021, 11, 11)]

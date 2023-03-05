@@ -1,3 +1,6 @@
+import random
+import string
+
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError, StreamFailureError
 
@@ -30,7 +33,10 @@ def test_row_stream(test_client: Client):
 
 
 def test_column_block_stream(test_client: Client):
-    block_stream = test_client.query_column_block_stream('SELECT number, randomStringUTF8(50) FROM numbers(10000)',
+    random_string = 'randomStringUTF8(50)'
+    if not test_client.min_version('20'):
+        random_string = random.choices(string.ascii_lowercase, k=50)
+    block_stream = test_client.query_column_block_stream(f'SELECT number, {random_string} FROM numbers(10000)',
                                                          settings={'max_block_size': 4000})
     total = 0
     block_count = 0
@@ -43,7 +49,10 @@ def test_column_block_stream(test_client: Client):
 
 
 def test_row_block_stream(test_client: Client):
-    block_stream = test_client.query_row_block_stream('SELECT number, randomStringUTF8(50) FROM numbers(10000)',
+    random_string = 'randomStringUTF8(50)'
+    if not test_client.min_version('20'):
+        random_string = random.choices(string.ascii_lowercase, k=50)
+    block_stream = test_client.query_row_block_stream(f'SELECT number, {random_string} FROM numbers(10000)',
                                                       settings={'max_block_size': 4000})
     total = 0
     block_count = 0
@@ -81,5 +90,5 @@ def test_stream_failure(test_client: Client):
                 blocks += 1
         except StreamFailureError as ex:
             failed = True
-            assert 'DIVISION' in str(ex)
+            assert 'division by zero' in str(ex).lower()
     assert failed
