@@ -2,12 +2,12 @@ from decimal import Decimal
 from time import sleep
 from typing import Callable
 
+import pytest
+
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
-
-import pytest
 
 CSV_CONTENT = """abc,1,1
 abc,1,0
