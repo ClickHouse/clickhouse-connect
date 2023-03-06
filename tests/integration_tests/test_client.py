@@ -2,6 +2,8 @@ from decimal import Decimal
 from time import sleep
 from typing import Callable
 
+import pytest
+
 from clickhouse_connect import create_client
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError

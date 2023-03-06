@@ -29,10 +29,9 @@ def test_column_timezones(test_client: Client):
     date_tz64 = "toDateTime64('2023-01-02 15:44:22.7832', 6, 'Asia/Shanghai')"
     if not test_client.min_version('20'):
         date_tz64 = "toDateTime('2023-01-02 15:44:22', 'Asia/Shanghai')"
-
     column_tzs = {'chicago': 'America/Chicago', 'china': 'Asia/Shanghai'}
     row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
-                            f"{date_tz64} as china",
+                            f'{date_tz64} as china',
                             column_tzs=column_tzs).first_row
     chicago_tz = pytz.timezone('America/Chicago').localize(datetime(2020, 8, 8, 10, 5, 5)).tzinfo
     china_tz = pytz.timezone('Asia/Shanghai').localize(datetime(2024, 12, 4, 10, 5, 5)).tzinfo

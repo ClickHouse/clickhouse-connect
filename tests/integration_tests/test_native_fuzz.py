@@ -1,6 +1,8 @@
 import os
 import random
 
+import pytest
+
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
