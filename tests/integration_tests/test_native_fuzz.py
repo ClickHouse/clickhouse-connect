@@ -6,12 +6,16 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
 from tests.helpers import random_data, random_columns
 
+import pytest
+
 TEST_COLUMNS = 10
 MAX_DATA_ROWS = 40
 
 
 # pylint: disable=duplicate-code
 def test_query_fuzz(test_client: Client, test_table_engine: str):
+    if not test_client.min_version('21'):
+        pytest.skip(f'flatten_nested setting not supported in this server version {test_client.server_version}')
     test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250'))
     for _ in range(test_runs):
         test_client.command('DROP TABLE IF EXISTS fuzz_test')

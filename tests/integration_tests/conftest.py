@@ -32,7 +32,7 @@ class TestConfig(NamedTuple):
 def test_config_fixture() -> Iterator[TestConfig]:
     host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
     docker = host == 'localhost' and \
-             os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
+        os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
         port = 10723 if docker else 8123
@@ -43,8 +43,8 @@ def test_config_fixture() -> Iterator[TestConfig]:
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
     proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
-    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum,
-                     proxy_address)
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress,
+                     insert_quorum, proxy_address)
 
 
 @fixture(scope='session', name='test_db')
@@ -74,18 +74,17 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
     while True:
         tries += 1
         try:
-            client = create_client(host=test_config.host,
-                                   port=test_config.port,
-                                   username=test_config.username,
-                                   password=test_config.password,
-                                   send_progress=False,
-                                   query_limit=0,
-                                   compress=test_config.compress,
-                                   client_name='int_tests/test',
-                                   settings={
-                                       'allow_suspicious_low_cardinality_types': True,
-                                   }
-                                   )
+            client = create_client(
+                host=test_config.host,
+                port=test_config.port,
+                username=test_config.username,
+                password=test_config.password,
+                send_progress=False,
+                query_limit=0,
+                compress=test_config.compress,
+                client_name='int_tests/test',
+                settings={'allow_suspicious_low_cardinality_types': True}
+            )
             break
         except OperationalError as ex:
             if tries > 10:
@@ -116,7 +115,8 @@ def table_context_fixture(test_client: Client, test_table_engine: str):
                 columns: Sequence[str],
                 column_types: Optional[Sequence[str]] = None,
                 order_by: Optional[str] = None):
-        return TableContext(test_client, name, columns, column_types, test_table_engine, order_by)
+        return TableContext(test_client, name, columns, column_types,
+                            test_table_engine, order_by)
 
     yield context
 

@@ -128,17 +128,24 @@ def test_pandas_low_card(test_client: Client, table_context: Callable):
 
 
 def test_pandas_large_types(test_client: Client, table_context: Callable):
-    with table_context('test_pandas_big_int', ['key String', 'value Int256']):
-        df = pd.DataFrame([['key1', 2000, ], ['key2', 30000000000000000000000000000000000]], columns=['key', 'value'])
+    columns = ['key String', 'value Int256']
+    key2_value = 30000000000000000000000000000000000
+    if not test_client.min_version('21'):
+        columns = ['key String', 'value Int64']
+        key2_value = 3000000000000000000
+    with table_context('test_pandas_big_int', columns):
+        df = pd.DataFrame([['key1', 2000, ], ['key2', key2_value]], columns=['key', 'value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_big_int', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_big_int')
         assert result_df.iloc[0]['value'] == 2000
-        assert result_df.iloc[1]['value'] == 30000000000000000000000000000000000
+        assert result_df.iloc[1]['value'] == key2_value
         assert df.equals(source_df)
 
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):
+    if not test_client.min_version('20'):
+        pytest.skip(f'DateTime64 not supported in this server version {test_client.server_version}')
     nano_timestamp = pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
     milli_timestamp = pd.Timestamp(2022, 5, 3, 10, 44, 10, 55000)
     chicago_timestamp = milli_timestamp.tz_localize('America/Chicago')
@@ -167,6 +174,8 @@ def test_pandas_datetime64(test_client: Client, table_context: Callable):
 
 
 def test_pandas_streams(test_client: Client):
+    if not test_client.min_version('22'):
+        pytest.skip(f'generateRandom is not supported in this server version {test_client.server_version}')
     runs = os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250')
     for _ in range(int(runs) // 2):
         query_rows = random.randint(0, 5000) + 20000

@@ -388,8 +388,8 @@ class AggregateFunction(ChSqlaType, UserDefinedType):
 
     def __init__(self, *params, type_def: TypeDef = None):
         """
-        Simple wraps the parameters for AggregateFunction for DDL, unless the TypeDef is specified.  Callables or actual types are
-        converted to their names
+        Simple wraps the parameters for AggregateFunction for DDL, unless the TypeDef is specified.
+        Callables or actual types are converted to their names.
         :param params: AggregateFunction parameters
         :param type_def: TypeDef from parse_name function
         """

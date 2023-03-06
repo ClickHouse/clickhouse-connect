@@ -33,10 +33,12 @@ columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 # pylint: disable=too-many-instance-attributes
 class HttpClient(Client):
     params = {}
-    valid_transport_settings = {'database', 'buffer_size', 'session_id', 'compress', 'decompress',
-                                'session_timeout', 'session_check', 'query_id', 'quota_key', 'wait_end_of_query',
-                                'client_protocol_version'}
-    optional_transport_settings = {'send_progress_in_http_headers', 'http_headers_progress_interval_ms',
+    valid_transport_settings = {'database', 'buffer_size', 'session_id',
+                                'compress', 'decompress', 'session_timeout',
+                                'session_check', 'query_id', 'quota_key',
+                                'wait_end_of_query', 'client_protocol_version'}
+    optional_transport_settings = {'send_progress_in_http_headers',
+                                   'http_headers_progress_interval_ms',
                                    'enable_http_compression'}
     _owns_pool_manager = False
 
@@ -135,7 +137,7 @@ class HttpClient(Client):
         else:
             compression = None
 
-        super().__init__(database=database, query_limit=coerce_int(query_limit), uri=self.url)
+        super().__init__(database=database, uri=self.url, query_limit=coerce_int(query_limit))
         self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
         self._send_comp_header = not comp_setting.is_set and comp_setting.is_writable
@@ -223,7 +225,7 @@ class HttpClient(Client):
                 ex = context.insert_exception
                 context.insert_exception = None
                 raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
-                                       'in an inserted row or column') from ex
+                                       'in an inserted row or column') from ex  # type: ignore
             self._error_handler(response)
 
         self.raw_insert(context.table,
@@ -336,6 +338,7 @@ class HttpClient(Client):
         }
         if self._server_host_name:
             kwargs['assert_same_host'] = False
+            kwargs['headers'].update({'Host': self._server_host_name})
         while True:
             attempts += 1
             try:

@@ -185,7 +185,7 @@ class VersionedCollapsingMergeTree(TableEngine):
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, sign: str = None, version: str = None,order_by: str = None, primary_key: str = None,
+    def __init__(self, sign: str = None, version: str = None, order_by: str = None, primary_key: str = None,
                  partition_by: str = None, sample_by: str = None):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
@@ -197,7 +197,7 @@ class GraphiteMergeTree(TableEngine):
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, config_section: str = None, version: str = None,order_by: str = None, primary_key: str = None,
+    def __init__(self, config_section: str = None, version: str = None, order_by: str = None, primary_key: str = None,
                  partition_by: str = None, sample_by: str = None):
         if not order_by and not primary_key:
             raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')

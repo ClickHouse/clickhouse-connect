@@ -5,7 +5,7 @@ from typing import Any
 
 try:
     import orjson
-    any_to_json = orjson.dumps # pylint: disable=no-member
+    any_to_json = orjson.dumps  # pylint: disable=no-member
 except ImportError:
     orjson = None
 

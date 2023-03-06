@@ -7,6 +7,8 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
 
+import pytest
+
 CSV_CONTENT = """abc,1,1
 abc,1,0
 def,1,0
@@ -29,7 +31,7 @@ def test_query(test_client: Client):
 
 def test_command(test_client: Client):
     version = test_client.command('SELECT version()')
-    assert version.startswith('2')
+    assert int(version.split('.')[0]) >= 19
 
 
 def test_client_name(test_client: Client):
@@ -40,23 +42,26 @@ def test_client_name(test_client: Client):
 
 def test_none_database(test_client: Client):
     old_db = test_client.database
-    test_db = test_client.command('select database()')
+    test_db = test_client.command('select currentDatabase()')
     assert test_db == old_db
     try:
         test_client.database = None
         with test_client.query('SELECT * FROM system.tables'):
             pass
-        test_db = test_client.command('select database()')
+        test_db = test_client.command('select currentDatabase()')
         assert test_db == 'default'
         test_client.database = old_db
-        test_db = test_client.command('select database()')
+        test_db = test_client.command('select currentDatabase()')
         assert test_db == old_db
     finally:
         test_client.database = old_db
 
 
 def test_insert(test_client: Client, test_table_engine: str):
-    test_client.command('DROP TABLE IF EXISTS test_system_insert SYNC')
+    if test_client.min_version('19'):
+        test_client.command('DROP TABLE IF EXISTS test_system_insert')
+    else:
+        test_client.command('DROP TABLE IF EXISTS test_system_insert SYNC')
     test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
     tables_result = test_client.query('SELECT * from system.tables')
     test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
@@ -96,17 +101,19 @@ def test_session_params(test_config: TestConfig):
     result = client.query('SELECT number FROM system.numbers LIMIT 5',
                           settings={'query_id': 'test_session_params'}).result_set
     assert len(result) == 5
-    if test_config.host != 'localhost':
-        return  # By default, the session log isn't enabled, so we only validate in environments we control
-    sleep(10)  # Allow the log entries to flush to tables
-    result = client.query(
-        "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
-        'event_time > now() - 30').result_set
-    assert result[0] == ('TEST_SESSION_ID', test_config.username)
-    result = client.query(
-        "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
-        'event_time > now() - 30').result_set
-    assert result[0] == ('test_session_params', test_config.username)
+
+    if client.min_version('21'):
+        if test_config.host != 'localhost':
+            return  # By default, the session log isn't enabled, so we only validate in environments we control
+        sleep(10)  # Allow the log entries to flush to tables
+        result = client.query(
+            "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
+            'event_time > now() - 30').result_set
+        assert result[0] == ('TEST_SESSION_ID', test_config.username)
+        result = client.query(
+            "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
+            'event_time > now() - 30').result_set
+        assert result[0] == ('test_session_params', test_config.username)
 
 
 def test_dsn_config(test_config: TestConfig):
@@ -197,6 +204,8 @@ def test_command_as_query(test_client: Client):
 
 
 def test_show_create(test_client: Client):
+    if not test_client.min_version('21'):
+        pytest.skip(f'Not supported server version {test_client.server_version}')
     result = test_client.query('SHOW CREATE TABLE system.tables')
     result.close()
     assert 'statement' in result.column_names

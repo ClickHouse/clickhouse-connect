@@ -7,9 +7,10 @@ def test_params(test_client: Client, table_context: callable):
     result = test_client.query('SELECT name, database FROM system.tables WHERE database = {db:String}',
                                parameters={'db': 'system'})
     assert result.first_item['database'] == 'system'
-    result = test_client.query('SELECT name, {col:String} FROM system.tables WHERE table ILIKE {t:String}',
-                               parameters={'t': '%rr%', 'col': 'database'})
-    assert 'rr' in result.first_item['name']
+    if test_client.min_version('21'):
+        result = test_client.query('SELECT name, {col:String} FROM system.tables WHERE table ILIKE {t:String}',
+                                   parameters={'t': '%rr%', 'col': 'database'})
+        assert 'rr' in result.first_item['name']
 
     first_date = datetime.strptime('Jun 1 2005  1:33PM', '%b %d %Y %I:%M%p')
     second_date = datetime.strptime('Dec 25 2022  5:00AM', '%b %d %Y %I:%M%p')
