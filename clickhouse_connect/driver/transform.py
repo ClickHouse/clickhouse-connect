@@ -15,7 +15,7 @@ _EMPTY_CTX = QueryContext()
 class NativeTransform:
     # pylint: disable=too-many-locals
     @staticmethod
-    def parse_response(source: ByteSource, context: QueryContext = _EMPTY_CTX) -> Union[NumpyResult, QueryResult]:  # noqa: E501, C901
+    def parse_response(source: ByteSource, context: QueryContext = _EMPTY_CTX) -> Union[NumpyResult, QueryResult]:
         names = []
         col_types = []
         block_num = 0

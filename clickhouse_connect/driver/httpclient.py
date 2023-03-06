@@ -43,7 +43,7 @@ class HttpClient(Client):
     _owns_pool_manager = False
 
     # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
-    def __init__(self,  # noqa: C901
+    def __init__(self,
                  interface: str,
                  host: str,
                  port: int,
@@ -305,7 +305,7 @@ class HttpClient(Client):
             err_str = f':{err_str}\n {err_msg[0:240]}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
-    def _raw_request(self,  # noqa: C901
+    def _raw_request(self,
                      data,
                      params: Dict[str, str],
                      headers: Optional[Dict[str, Any]] = None,

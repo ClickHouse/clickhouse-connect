@@ -58,7 +58,7 @@ def test_table_engine_fixture() -> Iterator[str]:
 
 
 @fixture(scope='session', autouse=True, name='test_client')
-def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:  # noqa: C901
+def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
     if test_config.docker:
         run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])

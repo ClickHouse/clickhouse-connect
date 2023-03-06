@@ -35,7 +35,7 @@ unsupported_types = set()
 native_transform = NativeTransform()
 
 
-def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,  # noqa: C901
+def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC,
                 nullable_perc: float = NULLABLE_PERC, parent_type: str = None):
     base_type = random.choices(all_types, all_weights)[0]
     low_card_ok = True
