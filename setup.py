@@ -62,6 +62,7 @@ def run_setup(try_c: bool = True):
             'arrow': ['pyarrow'],
             'orjson': ['orjson'],
         },
+        tests_require=['pytest'],
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',
                                     'clickhousedb=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect'],

@@ -18,7 +18,21 @@ The secondary effect of the `send_progress` argument -- to set `wait_end_of_quer
 on whether the query is streaming or not.
 
 
-## 0.5.14, 2023-01-02
+## 0.5.15, 2023-03-10
+### Bug Fix
+- Remove unnecessary addition of the client database to the table name for inserts. Fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/145
+
+### Improvement
+- The driver should now work for older versions of ClickHouse back to 19.16.  Note that older versions are not
+officially tested or supported (like the main ClickHouse database, we officially support the last three monthly ClickHouse
+releases and the last two LTS ClickHouse releases).  For versions prior to 19.17, you may want change the new `readonly`
+`clickhouse_connect.common` setting to '1' to allow sending ClickHouse settings with individual queries (if the user has
+write permissions).  Thanks to [Aleksey Astafiev](https://github.com/aastafiev) for this contribution and for
+updating the tests to run with these legacy versions!
+
+
+## 0.5.14, 2023-03-02
 ### Bug Fix
 - Remove direct pandas import that caused an unrecoverable error when pandas was not installed.
 https://github.com/ClickHouse/clickhouse-connect/issues/139
