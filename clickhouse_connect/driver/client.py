@@ -93,7 +93,7 @@ class Client(ABC):
         return str(value)
 
     def _setting_status(self, key: str) -> SettingStatus:
-        comp_setting = self.server_settings[key]
+        comp_setting = self.server_settings.get(key)
         if not comp_setting:
             return SettingStatus(False, False)
         return SettingStatus(comp_setting != '0', comp_setting.readonly != 1)
@@ -436,7 +436,7 @@ class Client(ABC):
                table: Optional[str] = None,
                data: Sequence[Sequence[Any]] = None,
                column_names: Union[str, Iterable[str]] = '*',
-               database: str = '',
+               database: Optional[str] = None,
                column_types: Sequence[ClickHouseType] = None,
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
@@ -449,7 +449,7 @@ class Client(ABC):
         :param data: Sequence of sequences of Python data
         :param column_names: Ordered list of column names or '*' if column types should be retrieved from the
             ClickHouse table definition
-        :param database: Target database -- will use client default database if not specified
+        :param database: Target database -- will use client default database if not specified.
         :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from
             the server
         :param column_type_names: ClickHouse column type names.  If set then column data does not need to be
@@ -478,7 +478,7 @@ class Client(ABC):
 
     def insert_df(self, table: str = None,
                   df=None,
-                  database: str = None,
+                  database: Optional[str] = None,
                   settings: Optional[Dict] = None,
                   column_names: Optional[Sequence[str]] = None,
                   column_types: Sequence[ClickHouseType] = None,
@@ -517,7 +517,6 @@ class Client(ABC):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :return: No return, throws an exception if the insert fails
         """
-        database = database or self.database
         full_table = table if '.' in table or not database else f'{database}.{table}'
         column_names, insert_block = arrow_buffer(arrow_table)
         self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
@@ -525,7 +524,7 @@ class Client(ABC):
     def create_insert_context(self,
                               table: str,
                               column_names: Optional[Union[str, Sequence[str]]] = None,
-                              database: str = '',
+                              database: Optional[str] = None,
                               column_types: Sequence[ClickHouseType] = None,
                               column_type_names: Sequence[str] = None,
                               column_oriented: bool = False,
@@ -546,10 +545,9 @@ class Client(ABC):
         :param data: Initial dataset for insert
         :return Reusable insert context
         """
-        database = database or self.database
         full_table = table if '.' in table or not database else f'{database}.{table}'
         column_defs = []
-        if column_types is None:
+        if column_types is None and column_type_names is None:
             describe_result = self.query(f'DESCRIBE TABLE {full_table}')
             column_defs = [ColumnDef(**row) for row in describe_result.named_results()
                            if row['default_type'] not in ('ALIAS', 'MATERIALIZED')]

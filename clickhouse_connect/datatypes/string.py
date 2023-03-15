@@ -8,29 +8,51 @@ from clickhouse_connect.driver.options import np, pd
 
 
 class String(ClickHouseType):
+    valid_formats = 'bytes', 'native'
+
+    def _active_encoding(self, ctx):
+        if self.read_format(ctx) == 'bytes':
+            return None
+        if ctx.encoding:
+            return ctx.encoding
+        return self.encoding
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
-        return source.read_str_col(num_rows, ctx.encoding or self.encoding)
+        return source.read_str_col(num_rows, self._active_encoding(ctx))
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        return source.read_str_col(num_rows, ctx.encoding or self.encoding, True, self._active_null(ctx))
+        return source.read_str_col(num_rows, self._active_encoding(ctx), True, self._active_null(ctx))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        if ctx.use_na_values:
+        if ctx.use_na_values and self.read_format(ctx) == 'native':
             return pd.array(column, dtype=pd.StringDtype())
         if ctx.use_numpy and ctx.max_str_len:
             return np.array(column, dtype=f'<U{ctx.max_str_len}')
         return column
 
-    # pylint: disable=duplicate-code
+    # pylint: disable=duplicate-code,too-many-nested-blocks,too-many-branches
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         encoding = ctx.encoding or self.encoding
         app = dest.append
-        if self.nullable:
-            for x in column:
-                if x is None:
-                    app(0)
-                else:
+        first = self._first_value(column)
+        if isinstance(first, str):
+            if self.nullable:
+                for x in column:
+                    if x is None:
+                        app(0)
+                    else:
+                        y = x.encode(encoding)
+                        sz = len(y)
+                        while True:
+                            b = sz & 0x7f
+                            sz >>= 7
+                            if sz == 0:
+                                app(b)
+                                break
+                            app(0x80 | b)
+                        dest += y
+            else:
+                for x in column:
                     y = x.encode(encoding)
                     sz = len(y)
                     while True:
@@ -42,20 +64,38 @@ class String(ClickHouseType):
                         app(0x80 | b)
                     dest += y
         else:
-            for x in column:
-                y = x.encode(encoding)
-                sz = len(y)
-                while True:
-                    b = sz & 0x7f
-                    sz >>= 7
-                    if sz == 0:
-                        app(b)
-                        break
-                    app(0x80 | b)
-                dest += y
+            if self.nullable:
+                for x in column:
+                    if x is None:
+                        app(0)
+                    else:
+                        sz = len(x)
+                        while True:
+                            b = sz & 0x7f
+                            sz >>= 7
+                            if sz == 0:
+                                app(b)
+                                break
+                            app(0x80 | b)
+                        dest += x
+            else:
+                for x in column:
+                    sz = len(x)
+                    while True:
+                        b = sz & 0x7f
+                        sz >>= 7
+                        if sz == 0:
+                            app(b)
+                            break
+                        app(0x80 | b)
+                    dest += x
 
     def _active_null(self, ctx):
-        return None if ctx.use_none else ''
+        if ctx.use_none:
+            return None
+        if self.read_format(ctx) == 'bytes':
+            return bytes()
+        return ''
 
 
 class FixedString(ClickHouseType):

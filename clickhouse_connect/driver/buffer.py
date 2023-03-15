@@ -95,11 +95,13 @@ class ResponseBuffer(ByteSource):
             x = self.read_bytes(sz)
             if null_map and null_map[ix]:
                 app(null_obj)
-            else:
+            elif encoding:
                 try:
                     app(x.decode(encoding))
                 except UnicodeDecodeError:
                     app(x.hex())
+            else:
+                app(x)
         return column
 
     def read_bytes_col(self, sz: int, num_rows: int) -> Iterable[bytes]:

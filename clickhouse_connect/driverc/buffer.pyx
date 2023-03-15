@@ -1,5 +1,5 @@
 import sys
-from typing import Iterable, Any
+from typing import Iterable, Any, Optional
 
 import cython
 
@@ -122,10 +122,13 @@ cdef class ResponseBuffer:
                     break
                 shift += 7
             buf = self.read_bytes_c(sz)
-            try:
-                v = PyUnicode_Decode(buf, sz, encoding, errors)
-            except UnicodeDecodeError:
-                v = PyBytes_FromStringAndSize(buf, sz).hex()
+            if encoding:
+                try:
+                    v = PyUnicode_Decode(buf, sz, encoding, errors)
+                except UnicodeDecodeError:
+                    v = PyBytes_FromStringAndSize(buf, sz).hex()
+            else:
+                v = PyBytes_FromStringAndSize(buf, sz)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
             x += 1
@@ -159,11 +162,13 @@ cdef class ResponseBuffer:
             buf = self.read_bytes_c(sz)
             if null_map[x]:
                 v = null_obj
-            else:
+            elif encoding:
                 try:
                     v = PyUnicode_Decode(buf, sz, encoding, errors)
                 except UnicodeDecodeError:
                     v = PyBytes_FromStringAndSize(buf, sz).hex()
+            else:
+                v = PyBytes_FromStringAndSize(buf, sz)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
         PyMem_Free(<void *> null_map)
@@ -221,12 +226,16 @@ cdef class ResponseBuffer:
 
     def read_str_col(self,
                      unsigned long long num_rows,
-                     encoding: str,
+                     encoding: Optional[str],
                      nullable: bool = False,
                      null_object: Any = None) -> Iterable[str]:
+        cdef char * enc = NULL
+        if encoding:
+            pyenc = encoding.encode()
+            enc = pyenc
         if nullable:
-            return self._read_nullable_str_col(num_rows, encoding.encode(), null_object)
-        return self._read_str_col(num_rows, encoding.encode())
+            return self._read_nullable_str_col(num_rows, enc, null_object)
+        return self._read_str_col(num_rows, enc)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
