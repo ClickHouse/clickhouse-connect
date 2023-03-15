@@ -93,7 +93,7 @@ class Client(ABC):
         return str(value)
 
     def _setting_status(self, key: str) -> SettingStatus:
-        comp_setting = self.server_settings[key]
+        comp_setting = self.server_settings.get(key)
         if not comp_setting:
             return SettingStatus(False, False)
         return SettingStatus(comp_setting != '0', comp_setting.readonly != 1)
