@@ -229,3 +229,23 @@ def test_temporary_tables(test_client: Client):
     df = test_client.query_df('SELECT * FROM temp_test_table')
     assert len(df['field1']) == 4
     test_client.command('DROP TABLE temp_test_table')
+
+
+def test_str_as_bytes(test_client: Client, table_context: Callable):
+    with table_context('test_insert_bytes', ['key UInt32', 'byte_str String', 'n_byte_str Nullable(String)']):
+        test_client.insert('test_insert_bytes', [[0, 'str_0', 'n_str_0'], [1, 'str_1', 'n_str_0']])
+        test_client.insert('test_insert_bytes', [[2, 'str_2'.encode('ascii'), 'n_str_2'.encode()],
+                                                 [3, b'str_3', b'str_3'],
+                                                 [4, bytearray([5, 120, 24]), bytes([16, 48, 52])],
+                                                 [5, b'', None]
+                                                 ])
+        result_set = test_client.query('SELECT * FROM test_insert_bytes ORDER BY key').result_columns
+        assert result_set[1][0] == 'str_0'
+        assert result_set[1][3] == 'str_3'
+        assert result_set[2][5] is None
+        assert result_set[1][4].encode() == b'\x05\x78\x18'
+        result_set = test_client.query('SELECT * FROM test_insert_bytes ORDER BY key',
+                                       query_formats={'String': 'bytes'}).result_columns
+        assert result_set[1][0] == b'str_0'
+        assert result_set[1][4] == b'\x05\x78\x18'
+        assert result_set[2][4] == b'\x10\x30\x34'

@@ -18,6 +18,19 @@ The secondary effect of the `send_progress` argument -- to set `wait_end_of_quer
 on whether the query is streaming or not.
 
 
+## 0.5.16, 2023-03-15
+### Bug Fix
+- Creating a client would fail if for some reason the user did not have access to the `system.settings` table.  Thanks
+to [Filipp Balakin](https://github.com/Barsoomx) for the fix.
+
+### Improvements
+- String columns now accept values of bytes-like objects (bytes/bytearray/etc.) for inserts (as with other inserts, all
+values for the inserted column should be the same types, either a bytes-like object or `str`).  A corresponding `bytes`
+read format has been enabled for String columns as well.  Thanks to [Tim Nooran](https://github.com/TimNooren) for opening
+the issue and providing unit tests.  https://github.com/ClickHouse/clickhouse-connect/issues/148
+- Cython version upgraded to 3.0.0b1
+
+
 ## 0.5.15, 2023-03-10
 ### Bug Fix
 - Remove unnecessary addition of the client database to the table name for inserts. Fixes
