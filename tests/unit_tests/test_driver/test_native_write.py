@@ -27,6 +27,11 @@ TUPLE_THREE_OUTPUT = """
 7472 696e 6732 0773 7472 696e 6733
 """
 
+STRING_ACCEPTS_BYTES_OUTPUT = """
+0101 0576 616c 7565 0653 7472 696e 6701
+ff
+"""
+
 
 def test_low_card_null():
     data = [['three']]
@@ -60,3 +65,11 @@ def test_nested():
     types = [get_from_name('Nested(str1 String, int32 UInt32)')]
     output = native_insert_block(data, ['nested'], types)
     assert bytes(output) == bytes.fromhex(NESTED_BINARY)
+
+
+def test_string_accepts_bytes():
+    data = [[bytes.fromhex('ff')]]
+    names = ['value']
+    types = [get_from_name('String')]
+    output = native_insert_block(data, names, types)
+    assert bytes(output) == bytes.fromhex(STRING_ACCEPTS_BYTES_OUTPUT)
