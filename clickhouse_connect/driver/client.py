@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
 
 
-# pylint: disable=too-many-public-methods
+# pylint: disable=too-many-public-methods, too-many-instance-attributes
 class Client(ABC):
     """
     Base ClickHouse Connect client

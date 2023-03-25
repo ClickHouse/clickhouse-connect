@@ -148,12 +148,12 @@ class QueryContext(BaseQueryContext):
         self.parameters[key] = value
         self._update_query()
 
-    def set_response_tz(self, tz: tzinfo):
+    def set_response_tz(self, response_tz: tzinfo):
         if not self.query_tz:
             if tzinfo == pytz.UTC:
                 self._context_tz = None
             else:
-                self._context_tz = tz
+                self._context_tz = response_tz
 
     def start_column(self, name: str):
         super().start_column(name)
