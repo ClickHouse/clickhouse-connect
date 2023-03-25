@@ -59,5 +59,5 @@ def _init_common(name: str, options: Sequence[Any], default: Any):
 _init_common('autogenerate_session_id', (True, False), True)
 _init_common('dict_parameter_format', ('json', 'map'), 'json')
 _init_common('invalid_setting_action', ('send', 'drop', 'error'), 'error')
-_init_common('product_name', (), '')
+_init_common('product_name', (), '')  # Product name used as part of client identification for ClickHouse query_log
 _init_common('readonly', (0, 1), 0)

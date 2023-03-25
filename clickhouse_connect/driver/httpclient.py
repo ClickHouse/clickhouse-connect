@@ -66,7 +66,8 @@ class HttpClient(Client):
                  pool_mgr: Optional[PoolManager] = None,
                  http_proxy: Optional[str] = None,
                  https_proxy: Optional[str] = None,
-                 server_host_name: Optional[str] = None):
+                 server_host_name: Optional[str] = None,
+                 apply_server_timezone: Optional[bool] = True):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -111,14 +112,12 @@ class HttpClient(Client):
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
-        self._server_host_name = server_host_name
 
         connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
-        self.query_retries = coerce_int(query_retries)
         self.http_retries = 1
         self._send_progress = None
-        self._send_comp_header = False
+        self._send_comp_setting = False
         self._progress_interval = None
 
         if session_id:
@@ -137,10 +136,15 @@ class HttpClient(Client):
         else:
             compression = None
 
-        super().__init__(database=database, uri=self.url, query_limit=coerce_int(query_limit))
+        super().__init__(database=database,
+                         uri=self.url,
+                         query_limit=query_limit,
+                         query_retries=query_retries,
+                         server_host_name = server_host_name,
+                         apply_server_timezone=apply_server_timezone)
         self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
-        self._send_comp_header = not comp_setting.is_set and comp_setting.is_writable
+        self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
         if comp_setting.is_set or comp_setting.is_writable:
             self.compression = compression
         send_setting = self._setting_status('send_progress_in_http_headers')
@@ -189,7 +193,7 @@ class HttpClient(Client):
 
         if self.compression:
             headers['Accept-Encoding'] = self.compression
-            if self._send_comp_header:
+            if self._send_comp_setting:
                 params['enable_http_compression'] = '1'
         response = self._raw_request(self._prep_query(context),
                                      params,
@@ -198,6 +202,7 @@ class HttpClient(Client):
                                      retries=self.query_retries,
                                      server_wait=not context.streaming)
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
+        context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:

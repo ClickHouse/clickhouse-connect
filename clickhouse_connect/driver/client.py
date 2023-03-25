@@ -12,7 +12,7 @@ from clickhouse_connect import common
 from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.common import dict_copy, StreamContext
+from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
@@ -35,14 +35,23 @@ class Client(ABC):
     valid_transport_settings = set()
     optional_transport_settings = set()
 
-    def __init__(self, database: str, query_limit: int, uri: str):
+    def __init__(self,
+                 database: str,
+                 query_limit: int,
+                 uri: str,
+                 query_retries: int,
+                 server_host_name: Optional[str],
+                 apply_server_timezone: Optional[bool]):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
         :param query_limit: default LIMIT for queries
         :param uri: uri for error messages
         """
-        self.query_limit = query_limit
+        self.query_limit = coerce_int(query_limit)
+        self.query_retries = coerce_int(query_retries)
+        self._server_host_name = server_host_name
+        self._apply_server_timezone = apply_server_timezone is True
         self.server_tz = pytz.UTC
         self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
@@ -102,6 +111,15 @@ class Client(ABC):
         if context.is_select and not context.has_limit and self.query_limit:
             return f'{context.final_query}\n LIMIT {self.query_limit}'
         return context.final_query
+
+    def _check_tz_change(self, new_tz) -> Optional[tzinfo]:
+        try:
+            new_tzinfo = pytz.timezone(new_tz)
+            if new_tzinfo != self.server_tz:
+                return new_tzinfo
+        except UnknownTimeZoneError:
+            logger.warning('Unrecognized timezone %s received from ClickHouse', new_tz)
+        return None
 
     @abstractmethod
     def _query_with_context(self, context: QueryContext):
@@ -273,6 +291,8 @@ class Client(ABC):
                  use_none: Optional[bool] = None,
                  max_str_len: Optional[int] = None,
                  use_na_values: Optional[bool] = None,
+                 query_tz: Optional[str] = None,
+                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                  context: QueryContext = None):
         """
         Query method that results the results as a pandas dataframe.  For parameter values, see the
@@ -292,6 +312,8 @@ class Client(ABC):
                         use_none: Optional[bool] = None,
                         max_str_len: Optional[int] = None,
                         use_na_values: Optional[bool] = None,
+                        query_tz: Optional[str] = None,
+                        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                         context: QueryContext = None) -> StreamContext:
         """
         Query method that returns the results as a StreamContext.  For parameter values, see the

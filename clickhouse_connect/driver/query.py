@@ -52,7 +52,8 @@ class QueryContext(BaseQueryContext):
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                  use_na_values: Optional[bool] = None,
                  as_pandas: bool = False,
-                 streaming: bool = False):
+                 streaming: bool = False,
+                 apply_server_tz: bool = False):
         """
         Initializes various configuration settings for the query context
 
@@ -88,19 +89,24 @@ class QueryContext(BaseQueryContext):
                          use_numpy if use_numpy is not None else False)
         self.query = query
         self.parameters = parameters or {}
-        self.server_tz = server_tz
         self.use_none = True if use_none is None else use_none
         self.column_oriented = False if column_oriented is None else column_oriented
         self.use_numpy = use_numpy
         self.max_str_len = 0 if max_str_len is None else max_str_len
-        if query_tz is not None:
-            if isinstance(query_tz, str):
-                try:
-                    query_tz = pytz.timezone(query_tz)
-                except UnknownTimeZoneError as ex:
-                    raise ProgrammingError('query_tz is not recognized') from ex
+        self.server_tz = server_tz
+        if isinstance(query_tz, str):
+            try:
+                query_tz = pytz.timezone(query_tz)
+            except UnknownTimeZoneError as ex:
+                raise ProgrammingError(f'query_tz {query_tz} is not recognized') from ex
         self.query_tz = query_tz
-        self.active_tz = query_tz
+        if self.query_tz:
+            self._context_tz = query_tz
+        elif apply_server_tz and server_tz != pytz.UTC:
+            self._context_tz = server_tz
+        else:
+            self._context_tz = None
+        self.active_tz = self._context_tz
         if column_tzs is not None:
             for col_name, timezone in column_tzs.items():
                 if isinstance(timezone, str):
@@ -108,7 +114,7 @@ class QueryContext(BaseQueryContext):
                         timezone = pytz.timezone(timezone)
                         column_tzs[col_name] = timezone
                     except UnknownTimeZoneError as ex:
-                        raise ProgrammingError('query_tz is not recognized') from ex
+                        raise ProgrammingError(f'column_tz {timezone} is not recognized') from ex
         self.column_tzs = column_tzs
         self.block_info = False
         self.as_pandas = as_pandas
@@ -142,12 +148,19 @@ class QueryContext(BaseQueryContext):
         self.parameters[key] = value
         self._update_query()
 
+    def set_response_tz(self, tz: tzinfo):
+        if not self.query_tz:
+            if tzinfo == pytz.UTC:
+                self._context_tz = None
+            else:
+                self._context_tz = tz
+
     def start_column(self, name: str):
         super().start_column(name)
         if self.column_tzs and name in self.column_tzs:
             self.active_tz = self.column_tzs[name]
         else:
-            self.active_tz = self.query_tz
+            self.active_tz = self._context_tz
 
     def updated_copy(self,
                      query: Optional[str] = None,
