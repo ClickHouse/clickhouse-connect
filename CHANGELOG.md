@@ -33,7 +33,13 @@ ClickHouse DateTime and DateTime64 columns without a defined timezone.  To rever
   - Use the query timezone for the query if it is set using the `query_tz` parameter
   - Use the "response" timezone for the query as read from the `X-ClickHouse-Timezone` header if different from the server timezone.  This closes https://github.com/ClickHouse/clickhouse-connect/issues/138.
   - Use the ClickHouse server timezone (if the client parameter `apply_server_timezone` is `True`)
-- Note if the detected timezone according to the above precedence is UTC, clickhouse-connect will always return a naive datetime object with no timezone information
+- Note if the detected timezone according to the above precedence is UTC, `clickhouse-connect` will always return a naive datetime object with no timezone information
+
+### New Feature
+- ClickHouse external data is now support for all client `query` methods.  To send external data, construct a `driver.external.ExternalData` object and
+send it as the `external_data` parameter in the appropriate query method.  See the [ClickHouse documentation](https://clickhouse.com/docs/en/engines/table-engines/special/external-data)
+for additional details.  There are also examples in the [test file ](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_external_data.py).
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/98
 
 
 ## 0.5.16, 2023-03-15

@@ -12,6 +12,7 @@ from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
+from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
@@ -53,7 +54,8 @@ class QueryContext(BaseQueryContext):
                  use_na_values: Optional[bool] = None,
                  as_pandas: bool = False,
                  streaming: bool = False,
-                 apply_server_tz: bool = False):
+                 apply_server_tz: bool = False,
+                 external_data: Optional[ExternalData] = None):
         """
         Initializes various configuration settings for the query context
 
@@ -95,6 +97,7 @@ class QueryContext(BaseQueryContext):
         self.max_str_len = 0 if max_str_len is None else max_str_len
         self.server_tz = server_tz
         self.apply_server_tz = apply_server_tz
+        self.external_data = external_data
         if isinstance(query_tz, str):
             try:
                 query_tz = pytz.timezone(query_tz)
@@ -183,7 +186,8 @@ class QueryContext(BaseQueryContext):
                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                      use_na_values: Optional[bool] = None,
                      as_pandas: bool = False,
-                     streaming: bool = False) -> 'QueryContext':
+                     streaming: bool = False,
+                     external_data: Optional[ExternalData] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -202,7 +206,9 @@ class QueryContext(BaseQueryContext):
                             self.column_tzs if column_tzs is None else column_tzs,
                             self.use_na_values if use_na_values is None else use_na_values,
                             as_pandas,
-                            streaming)
+                            streaming,
+                            self.apply_server_tz,
+                            self.external_data if external_data is None else external_data)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
