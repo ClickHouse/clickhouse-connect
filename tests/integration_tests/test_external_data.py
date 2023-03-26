@@ -36,10 +36,11 @@ def test_external_multiple(test_client: Client):
 def test_external_parquet(test_client: Client):
     movies_file = f'{Path(__file__).parent}/movies.parquet'
     test_client.command("""
-CREATE TABLE IF NOT EXISTS num
+CREATE TABLE IF NOT EXISTS num (number UInt64, t String)
 ENGINE = MergeTree
-ORDER BY number AS
-SELECT number, concat(toString(number), 'x') as t
+ORDER BY number""")
+    test_client.command("""
+INSERT INTO num SELECT number, concat(toString(number), 'x') as t
 FROM numbers(2500)
 WHERE (number > 1950) AND (number < 2025)
     """)
