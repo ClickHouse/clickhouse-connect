@@ -50,8 +50,8 @@ class Client(ABC):
         """
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
-        self._server_host_name = server_host_name
-        self._apply_server_timezone = apply_server_timezone is True
+        self.server_host_name = server_host_name
+        self.apply_server_timezone = apply_server_timezone is True
         self.server_tz = pytz.UTC
         self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
@@ -405,7 +405,8 @@ class Client(ABC):
                             column_tzs=column_tzs,
                             use_na_values=use_na_values,
                             as_pandas=as_pandas,
-                            streaming=streaming)
+                            streaming=streaming,
+                            apply_server_tz=self.apply_server_timezone)
 
     def query_arrow(self,
                     query: str,

@@ -94,19 +94,13 @@ class QueryContext(BaseQueryContext):
         self.use_numpy = use_numpy
         self.max_str_len = 0 if max_str_len is None else max_str_len
         self.server_tz = server_tz
+        self.apply_server_tz = apply_server_tz
         if isinstance(query_tz, str):
             try:
                 query_tz = pytz.timezone(query_tz)
             except UnknownTimeZoneError as ex:
                 raise ProgrammingError(f'query_tz {query_tz} is not recognized') from ex
         self.query_tz = query_tz
-        if self.query_tz:
-            self._context_tz = query_tz
-        elif apply_server_tz and server_tz != pytz.UTC:
-            self._context_tz = server_tz
-        else:
-            self._context_tz = None
-        self.active_tz = self._context_tz
         if column_tzs is not None:
             for col_name, timezone in column_tzs.items():
                 if isinstance(timezone, str):
@@ -116,6 +110,8 @@ class QueryContext(BaseQueryContext):
                     except UnknownTimeZoneError as ex:
                         raise ProgrammingError(f'column_tz {timezone} is not recognized') from ex
         self.column_tzs = column_tzs
+        self.column_tz = None
+        self.response_tz = None
         self.block_info = False
         self.as_pandas = as_pandas
         self.use_pandas_na = as_pandas and pd_has_na
@@ -149,18 +145,27 @@ class QueryContext(BaseQueryContext):
         self._update_query()
 
     def set_response_tz(self, response_tz: tzinfo):
-        if not self.query_tz:
-            if tzinfo == pytz.UTC:
-                self._context_tz = None
-            else:
-                self._context_tz = response_tz
+        self.response_tz = response_tz
 
     def start_column(self, name: str):
         super().start_column(name)
         if self.column_tzs and name in self.column_tzs:
-            self.active_tz = self.column_tzs[name]
+            self.column_tz = self.column_tzs[name]
         else:
-            self.active_tz = self._context_tz
+            self.column_tz = None
+
+    def active_tz(self, datatype_tz: Optional[tzinfo]):
+        if self.column_tz:
+            return self.column_tz
+        if datatype_tz:
+            return datatype_tz
+        if self.query_tz:
+            return self.query_tz
+        if self.response_tz:
+            return self.response_tz
+        if self.apply_server_tz:
+            return self.server_tz
+        return None
 
     def updated_copy(self,
                      query: Optional[str] = None,

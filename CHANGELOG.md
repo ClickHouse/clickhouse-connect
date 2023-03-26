@@ -18,6 +18,24 @@ The secondary effect of the `send_progress` argument -- to set `wait_end_of_quer
 on whether the query is streaming or not.
 
 
+## 0.5.17, 2023-03-26
+### Timezone Improvements
+- The client `query_df` and `query_df_stream` methods now accept `query_tz` and `column_tzs` parameters like other
+`query*` methods.
+- A new boolean parameter `apply_server_timezone` has been added to the main `get_client` method.  Setting this
+parameter to `True` (the default) will apply the server timezone (if not UTC) to values returned by the client `query*`
+methods.  The previous behavior would always return timezone naive, UTC based Python and Pandas `datetime` objects for
+ClickHouse DateTime and DateTime64 columns without a defined timezone.  To revert to the previous behavior, set the
+`apply_server_timezone` parameter to `False`.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/152
+- The timezone logic applied to query results has been simplified and now uses the following order of precedence:
+  - Use the column timezone for the column if it is specified using the `column_tzs` parameter
+  - Use the column timezone for the column if specified in the ClickHouse column definition (only works for ClickHouse versions 23.2 and later)
+  - Use the query timezone for the query if it is set using the `query_tz` parameter
+  - Use the "response" timezone for the query as read from the `X-ClickHouse-Timezone` header if different from the server timezone.  This closes https://github.com/ClickHouse/clickhouse-connect/issues/138.
+  - Use the ClickHouse server timezone (if the client parameter `apply_server_timezone` is `True`)
+- Note if the detected timezone according to the above precedence is UTC, clickhouse-connect will always return a naive datetime object with no timezone information
+
+
 ## 0.5.16, 2023-03-15
 ### Bug Fix
 - Creating a client would fail if for some reason the user did not have access to the `system.settings` table.  Thanks

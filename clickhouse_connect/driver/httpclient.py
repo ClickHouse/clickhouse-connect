@@ -341,9 +341,9 @@ class HttpClient(Client):
             'retries': self.http_retries,
             'preload_content': not stream
         }
-        if self._server_host_name:
+        if self.server_host_name:
             kwargs['assert_same_host'] = False
-            kwargs['headers'].update({'Host': self._server_host_name})
+            kwargs['headers'].update({'Host': self.server_host_name})
         while True:
             attempts += 1
             try:

@@ -4,7 +4,9 @@ from decimal import Decimal as PyDecimal
 from ipaddress import IPv4Address, IPv6Address
 from random import random, choice
 from typing import Sequence, Union, NamedTuple, Callable, Type, Dict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
+
+import pytz
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Tuple, Map, Nested
@@ -17,6 +19,7 @@ from clickhouse_connect.datatypes.temporal import Date, Date32, DateTime, DateTi
 from clickhouse_connect.driver.common import array_sizes
 
 dt_from_ts = datetime.utcfromtimestamp
+dt_from_ts_tz = datetime.fromtimestamp
 epoch_date = date(1970, 1, 1)
 date32_start_date = date(1925, 1, 1)
 
@@ -25,6 +28,7 @@ class RandomValueDef(NamedTuple):
     """
     Parameter object to control the generation of random data values for testing
     """
+    server_tz: tzinfo = pytz.UTC
     null_pct: float = 0.15
     str_len: int = 200
     arr_len: int = 12
@@ -88,9 +92,17 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
         return lambda: random_utf8_str(col_def.str_len)
     if isinstance(ch_type, FixedString):
         return lambda: bytes((int(random() * 256) for _ in range(ch_type.byte_size)))
+    if isinstance(ch_type, DateTime):
+        if col_def.server_tz == pytz.UTC:
+            return random_datetime
+        timezone = col_def.server_tz
+        return lambda: random_datetime_tz(timezone)
     if isinstance(ch_type, DateTime64):
         prec = ch_type.prec
-        return lambda: random_datetime64(prec)
+        if col_def.server_tz == pytz.UTC:
+            return lambda: random_datetime64(prec)
+        timezone = col_def.server_tz
+        return lambda: random_datetime64_tz(prec, timezone)
     raise ValueError(f'Invalid ClickHouse type {ch_type.name} for random column data')
 
 
@@ -125,6 +137,10 @@ def random_datetime():
     return dt_from_ts(int(random() * 2 ** 32)).replace(microsecond=0)
 
 
+def random_datetime_tz(timezone: tzinfo):
+    return dt_from_ts_tz(int(random() * 2 ** 32), timezone).replace(microsecond=0)
+
+
 def random_ascii_str(max_len: int = 200, min_len: int = 0):
     return ''.join((chr(int(random() * 95) + 32) for _ in range(int(random() * max_len) + min_len)))
 
@@ -143,6 +159,16 @@ def random_datetime64(prec: int):
     else:
         u_sec = int(random() * 1000000)
     return dt_from_ts(int(random() * 4294967296)).replace(microsecond=u_sec)
+
+
+def random_datetime64_tz(prec: int, timezone: tzinfo):
+    if prec == 1:
+        u_sec = 0
+    elif prec == 1000:
+        u_sec = int(random() * 1000) * 1000
+    else:
+        u_sec = int(random() * 1000000)
+    return dt_from_ts_tz(int(random() * 4294967296), timezone).replace(microsecond=u_sec)
 
 
 def random_ipv6():
@@ -170,7 +196,6 @@ gen_map: Dict[Type[ClickHouseType], Callable] = {
     Float32: random_float32,
     Date: lambda: epoch_date + timedelta(days=int(random() * 65536)),
     Date32: lambda: date32_start_date + timedelta(days=random() * 130000),
-    DateTime: random_datetime,
     UUID: uuid.uuid4,
     IPv4: lambda: IPv4Address(int(random() * 4294967296)),
     IPv6: random_ipv6,
