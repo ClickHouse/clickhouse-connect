@@ -138,7 +138,7 @@ def main():
         #read_pandas_stream(query)
         # read_numpy(query)
         #read_pandas(query)
-        read_arrow(query)
+        # read_arrow(query)
         #dr_read_python(query)
         # dr_read_python_rows(query)
         #dr_read_pandas(query)

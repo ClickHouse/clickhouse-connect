@@ -20,6 +20,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
+from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers
 from clickhouse_connect.driver.insert import InsertContext
@@ -66,7 +67,8 @@ class HttpClient(Client):
                  pool_mgr: Optional[PoolManager] = None,
                  http_proxy: Optional[str] = None,
                  https_proxy: Optional[str] = None,
-                 server_host_name: Optional[str] = None):
+                 server_host_name: Optional[str] = None,
+                 apply_server_timezone: Optional[bool] = True):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -111,14 +113,12 @@ class HttpClient(Client):
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
-        self._server_host_name = server_host_name
 
         connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
-        self.query_retries = coerce_int(query_retries)
         self.http_retries = 1
         self._send_progress = None
-        self._send_comp_header = False
+        self._send_comp_setting = False
         self._progress_interval = None
 
         if session_id:
@@ -137,10 +137,15 @@ class HttpClient(Client):
         else:
             compression = None
 
-        super().__init__(database=database, uri=self.url, query_limit=coerce_int(query_limit))
+        super().__init__(database=database,
+                         uri=self.url,
+                         query_limit=query_limit,
+                         query_retries=query_retries,
+                         server_host_name = server_host_name,
+                         apply_server_timezone=apply_server_timezone)
         self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
-        self._send_comp_header = not comp_setting.is_set and comp_setting.is_writable
+        self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
         if comp_setting.is_set or comp_setting.is_writable:
             self.compression = compression
         send_setting = self._setting_status('send_progress_in_http_headers')
@@ -165,7 +170,7 @@ class HttpClient(Client):
         return f'{final_query}\n FORMAT {self._write_format}'
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
-        headers = {'Content-Type': 'text/plain; charset=utf-8'}
+        headers = {}
         params = {}
         if self.database:
             params['database'] = self.database
@@ -189,15 +194,27 @@ class HttpClient(Client):
 
         if self.compression:
             headers['Accept-Encoding'] = self.compression
-            if self._send_comp_header:
+            if self._send_comp_setting:
                 params['enable_http_compression'] = '1'
-        response = self._raw_request(self._prep_query(context),
+        final_query = self._prep_query(context)
+        if context.external_data:
+            body = bytes()
+            params['query'] = final_query
+            params.update(context.external_data.query_params)
+            fields = context.external_data.form_data
+        else:
+            body = final_query
+            fields = None
+            headers['Content-Type'] = 'text/plain; charset=utf-8'
+        response = self._raw_request(body,
                                      params,
                                      headers,
                                      stream=True,
                                      retries=self.query_retries,
+                                     fields=fields,
                                      server_wait=not context.streaming)
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
+        context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
         if 'X-ClickHouse-Summary' in response.headers:
             try:
@@ -313,6 +330,7 @@ class HttpClient(Client):
                      retries: int = 0,
                      stream: bool = False,
                      server_wait: bool = True,
+                     fields: Optional[Dict[str, tuple]] = None,
                      error_handler: Callable = None) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
@@ -332,13 +350,16 @@ class HttpClient(Client):
         kwargs = {
             'headers': headers,
             'timeout': self.timeout,
-            'body': data,
             'retries': self.http_retries,
             'preload_content': not stream
         }
-        if self._server_host_name:
+        if self.server_host_name:
             kwargs['assert_same_host'] = False
-            kwargs['headers'].update({'Host': self._server_host_name})
+            kwargs['headers'].update({'Host': self.server_host_name})
+        if fields:
+            kwargs['fields'] = fields
+        else:
+            kwargs['body'] = data
         while True:
             attempts += 1
             try:
@@ -376,12 +397,10 @@ class HttpClient(Client):
             logger.debug('ping failed', exc_info=True)
             return False
 
-    def raw_query(self,
-                  query: str,
+    def raw_query(self, query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-                  settings: Optional[Dict[str, Any]] = None,
-                  fmt: str = None,
-                  use_database: bool = True) -> bytes:
+                  settings: Optional[Dict[str, Any]] = None, fmt: str = None,
+                  use_database: bool = True, external_data: Optional[ExternalData] = None) -> bytes:
         """
         See BaseClient doc_string for this method
         """
@@ -392,7 +411,15 @@ class HttpClient(Client):
         if use_database and self.database:
             params['database'] = self.database
         params.update(bind_params)
-        return self._raw_request(final_query, params).data
+        if external_data:
+            body = bytes()
+            params['query'] = final_query
+            params.update(external_data.query_params)
+            fields = external_data.form_data
+        else:
+            body = final_query
+            fields = None
+        return self._raw_request(body, params, fields=fields).data
 
     def close(self):
         if self._owns_pool_manager:

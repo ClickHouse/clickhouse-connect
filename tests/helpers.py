@@ -1,17 +1,18 @@
-import math
 import random
 import re
 from typing import Sequence, Optional, Union, Type
 
+import math
+import pytz
 import pkg_resources
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
-from clickhouse_connect.driver.extras import random_col_data, random_ascii_str
+from clickhouse_connect.driver.extras import random_col_data, random_ascii_str, RandomValueDef
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
+from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
 
 LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2
@@ -121,8 +122,11 @@ def random_columns(cnt: int = 16, col_prefix: str = 'col'):
     return tuple(col_names), tuple(col_types)
 
 
-def random_data(col_types: Sequence[ClickHouseType], num_rows: int = 1):
-    data = [tuple(random_col_data(col_type, num_rows)) for col_type in col_types]
+def random_data(col_types: Sequence[ClickHouseType],
+                num_rows: int = 1,
+                server_tz: pytz.tzinfo = pytz.UTC):
+    col_def = RandomValueDef(server_tz)
+    data = [tuple(random_col_data(col_type, num_rows, col_def)) for col_type in col_types]
     all_cols = [list(range(num_rows))]
     all_cols.extend(data)
     return list(zip(*all_cols))

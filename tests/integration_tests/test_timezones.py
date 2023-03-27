@@ -25,6 +25,25 @@ def test_basic_timezones(test_client: Client):
         assert row[0].microsecond == 789123
 
 
+def test_server_timezone(test_client: Client):
+    #  This test is really for manual testing since changing the timezone on the test ClickHouse server
+    #  still requires a restart.  Other tests will depend on https://github.com/ClickHouse/ClickHouse/pull/44149
+    test_client.apply_server_timezone = True
+    try:
+        date = test_client.query("SELECT toDateTime('2023-03-18 16:04:25') as st").first_row[0]
+        if test_client.server_tz == pytz.UTC:
+            assert date.tzinfo is None
+            assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=None)
+            assert date.timestamp() == 1679155465
+        else:
+            den_tz = pytz.timezone('America/Denver').localize(datetime(2020, 8, 8)).tzinfo
+            assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=den_tz)
+            assert date.tzinfo == den_tz
+            assert date.timestamp() == 1679177065
+    finally:
+        test_client.apply_server_timezone = False
+
+
 def test_column_timezones(test_client: Client):
     date_tz64 = "toDateTime64('2023-01-02 15:44:22.7832', 6, 'Asia/Shanghai')"
     if not test_client.min_version('20'):
