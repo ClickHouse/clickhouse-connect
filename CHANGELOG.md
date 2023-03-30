@@ -17,6 +17,13 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
+## 0.5.18, 2023-03-30
+### Performance Improvement
+- The server timezone will not be applied (and Python datetime types will be timezone naive) if the client and server timezones match
+and the `get_client` apply_server_timezone parameter is True (the default).  This improves performance where client and server
+have the same (non-UTC) timezone.  To override this behavior and always apply a server timezone to the result, use `apply_server_timezone='always'`.
+This should fix https://github.com/ClickHouse/clickhouse-connect/issues/157
+
 
 ## 0.5.17, 2023-03-26
 ### Timezone Improvements
