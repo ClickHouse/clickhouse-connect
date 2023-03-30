@@ -1,6 +1,6 @@
 import io
 import logging
-from datetime import tzinfo
+from datetime import tzinfo, datetime
 
 import pytz
 
@@ -42,7 +42,7 @@ class Client(ABC):
                  uri: str,
                  query_retries: int,
                  server_host_name: Optional[str],
-                 apply_server_timezone: Optional[bool]):
+                 apply_server_timezone: Optional[Union[str, bool]]):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
@@ -52,7 +52,6 @@ class Client(ABC):
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
         self.server_host_name = server_host_name
-        self.apply_server_timezone = apply_server_timezone is True
         self.server_tz = pytz.UTC
         self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
@@ -60,6 +59,9 @@ class Client(ABC):
             self.server_tz = pytz.timezone(server_tz)
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
+        offsets_match = datetime.now().astimezone().utcoffset() == datetime.now(tz=self.server_tz).utcoffset()
+        self.apply_server_timezone = apply_server_timezone == 'always' or \
+                                     (apply_server_timezone is True and not offsets_match)
         readonly = 'readonly'
         if not self.min_version('19.17'):
             readonly = common.get_setting('readonly')
