@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from clickhouse_connect.driver.query import finalize_query
+import pytest
+
+from clickhouse_connect.driver.query import finalize_query, format_bind_value
 
 
 def test_finalize():
@@ -14,3 +16,19 @@ def test_finalize():
     parameters = [hash_id, timestamp]
     query = finalize_query('SELECT hash_id FROM db.mytable WHERE hash_id = %s AND dt = %s', parameters)
     assert query == expected
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("a", "a"),
+    ("a'", r"a\'"),
+    ("'a'", r"\'a\'"),
+    ("''a'", r"\'\'a\'"),
+    ([], "[]"),
+    ([1], "[1]"),
+    (["a"], "['a']"),
+    (["a'"], r"['a\'']"),
+    ([["a"]], "[['a']]"),
+
+])
+def test_format_bind_value(value, expected):
+    assert format_bind_value(value) == expected

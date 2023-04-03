@@ -393,7 +393,10 @@ def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]]
 
 
 def format_str(value: str):
-    return f"'{''.join(f'{BS}{c}' if c in must_escape else c for c in value)}'"
+    return f"'{escape_str(value)}'"
+
+def escape_str(value: str):
+    return ''.join(f'{BS}{c}' if c in must_escape else c for c in value)
 
 
 # pylint: disable=too-many-return-statements
@@ -431,15 +434,22 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     return str(value)
 
 
-def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC):
+def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool = True):
     """
     Format Python values in a ClickHouse query
     :param value: Python object
     :param server_tz: Server timezone for adjusting datetime values
     :return: Literal string for python value
     """
+    recurse = lambda x: format_bind_value(x, server_tz=server_tz, top_level=False)
     if value is None:
         return 'NULL'
+    if isinstance(value, str):
+        if not top_level:
+            # At the top levels, strings must not be surrounded by quotes
+            return format_str(value)
+        else:
+            return escape_str(value)
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
@@ -447,17 +457,17 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, list):
-        return f"[{', '.join(format_bind_value(x, server_tz) for x in value)}]"
+        return f"[{', '.join(recurse(x) for x in value)}]"
     if isinstance(value, tuple):
-        return f"({', '.join(format_bind_value(x, server_tz) for x in value)})"
+        return f"({', '.join(recurse(x) for x in value)})"
     if isinstance(value, dict):
         if common.get_setting('dict_parameter_format') == 'json':
             return any_to_json(value).decode()
-        pairs = [format_bind_value(k, server_tz) + ':' + format_bind_value(v, server_tz)
+        pairs = [recurse(k) + ':' + recurse(v)
                  for k, v in value.items()]
         return f"{{{', '.join(pairs)}}}"
     if isinstance(value, Enum):
-        return format_bind_value(value.value, server_tz)
+        return recurse(value.value)
     return str(value)
 
 
