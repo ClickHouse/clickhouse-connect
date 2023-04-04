@@ -18,7 +18,8 @@ def test_finalize():
     assert query == expected
 
 
-@pytest.mark.parametrize("value, expected", [
+# pylint: disable=inconsistent-quotes
+@pytest.mark.parametrize('value, expected', [
     ("a", "a"),
     ("a'", r"a\'"),
     ("'a'", r"\'a\'"),

@@ -439,17 +439,19 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
     Format Python values in a ClickHouse query
     :param value: Python object
     :param server_tz: Server timezone for adjusting datetime values
+    :param top_level: Flag for top level for nested structures
     :return: Literal string for python value
     """
-    recurse = lambda x: format_bind_value(x, server_tz=server_tz, top_level=False)
+    def recurse(x):
+        return format_bind_value(x, server_tz, False)
+
     if value is None:
         return 'NULL'
     if isinstance(value, str):
-        if not top_level:
+        if top_level:
             # At the top levels, strings must not be surrounded by quotes
-            return format_str(value)
-        else:
             return escape_str(value)
+        return format_str(value)
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
