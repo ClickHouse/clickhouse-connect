@@ -159,8 +159,8 @@ def check_env_proxy(scheme: str, host: str, port: int) -> Optional[str]:
             name = name.lstrip('.').lower()
             if name in (host, f'{host}:{port}'):
                 return None  # Host or host/port matches
-            if host.endswith(name):
-                return None
+            if host.endswith('.' + name):
+                return None  # Domain matches
     return proxy
 
 
