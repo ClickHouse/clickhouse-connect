@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 import uuid
 from base64 import b64encode
@@ -22,7 +21,7 @@ from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
-    default_pool_manager, get_proxy_manager, all_managers
+    default_pool_manager, get_proxy_manager, all_managers, check_env_proxy
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -78,8 +77,8 @@ class HttpClient(Client):
         ch_settings = settings or {}
         self.http = pool_mgr
         if interface == 'https':
-            if not https_proxy and 'HTTPS_PROXY' in os.environ:
-                https_proxy = os.environ['HTTPS_PROXY']
+            if not https_proxy:
+                https_proxy = check_env_proxy('https', host, port)
             if client_cert:
                 if not username:
                     raise ProgrammingError('username parameter is required for Mutual TLS authentication')
@@ -101,8 +100,8 @@ class HttpClient(Client):
                 self.http = get_pool_manager(https_proxy=https_proxy, **options)
                 self._owns_pool_manager = True
         if not self.http:
-            if not http_proxy and 'HTTP_PROXY' in os.environ:
-                http_proxy = os.environ['HTTP_PROXY']
+            if not http_proxy:
+                http_proxy = check_env_proxy('http', host, port)
             if http_proxy:
                 self.http = get_proxy_manager(host, http_proxy)
             else:

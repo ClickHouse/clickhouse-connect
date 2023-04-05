@@ -17,10 +17,14 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
-## 0.5.19
+## 0.5.19, 2023-04-05
 ### Bug Fixes
 - Fix quoting and escaping of array literals in server parameters.  See [#159](https://github.com/ClickHouse/clickhouse-connect/issues/159).  Big thanks to
 [Joachim Jablon](https://github.com/ewjoachim) for the report and the fix.
+- Pandas and numpy Date values were incorrect for values after 2050.  This has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/164
+- Fixed server side parameter binding of the NULL value for Nullable types
+- Added support for `no_proxy`/`NO_PROXY` environment variable.  Also added support for lower case `http_proxy` and `https_proxy` variables.  Note that
+lower case versions have precedence over upper case versions.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/163
 
 ## 0.5.18, 2023-03-30
 ### Performance Improvement

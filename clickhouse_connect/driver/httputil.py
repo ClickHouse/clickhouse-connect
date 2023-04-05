@@ -1,9 +1,10 @@
 import atexit
 import http
 import logging
+import os
 import sys
 import socket
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import certifi
 import lz4.frame
@@ -135,6 +136,32 @@ def get_response_data(response: HTTPResponse) -> bytes:
         lz4_decom = lz4.frame.LZ4FrameDecompressor()
         return lz4_decom.decompress(response.data, len(response.data))
     return response.data
+
+
+def check_env_proxy(scheme: str, host: str, port: int) -> Optional[str]:
+    env_var = f'{scheme}_proxy'.lower()
+    proxy = os.environ.get(env_var)
+    if not proxy:
+        proxy = os.environ.get(env_var.upper())
+        if not proxy:
+            return None
+    no_proxy = os.environ.get('no_proxy')
+    if not no_proxy:
+        no_proxy = os.environ.get('NO_PROXY')
+        if not no_proxy:
+            return proxy
+    if no_proxy == '*':
+        return None  # Wildcard no proxy means don't actually proxy anything
+    host = host.lower()
+    for name in no_proxy.split(','):
+        name = name.strip()
+        if name:
+            name = name.lstrip('.').lower()
+            if name in (host, f'{host}:{port}'):
+                return None  # Host or host/port matches
+            if host.endswith(name):
+                return None
+    return proxy
 
 
 default_pool_manager = get_pool_manager()
