@@ -28,3 +28,7 @@ def test_params(test_client: Client, table_context: callable):
         result = test_client.query("SELECT * FROM test_bind_params WHERE value != %(v)s AND value like '%%1'",
                                    parameters={'v': 'v11'})
         assert result.row_count == 2
+
+    result = test_client.query('SELECT number FROM numbers(10) WHERE {n:Nullable(String)} IS NULL',
+                               parameters={'n': None}).result_rows
+    assert len(result) == 10

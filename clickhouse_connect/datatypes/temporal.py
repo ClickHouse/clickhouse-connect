@@ -27,7 +27,7 @@ class Date(ClickHouseType):
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, '<i2', num_rows).astype(self.np_type)
+            return numpy_conv.read_numpy_array(source, '<u2', num_rows).astype(self.np_type)
         return data_conv.read_date_col(source, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):

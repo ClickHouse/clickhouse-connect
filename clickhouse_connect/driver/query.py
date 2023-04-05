@@ -395,6 +395,7 @@ def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]]
 def format_str(value: str):
     return f"'{escape_str(value)}'"
 
+
 def escape_str(value: str):
     return ''.join(f'{BS}{c}' if c in must_escape else c for c in value)
 
@@ -446,7 +447,7 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
         return format_bind_value(x, server_tz, False)
 
     if value is None:
-        return 'NULL'
+        return '\\N'
     if isinstance(value, str):
         if top_level:
             # At the top levels, strings must not be surrounded by quotes
