@@ -108,7 +108,7 @@ class Client(ABC):
         comp_setting = self.server_settings.get(key)
         if not comp_setting:
             return SettingStatus(False, False)
-        return SettingStatus(comp_setting != '0', comp_setting.readonly != 1)
+        return SettingStatus(comp_setting.value != '0', comp_setting.readonly != 1)
 
     def _prep_query(self, context: QueryContext):
         if context.is_select and not context.has_limit and self.query_limit:

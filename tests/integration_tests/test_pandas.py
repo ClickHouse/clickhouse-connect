@@ -204,3 +204,17 @@ def test_pandas_date(test_client: Client, table_context:Callable):
         assert result_df.iloc[0]['null_dt'] == pd.Timestamp(2023, 5, 4)
         assert pd.isnull(result_df.iloc[1]['null_dt'])
         assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
+
+
+def test_pandas_row_df(test_client: Client, table_context:Callable):
+    with table_context('test_pandas_row_df', ['key UInt64', 'dt DateTime64(6)']):
+        df = pd.DataFrame({'key': [1, 2],
+                          'dt': [pd.Timestamp(2023, 5, 4, 10, 20), pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)]})
+        df = df.iloc[1:]
+        source_df = df.copy()
+        test_client.insert_df('test_pandas_row_df', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_row_df')
+        assert result_df.iloc[0]['key'] == 2
+        assert result_df.iloc[0]['dt'] == pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)
+        assert len(result_df) == 1
+        assert source_df.equals(df)
