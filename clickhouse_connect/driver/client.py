@@ -1,6 +1,6 @@
 import io
 import logging
-from datetime import tzinfo
+from datetime import tzinfo, datetime
 
 import pytz
 
@@ -12,9 +12,10 @@ from clickhouse_connect import common
 from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.common import dict_copy, StreamContext
+from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int, coerce_bool
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, QueryContext, arrow_buffer
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
 
 
-# pylint: disable=too-many-public-methods
+# pylint: disable=too-many-public-methods, too-many-instance-attributes
 class Client(ABC):
     """
     Base ClickHouse Connect client
@@ -35,14 +36,22 @@ class Client(ABC):
     valid_transport_settings = set()
     optional_transport_settings = set()
 
-    def __init__(self, database: str, query_limit: int, uri: str):
+    def __init__(self,
+                 database: str,
+                 query_limit: int,
+                 uri: str,
+                 query_retries: int,
+                 server_host_name: Optional[str],
+                 apply_server_timezone: Optional[Union[str, bool]]):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
         :param query_limit: default LIMIT for queries
         :param uri: uri for error messages
         """
-        self.query_limit = query_limit
+        self.query_limit = coerce_int(query_limit)
+        self.query_retries = coerce_int(query_retries)
+        self.server_host_name = server_host_name
         self.server_tz = pytz.UTC
         self.server_version, server_tz, self.database = \
             tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
@@ -50,6 +59,9 @@ class Client(ABC):
             self.server_tz = pytz.timezone(server_tz)
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
+        offsets_differ = datetime.now().astimezone().utcoffset() != datetime.now(tz=self.server_tz).utcoffset()
+        self.apply_server_timezone = apply_server_timezone == 'always' or (
+                    coerce_bool(apply_server_timezone) and offsets_differ)
         readonly = 'readonly'
         if not self.min_version('19.17'):
             readonly = common.get_setting('readonly')
@@ -96,12 +108,21 @@ class Client(ABC):
         comp_setting = self.server_settings.get(key)
         if not comp_setting:
             return SettingStatus(False, False)
-        return SettingStatus(comp_setting != '0', comp_setting.readonly != 1)
+        return SettingStatus(comp_setting.value != '0', comp_setting.readonly != 1)
 
     def _prep_query(self, context: QueryContext):
         if context.is_select and not context.has_limit and self.query_limit:
             return f'{context.final_query}\n LIMIT {self.query_limit}'
         return context.final_query
+
+    def _check_tz_change(self, new_tz) -> Optional[tzinfo]:
+        try:
+            new_tzinfo = pytz.timezone(new_tz)
+            if new_tzinfo != self.server_tz:
+                return new_tzinfo
+        except UnknownTimeZoneError:
+            logger.warning('Unrecognized timezone %s received from ClickHouse', new_tz)
+        return None
 
     @abstractmethod
     def _query_with_context(self, context: QueryContext):
@@ -138,7 +159,8 @@ class Client(ABC):
               max_str_len: Optional[int] = None,
               context: QueryContext = None,
               query_tz: Optional[Union[str, tzinfo]] = None,
-              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> QueryResult:
+              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+              external_data: Optional[ExternalData] = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
         parameters, see the create_query_context method
@@ -165,7 +187,8 @@ class Client(ABC):
                                   use_none: Optional[bool] = None,
                                   context: QueryContext = None,
                                   query_tz: Optional[Union[str, tzinfo]] = None,
-                                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> StreamContext:
+                                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                                  external_data: Optional[ExternalData] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of column oriented blocks. For
         parameters, see the create_query_context method.
@@ -183,7 +206,8 @@ class Client(ABC):
                                use_none: Optional[bool] = None,
                                context: QueryContext = None,
                                query_tz: Optional[Union[str, tzinfo]] = None,
-                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> StreamContext:
+                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                               external_data: Optional[ExternalData] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks. For
         parameters, see the create_query_context method.
@@ -201,7 +225,8 @@ class Client(ABC):
                           use_none: Optional[bool] = None,
                           context: QueryContext = None,
                           query_tz: Optional[Union[str, tzinfo]] = None,
-                          column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None) -> StreamContext:
+                          column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                          external_data: Optional[ExternalData] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks. For
         parameters, see the create_query_context method.
@@ -214,7 +239,8 @@ class Client(ABC):
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                   settings: Optional[Dict[str, Any]] = None,
                   fmt: str = None,
-                  use_database: bool = True) -> bytes:
+                  use_database: bool = True,
+                  external_data: Optional[ExternalData] = None) -> bytes:
         """
         Query method that simply returns the raw ClickHouse format bytes
         :param query: Query statement/format string
@@ -223,6 +249,7 @@ class Client(ABC):
         :param fmt: ClickHouse output format
         :param use_database  Send the database parameter to ClickHouse so the command will be executed in the client
          database context.
+        :param external_data  External data to send with the query
         :return: bytes representing raw ClickHouse return value based on format
         """
 
@@ -236,7 +263,8 @@ class Client(ABC):
                  encoding: Optional[str] = None,
                  use_none: Optional[bool] = None,
                  max_str_len: Optional[int] = None,
-                 context: QueryContext = None):
+                 context: QueryContext = None,
+                 external_data: Optional[ExternalData] = None):
         """
         Query method that returns the results as a numpy array.  For parameter values, see the
         create_query_context method
@@ -254,7 +282,8 @@ class Client(ABC):
                         encoding: Optional[str] = None,
                         use_none: Optional[bool] = None,
                         max_str_len: Optional[int] = None,
-                        context: QueryContext = None) -> StreamContext:
+                        context: QueryContext = None,
+                        external_data: Optional[ExternalData] = None) -> StreamContext:
         """
         Query method that returns the results as a stream of numpy arrays.  For parameter values, see the
         create_query_context method
@@ -273,7 +302,10 @@ class Client(ABC):
                  use_none: Optional[bool] = None,
                  max_str_len: Optional[int] = None,
                  use_na_values: Optional[bool] = None,
-                 context: QueryContext = None):
+                 query_tz: Optional[str] = None,
+                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                 context: QueryContext = None,
+                 external_data: Optional[ExternalData] = None):
         """
         Query method that results the results as a pandas dataframe.  For parameter values, see the
         create_query_context method
@@ -292,7 +324,10 @@ class Client(ABC):
                         use_none: Optional[bool] = None,
                         max_str_len: Optional[int] = None,
                         use_na_values: Optional[bool] = None,
-                        context: QueryContext = None) -> StreamContext:
+                        query_tz: Optional[str] = None,
+                        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                        context: QueryContext = None,
+                        external_data: Optional[ExternalData] = None) -> StreamContext:
         """
         Query method that returns the results as a StreamContext.  For parameter values, see the
         create_query_context method
@@ -318,7 +353,8 @@ class Client(ABC):
                              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                              use_na_values: Optional[bool] = None,
                              streaming: bool = False,
-                             as_pandas: bool = False) -> QueryContext:
+                             as_pandas: bool = False,
+                             external_data: Optional[ExternalData] = None) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -345,6 +381,7 @@ class Client(ABC):
           pandas.NA and pandas.NaT for ClickHouse NULL values.  Defaulted to True for query_df methods
         :param as_pandas Return the result columns as pandas.Series objects
         :param streaming Marker used to correctly configure streaming queries
+        :param external_data ClickHouse "external data" to send with query
         :return: Reusable QueryContext
         """
         if context:
@@ -363,7 +400,8 @@ class Client(ABC):
                                         column_tzs=column_tzs,
                                         as_pandas=as_pandas,
                                         use_na_values=use_na_values,
-                                        streaming=streaming)
+                                        streaming=streaming,
+                                        external_data=external_data)
         if use_numpy and max_str_len is None:
             max_str_len = 0
         if as_pandas and use_na_values is None:
@@ -383,7 +421,9 @@ class Client(ABC):
                             column_tzs=column_tzs,
                             use_na_values=use_na_values,
                             as_pandas=as_pandas,
-                            streaming=streaming)
+                            streaming=streaming,
+                            apply_server_tz=self.apply_server_timezone,
+                            external_data=external_data)
 
     def query_arrow(self,
                     query: str,

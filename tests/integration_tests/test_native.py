@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
 from typing import Callable
 
@@ -13,6 +14,14 @@ def test_low_card(test_client: Client, table_context: Callable):
         test_client.insert('native_test', [[55, 'TV1'], [-578328, 'TV38882'], [57372, 'Kabc/defXX']])
         result = test_client.query("SELECT * FROM native_test WHERE value_1 LIKE '%abc/def%'")
         assert len(result.result_set) == 1
+
+
+def test_bare_datetime64(test_client: Client, table_context: Callable):
+    with table_context('bare_datetime64_test', ['key UInt32', 'dt64 DateTime64']):
+        test_client.insert('bare_datetime64_test', [[1, datetime(2023, 3, 25, 10, 5, 44, 772402)], [2, datetime.now()]])
+        result = test_client.query('SELECT * FROM bare_datetime64_test ORDER BY key').result_rows
+        assert result[0][0] == 1
+        assert result[0][1] == datetime(2023, 3, 25, 10, 5, 44, 772000)
 
 
 def test_nulls(test_client: Client, table_context: Callable):

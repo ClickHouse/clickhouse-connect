@@ -12,6 +12,7 @@ from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
+from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
@@ -52,7 +53,9 @@ class QueryContext(BaseQueryContext):
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                  use_na_values: Optional[bool] = None,
                  as_pandas: bool = False,
-                 streaming: bool = False):
+                 streaming: bool = False,
+                 apply_server_tz: bool = False,
+                 external_data: Optional[ExternalData] = None):
         """
         Initializes various configuration settings for the query context
 
@@ -88,19 +91,19 @@ class QueryContext(BaseQueryContext):
                          use_numpy if use_numpy is not None else False)
         self.query = query
         self.parameters = parameters or {}
-        self.server_tz = server_tz
         self.use_none = True if use_none is None else use_none
         self.column_oriented = False if column_oriented is None else column_oriented
         self.use_numpy = use_numpy
         self.max_str_len = 0 if max_str_len is None else max_str_len
-        if query_tz is not None:
-            if isinstance(query_tz, str):
-                try:
-                    query_tz = pytz.timezone(query_tz)
-                except UnknownTimeZoneError as ex:
-                    raise ProgrammingError('query_tz is not recognized') from ex
+        self.server_tz = server_tz
+        self.apply_server_tz = apply_server_tz
+        self.external_data = external_data
+        if isinstance(query_tz, str):
+            try:
+                query_tz = pytz.timezone(query_tz)
+            except UnknownTimeZoneError as ex:
+                raise ProgrammingError(f'query_tz {query_tz} is not recognized') from ex
         self.query_tz = query_tz
-        self.active_tz = query_tz
         if column_tzs is not None:
             for col_name, timezone in column_tzs.items():
                 if isinstance(timezone, str):
@@ -108,8 +111,10 @@ class QueryContext(BaseQueryContext):
                         timezone = pytz.timezone(timezone)
                         column_tzs[col_name] = timezone
                     except UnknownTimeZoneError as ex:
-                        raise ProgrammingError('query_tz is not recognized') from ex
+                        raise ProgrammingError(f'column_tz {timezone} is not recognized') from ex
         self.column_tzs = column_tzs
+        self.column_tz = None
+        self.response_tz = None
         self.block_info = False
         self.as_pandas = as_pandas
         self.use_pandas_na = as_pandas and pd_has_na
@@ -142,12 +147,28 @@ class QueryContext(BaseQueryContext):
         self.parameters[key] = value
         self._update_query()
 
+    def set_response_tz(self, response_tz: tzinfo):
+        self.response_tz = response_tz
+
     def start_column(self, name: str):
         super().start_column(name)
         if self.column_tzs and name in self.column_tzs:
-            self.active_tz = self.column_tzs[name]
+            self.column_tz = self.column_tzs[name]
         else:
-            self.active_tz = self.query_tz
+            self.column_tz = None
+
+    def active_tz(self, datatype_tz: Optional[tzinfo]):
+        if self.column_tz:
+            return self.column_tz
+        if datatype_tz:
+            return datatype_tz
+        if self.query_tz:
+            return self.query_tz
+        if self.response_tz:
+            return self.response_tz
+        if self.apply_server_tz:
+            return self.server_tz
+        return None
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -165,7 +186,8 @@ class QueryContext(BaseQueryContext):
                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                      use_na_values: Optional[bool] = None,
                      as_pandas: bool = False,
-                     streaming: bool = False) -> 'QueryContext':
+                     streaming: bool = False,
+                     external_data: Optional[ExternalData] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -184,7 +206,9 @@ class QueryContext(BaseQueryContext):
                             self.column_tzs if column_tzs is None else column_tzs,
                             self.use_na_values if use_na_values is None else use_na_values,
                             as_pandas,
-                            streaming)
+                            streaming,
+                            self.apply_server_tz,
+                            self.external_data if external_data is None else external_data)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
@@ -369,7 +393,11 @@ def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]]
 
 
 def format_str(value: str):
-    return f"'{''.join(f'{BS}{c}' if c in must_escape else c for c in value)}'"
+    return f"'{escape_str(value)}'"
+
+
+def escape_str(value: str):
+    return ''.join(f'{BS}{c}' if c in must_escape else c for c in value)
 
 
 # pylint: disable=too-many-return-statements
@@ -407,15 +435,24 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     return str(value)
 
 
-def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC):
+def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool = True):
     """
     Format Python values in a ClickHouse query
     :param value: Python object
     :param server_tz: Server timezone for adjusting datetime values
+    :param top_level: Flag for top level for nested structures
     :return: Literal string for python value
     """
+    def recurse(x):
+        return format_bind_value(x, server_tz, False)
+
     if value is None:
-        return 'NULL'
+        return '\\N'
+    if isinstance(value, str):
+        if top_level:
+            # At the top levels, strings must not be surrounded by quotes
+            return escape_str(value)
+        return format_str(value)
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
@@ -423,17 +460,17 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, list):
-        return f"[{', '.join(format_bind_value(x, server_tz) for x in value)}]"
+        return f"[{', '.join(recurse(x) for x in value)}]"
     if isinstance(value, tuple):
-        return f"({', '.join(format_bind_value(x, server_tz) for x in value)})"
+        return f"({', '.join(recurse(x) for x in value)})"
     if isinstance(value, dict):
         if common.get_setting('dict_parameter_format') == 'json':
             return any_to_json(value).decode()
-        pairs = [format_bind_value(k, server_tz) + ':' + format_bind_value(v, server_tz)
+        pairs = [recurse(k) + ':' + recurse(v)
                  for k, v in value.items()]
         return f"{{{', '.join(pairs)}}}"
     if isinstance(value, Enum):
-        return format_bind_value(value.value, server_tz)
+        return recurse(value.value)
     return str(value)
 
 

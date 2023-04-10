@@ -189,3 +189,32 @@ def test_pandas_streams(test_client: Client):
                 row_count += len(df)
         assert row_count == query_rows
         assert stream_count > 2
+
+
+def test_pandas_date(test_client: Client, table_context:Callable):
+    with table_context('test_pandas_date', ['key UInt32', 'dt Date', 'null_dt Nullable(Date)']):
+        df = pd.DataFrame([[1, pd.Timestamp(1992, 10, 15), pd.Timestamp(2023, 5, 4)],
+                           [2, pd.Timestamp(2088, 1, 31), pd.NaT],
+                           [3, pd.Timestamp(1971, 4, 15), pd.Timestamp(2101, 12, 31)]],
+                          columns=['key', 'dt', 'null_dt'])
+        test_client.insert_df('test_pandas_date', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_date')
+        assert result_df.iloc[0]['dt'] == pd.Timestamp(1992, 10, 15)
+        assert result_df.iloc[1]['dt'] == pd.Timestamp(2088, 1, 31)
+        assert result_df.iloc[0]['null_dt'] == pd.Timestamp(2023, 5, 4)
+        assert pd.isnull(result_df.iloc[1]['null_dt'])
+        assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
+
+
+def test_pandas_row_df(test_client: Client, table_context:Callable):
+    with table_context('test_pandas_row_df', ['key UInt64', 'dt DateTime64(6)']):
+        df = pd.DataFrame({'key': [1, 2],
+                          'dt': [pd.Timestamp(2023, 5, 4, 10, 20), pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)]})
+        df = df.iloc[1:]
+        source_df = df.copy()
+        test_client.insert_df('test_pandas_row_df', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_row_df')
+        assert result_df.iloc[0]['key'] == 2
+        assert result_df.iloc[0]['dt'] == pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)
+        assert len(result_df) == 1
+        assert source_df.equals(df)

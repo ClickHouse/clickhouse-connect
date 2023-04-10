@@ -6,7 +6,7 @@ from clickhouse_connect.driver.tools import insert_file
 
 
 def test_csv_upload(test_client: Client, table_context: Callable):
-    data_file = f'{Path(__file__).parent}/IMDB_Top_250.csv'
+    data_file = f'{Path(__file__).parent}/movies.csv'
     with table_context('test_csv_upload', ['movie String', 'year UInt16', 'rating Decimal32(3)']):
         insert_file(test_client, 'test_csv_upload', data_file,
                     settings={'input_format_allow_errors_ratio': .2,
@@ -18,7 +18,7 @@ def test_csv_upload(test_client: Client, table_context: Callable):
 
 
 def test_parquet_upload(test_client: Client, table_context: Callable):
-    data_file = f'{Path(__file__).parent}/IMDB_Top_250.parquet'
+    data_file = f'{Path(__file__).parent}/movies.parquet'
     with table_context('test_parquet_upload', ['movie String', 'year UInt16', 'rating Float64']):
         insert_file(test_client, 'test_parquet_upload', data_file, 'Parquet')
         res = test_client.query(
