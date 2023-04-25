@@ -135,7 +135,7 @@ def main():
         #read_python_rows(query)
         #read_python_stream_rows(query)
         read_python_stream_columns(query)
-        #read_pandas_stream(query)
+        read_pandas_stream(query)
         # read_numpy(query)
         #read_pandas(query)
         # read_arrow(query)

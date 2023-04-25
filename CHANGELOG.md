@@ -1,21 +1,16 @@
 # ClickHouse Connect ChangeLog
 
-### Deprecation Warning -- Context interface and stream* methods to be removed from QueryResult
-In v0.5.0-0.5.3 releases, streaming was implemented by returning generators from the QueryResult methods
-`stream_column_blocks`, `stream_row_blocks`, and `stream_rows`.  Safe usage of these methods required executing them
-within a Python context created `with` the QueryResult itself.  Otherwise, the HTTP response could be left open in the
-case of an exception or other failure to consume the stream.
+## 0.5.21, TBD
+### Breaking Changes
+- The `interface` and `stream` methods have been removed from the QueryResult object.  Please use the contexts create by the
+`*stream` methods instead.
+- The `send_progress` keyword argument has been removed from the `get_client` factory method.  That setting is now automatically handled.
 
-Using QueryResult as a context is unintuitive, and that usage pattern is deprecated and will be completely disabled in
-a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
-under New Features in the 0.5.4 release, below.
+### Bug Fix
+- Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.  Thanks to
+[Alexandro Sandre](https://github.com/alexandrosandre) for the fix.
+- 
 
-### Deprecation Warning -- send_progress Client argument now ignored
-The `send_progress` keyword argument to the get_client method has been deprecated.  It now does nothing and will be removed
-in a future release.  Starting with 0.5.9 the driver now requests ClickHouse progress headers in all cases to provide
-"keep alive" functionality for both long-running streaming query result processing, and long-running insert/DDL queries.
-The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
-on whether the query is streaming or not.
 
 ## 0.5.20, 2023-04-06
 ### Bug Fixes
@@ -24,7 +19,7 @@ a subset of the original.)   https://github.com/ClickHouse/clickhouse-connect/is
 the report and suggested fix, and his continued stress testing of Pandas functionality.
 - Compression and other control settings were not properly sent with the request if the corresponding setting was not enabled on the server.
 Many thanks to [Alexander Khmelevskiy](https://github.com/khmelevskiy) for the extended investigation and subsequent fix.  https://github.com/ClickHouse/clickhouse-connect/issues/157
-- Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.
+
 
 ## 0.5.19, 2023-04-05
 ### Bug Fixes
