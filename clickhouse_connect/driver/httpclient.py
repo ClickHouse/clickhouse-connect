@@ -372,7 +372,7 @@ class HttpClient(Client):
                     if attempts == 1:
                         logger.debug('Retrying remotely closed connection')
                         continue
-                logger.exception('Unexpected Http Driver Exception')
+                logger.warning('Unexpected Http Driver Exception')
                 raise OperationalError(f'Error {ex} executing HTTP request {self.url}') from ex
             if 200 <= response.status < 300:
                 return response
