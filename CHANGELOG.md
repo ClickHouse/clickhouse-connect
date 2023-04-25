@@ -24,6 +24,7 @@ a subset of the original.)   https://github.com/ClickHouse/clickhouse-connect/is
 the report and suggested fix, and his continued stress testing of Pandas functionality.
 - Compression and other control settings were not properly sent with the request if the corresponding setting was not enabled on the server.
 Many thanks to [Alexander Khmelevskiy](https://github.com/khmelevskiy) for the extended investigation and subsequent fix.  https://github.com/ClickHouse/clickhouse-connect/issues/157
+- Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.
 
 ## 0.5.19, 2023-04-05
 ### Bug Fixes
