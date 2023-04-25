@@ -314,7 +314,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if self.read_format(ctx) == 'string':
             return [str(x) for x in column]
-        if ctx.use_pandas_na and self.nullable:
+        if ctx.use_na_values and self.nullable:
             return pd.array(column, dtype=self.base_type)
         if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype=self.np_type)

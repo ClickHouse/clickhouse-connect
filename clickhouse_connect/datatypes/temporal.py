@@ -88,7 +88,7 @@ class DateTimeBase(ClickHouseType, registered=False):
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
-        if ctx.use_pandas_na:
+        if ctx.use_na_values:
             return pd.NA if fmt == 'int' else pd.NaT
         if ctx.use_none:
             return None
