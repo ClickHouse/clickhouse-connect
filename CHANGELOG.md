@@ -17,8 +17,13 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
-## WIP for next release
+## 0.5.20, 2023-04-06
 ### Bug Fixes
+- Fix Pandas dataframe inserts where the Dataframe index does not match the data values (after, for example, creating a new DataFrame from
+a subset of the original.)   https://github.com/ClickHouse/clickhouse-connect/issues/167  Thanks to [Georgi Peev](https://github.com/georgipeev) for
+the report and suggested fix, and his continued stress testing of Pandas functionality.
+- Compression and other control settings were not properly sent with the request if the corresponding setting was not enabled on the server.
+Many thanks to [Alexander Khmelevskiy](https://github.com/khmelevskiy) for the extended investigation and subsequent fix.  https://github.com/ClickHouse/clickhouse-connect/issues/157
 - Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.
 
 ## 0.5.19, 2023-04-05

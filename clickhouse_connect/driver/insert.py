@@ -8,7 +8,6 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 if TYPE_CHECKING:
     from clickhouse_connect.datatypes.base import ClickHouseType
 
-
 DEFAULT_BLOCK_SIZE = 16834
 
 
@@ -25,6 +24,7 @@ class InsertContext(BaseQueryContext):
     """
     Reusable Argument/parameter object for inserts.
     """
+
     # pylint: disable=too-many-arguments
     def __init__(self,
                  table: str,
@@ -115,7 +115,8 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif 'datetime' in ch_type.np_type and pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col):
+            elif 'datetime' in ch_type.np_type and (pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col)
+                                                    or 'datetime64[ns' in d_type):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'
@@ -130,7 +131,7 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.astype(ch_type.np_type)
                 else:
                     df_col = df_col.replace({np.nan: None})
-            data.append(df_col)
+            data.append(df_col.to_numpy(copy=False))
         return data
 
     def _convert_numpy(self, np_array):
