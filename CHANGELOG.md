@@ -17,6 +17,10 @@ in a future release.  Starting with 0.5.9 the driver now requests ClickHouse pro
 The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
 on whether the query is streaming or not.
 
+## WIP for next release
+### Bug Fixes
+- Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.
+
 ## 0.5.19, 2023-04-05
 ### Bug Fixes
 - Fix quoting and escaping of array literals in server parameters.  See [#159](https://github.com/ClickHouse/clickhouse-connect/issues/159).  Big thanks to
