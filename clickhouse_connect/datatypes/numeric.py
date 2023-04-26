@@ -69,7 +69,7 @@ class UInt64(ArrayType):
         fmt = self.read_format(ctx)
         if fmt == 'string':
             return [str(x) for x in column]
-        if ctx.use_na_values and self.nullable:
+        if ctx.use_extended_dtypes and self.nullable:
             return pd.array(column, dtype='Int64' if fmt == 'signed' else 'UInt64')
         if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype='<q' if fmt == 'signed' else '<u8')
@@ -157,7 +157,7 @@ class Float(ArrayType, registered=False):
         return column
 
     def _active_null(self, ctx: QueryContext):
-        if ctx.use_na_values:
+        if ctx.use_extended_dtypes:
             return nan
         if ctx.use_none:
             return None

@@ -305,7 +305,8 @@ class Client(ABC):
                  query_tz: Optional[str] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                  context: QueryContext = None,
-                 external_data: Optional[ExternalData] = None):
+                 external_data: Optional[ExternalData] = None,
+                 use_extended_dtypes: Optional[bool] = None):
         """
         Query method that results the results as a pandas dataframe.  For parameter values, see the
         create_query_context method
@@ -327,7 +328,8 @@ class Client(ABC):
                         query_tz: Optional[str] = None,
                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                         context: QueryContext = None,
-                        external_data: Optional[ExternalData] = None) -> StreamContext:
+                        external_data: Optional[ExternalData] = None,
+                        use_extended_dtypes: Optional[bool] = None) -> StreamContext:
         """
         Query method that returns the results as a StreamContext.  For parameter values, see the
         create_query_context method
@@ -354,7 +356,8 @@ class Client(ABC):
                              use_na_values: Optional[bool] = None,
                              streaming: bool = False,
                              as_pandas: bool = False,
-                             external_data: Optional[ExternalData] = None) -> QueryContext:
+                             external_data: Optional[ExternalData] = None,
+                             use_extended_dtypes: Optional[bool] = None) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -377,11 +380,13 @@ class Client(ABC):
           objects with the selected timezone.
         :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
           tzinfo objects).  The timezone will be applied to datetime objects returned in the query
-        :param use_na_values:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
-          pandas.NA and pandas.NaT for ClickHouse NULL values.  Defaulted to True for query_df methods
+        :param use_na_values: Deprecated alias for use_advanced_dtypes
         :param as_pandas Return the result columns as pandas.Series objects
         :param streaming Marker used to correctly configure streaming queries
         :param external_data ClickHouse "external data" to send with query
+        :param use_extended_dtypes:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
+          pandas.NA and pandas.NaT for ClickHouse NULL values, as well as extended Pandas dtypes such as IntegerArray
+          and StringArray.  Defaulted to True for query_df methods
         :return: Reusable QueryContext
         """
         if context:
@@ -399,13 +404,15 @@ class Client(ABC):
                                         query_tz=query_tz,
                                         column_tzs=column_tzs,
                                         as_pandas=as_pandas,
-                                        use_na_values=use_na_values,
+                                        use_extended_dtypes=use_extended_dtypes,
                                         streaming=streaming,
                                         external_data=external_data)
         if use_numpy and max_str_len is None:
             max_str_len = 0
-        if as_pandas and use_na_values is None:
-            use_na_values = True
+        if use_extended_dtypes is None:
+            use_extended_dtypes = use_na_values
+        if as_pandas and use_extended_dtypes is None:
+            use_extended_dtypes = True
         return QueryContext(query=query,
                             parameters=parameters,
                             settings=settings,
@@ -419,7 +426,7 @@ class Client(ABC):
                             max_str_len=max_str_len,
                             query_tz=query_tz,
                             column_tzs=column_tzs,
-                            use_na_values=use_na_values,
+                            use_extended_dtypes=use_extended_dtypes,
                             as_pandas=as_pandas,
                             streaming=streaming,
                             apply_server_tz=self.apply_server_timezone,
