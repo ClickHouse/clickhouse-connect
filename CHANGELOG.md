@@ -11,7 +11,7 @@ since 0.5.13, which add automatic handling of progress headers based on the quer
 and will be removed in a future release.
 
 
-## 0.5.21, TBD
+## 0.5.21, 2023-04-26
 ### Bug Fix
 - Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.  Thanks to
 [Alexandro Sandre](https://github.com/alexandrosandre) for the fix.
