@@ -5,7 +5,7 @@ import uuid
 import pytz
 
 from enum import Enum
-from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Iterator
+from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator
 from datetime import date, datetime, tzinfo
 
 from pytz.exceptions import UnknownTimeZoneError

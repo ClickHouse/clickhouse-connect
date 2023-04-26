@@ -1,5 +1,4 @@
 from clickhouse_connect.driver.query import QueryContext
-from clickhouse_connect.driver.query import QueryResult
 
 
 def test_copy_context():
