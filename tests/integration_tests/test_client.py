@@ -46,8 +46,7 @@ def test_none_database(test_client: Client):
     assert test_db == old_db
     try:
         test_client.database = None
-        with test_client.query('SELECT * FROM system.tables'):
-            pass
+        test_client.query('SELECT * FROM system.tables')
         test_db = test_client.command('select currentDatabase()')
         assert test_db == 'default'
         test_client.database = old_db

@@ -56,7 +56,6 @@ class HttpClient(Client):
                  connect_timeout: int = 10,
                  send_receive_timeout: int = 300,
                  client_name: Optional[str] = None,
-                 send_progress: bool = True,
                  verify: bool = True,
                  ca_cert: Optional[str] = None,
                  client_cert: Optional[str] = None,
@@ -272,7 +271,9 @@ class HttpClient(Client):
         if self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
-        response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
+        response = self._raw_request(insert_block, params, headers,
+                                     error_handler=status_handler,
+                                     server_wait=False)
         logger.debug('Insert response code: %d, content: %s', response.status, response.data)
 
     def command(self,

@@ -14,7 +14,7 @@ class BaseQueryContext:
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                  encoding: Optional[str] = None,
-                 use_na_values: bool = False,
+                 use_extended_dtypes: bool = False,
                  use_numpy: bool = False):
         self.settings = settings or {}
         if query_formats is None:
@@ -37,7 +37,7 @@ class BaseQueryContext:
         self.column_formats = column_formats or {}
         self.encoding = encoding
         self.use_numpy = use_numpy
-        self.use_na_values = use_na_values
+        self.use_extended_dtypes = use_extended_dtypes
         self._active_col_fmt = None
         self._active_col_type_fmts = _empty_map
 

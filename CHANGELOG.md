@@ -1,16 +1,25 @@
 # ClickHouse Connect ChangeLog
 
-## 0.5.21, TBD
-### Breaking Changes
-- The `interface` and `stream` methods have been removed from the QueryResult object.  Please use the contexts create by the
-`*stream` methods instead.
-- The `send_progress` keyword argument has been removed from the `get_client` factory method.  That setting is now automatically handled.
+## WARNING -- Breaking changes in 0.5.21
+- The Python context (`__enter__` and `__exit__`) and `stream` methods have been removed from the QueryResult object.  Please use the contexts create by the
+client `*stream` methods instead of using the QueryResult as a context.
+- The `send_progress` keyword argument has been removed from the `get_client` factory method.  This setting has not been used
+since 0.5.13, which add automatic handling of progress headers based on the query type.
 
+## Deprecation Warning -- use_na_types renamed
+- The query_df setting `use_na_types` has been renamed to `use_extended_dtypes`.  The older name is now an alias for `use_extended_dtypes`
+and will be removed in a future release.
+
+
+## 0.5.21, 2023-04-26
 ### Bug Fix
 - Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.  Thanks to
 [Alexandro Sandre](https://github.com/alexandrosandre) for the fix.
-- 
-
+- The `wait_end_of_query` setting is no longer automatically sent with inserts.  This caused unnecessary buffering on the ClickHouse server file system, especially
+in the case of many small inserts.  It can still be added using the `settings` dictionary of the client `*insert` methods if needed for some reason.
+- The query setting `use_na_values` has been renamed to `use_extended_dtypes` and now applies to all extended/special Pandas dtypes (except the Pandas Timestamp type).
+Set this to `False` to limit  the dtypes returned in Pandas dataframes to the "basic" numpy types.  (Note that this will force the use of numpy object arrays
+for most "nullable types")  This should allow creating "basic" dataframes for greater compatibility. Closes https://github.com/ClickHouse/clickhouse-connect/issues/172.  
 
 ## 0.5.20, 2023-04-06
 ### Bug Fixes

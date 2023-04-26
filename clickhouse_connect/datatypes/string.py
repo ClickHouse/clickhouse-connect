@@ -24,7 +24,7 @@ class String(ClickHouseType):
         return source.read_str_col(num_rows, self._active_encoding(ctx), True, self._active_null(ctx))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        if ctx.use_na_values and self.read_format(ctx) == 'native':
+        if ctx.use_extended_dtypes and self.read_format(ctx) == 'native':
             return pd.array(column, dtype=pd.StringDtype())
         if ctx.use_numpy and ctx.max_str_len:
             return np.array(column, dtype=f'<U{ctx.max_str_len}')

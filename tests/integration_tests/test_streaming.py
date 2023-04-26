@@ -5,19 +5,6 @@ from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError, StreamFailureError
 
 
-# This is deprecated version
-def test_numbers_stream(test_client: Client):
-    query_result = test_client.query('SELECT number FROM numbers(1000000)')
-    total = 0
-    blocks = 0
-    with query_result:
-        for x in query_result.stream_column_blocks():
-            total += len(x[0])
-            blocks += 1
-    assert blocks > 0
-    assert total == 1000000
-
-
 def test_row_stream(test_client: Client):
     row_stream = test_client.query_rows_stream('SELECT number FROM numbers(10000)')
     total = 0

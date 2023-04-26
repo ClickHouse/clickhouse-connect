@@ -7,10 +7,10 @@ except ImportError:
 
 try:
     import pandas as pd
-    pd_has_na = not pd.__version__.startswith('0')
+    pd_extended_dtypes = not pd.__version__.startswith('0')
 except ImportError:
     pd = None
-    pd_has_na = False
+    pd_extended_dtypes = False
 
 try:
     import pyarrow as arrow

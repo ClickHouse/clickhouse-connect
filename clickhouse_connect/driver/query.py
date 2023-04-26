@@ -5,7 +5,7 @@ import uuid
 import pytz
 
 from enum import Enum
-from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, Iterator
+from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator
 from datetime import date, datetime, tzinfo
 
 from pytz.exceptions import UnknownTimeZoneError
@@ -16,7 +16,7 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
-from clickhouse_connect.driver.options import check_arrow, pd_has_na
+from clickhouse_connect.driver.options import check_arrow, pd_extended_dtypes
 from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ class QueryContext(BaseQueryContext):
                  max_str_len: Optional[int] = 0,
                  query_tz: Optional[Union[str, tzinfo]] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                 use_na_values: Optional[bool] = None,
+                 use_extended_dtypes: Optional[bool] = None,
                  as_pandas: bool = False,
                  streaming: bool = False,
                  apply_server_tz: bool = False,
@@ -87,7 +87,7 @@ class QueryContext(BaseQueryContext):
                          query_formats,
                          column_formats,
                          encoding,
-                         use_na_values if use_na_values is not None else False,
+                         use_extended_dtypes if use_extended_dtypes is not None else False,
                          use_numpy if use_numpy is not None else False)
         self.query = query
         self.parameters = parameters or {}
@@ -117,7 +117,7 @@ class QueryContext(BaseQueryContext):
         self.response_tz = None
         self.block_info = False
         self.as_pandas = as_pandas
-        self.use_pandas_na = as_pandas and pd_has_na
+        self.use_pandas_na = as_pandas and pd_extended_dtypes
         self.streaming = streaming
         self._update_query()
 
@@ -182,9 +182,9 @@ class QueryContext(BaseQueryContext):
                      column_oriented: Optional[bool] = None,
                      use_numpy: Optional[bool] = None,
                      max_str_len: Optional[int] = None,
-                     query_tz: Optional[Union[str, tzinfo]]= None,
+                     query_tz: Optional[Union[str, tzinfo]] = None,
                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                     use_na_values: Optional[bool] = None,
+                     use_extended_dtypes: Optional[bool] = None,
                      as_pandas: bool = False,
                      streaming: bool = False,
                      external_data: Optional[ExternalData] = None) -> 'QueryContext':
@@ -204,7 +204,7 @@ class QueryContext(BaseQueryContext):
                             self.max_str_len if max_str_len is None else max_str_len,
                             self.query_tz if query_tz is None else query_tz,
                             self.column_tzs if column_tzs is None else column_tzs,
-                            self.use_na_values if use_na_values is None else use_na_values,
+                            self.use_extended_dtypes if use_extended_dtypes is None else use_extended_dtypes,
                             as_pandas,
                             streaming,
                             self.apply_server_tz,
@@ -218,11 +218,6 @@ class QueryContext(BaseQueryContext):
 class QueryResult(Closable):
     """
     Wrapper class for query return values and metadata
-
-    Note that the use of this object as a Python context is deprecated and that the Context interface will be
-    removed in a future release.  Future usage of a QueryContext will be in either "closed" mode, where the
-    stream has been consumed and collected into the result_set property, or in "stream" mode, where only
-    the "stream" properties should be externally accessed.
     """
 
     # pylint: disable=too-many-arguments
@@ -323,29 +318,6 @@ class QueryResult(Closable):
             return [col[0] for col in self.result_set]
         return self.result_set[0]
 
-    def stream_column_blocks(self) -> Iterator:
-        """
-        .. deprecated:: 0.5.4
-            Please use the column_block_stream property instead.  This method will be removed in a future release
-        """
-        return self._column_block_stream()
-
-    def stream_row_blocks(self) -> Iterator:
-        """
-        .. deprecated:: 0.5.4
-            Please use the row_block_stream property instead.  This method will be removed in a future release
-        """
-        return self._row_block_stream()
-
-    def stream_rows(self) -> Iterator:
-        """
-        .. deprecated:: 0.5.4
-           Please use the row_block_stream property instead.  This method will be removed in a future release
-        """
-        for block in self._row_block_stream():
-            for row in block:
-                yield row
-
     def close(self):
         if self.source:
             self.source.close()
@@ -353,12 +325,6 @@ class QueryResult(Closable):
         if self._block_gen is not None:
             self._block_gen.close()
             self._block_gen = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
 
 
 local_tz = datetime.now().astimezone().tzinfo
@@ -443,6 +409,7 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
     :param top_level: Flag for top level for nested structures
     :return: Literal string for python value
     """
+
     def recurse(x):
         return format_bind_value(x, server_tz, False)
 
