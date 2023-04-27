@@ -176,7 +176,7 @@ class ResponseSource:
 
             def decompress():
                 while True:
-                    chunk = response.read(chunk_size)
+                    chunk = response.read(chunk_size, decode_content=False)
                     if not chunk:
                         break
                     yield zstd_decom.decompress(chunk)
@@ -187,7 +187,7 @@ class ResponseSource:
 
             def decompress():
                 while lz4_decom.needs_input:
-                    data = self.response.read(chunk_size)
+                    data = self.response.read(chunk_size, decode_content=False)
                     if lz4_decom.unused_data:
                         data = lz4_decom.unused_data + data
                     if not data:
