@@ -10,6 +10,9 @@ since 0.5.13, which add automatic handling of progress headers based on the quer
 - The query_df setting `use_na_types` has been renamed to `use_extended_dtypes`.  The older name is now an alias for `use_extended_dtypes`
 and will be removed in a future release.
 
+## 0.5.22, 2023-04-27
+### Bug Fix
+- There was a critical issue when using zstd compression (the default) with urllib3 version 2.0+.  This has been fixed.
 
 ## 0.5.21, 2023-04-26
 ### Bug Fix
