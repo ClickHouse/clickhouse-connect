@@ -1,12 +1,16 @@
 name: 'Build and Publish Release'
 
 on:
-  release:
-    types: [created]
-  push:
-    branches:
-      - '*build*'
-
+  workflow_dispatch:
+    inputs:
+      publish_type:
+        description: Publish Type
+        type: choice
+        default: test
+        options:
+          - test
+          - release
+          - build
 env:
   CIBW_SKIP: 'cp36-*'
 
@@ -126,6 +130,7 @@ jobs:
       - build_aarch64_pypy_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
+    if: ${{ inputs.publish_type != 'build' }}
     steps:
       - uses: actions/checkout@v3
       - name: Build source distribution
@@ -143,13 +148,13 @@ jobs:
       - name: Install Twine
         run:  pip install twine
       - name: Publish (Release)
-        if: ${{ github.event.release && startsWith(github.ref_name, 'v') }}
+        if: ${{ inputs.publish_type == 'release') }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
         run: twine upload dist/*
       - name: Publish (Test)
-        if: ${{ !github.event.release }}
+        if: ${{ inputs.publish_type == 'test' }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
