@@ -148,7 +148,7 @@ jobs:
       - name: Install Twine
         run:  pip install twine
       - name: Publish (Release)
-        if: ${{ inputs.publish_type == 'release') }}
+        if: ${{ inputs.publish_type == 'release' }}
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
