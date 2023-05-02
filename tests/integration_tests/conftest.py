@@ -111,12 +111,18 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
 
 @fixture(scope='session', name='table_context')
 def table_context_fixture(test_client: Client, test_table_engine: str):
-    def context(name: str,
+    def context(table: str,
                 columns: Sequence[str],
                 column_types: Optional[Sequence[str]] = None,
-                order_by: Optional[str] = None):
-        return TableContext(test_client, name, columns, column_types,
-                            test_table_engine, order_by)
+                order_by: Optional[str] = None,
+                **kwargs):
+        if 'engine' not in kwargs:
+            kwargs['engine'] = test_table_engine
+        return TableContext(test_client,
+                            table=table,
+                            columns=columns,
+                            column_types=column_types,
+                            order_by=order_by, **kwargs)
 
     yield context
 

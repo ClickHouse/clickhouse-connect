@@ -116,12 +116,13 @@ class Client(ABC):
         return context.final_query
 
     def _check_tz_change(self, new_tz) -> Optional[tzinfo]:
-        try:
-            new_tzinfo = pytz.timezone(new_tz)
-            if new_tzinfo != self.server_tz:
-                return new_tzinfo
-        except UnknownTimeZoneError:
-            logger.warning('Unrecognized timezone %s received from ClickHouse', new_tz)
+        if new_tz:
+            try:
+                new_tzinfo = pytz.timezone(new_tz)
+                if new_tzinfo != self.server_tz:
+                    return new_tzinfo
+            except UnknownTimeZoneError:
+                logger.warning('Unrecognized timezone %s received from ClickHouse', new_tz)
         return None
 
     @abstractmethod
@@ -436,21 +437,27 @@ class Client(ABC):
                     query: str,
                     parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                     settings: Optional[Dict[str, Any]] = None,
-                    use_strings: bool = True):
+                    use_strings: bool = True,
+                    external_data: Optional[ExternalData] = None):
         """
         Query method using the ClickHouse Arrow format to return a PyArrow table
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
+        :param external_data ClickHouse "external data" to send with query
         :return: PyArrow.Table
         """
         settings = dict_copy(settings)
         if self.database:
             settings['database'] = self.database
-        if arrow_str_setting in self.server_settings and arrow_str_setting not in settings:
+        if self._setting_status(arrow_str_setting).is_writable and arrow_str_setting not in settings:
             settings[arrow_str_setting] = '1' if use_strings else '0'
-        return to_arrow(self.raw_query(query, parameters, settings, 'Arrow'))
+        return to_arrow(self.raw_query(query,
+                                       parameters,
+                                       settings,
+                                       fmt='Arrow',
+                                       external_data=external_data))
 
     @abstractmethod
     def command(self,

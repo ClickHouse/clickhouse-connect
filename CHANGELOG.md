@@ -10,6 +10,17 @@ since 0.5.13, which add automatic handling of progress headers based on the quer
 - The query_df setting `use_na_types` has been renamed to `use_extended_dtypes`.  The older name is now an alias for `use_extended_dtypes`
 and will be removed in a future release.
 
+## 0.5.23, 2023-05-03
+### Bug Fixes
+- SQLAlchemy table reflection threw an exception for `SimpleAggregateFunction` columns.  This has been fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/180
+- The client no longer logs an invalid warning for query types that did not return a timezone header.
+https://github.com/ClickHouse/clickhouse-connect/issues/181
+- Querying `SimpleAggregateFunction` columns with a LowCardinality type parameter was broken.  This has been fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/182
+- The `query_arrow` method now correctly accepts the external_data parameter.  https://github.com/ClickHouse/clickhouse-connect/issues/183
+- The `query_arrow` method has been fixed for read only queries/settings.  https://github.com/ClickHouse/clickhouse-connect/issues/184
+
 ## 0.5.22, 2023-04-27
 ### Bug Fix
 - There was a critical issue when using zstd compression (the default) with urllib3 version 2.0+.  This has been fixed.
