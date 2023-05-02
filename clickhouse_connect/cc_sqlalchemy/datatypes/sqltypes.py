@@ -368,7 +368,7 @@ class SimpleAggregateFunction(ChSqlaType, UserDefinedType):
 
     def __init__(self, name: str = None, element: Union[ChSqlaType, Type[ChSqlaType]] = None, type_def: TypeDef = None):
         """
-        Constructor that can take the SimpleAggregateFunction name and wrapped type_def not constructed from a TypeDef
+        Constructor that can take the SimpleAggregateFunction name and wrapped type if not constructed from a TypeDef
         :param name: Aggregate function name
         :param element: ChSqlaType instance or class which the function aggregates
         :param type_def: TypeDef from parse_name function
