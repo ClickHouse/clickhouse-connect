@@ -10,6 +10,7 @@ from pytest import fixture
 
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
+from clickhouse_connect import common
 from clickhouse_connect.driver.exceptions import OperationalError
 from tests.helpers import TableContext
 
@@ -30,6 +31,7 @@ class TestConfig(NamedTuple):
 
 @fixture(scope='session', autouse=True, name='test_config')
 def test_config_fixture() -> Iterator[TestConfig]:
+    common.set_setting('max_connection_age', 15)  # Make sure resetting connections doesn't break stuff
     host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
     docker = host == 'localhost' and \
         os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
