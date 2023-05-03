@@ -14,7 +14,7 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int, coerce_bool
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
@@ -437,7 +437,7 @@ class Client(ABC):
                     query: str,
                     parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                     settings: Optional[Dict[str, Any]] = None,
-                    use_strings: bool = True,
+                    use_strings: Optional[bool] = None,
                     external_data: Optional[ExternalData] = None):
         """
         Query method using the ClickHouse Arrow format to return a PyArrow table
@@ -451,7 +451,13 @@ class Client(ABC):
         settings = dict_copy(settings)
         if self.database:
             settings['database'] = self.database
-        if self._setting_status(arrow_str_setting).is_writable and arrow_str_setting not in settings:
+        str_status = self._setting_status(arrow_str_setting)
+        if use_strings is None:
+            if str_status.is_writable and not str_status.is_set:
+                settings[arrow_str_setting] = '1'  # Default to returning strings if possible
+        elif use_strings != str_status.is_set:
+            if not str_status.is_writable:
+                raise OperationalError(f'Cannot change readonly {arrow_str_setting} to {use_strings}')
             settings[arrow_str_setting] = '1' if use_strings else '0'
         return to_arrow(self.raw_query(query,
                                        parameters,
