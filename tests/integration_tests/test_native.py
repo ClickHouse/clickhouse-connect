@@ -123,3 +123,15 @@ def test_read_formats(test_client: Client, test_table_engine: str):
     set_read_format('tuple', 'native')
     result = test_client.query('SELECT * FROM read_format_test', column_formats={'tup': {'ip*': 'string'}}).result_set
     assert result[0][5]['ip2'] == '10.20.30.203'
+
+
+def test_agg_function(test_client: Client, table_context: Callable):
+    with table_context('agg_func_test', ['key Int32',
+                                         'str SimpleAggregateFunction(any, String)',
+                                         'lc_str SimpleAggregateFunction(any, LowCardinality(String))'],
+                       engine='AggregatingMergeTree'):
+
+        test_client.command("INSERT INTO agg_func_test VALUES (1, 'str', 'lc_str')")
+        row = test_client.query('SELECT str, lc_str FROM agg_func_test').first_row
+        assert row[0] == 'str'
+        assert row[1] == 'lc_str'

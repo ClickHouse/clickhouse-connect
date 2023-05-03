@@ -3,7 +3,7 @@ import sqlalchemy as db
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import UInt32, SimpleAggregateFunction
 
 
 def test_basic_reflection(test_engine: Engine):
@@ -17,15 +17,18 @@ def test_basic_reflection(test_engine: Engine):
     assert rows
 
 
-def test_full_table_reflection(test_engine: Engine, test_db: str, test_table_engine: str):
+def test_full_table_reflection(test_engine: Engine, test_db: str):
     common.set_setting('invalid_setting_action', 'drop')
     conn = test_engine.connect()
+    conn.execute(f'DROP TABLE IF EXISTS {test_db}.reflect_test')
     conn.execute(
-        'CREATE TABLE IF NOT EXISTS reflect_test (key UInt32, value FixedString(20))' +
-        f'ENGINE {test_table_engine} ORDER BY key')
+        f'CREATE TABLE {test_db}.reflect_test (key UInt32, value FixedString(20),'+
+        'agg SimpleAggregateFunction(anyLast, String))' +
+        'ENGINE AggregatingMergeTree ORDER BY key')
     metadata = db.MetaData(bind=test_engine, schema=test_db)
     table = db.Table('reflect_test', metadata, autoload_with=test_engine)
     assert table.columns.key.type.__class__ == UInt32
+    assert table.columns.agg.type.__class__ == SimpleAggregateFunction
     assert 'MergeTree' in table.engine.name
 
 

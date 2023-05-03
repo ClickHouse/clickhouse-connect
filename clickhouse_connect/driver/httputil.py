@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import socket
+import time
 from typing import Dict, Any, Optional
 
 import certifi
@@ -14,6 +15,7 @@ from urllib3.poolmanager import PoolManager, ProxyManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect import common
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ core_socket_options = [
 
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 _proxy_managers = {}
-all_managers = set()
+all_managers = {}
 
 
 @atexit.register
@@ -111,8 +113,19 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
         manager = ProxyManager(https_proxy, **options)
     else:
         manager = PoolManager(**options)
-    all_managers.add(manager)
+    all_managers[manager] = int(time.time())
     return manager
+
+
+def check_conn_reset(manager: PoolManager):
+    reset_seconds = common.get_setting('max_connection_age')
+    if reset_seconds:
+        last_reset = all_managers.get(manager, 0)
+        now = int(time.time())
+        if last_reset < now - reset_seconds:
+            logger.debug('connection reset')
+            manager.clear()
+            all_managers[manager] = now
 
 
 def get_proxy_manager(host: str, http_proxy):

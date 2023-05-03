@@ -87,6 +87,9 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
 
+    def read_column_prefix(self, source: ByteSource):
+        return self.element_type.read_column_prefix(source)
+
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         return self.element_type.read_column_data(source, num_rows, ctx)
 
