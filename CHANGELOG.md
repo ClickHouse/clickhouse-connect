@@ -21,6 +21,10 @@ https://github.com/ClickHouse/clickhouse-connect/issues/182
 - The `query_arrow` method now correctly accepts the external_data parameter.  https://github.com/ClickHouse/clickhouse-connect/issues/183
 - The `query_arrow` method has been fixed for read only queries/settings.  https://github.com/ClickHouse/clickhouse-connect/issues/184
 
+### New Feature
+- A common setting `max_connection_age` has been added, which will ensure that HTTP connections are not reused forever (this
+can help with certain load balancing issues.  It defaults to 10 minutes
+
 ## 0.5.22, 2023-04-27
 ### Bug Fix
 - There was a critical issue when using zstd compression (the default) with urllib3 version 2.0+.  This has been fixed.

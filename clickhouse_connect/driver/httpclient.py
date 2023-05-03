@@ -21,7 +21,7 @@ from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
-    default_pool_manager, get_proxy_manager, all_managers, check_env_proxy
+    default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_reset
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
@@ -118,6 +118,7 @@ class HttpClient(Client):
         self._send_progress = None
         self._send_comp_setting = False
         self._progress_interval = None
+        self._active_session = None
 
         if session_id:
             ch_settings['session_id'] = session_id
@@ -139,7 +140,7 @@ class HttpClient(Client):
                          uri=self.url,
                          query_limit=query_limit,
                          query_retries=query_retries,
-                         server_host_name = server_host_name,
+                         server_host_name=server_host_name,
                          apply_server_timezone=apply_server_timezone)
         self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
@@ -360,8 +361,16 @@ class HttpClient(Client):
             kwargs['fields'] = fields
         else:
             kwargs['body'] = data
+        check_conn_reset(self.http)
+        query_session = final_params.get('session_id')
         while True:
-            attempts += 1
+            if query_session:
+                if query_session == self._active_session:
+                    raise ProgrammingError('Attempt to execute concurrent queries within the same session.' +
+                                           'Please use a separate client instance per thread/process.')
+                # There is a race condition here when using multiprocessing -- in that case the server will
+                # throw an error instead, but in most cases this more helpful error will be thrown first
+                self._active_session = query_session
             try:
                 response: HTTPResponse = self.http.request(method, url, **kwargs)
             except HTTPError as ex:
@@ -375,6 +384,9 @@ class HttpClient(Client):
                         continue
                 logger.warning('Unexpected Http Driver Exception')
                 raise OperationalError(f'Error {ex} executing HTTP request {self.url}') from ex
+            finally:
+                if query_session:
+                    self._active_session = None  # Make sure we always clear this
             if 200 <= response.status < 300:
                 return response
             if response.status in (429, 503, 504):
@@ -424,4 +436,4 @@ class HttpClient(Client):
     def close(self):
         if self._owns_pool_manager:
             self.http.clear()
-            all_managers.remove(self.http)
+            all_managers.pop(self.http, None)
