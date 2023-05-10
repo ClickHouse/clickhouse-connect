@@ -4,11 +4,17 @@
 - The Python context (`__enter__` and `__exit__`) and `stream` methods have been removed from the QueryResult object.  Please use the contexts create by the
 client `*stream` methods instead of using the QueryResult as a context.
 - The `send_progress` keyword argument has been removed from the `get_client` factory method.  This setting has not been used
-since 0.5.13, which add automatic handling of progress headers based on the query type.
+since 0.5.13, which added automatic handling of progress headers based on the query type.
 
 ## Deprecation Warning -- use_na_types renamed
 - The query_df setting `use_na_types` has been renamed to `use_extended_dtypes`.  The older name is now an alias for `use_extended_dtypes`
 and will be removed in a future release.
+
+## 0.5.24, 2023-05-11
+### Bug Fixes
+- The client `command` method now accepts ClickHouse "external data."  Closes https://github.com/ClickHouse/clickhouse-connect/issues/186
+- Arrays of Python date and datetime objects are now correctly formatted when use as server side parameters.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/188
+- Fixed inserts of SimpleAggregateFunction columns with a LowCardinality type parameter.  https://github.com/ClickHouse/clickhouse-connect/issues/187
 
 ## 0.5.23, 2023-05-03
 ### Bug Fixes

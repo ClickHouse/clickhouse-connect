@@ -131,7 +131,7 @@ def test_agg_function(test_client: Client, table_context: Callable):
                                          'lc_str SimpleAggregateFunction(any, LowCardinality(String))'],
                        engine='AggregatingMergeTree'):
 
-        test_client.command("INSERT INTO agg_func_test VALUES (1, 'str', 'lc_str')")
+        test_client.insert('agg_func_test', [(1, 'str', 'lc_str')])
         row = test_client.query('SELECT str, lc_str FROM agg_func_test').first_row
         assert row[0] == 'str'
         assert row[1] == 'lc_str'

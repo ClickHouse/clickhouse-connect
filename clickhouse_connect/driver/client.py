@@ -174,7 +174,10 @@ class Client(ABC):
         del kwargs['self']
         query_context = self.create_query_context(**kwargs)
         if query_context.is_command:
-            response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
+            response = self.command(query,
+                                    parameters=query_context.parameters,
+                                    settings=query_context.settings,
+                                    external_data=query_context.external_data)
             return QueryResult([response] if isinstance(response, list) else [[response]])
         return self._query_with_context(query_context)
 
@@ -471,7 +474,8 @@ class Client(ABC):
                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Dict[str, Any] = None,
-                use_database: bool = True) -> Union[str, int, Sequence[str]]:
+                use_database: bool = True,
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str]]:
         """
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
@@ -481,6 +485,7 @@ class Client(ABC):
         :param use_database: Send the database parameter to ClickHouse so the command will be executed in the client
          database context.  Otherwise, no database will be specified with the command.  This is useful for determining
          the default user database
+        :param external_data ClickHouse "external data" to send with command/query
         :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
         """
 

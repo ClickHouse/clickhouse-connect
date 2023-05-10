@@ -401,6 +401,7 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     return str(value)
 
 
+# pylint: disable=too-many-branches
 def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool = True):
     """
     Format Python values in a ClickHouse query
@@ -423,9 +424,14 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
     if isinstance(value, datetime):
         if value.tzinfo is None and server_tz != local_tz:
             value = value.replace(tzinfo=server_tz)
-        return value.strftime('%Y-%m-%d %H:%M:%S')
+        val = value.strftime('%Y-%m-%d %H:%M:%S')
+        if top_level:
+            return val
+        return f"'{val}'"
     if isinstance(value, date):
-        return value.isoformat()
+        if top_level:
+            return value.isoformat()
+        return f"'{value.isoformat()}'"
     if isinstance(value, list):
         return f"[{', '.join(recurse(x) for x in value)}]"
     if isinstance(value, tuple):

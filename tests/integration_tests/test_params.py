@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 
 from clickhouse_connect.driver import Client
 
@@ -32,3 +32,11 @@ def test_params(test_client: Client, table_context: callable):
     result = test_client.query('SELECT number FROM numbers(10) WHERE {n:Nullable(String)} IS NULL',
                                parameters={'n': None}).result_rows
     assert len(result) == 10
+
+    date_params = [date(2023, 6, 1), date(2023, 8, 5)]
+    result = test_client.query('SELECT {l:Array(Date)}', parameters={'l': date_params}).first_row
+    assert date_params == result[0]
+
+    dt_params = [datetime(2023, 6, 1, 7, 40, 2), datetime(2023, 8, 17, 20, 0, 10)]
+    result = test_client.query('SELECT {l:Array(DateTime)}', parameters={'l': dt_params}).first_row
+    assert dt_params == result[0]
