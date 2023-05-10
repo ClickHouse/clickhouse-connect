@@ -282,30 +282,38 @@ class HttpClient(Client):
                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
-                use_database: int = True) -> Union[str, int, Sequence[str]]:
+                use_database: int = True,
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str]]:
         """
         See BaseClient doc_string for this method
         """
         cmd, params = bind_query(cmd, parameters, self.server_tz)
         headers = {}
         payload = None
-        if isinstance(data, str):
+        fields = None
+        if external_data:
+            if data:
+                raise ProgrammingError('Cannot combine command data with external data') from None
+            fields = external_data.form_data
+            params.update(external_data.query_params)
+        elif isinstance(data, str):
             headers['Content-Type'] = 'text/plain; charset=utf-8'
             payload = data.encode()
         elif isinstance(data, bytes):
             headers['Content-Type'] = 'application/octet-stream'
             payload = data
-        if payload is None:
-            if not cmd:
-                raise ProgrammingError('Command sent without query or recognized data') from None
-            payload = cmd
-        elif cmd:
+        if payload is None and not cmd:
+            raise ProgrammingError('Command sent without query or recognized data') from None
+        if payload or fields:
             params['query'] = cmd
+        else:
+            payload = cmd
         if use_database and self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
-        method = 'POST' if payload else 'GET'
-        response = self._raw_request(payload, params, headers, method)
+
+        method = 'POST' if payload or fields else 'GET'
+        response = self._raw_request(payload, params, headers, method, fields=fields)
         result = response.data.decode()[:-1].split('\t')
         if len(result) == 1:
             try:

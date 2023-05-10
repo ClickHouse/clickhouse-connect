@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 
 import pytest
 
@@ -29,6 +29,9 @@ def test_finalize():
     (["a"], "['a']"),
     (["a'"], r"['a\'']"),
     ([["a"]], "[['a']]"),
+    (date(2023, 6, 1), '2023-06-01'),
+    (datetime(2023, 6, 1, 20, 4, 5), '2023-06-01 20:04:05'),
+    ([date(2023, 6, 1), date(2023, 8, 5)], "['2023-06-01', '2023-08-05']")
 
 ])
 def test_format_bind_value(value, expected):

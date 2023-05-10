@@ -84,3 +84,18 @@ def test_external_raw(test_client: Client):
     data = ExternalData(movies_file, fmt='Parquet', structure=['movie String', 'year UInt16', 'rating Float64'])
     result = test_client.raw_query('SELECT avg(rating) FROM movies', external_data=data)
     assert '8.25' == result.decode()[0:4]
+
+
+def test_external_command(test_client: Client):
+    movies_file = f'{Path(__file__).parent}/movies.parquet'
+    data = ExternalData(movies_file, fmt='Parquet', structure=['movie String', 'year UInt16', 'rating Float64'])
+    result = test_client.command('SELECT avg(rating) FROM movies', external_data=data)
+    assert '8.25' == result[0:4]
+
+    test_client.command('DROP TABLE IF EXISTS movies_ext')
+    if test_client.min_version('22.8'):
+        query_result = test_client.query('CREATE TABLE movies_ext ENGINE MergeTree() ORDER BY tuple() EMPTY ' +
+                                         'AS SELECT * FROM movies', external_data=data)
+        assert '' == query_result.first_row[0]
+        test_client.raw_query('INSERT INTO movies_ext SELECT * FROM movies', external_data=data)
+        assert 250 == test_client.command('SELECT COUNT() FROM movies_ext')
