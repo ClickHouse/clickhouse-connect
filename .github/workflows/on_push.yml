@@ -73,9 +73,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install pip
         run:  python -m pip install --upgrade pip
-      - name: Install Superset dependencies
-        if: contains(fromJson('["3.8", "3.9"]'), matrix.python-version)
-        run: pip install -r tests/superset_requirements.txt
       - name: Install Test Dependencies
         run: pip install -r tests/test_requirements.txt
       - name: Build cython extensions

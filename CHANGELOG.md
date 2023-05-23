@@ -1,14 +1,13 @@
 # ClickHouse Connect ChangeLog
 
-## WARNING -- Breaking changes in 0.5.21
-- The Python context (`__enter__` and `__exit__`) and `stream` methods have been removed from the QueryResult object.  Please use the contexts create by the
-client `*stream` methods instead of using the QueryResult as a context.
-- The `send_progress` keyword argument has been removed from the `get_client` factory method.  This setting has not been used
-since 0.5.13, which added automatic handling of progress headers based on the query type.
+## WARNING -- Superset Engine Spec removed from v0.60.0
+The Superset Engine Spec for ClickHouse has been removed from clickhouse-connect.  The official Superset Engine Spec is
+now maintained directly in the Apache Superset project starting with release 2.1.  If you need compatibility with
+older version of Superset, you should use clickhouse-connect v0.5.24.
 
-## Deprecation Warning -- use_na_types renamed
-- The query_df setting `use_na_types` has been renamed to `use_extended_dtypes`.  The older name is now an alias for `use_extended_dtypes`
-and will be removed in a future release.
+## 0.6.0, TBD
+### Improvements
+- Cython version upgraded to 3.0.0b2
 
 ## 0.5.24, 2023-05-11
 ### Bug Fixes

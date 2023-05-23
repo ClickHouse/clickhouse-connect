@@ -61,4 +61,8 @@ _init_common('dict_parameter_format', ('json', 'map'), 'json')
 _init_common('invalid_setting_action', ('send', 'drop', 'error'), 'error')
 _init_common('max_connection_age', (), 10 * 60)  # Max time in seconds to keep reusing a database TCP connection
 _init_common('product_name', (), '')  # Product name used as part of client identification for ClickHouse query_log
-_init_common('readonly', (0, 1), 0)
+_init_common('readonly', (0, 1), 0)  # Implied "read_only" ClickHouse settings for versions prior to 19.17
+
+# Use the client protocol version  This is needed for DateTime timezone columns but breaks with current version of
+# chproxy
+_init_common('use_protocol_version', (True, False), True)
