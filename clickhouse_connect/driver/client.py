@@ -70,7 +70,13 @@ class Client(ABC):
         if database and not database == '__default__':
             self.database = database
         if self.min_version(CH_VERSION_WITH_PROTOCOL):
-            self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
+            #  Unfortunately we have to validate that the client protocol version is actually used by ClickHouse
+            #  since the query parameter could be stripped off (in particular, by CHProxy)
+            test_data = self.raw_query('SELECT 1 AS check', fmt='Native', settings={
+                'client_protocol_version': PROTOCOL_VERSION_WITH_LOW_CARD
+            })
+            if test_data[8:16] == b'\x01\x01\x05check':
+                self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
         self.uri = uri
 
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:

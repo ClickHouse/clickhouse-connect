@@ -9,6 +9,14 @@ older version of Superset, you should use clickhouse-connect v0.5.24.
 ### Improvements
 - Cython version upgraded to 3.0.0b2
 
+## 0.5.25, 2023-05-23
+### Bug Fix
+- The client will now validate that the `client_protocol_version` query parameter is actually received and used by the ClickHouse
+server before assuming that data returned confirms to the expected protocol version.  This fixes an incompatibility with the
+current versions of CHProxy (and possibly other proxies that restrict the query parameters passed to the ClickHouse Server).
+Note that other features that require the use of query parameters (such as server side bound query parameters) may also fail
+because of this behavior in CHProxy.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/191
+
 ## 0.5.24, 2023-05-11
 ### Bug Fixes
 - The client `command` method now accepts ClickHouse "external data."  Closes https://github.com/ClickHouse/clickhouse-connect/issues/186
