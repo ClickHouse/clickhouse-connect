@@ -29,6 +29,10 @@ class TestConfig(NamedTuple):
     __test__ = False
 
 
+class TestException(BaseException):
+    pass
+
+
 @fixture(scope='session', autouse=True, name='test_config')
 def test_config_fixture() -> Iterator[TestConfig]:
     common.set_setting('max_connection_age', 15)  # Make sure resetting connections doesn't break stuff
@@ -59,6 +63,9 @@ def test_table_engine_fixture() -> Iterator[str]:
     yield 'MergeTree'
 
 
+
+
+
 @fixture(scope='session', autouse=True, name='test_client')
 def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
     compose_file = f'{Path(__file__).parent}/docker-compose.yml'
@@ -67,10 +74,10 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         sys.stderr.write('Starting docker compose')
         pull_result = run_cmd(['docker-compose', '-f', compose_file, 'pull'])
         if pull_result[0]:
-            raise Exception(f'Failed to pull latest docker image(s): {pull_result[2]}')
+            raise TestException(f'Failed to pull latest docker image(s): {pull_result[2]}')
         up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
         if up_result[0]:
-            raise Exception(f'Failed to start docker: {up_result[2]}')
+            raise TestException(f'Failed to start docker: {up_result[2]}')
         time.sleep(5)
     tries = 0
     while True:
@@ -91,7 +98,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             break
         except OperationalError as ex:
             if tries > 10:
-                raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
+                raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)

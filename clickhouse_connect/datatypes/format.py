@@ -71,7 +71,7 @@ def _matching_types(pattern: str, fmt: str = None) -> Sequence[Type[ClickHouseTy
     re_pattern = re.compile(pattern.replace('*', '.*'), re.IGNORECASE)
     matches = [ch_type for type_name, ch_type in type_map.items() if re_pattern.match(type_name)]
     if not matches:
-        ProgrammingError(f'Unrecognized ClickHouse type {pattern} when setting formats')
+        raise ProgrammingError(f'Unrecognized ClickHouse type {pattern} when setting formats')
     if fmt:
         invalid = [ch_type.__name__ for ch_type in matches if fmt not in ch_type.valid_formats]
         if invalid:
