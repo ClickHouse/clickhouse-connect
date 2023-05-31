@@ -76,7 +76,7 @@ jobs:
         run: pip install -r tests/test_requirements.txt
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
-      - name: Add distribution info
+      - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
         run: python setup.py develop
       - name: Run tests
         env:
@@ -108,6 +108,8 @@ jobs:
           pip install -r tests/test_requirements.txt
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
+      - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
+        run: python setup.py develop
       - name: Run tests
         env:
           CLICKHOUSE_CONNECT_TEST_FUZZ: 10
