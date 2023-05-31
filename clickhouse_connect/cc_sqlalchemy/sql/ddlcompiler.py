@@ -7,13 +7,13 @@ from clickhouse_connect.driver.query import quote_identifier
 
 class ChDDLCompiler(DDLCompiler):
 
-    def visit_create_schema(self, create):
+    def visit_create_schema(self, create, **_):
         return f'CREATE DATABASE {quote_identifier(create.element)}'
 
-    def visit_drop_schema(self, drop):
+    def visit_drop_schema(self, drop, **_):
         return f'DROP DATABASE {quote_identifier(drop.element)}'
 
-    def visit_create_table(self, create):
+    def visit_create_table(self, create, **_):
         table = create.element
         text = f'CREATE TABLE {format_table(table)} ('
         text += ', '.join([self.get_column_specification(c.element) for c in create.columns])

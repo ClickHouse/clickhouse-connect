@@ -4,6 +4,7 @@ from sqlalchemy.exc import ArgumentError
 from clickhouse_connect.driver.query import quote_identifier
 
 
+#  pylint: disable=too-many-ancestors,abstract-method
 class CreateDatabase(DDL):
     """
     SqlAlchemy DDL statement that is essentially an alternative to the built in CreateSchema DDL class
@@ -30,6 +31,7 @@ class CreateDatabase(DDL):
         super().__init__(stmt)
 
 
+#  pylint: disable=too-many-ancestors,abstract-method
 class DropDatabase(DDL):
     """
     Alternative DDL statement for built in SqlAlchemy DropSchema DDL class
