@@ -53,6 +53,7 @@ class ClickHouseDialect(DefaultDialect):
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
 
+    #  pylint: disable=arguments-renamed
     def get_pk_constraint(self, connection, table_name, schema=None, **kw):
         return []
 
