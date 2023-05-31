@@ -64,7 +64,7 @@ def run_setup(try_c: bool = True):
         tests_require=['pytest'],
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',
-                                    'clickhousedb=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect'],
+                                    'clickhousedb=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect']
         },
         classifiers=[
             'Development Status :: 4 - Beta',
