@@ -4,8 +4,7 @@ import sys
 import pkg_resources
 
 EXPECTED_EPS = {'sqlalchemy.dialects:clickhousedb',
-                'sqlalchemy.dialects:clickhousedb.connect',
-                'superset.db_engine_specs:clickhousedb'}
+                'sqlalchemy.dialects:clickhousedb.connect'}
 
 
 def validate_entrypoints():
