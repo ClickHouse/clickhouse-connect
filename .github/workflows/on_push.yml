@@ -76,6 +76,8 @@ jobs:
         run: pip install -r tests/test_requirements.txt
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
+      - name: Add distribution info
+        run: python setup.py develop
       - name: Run tests
         env:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
