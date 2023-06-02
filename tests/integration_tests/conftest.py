@@ -12,7 +12,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.exceptions import OperationalError
-from tests.helpers import TableContext
+from clickhouse_connect.tools.testing import TableContext
 
 
 class TestConfig(NamedTuple):
@@ -61,9 +61,6 @@ def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
 @fixture(scope='session', name='test_table_engine')
 def test_table_engine_fixture() -> Iterator[str]:
     yield 'MergeTree'
-
-
-
 
 
 @fixture(scope='session', autouse=True, name='test_client')

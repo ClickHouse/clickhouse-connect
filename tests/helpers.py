@@ -1,6 +1,6 @@
 import random
 import re
-from typing import Sequence, Optional, Union, Type
+from typing import Sequence, Union, Type
 
 import math
 import pytz
@@ -8,8 +8,7 @@ import pkg_resources
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.extras import random_col_data, random_ascii_str, RandomValueDef
+from clickhouse_connect.tools.datagen import random_col_data, random_ascii_str, RandomValueDef
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
 from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
@@ -190,41 +189,6 @@ def random_query(row_count: int = 10000, col_count: int = 10, date32: bool = Tru
         columns.append(f'col_{chr(len(columns) + 97)} {col_type}')
     columns = ', '.join(columns)
     return f"SELECT * FROM generateRandom('{columns}') LIMIT {row_count}"
-
-
-class TableContext:
-    def __init__(self, client: Client,
-                 table: str,
-                 columns: Sequence[str],
-                 column_types: Optional[Sequence[str]] = None,
-                 engine: str = 'MergeTree',
-                 order_by: str = None):
-        self.client = client
-        self.table = table
-        if column_types is None:
-            self.column_names = []
-            self.column_types = []
-            for col in columns:
-                ix = col.find(' ')
-                self.column_types.append(col[ix + 1:].strip())
-                self.column_names.append(col[:ix].strip())
-        else:
-            self.column_names = columns
-            self.column_types = column_types
-        self.engine = engine
-        self.order_by = self.column_names[0] if order_by is None else order_by
-
-    def __enter__(self):
-        if self.client.min_version('19'):
-            self.client.command(f'DROP TABLE IF EXISTS {self.table}')
-        else:
-            self.client.command(f'DROP TABLE IF EXISTS {self.table} SYNC')
-        col_defs = ','.join(f'{name} {col_type}' for name, col_type in zip(self.column_names, self.column_types))
-        self.client.command(f'CREATE TABLE {self.table} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}')
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.client.command(f'DROP TABLE IF EXISTS {self.table}')
 
 
 def bytes_source(data: Union[str, bytes], chunk_size: int = 256, cls: Type = ResponseBuffer):

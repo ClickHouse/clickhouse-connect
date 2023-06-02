@@ -1,6 +1,6 @@
 # ClickHouse Connect ChangeLog
 
-## WARNING -- Superset Engine Spec removed from v0.60.0
+## WARNING -- Superset Engine Spec removed from v0.6.0
 The Superset Engine Spec for ClickHouse has been removed from clickhouse-connect.  The official ClickHouse
 Superset Engine Spec is now maintained directly in the Apache Superset project starting with release 2.1.0.
 If you need compatibility with older versions of Superset, you should use clickhouse-connect v0.5.25, which
@@ -12,6 +12,11 @@ installation, the ClickHouse datasource will be available with a straightforward
 ## 0.6.0, TBD
 ### Improvements
 - Cython version upgraded to 3.0.0b2
+
+### Bug Fix
+- Use uuid4 instead of uuid1 for generating client level session_ids, as well as use a new urllib3 PoolManager
+  when multiprocessing mode is detected.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/194.
+  Thanks to [Guillaume Matheron](https://github.com/guillaumematheron) for filing the issue and digging into details.
 
 ## 0.5.25, 2023-05-23
 ### Bug Fix

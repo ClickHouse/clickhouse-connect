@@ -1,6 +1,7 @@
 import atexit
 import http
 import logging
+import multiprocessing
 import os
 import sys
 import socket
@@ -177,7 +178,14 @@ def check_env_proxy(scheme: str, host: str, port: int) -> Optional[str]:
     return proxy
 
 
-default_pool_manager = get_pool_manager()
+_default_pool_manager = get_pool_manager()
+
+
+def default_pool_manager():
+    if multiprocessing.current_process().name == 'MainProcess':
+        return _default_pool_manager
+    #  PoolManagers don't seem to be safe for some multiprocessing environments, always return a new one
+    return get_pool_manager()
 
 
 class ResponseSource:

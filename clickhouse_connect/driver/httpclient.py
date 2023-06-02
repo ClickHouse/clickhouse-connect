@@ -104,7 +104,7 @@ class HttpClient(Client):
             if http_proxy:
                 self.http = get_proxy_manager(host, http_proxy)
             else:
-                self.http = default_pool_manager
+                self.http = default_pool_manager()
 
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
@@ -123,7 +123,7 @@ class HttpClient(Client):
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
-            ch_settings['session_id'] = str(uuid.uuid1())
+            ch_settings['session_id'] = str(uuid.uuid4())
 
         if coerce_bool(compress):
             compression = ','.join(available_compression)
