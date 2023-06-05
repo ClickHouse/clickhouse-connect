@@ -1,6 +1,6 @@
 import array
 import logging
-from typing import Sequence, MutableSequence, Collection
+from typing import Sequence, Collection
 
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -28,11 +28,11 @@ class Array(ClickHouseType):
 
     def _data_size(self, sample: Sequence) -> int:
         if len(sample) == 0:
-            return 0
+            return 8
         total = 0
         for x in sample:
             total += self.element_type.data_size(x)
-        return total // len(sample)
+        return total // len(sample) + 8
 
     # pylint: disable=too-many-locals
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext):
@@ -61,10 +61,10 @@ class Array(ClickHouseType):
             column = data
         return column
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         self.element_type.write_column_prefix(dest)
 
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         final_type = self.element_type
         depth = 1
         while isinstance(final_type, Array):
@@ -131,11 +131,11 @@ class Tuple(ClickHouseType):
             return dicts
         return tuple(zip(*columns))
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         for e_type in self.element_types:
             e_type.write_column_prefix(dest)
 
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         columns = list(zip(*column))
         for e_type, elem_column in zip(self.element_types, columns):
             e_type.write_column_data(elem_column, dest, ctx)
@@ -179,11 +179,11 @@ class Map(ClickHouseType):
             last = offset
         return column
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         self.key_type.write_column_prefix(dest)
         self.value_type.write_column_prefix(dest)
 
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         offsets = array.array('Q')
         keys = []
         values = []
@@ -225,10 +225,10 @@ class Nested(ClickHouseType):
         data = self.tuple_array.read_column_data(source, num_rows, ctx)
         return [[dict(zip(keys, x)) for x in row] for row in data]
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         self.tuple_array.write_column_prefix(dest)
 
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         keys = self.element_names
         data = [[tuple(sub_row[key] for key in keys) for sub_row in row] for row in column]
         self.tuple_array.write_column_data(data, dest, ctx)
@@ -239,11 +239,22 @@ class JSON(ClickHouseType):
     # Native is a Python type (primitive, dict, array), string is an actual JSON string
     valid_formats = 'string', 'native'
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         dest.append(0x01)
 
+    def _data_size(self, sample: Collection) -> int:
+        if len(sample) == 0:
+            return 0
+        total = 0
+        for x in sample:
+            if isinstance(x, str):
+                total += len(x)
+            elif x:
+                total += len(any_to_json(x))
+        return total // len(sample) + 1
+
     # pylint: disable=duplicate-code
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         app = dest.append
         first = self._first_value(column)
         if isinstance(first, str) or self.write_format(ctx) == 'string':

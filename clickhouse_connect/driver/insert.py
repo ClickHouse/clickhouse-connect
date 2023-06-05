@@ -113,9 +113,6 @@ class InsertContext(BaseQueryContext):
                 data = self._data
                 sample = [data[j][i] for j in range(0, self.row_count, sample_freq)]
                 d_size = d_type.data_size(sample)
-            if d_size == 0:
-                logger.warning('Invalid data size for type %s when calculating block_size', d_type.name)
-                d_size = 4
             row_size += d_size
         return 1 << (24 - int(log(row_size, 2)))
 
@@ -131,7 +128,7 @@ class InsertContext(BaseQueryContext):
             self.current_row = block_end
 
     def _column_block_data(self, block_start, block_end):
-        if block_start == 0 and block_end <= self.row_count:
+        if block_start == 0 and self.row_count <= block_end:
             return self._block_columns  # Optimization if we don't need to break up the block
         return [col[block_start: block_end] for col in self._block_columns]
 

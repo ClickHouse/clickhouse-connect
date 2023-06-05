@@ -11,7 +11,6 @@ from datetime import date, datetime, tzinfo
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.types import Matrix, Closable
@@ -278,7 +277,8 @@ class QueryResult(Closable):
 
     def _row_block_stream(self):
         for block in self._column_block_stream():
-            yield data_conv.pivot(block, 0, len(block))
+            yield list(zip(*block))
+            # yield data_conv.pivot(block, 0, len(block))
 
     @property
     def column_block_stream(self) -> StreamContext:

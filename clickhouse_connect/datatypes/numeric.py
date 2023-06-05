@@ -95,7 +95,7 @@ class BigInt(ClickHouseType, registered=False):
         return column
 
     # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
         first = self._first_value(column)
@@ -218,7 +218,7 @@ class Enum(ClickHouseType):
         lookup = self._int_map.get
         return [lookup(x, None) for x in column]
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         first = self._first_value(column)
         if first is None or isinstance(first, int):
             if self.nullable:
@@ -285,7 +285,7 @@ class Decimal(ClickHouseType):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         mult = self._mult
         if self.nullable:
             write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
@@ -323,7 +323,7 @@ class BigDecimal(Decimal, registered=False):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         with decimal.localcontext() as ctx:
             ctx.prec = self.prec
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")

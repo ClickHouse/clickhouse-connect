@@ -31,7 +31,7 @@ class Date(ClickHouseType):
             return numpy_conv.read_numpy_array(source, '<u2', num_rows).astype(self.np_type)
         return data_conv.read_date_col(source, num_rows)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -128,7 +128,7 @@ class DateTime(DateTimeBase):
             return np_array
         return data_conv.read_datetime_col(source, num_rows, active_tz)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -205,7 +205,7 @@ class DateTime64(DateTimeBase):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:

@@ -9,13 +9,13 @@ from clickhouse_connect.tools.testing import TableContext
 
 
 inserts = [{'query': 'SELECT trip_id, pickup, dropoff, pickup_longitude, ' +
-                     'pickup_latitude FROM taxis ORDER BY trip_id LIMIT 500000',
+                     'pickup_latitude FROM taxis ORDER BY trip_id LIMIT 5000000',
             'columns': 'trip_id UInt32, pickup String, dropoff String,' +
                        ' pickup_longitude Float64, pickup_latitude Float64'},
            {'query': 'SELECT number from numbers(5000000)',
             'columns': 'number UInt64'}]
 
-excluded = {0}
+excluded = {}
 cc_client = clickhouse_connect.get_client(compress=False)
 cd_client = clickhouse_driver.Client(host='localhost')
 run_id = random.randint(0, 10000000)
@@ -68,7 +68,7 @@ def main():
         print(f"\n{insert['query']}")
         write_python_columns(ix, insert)
         write_python_rows(ix, insert)
-        # dr_write_python_columns(ix, insert)
+        dr_write_python_columns(ix, insert)
 
 
 class CDWrapper:

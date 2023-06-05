@@ -36,7 +36,7 @@ class UUID(ClickHouseType):
         return column
 
     # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         empty = empty_uuid_b
         if isinstance(first, str) or self.write_format(ctx) == 'string':
@@ -76,7 +76,7 @@ class Nothing(ArrayType):
         super().__init__(type_def)
         self.nullable = True
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         dest += bytes(0x30 for _ in range(len(column)))
 
 
@@ -95,13 +95,13 @@ class SimpleAggregateFunction(ClickHouseType):
     def read_column_prefix(self, source: ByteSource):
         return self.element_type.read_column_prefix(source)
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         self.element_type.write_column_prefix(dest)
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         return self.element_type.read_column_data(source, num_rows, ctx)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         self.element_type.write_column_data(column, dest, ctx)
 
 

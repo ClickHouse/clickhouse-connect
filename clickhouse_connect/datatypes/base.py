@@ -109,7 +109,7 @@ class ClickHouseType(ABC):
             return self.byte_size
         return 0
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def write_column_prefix(self, dest: bytearray):
         """
         Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
         way the ClickHouse C++ code is written, this must be done before any data is written even if the
@@ -182,7 +182,7 @@ class ClickHouseType(ABC):
     def _finalize_column(self, column: Sequence, _ctx: QueryContext) -> Sequence:
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         """
         Lowest level write method for ClickHouseType data columns
         :param column: Python data column
@@ -190,7 +190,7 @@ class ClickHouseType(ABC):
         :param ctx: Insert Context with insert specific settings
         """
 
-    def write_column(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         """
         Wrapping write method for ClickHouseTypes.  Only overridden for container types that so that
         the write_native_prefix is done at the right time for contained types
@@ -201,7 +201,7 @@ class ClickHouseType(ABC):
         self.write_column_prefix(dest)
         self.write_column_data(column, dest, ctx)
 
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         """
         Public native write method for ClickHouseTypes.  Delegates the actual write to either the LowCardinality
         write method or the _write_native_binary method of the type
@@ -236,7 +236,7 @@ class ClickHouseType(ABC):
     def _build_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
         return data_conv.build_lc_nullable_column(keys, index, self._active_null(ctx))
 
-    def _write_column_low_card(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def _write_column_low_card(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
         index = []
@@ -335,7 +335,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             return np.array(column, dtype=self.np_type)
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         if len(column) and self.nullable:
             column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
@@ -360,5 +360,5 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
     def _read_column_binary(self, source: Sequence, num_rows: int, ctx: QueryContext):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         raise NotSupportedError(f'{self.name} serialization  not supported')

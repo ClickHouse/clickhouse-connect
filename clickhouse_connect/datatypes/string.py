@@ -40,7 +40,7 @@ class String(ClickHouseType):
         return column
 
     # pylint: disable=duplicate-code,too-many-nested-blocks,too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         encoding = ctx.encoding or self.encoding
         app = dest.append
         first = self._first_value(column)
@@ -131,7 +131,7 @@ class FixedString(ClickHouseType):
         return source.read_bytes_col(self.byte_size, num_rows)
 
     # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         ext = dest.extend
         sz = self.byte_size
         empty = bytes((0,) * sz)
