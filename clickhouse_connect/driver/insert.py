@@ -1,3 +1,5 @@
+import logging
+from math import log
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
 from clickhouse_connect.driver.common import SliceView
@@ -8,7 +10,8 @@ from clickhouse_connect.driver.exceptions import ProgrammingError
 if TYPE_CHECKING:
     from clickhouse_connect.datatypes.base import ClickHouseType
 
-DEFAULT_BLOCK_SIZE = 16834
+logger = logging.getLogger(__name__)
+DEFAULT_BLOCK_SIZE = 1 << 24
 
 
 class InsertBlock(NamedTuple):
@@ -43,7 +46,8 @@ class InsertContext(BaseQueryContext):
         self.column_types = column_types
         self.column_oriented = False if column_oriented is None else column_oriented
         self.compression = compression
-        self.block_size = DEFAULT_BLOCK_SIZE if block_size is None else block_size
+        self.req_block_size = block_size
+        self.block_size = DEFAULT_BLOCK_SIZE
         self.data = data
         self.insert_exception = None
 
@@ -72,7 +76,7 @@ class InsertContext(BaseQueryContext):
             data = self._convert_numpy(data)
         if self.column_oriented:
             self._next_block_data = self._column_block_data
-            self._block_columns = [SliceView(column) for column in data]
+            self._block_columns = data  # [SliceView(column) for column in data]
             self._block_rows = None
             self.column_count = len(data)
             self.row_count = len(data[0])
@@ -86,6 +90,34 @@ class InsertContext(BaseQueryContext):
             if self.column_count != len(self.column_names):
                 raise ProgrammingError('Insert data column count does not match column names')
             self._data = data
+            self._calc_block_size()
+
+    def _calc_block_size(self):
+        if self.req_block_size:
+            self.block_size = self.req_block_size
+            return
+        row_size = 0
+        sample_freq = max(1, self.row_count // 64)
+        for i, d_type in enumerate(self.column_types):
+            if d_type.byte_size:
+                row_size += d_type.byte_size
+                continue
+            if self.column_oriented:
+                col_data = self._data[i]
+                if sample_freq == 1:
+                    d_size = d_type.data_size(col_data)
+                else:
+                    sample = [col_data[j] for j in range(0, self.row_count, sample_freq)]
+                    d_size = d_type.data_size(sample)
+            else:
+                data = self._data
+                sample = [data[j][i] for j in range(0, self.row_count, sample_freq)]
+                d_size = d_type.data_size(sample)
+            if d_size == 0:
+                logger.error('Invalid data size for type %s when calculating block_size', d_type.name)
+                d_size = 4
+            row_size += d_size
+        self.block_size = 1 << (24 - int(log(row_size, 2)))
 
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:

@@ -178,6 +178,7 @@ class Float64(Float):
 class Bool(ClickHouseType):
     np_type = '?'
     python_type = bool
+    byte_size = 1
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext):
         column = source.read_bytes(num_rows)
@@ -230,10 +231,12 @@ class Enum(ClickHouseType):
 
 class Enum8(Enum):
     _array_type = 'b'
+    byte_size = 1
 
 
 class Enum16(Enum):
     _array_type = 'h'
+    byte_size = 2
 
 
 class Decimal(ClickHouseType):

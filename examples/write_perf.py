@@ -1,3 +1,5 @@
+#!/usr/bin/env python -u
+
 import time
 import random
 import clickhouse_driver  # pylint: disable=import-error
@@ -7,13 +9,13 @@ from clickhouse_connect.tools.testing import TableContext
 
 
 inserts = [{'query': 'SELECT trip_id, pickup, dropoff, pickup_longitude, ' +
-                     'pickup_latitude FROM taxis ORDER BY trip_id LIMIT 100000',
+                     'pickup_latitude FROM taxis ORDER BY trip_id LIMIT 500000',
             'columns': 'trip_id UInt32, pickup String, dropoff String,' +
                        ' pickup_longitude Float64, pickup_latitude Float64'},
            {'query': 'SELECT number from numbers(50000000)',
             'columns': 'number UInt64'}]
 
-excluded = {0}
+excluded = {1}
 cc_client = clickhouse_connect.get_client(compress=False)
 cd_client = clickhouse_driver.Client(host='localhost')
 run_id = random.randint(0, 10000000)

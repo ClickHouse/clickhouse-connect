@@ -18,6 +18,7 @@ class IPv4(ClickHouseType):
     _array_type = 'L' if int_size == 2 else 'I'
     valid_formats = 'string', 'native', 'int'
     python_type = IPv4Address
+    byte_size = 4
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
@@ -55,6 +56,7 @@ class IPv4(ClickHouseType):
 class IPv6(ClickHouseType):
     valid_formats = 'string', 'native'
     python_type = IPv6Address
+    byte_size = 16
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'string':

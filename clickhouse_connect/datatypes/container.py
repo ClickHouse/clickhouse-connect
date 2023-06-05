@@ -1,5 +1,6 @@
 import array
-from typing import Sequence, MutableSequence
+import logging
+from typing import Sequence, MutableSequence, Collection
 
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -8,6 +9,9 @@ from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
+
+
+logger = logging.getLogger(__name__)
 
 
 class Array(ClickHouseType):
@@ -21,6 +25,14 @@ class Array(ClickHouseType):
 
     def read_column_prefix(self, source: ByteSource):
         return self.element_type.read_column_prefix(source)
+
+    def _data_size(self, sample: Sequence) -> int:
+        if len(sample) == 0:
+            return 0
+        total = 0
+        for x in sample:
+            total += self.element_type.data_size(x)
+        return total // len(sample)
 
     # pylint: disable=too-many-locals
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext):
@@ -87,6 +99,17 @@ class Tuple(ClickHouseType):
         else:
             self._name_suffix = type_def.arg_str
 
+    def _data_size(self, sample: Collection) -> int:
+        if len(sample) == 0:
+            return 0
+        elem_size = 0
+        for ix, e_type in enumerate(self.element_types):
+            if e_type.byte_size > 0:
+                elem_size += e_type.byte_size
+            else:
+                elem_size += e_type.data_size([x[ix] for x in sample])
+        return elem_size
+
     def read_column_prefix(self, source: ByteSource):
         for e_type in self.element_types:
             e_type.read_column_prefix(source)
@@ -127,6 +150,15 @@ class Map(ClickHouseType):
         self.key_type = get_from_name(type_def.values[0])
         self.value_type = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
+
+    def _data_size(self, sample: Collection) -> int:
+        total = 0
+        if len(sample) == 0:
+            return 0
+        for x in sample:
+            total += self.key_type.data_size(x.keys())
+            total += self.value_type.data_size(x.values())
+        return total // len(sample)
 
     def read_column_prefix(self, source: ByteSource):
         self.key_type.read_column_prefix(source)
@@ -179,6 +211,11 @@ class Nested(ClickHouseType):
         self.element_types = self.tuple_array.element_type.element_types
         cols = [f'{x[0]} {x[1].name}' for x in zip(type_def.keys, self.element_types)]
         self._name_suffix = f"({', '.join(cols)})"
+
+    def _data_size(self, sample: Collection) -> int:
+        keys = self.element_names
+        array_sample = [[tuple(sub_row[key] for key in keys) for sub_row in row] for row in sample]
+        return self.tuple_array.data_size(array_sample)
 
     def read_column_prefix(self, source: ByteSource):
         self.tuple_array.read_column_prefix(source)

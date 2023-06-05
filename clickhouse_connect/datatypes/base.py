@@ -3,7 +3,7 @@ import logging
 
 from abc import ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Iterable
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Iterable, Collection
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
@@ -93,6 +93,21 @@ class ClickHouseType(ABC):
         for wrapper in reversed(self.wrappers):
             name = f'{wrapper}({name})'
         return name
+
+    def data_size(self, sample: Collection) -> int:
+        if self.low_card:
+            values = set(sample)
+            d_size = self._data_size(values) + 2
+        else:
+            d_size = self._data_size(sample)
+        if self.nullable:
+            d_size += 1
+        return d_size
+
+    def _data_size(self, _sample: Collection) -> int:
+        if self.byte_size:
+            return self.byte_size
+        return 0
 
     def write_column_prefix(self, dest: MutableSequence):
         """

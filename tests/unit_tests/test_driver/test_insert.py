@@ -1,0 +1,14 @@
+import datetime
+
+from clickhouse_connect.datatypes.registry import get_from_name
+
+from clickhouse_connect.driver.insert import InsertContext
+
+
+def test_block_size():
+    data = [(1, (datetime.date(2020, 5, 2), datetime.datetime(2020, 5, 2, 10, 5, 2)))]
+    ctx = InsertContext('fake_table',
+                        ['key', 'date_tuple'],
+                        [get_from_name('UInt64'), get_from_name('Tuple(Date, DateTime)')],
+                        data)
+    assert ctx.block_size == 2097152

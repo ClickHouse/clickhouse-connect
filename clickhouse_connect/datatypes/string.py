@@ -1,4 +1,4 @@
-from typing import Sequence, MutableSequence, Union
+from typing import Sequence, MutableSequence, Union, Collection
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.insert import InsertContext
@@ -16,6 +16,15 @@ class String(ClickHouseType):
         if ctx.encoding:
             return ctx.encoding
         return self.encoding
+
+    def _data_size(self, sample: Collection) -> int:
+        if len(sample) == 0:
+            return 0
+        total = 0
+        for x in sample:
+            if x:
+                total += len(x)
+        return total // len(sample) + 1
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         return source.read_str_col(num_rows, self._active_encoding(ctx))
