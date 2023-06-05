@@ -96,9 +96,9 @@ class BigInt(ClickHouseType, registered=False):
 
     # pylint: disable=too-many-branches
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
-        first = self._first_value(column)
-        if not column:
+        if len(column) == 0:
             return
+        first = self._first_value(column)
         sz = self.byte_size
         signed = self._signed
         empty = bytes(b'\x00' * sz)

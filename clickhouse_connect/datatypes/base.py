@@ -236,8 +236,8 @@ class ClickHouseType(ABC):
     def _build_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
         return data_conv.build_lc_nullable_column(keys, index, self._active_null(ctx))
 
-    def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
-        if not column:
+    def _write_column_low_card(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+        if len(column) == 0:
             return
         index = []
         keys = []
