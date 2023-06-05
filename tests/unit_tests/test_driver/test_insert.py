@@ -3,6 +3,7 @@ import datetime
 from clickhouse_connect.datatypes.registry import get_from_name
 
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.tools.datagen import fixed_len_ascii_str
 
 
 def test_block_size():
@@ -12,3 +13,10 @@ def test_block_size():
                         [get_from_name('UInt64'), get_from_name('Tuple(Date, DateTime)')],
                         data)
     assert ctx.block_size == 2097152
+
+    data = [(x, fixed_len_ascii_str(400)) for x in range(5000)]
+    ctx = InsertContext('fake_table',
+                        ['key', 'big_str'],
+                        [get_from_name('Int32'), get_from_name('String')],
+                        data)
+    assert ctx.block_size == 65536

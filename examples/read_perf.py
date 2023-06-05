@@ -93,7 +93,7 @@ def read_pandas_stream(query):
     _print_result(start, rows)
 
 
-def dr_read_python(query):
+def dr_read_python_columns(query):
     print('\n\tclickhouse-driver Python Batch (column oriented):')
     start = time.time()
     result = cd_client.execute(query, columnar=True)
@@ -132,15 +132,15 @@ def main():
     for query in queries:
         print(f'\n{query}')
         # read_python_columns(query)
-        #read_python_rows(query)
+        read_python_rows(query)
         #read_python_stream_rows(query)
-        read_python_stream_columns(query)
-        read_pandas_stream(query)
+        #read_python_stream_columns(query)
+        #read_pandas_stream(query)
         # read_numpy(query)
         #read_pandas(query)
         # read_arrow(query)
-        #dr_read_python(query)
-        # dr_read_python_rows(query)
+        #dr_read_python_columns(query)
+        dr_read_python_rows(query)
         #dr_read_pandas(query)
 
 

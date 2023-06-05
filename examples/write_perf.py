@@ -12,10 +12,10 @@ inserts = [{'query': 'SELECT trip_id, pickup, dropoff, pickup_longitude, ' +
                      'pickup_latitude FROM taxis ORDER BY trip_id LIMIT 500000',
             'columns': 'trip_id UInt32, pickup String, dropoff String,' +
                        ' pickup_longitude Float64, pickup_latitude Float64'},
-           {'query': 'SELECT number from numbers(50000000)',
+           {'query': 'SELECT number from numbers(5000000)',
             'columns': 'number UInt64'}]
 
-excluded = {1}
+excluded = {0}
 cc_client = clickhouse_connect.get_client(compress=False)
 cd_client = clickhouse_driver.Client(host='localhost')
 run_id = random.randint(0, 10000000)
@@ -29,6 +29,16 @@ def write_python_columns(ix, insert):
         start = time.time()
         cc_client.insert(table, data, ctx.column_names, column_type_names=ctx.column_types, column_oriented=True)
     _print_result(start, len(data[0]))
+
+
+def write_python_rows(ix, insert):
+    print('\n\tclickhouse-connect Python Insert (row oriented):')
+    data = cc_client.query(insert['query']).result_rows
+    table = f'perf_test_insert_{run_id}_{ix}'
+    with test_ctx(table, insert) as ctx:
+        start = time.time()
+        cc_client.insert(table, data, ctx.column_names, column_type_names=ctx.column_types)
+    _print_result(start, len(data))
 
 
 def dr_write_python_columns(ix, insert):
@@ -57,6 +67,7 @@ def main():
             continue
         print(f"\n{insert['query']}")
         write_python_columns(ix, insert)
+        write_python_rows(ix, insert)
         # dr_write_python_columns(ix, insert)
 
 

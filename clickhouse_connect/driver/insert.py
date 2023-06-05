@@ -2,7 +2,7 @@ import logging
 from math import log
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
-from clickhouse_connect.driver.common import SliceView
+from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.options import np, pd
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from clickhouse_connect.datatypes.base import ClickHouseType
 
 logger = logging.getLogger(__name__)
-DEFAULT_BLOCK_SIZE = 1 << 24
+DEFAULT_BLOCK_BYTES = 1 << 24   # Try to generate blocks between 16 and 32MB in raw size
 
 
 class InsertBlock(NamedTuple):
@@ -47,7 +47,7 @@ class InsertContext(BaseQueryContext):
         self.column_oriented = False if column_oriented is None else column_oriented
         self.compression = compression
         self.req_block_size = block_size
-        self.block_size = DEFAULT_BLOCK_SIZE
+        self.block_size = DEFAULT_BLOCK_BYTES
         self.data = data
         self.insert_exception = None
 
@@ -90,14 +90,14 @@ class InsertContext(BaseQueryContext):
             if self.column_count != len(self.column_names):
                 raise ProgrammingError('Insert data column count does not match column names')
             self._data = data
-            self._calc_block_size()
+            self.block_size = self._calc_block_size()
 
-    def _calc_block_size(self):
+    def _calc_block_size(self) -> int:
         if self.req_block_size:
-            self.block_size = self.req_block_size
-            return
+            return self.req_block_size
         row_size = 0
-        sample_freq = max(1, self.row_count // 64)
+        sample_size = min((log(self.row_count) + 1) * 2, 64)
+        sample_freq = max(1, int(self.row_count / sample_size))
         for i, d_type in enumerate(self.column_types):
             if d_type.byte_size:
                 row_size += d_type.byte_size
@@ -114,10 +114,10 @@ class InsertContext(BaseQueryContext):
                 sample = [data[j][i] for j in range(0, self.row_count, sample_freq)]
                 d_size = d_type.data_size(sample)
             if d_size == 0:
-                logger.error('Invalid data size for type %s when calculating block_size', d_type.name)
+                logger.warning('Invalid data size for type %s when calculating block_size', d_type.name)
                 d_size = 4
             row_size += d_size
-        self.block_size = 1 << (24 - int(log(row_size, 2)))
+        return 1 << (24 - int(log(row_size, 2)))
 
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:
@@ -131,11 +131,12 @@ class InsertContext(BaseQueryContext):
             self.current_row = block_end
 
     def _column_block_data(self, block_start, block_end):
+        if block_start == 0 and block_end <= self.row_count:
+            return self._block_columns  # Optimization if we don't need to break up the block
         return [col[block_start: block_end] for col in self._block_columns]
 
     def _row_block_data(self, block_start, block_end):
-        column_slice = SliceView(self._block_rows[block_start: block_end])
-        return tuple(zip(*column_slice))
+        return data_conv.pivot(self._block_rows, block_start, block_end)
 
     def _convert_pandas(self, df):
         data = []
