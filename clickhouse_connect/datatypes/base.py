@@ -337,15 +337,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
         if len(column) and self.nullable:
-            first = column[0]
-            try:
-                column[0] = None
-                for ix, x in enumerate(column):
-                    if not x:
-                        column[ix] = 0
-                column[0] = first or 0
-            except TypeError:
-                column = [0 if x is None else x for x in column]
+            column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
 
     def _active_null(self, ctx: QueryContext):
