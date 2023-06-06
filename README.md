@@ -1,9 +1,10 @@
 ## ClickHouse Connect
 
-A high performance core database driver for connecting ClickHouse to Python
+A high performance core database driver for connecting ClickHouse to Python, Pandas, and Superset
 * Pandas DataFrames
 * Numpy Arrays
 * PyArrow Tables
+* Superset Connector
 * SQLAlchemy 1.3 and 1.4 (limited feature set)
 
 ClickHouse Connect currently uses the ClickHouse HTTP interface for maximum compatibility.  
