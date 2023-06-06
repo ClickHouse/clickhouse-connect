@@ -8,7 +8,7 @@ from clickhouse_connect.cc_sqlalchemy import ischema_names, dialect_name
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 
 
-# pylint: disable-msg=too-many-public-methods
+# pylint: disable=too-many-public-methods,no-self-use,unused-argument
 class ClickHouseDialect(DefaultDialect):
     """
     See :py:class:`sqlalchemy.engine.interfaces`
@@ -53,7 +53,8 @@ class ClickHouseDialect(DefaultDialect):
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
 
-    def get_pk_constraint(self, conn, table_name, schema=None, **kw):
+    #  pylint: disable=arguments-renamed
+    def get_pk_constraint(self, connection, table_name, schema=None, **kw):
         return []
 
     def get_foreign_keys(self, connection, table_name, schema=None, **kw):

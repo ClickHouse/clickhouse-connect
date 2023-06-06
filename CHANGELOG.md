@@ -1,14 +1,30 @@
 # ClickHouse Connect ChangeLog
 
-## WARNING -- Breaking changes in 0.5.21
-- The Python context (`__enter__` and `__exit__`) and `stream` methods have been removed from the QueryResult object.  Please use the contexts create by the
-client `*stream` methods instead of using the QueryResult as a context.
-- The `send_progress` keyword argument has been removed from the `get_client` factory method.  This setting has not been used
-since 0.5.13, which added automatic handling of progress headers based on the query type.
+## WARNING -- Superset Engine Spec removed from v0.6.0
+The Superset Engine Spec for ClickHouse has been removed from clickhouse-connect.  The official ClickHouse
+Superset Engine Spec is now maintained directly in the Apache Superset project starting with release 2.1.0.
+If you need compatibility with older versions of Superset, you should use clickhouse-connect v0.5.25, which
+will dynamically load the EngineSpec from the clickhouse-connect project.
 
-## Deprecation Warning -- use_na_types renamed
-- The query_df setting `use_na_types` has been renamed to `use_extended_dtypes`.  The older name is now an alias for `use_extended_dtypes`
-and will be removed in a future release.
+This should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in your Superset
+installation, the ClickHouse datasource will be available with a straightforward connection dialog.
+
+## 0.6.0, 2023-06-05
+### Bug Fixes
+- Use uuid4 instead of uuid1 for generating client level session_ids, as well as use a new urllib3 PoolManager
+when multiprocessing mode is detected.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/194.
+Thanks to [Guillaume Matheron](https://github.com/guillaumematheron) for filing the issue and digging into details.
+The underlying problem is that the Python uuid1() is not guaranteed to be unique in a `forked` multiprocessing environment.
+- Change log warning to debug message if numpy is not available for C bindings.  This check is harmless if numpy
+is not installed and should not have produced a warning.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/195
+
+### Improvements
+- Cython version upgraded to 3.0.0b2
+- The block size (number of rows) for chunked/streaming inserts is now dynamically determined based on sample of
+the insert data.  This allows more efficient streaming of large inserts and significantly improves insert performance
+in some circumstances.
+- Pivoting row based data to native columns for inserts has been optimized in C.  This improves insert performance
+for large inserts of row oriented data.
 
 ## 0.5.25, 2023-05-23
 ### Bug Fix

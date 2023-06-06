@@ -38,7 +38,7 @@ def run_setup(try_c: bool = True):
         author='ClickHouse Inc.',
         author_email='clients@clickhouse.com',
         keywords=['clickhouse', 'superset', 'sqlalchemy', 'http', 'driver'],
-        description='ClickHouse core driver, SqlAlchemy, and Superset libraries',
+        description='ClickHouse Database Core Driver',
         version=version,
         long_description=long_desc,
         long_description_content_type='text/markdown',
@@ -55,8 +55,7 @@ def run_setup(try_c: bool = True):
             'lz4'
         ],
         extras_require={
-            'sqlalchemy': ['sqlalchemy>1.3.21,<1.4'],
-            'superset': ['apache_superset>=1.4.1'],
+            'sqlalchemy': ['sqlalchemy>1.3.21,<2.0'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
@@ -65,8 +64,7 @@ def run_setup(try_c: bool = True):
         tests_require=['pytest'],
         entry_points={
             'sqlalchemy.dialects': ['clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect',
-                                    'clickhousedb=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect'],
-            'superset.db_engine_specs': ['clickhousedb=clickhouse_connect.cc_superset.engine:ClickHouseEngineSpec']
+                                    'clickhousedb=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect']
         },
         classifiers=[
             'Development Status :: 4 - Beta',

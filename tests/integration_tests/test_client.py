@@ -91,8 +91,9 @@ def test_decimal_conv(test_client: Client, table_context: Callable):
 
 
 def test_session_params(test_config: TestConfig):
+    session_id = 'TEST_SESSION_ID_' + test_config.test_database
     client = create_client(
-        session_id='TEST_SESSION_ID',
+        session_id=session_id,
         host=test_config.host,
         port=test_config.port,
         username=test_config.username,
@@ -106,9 +107,9 @@ def test_session_params(test_config: TestConfig):
             return  # By default, the session log isn't enabled, so we only validate in environments we control
         sleep(10)  # Allow the log entries to flush to tables
         result = client.query(
-            "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
+            f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " +
             'event_time > now() - 30').result_set
-        assert result[0] == ('TEST_SESSION_ID', test_config.username)
+        assert result[0] == (session_id, test_config.username)
         result = client.query(
             "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
             'event_time > now() - 30').result_set
@@ -116,10 +117,11 @@ def test_session_params(test_config: TestConfig):
 
 
 def test_dsn_config(test_config: TestConfig):
+    session_id = 'TEST_DSN_SESSION_' + test_config.test_database
     dsn = (f'clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:{test_config.port}' +
-           f'/{test_config.test_database}?session_id=TEST_DSN_SESSION')
+           f'/{test_config.test_database}?session_id={session_id}')
     client = create_client(dsn=dsn)
-    assert client.get_client_setting('session_id') == 'TEST_DSN_SESSION'
+    assert client.get_client_setting('session_id') == session_id
     count = client.command('SELECT count() from system.tables')
     assert client.database == test_config.test_database
     assert count > 0

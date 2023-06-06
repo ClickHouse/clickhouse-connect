@@ -28,9 +28,9 @@ if coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_USE_C', True)):
         import clickhouse_connect.driverc.npconv as cnc
 
         numpy_conv = cnc
-        logger.info('Successfully import ClickHouse Connect C/Numpy optimizations')
+        logger.debug('Successfully import ClickHouse Connect C/Numpy optimizations')
     except ImportError as ex:
-        logger.warning('Unable to connect ClickHouse Connect C to Numpy API [%s], falling back to pure Python',
-                       str(ex))
+        logger.debug('Unable to connect ClickHouse Connect C to Numpy API [%s], falling back to pure Python',
+                     str(ex))
 else:
     logger.info('ClickHouse Connect C optimizations disabled')

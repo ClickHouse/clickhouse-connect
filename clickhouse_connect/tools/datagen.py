@@ -150,6 +150,10 @@ def random_utf8_str(max_len: int = 200):
     return ''.join((c for c in random_chars if c.isprintable()))
 
 
+def fixed_len_ascii_str(str_len: int = 200):
+    return ''.join((chr(int(random() * 95) + 32) for _ in range(str_len)))
+
+
 #   Only accepts precisions in multiples of 3 because others are extremely unlikely to be actually used
 def random_datetime64(prec: int):
     if prec == 1:

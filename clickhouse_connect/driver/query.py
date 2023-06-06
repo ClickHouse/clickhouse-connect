@@ -278,6 +278,7 @@ class QueryResult(Closable):
     def _row_block_stream(self):
         for block in self._column_block_stream():
             yield list(zip(*block))
+            # yield data_conv.pivot(block, 0, len(block))
 
     @property
     def column_block_stream(self) -> StreamContext:

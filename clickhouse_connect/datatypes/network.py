@@ -18,6 +18,7 @@ class IPv4(ClickHouseType):
     _array_type = 'L' if int_size == 2 else 'I'
     valid_formats = 'string', 'native', 'int'
     python_type = IPv4Address
+    byte_size = 4
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
@@ -27,7 +28,7 @@ class IPv4(ClickHouseType):
             return [socket.inet_ntoa(x.to_bytes(4, 'big')) for x in column]
         return data_conv.read_ipv4_col(source, num_rows)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, str):
             fixed = 24, 16, 8, 0
@@ -55,6 +56,7 @@ class IPv4(ClickHouseType):
 class IPv6(ClickHouseType):
     valid_formats = 'string', 'native'
     python_type = IPv6Address
+    byte_size = 16
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'string':
@@ -99,7 +101,7 @@ class IPv6(ClickHouseType):
                 app(tov6(af6, x))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         v = V6_NULL
         first = self._first_value(column)
         v4mask = IPV4_V6_MASK

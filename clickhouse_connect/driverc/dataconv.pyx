@@ -16,6 +16,24 @@ from libc.string cimport memcpy
 from datetime import tzinfo
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def pivot(data: Sequence, unsigned long long start, unsigned long long end):
+    cdef unsigned long long row_count = end - start
+    cdef unsigned long long col_count = len(data[0])
+    cdef object result = PyTuple_New(col_count)
+    cdef object col, v
+    for x in range(col_count):
+        col = PyTuple_New(row_count)
+        PyTuple_SET_ITEM(result, x, col)
+        Py_INCREF(col)
+        for y in range(row_count):
+            v = data[y + start][x]
+            PyTuple_SET_ITEM(col, y, v)
+            Py_INCREF(v)
+    return result
+
+
 @cython.wraparound(False)
 @cython.boundscheck(False)
 def read_ipv4_col(ResponseBuffer buffer, unsigned long long num_rows):

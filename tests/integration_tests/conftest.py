@@ -12,7 +12,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.exceptions import OperationalError
-from tests.helpers import TableContext
+from clickhouse_connect.tools.testing import TableContext
 
 
 class TestConfig(NamedTuple):
@@ -27,6 +27,10 @@ class TestConfig(NamedTuple):
     insert_quorum: int
     proxy_address: str
     __test__ = False
+
+
+class TestException(BaseException):
+    pass
 
 
 @fixture(scope='session', autouse=True, name='test_config')
@@ -67,10 +71,10 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         sys.stderr.write('Starting docker compose')
         pull_result = run_cmd(['docker-compose', '-f', compose_file, 'pull'])
         if pull_result[0]:
-            raise Exception(f'Failed to pull latest docker image(s): {pull_result[2]}')
+            raise TestException(f'Failed to pull latest docker image(s): {pull_result[2]}')
         up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
         if up_result[0]:
-            raise Exception(f'Failed to start docker: {up_result[2]}')
+            raise TestException(f'Failed to start docker: {up_result[2]}')
         time.sleep(5)
     tries = 0
     while True:
@@ -91,7 +95,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             break
         except OperationalError as ex:
             if tries > 10:
-                raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
+                raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)

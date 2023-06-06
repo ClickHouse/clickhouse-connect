@@ -104,3 +104,7 @@ def to_numpy_array(column: Sequence):
     arr = np.empty((len(column),), dtype=np.object)
     arr[:] = column
     return arr
+
+
+def pivot(data: Sequence[Sequence], start_row: int, end_row: int) -> Sequence[Sequence]:
+    return tuple(zip(*data[start_row: end_row]))

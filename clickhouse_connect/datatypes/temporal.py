@@ -22,6 +22,7 @@ class Date(ClickHouseType):
     nano_divisor = 86400 * 1000000000
     valid_formats = 'native', 'int'
     python_type = date
+    byte_size = 2
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
@@ -30,7 +31,7 @@ class Date(ClickHouseType):
             return numpy_conv.read_numpy_array(source, '<u2', num_rows).astype(self.np_type)
         return data_conv.read_date_col(source, num_rows)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -67,6 +68,7 @@ class Date(ClickHouseType):
 
 
 class Date32(Date):
+    byte_size = 4
     _array_type = 'l' if int_size == 2 else 'i'
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
@@ -103,6 +105,7 @@ class DateTime(DateTimeBase):
     _array_type = 'L' if int_size == 2 else 'I'
     np_type = 'datetime64[s]'
     nano_divisor = 1000000000
+    byte_size = 4
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -125,7 +128,7 @@ class DateTime(DateTimeBase):
             return np_array
         return data_conv.read_datetime_col(source, num_rows, active_tz)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -140,6 +143,7 @@ class DateTime(DateTimeBase):
 
 class DateTime64(DateTimeBase):
     __slots__ = 'scale', 'prec', 'unit'
+    byte_size = 8
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -201,7 +205,7 @@ class DateTime64(DateTimeBase):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
