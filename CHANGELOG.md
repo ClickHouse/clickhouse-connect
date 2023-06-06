@@ -1,16 +1,18 @@
 # ClickHouse Connect ChangeLog
 
-## WARNING -- Engine Spec removed from v0.6.x
+### WARNING -- Engine Spec removed from v0.6.x
 ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
 As a result, the Superset Engine Spec has been removed from clickhouse-connect and is now maintained in main
 Superset project. However,if you need compatibility with older versions of Superset, you may need clickhouse-connect
-v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect project.  Regardless, this should not
-affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in your Superset
-installation, the ClickHouse datasource will be available with a straightforward connection dialog.
+v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect project.
+
+In any case, this should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in
+your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
+or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
 ## 0.6.1, 2023-06-06
 ### Improvements
-Minor documentation clean up
+Minor documentation clean up regarding Superset compatibility
 
 ## 0.6.0, 2023-06-05
 ### Bug Fixes
