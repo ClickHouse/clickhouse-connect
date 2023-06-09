@@ -15,7 +15,7 @@ inserts = [{'query': 'SELECT trip_id, pickup, dropoff, pickup_longitude, ' +
            {'query': 'SELECT number from numbers(5000000)',
             'columns': 'number UInt64'}]
 
-excluded = {}
+excluded = {1}
 cc_client = clickhouse_connect.get_client(compress=False)
 cd_client = clickhouse_driver.Client(host='localhost')
 run_id = random.randint(0, 10000000)
@@ -67,8 +67,8 @@ def main():
             continue
         print(f"\n{insert['query']}")
         write_python_columns(ix, insert)
-        write_python_rows(ix, insert)
-        dr_write_python_columns(ix, insert)
+        # write_python_rows(ix, insert)
+        # dr_write_python_columns(ix, insert)
 
 
 class CDWrapper:

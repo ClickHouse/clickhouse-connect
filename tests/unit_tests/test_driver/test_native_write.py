@@ -73,3 +73,11 @@ def test_string_accepts_bytes():
     types = [get_from_name('String')]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(STRING_ACCEPTS_BYTES_OUTPUT)
+
+
+def test_long_str():
+    data = [[bytes.fromhex('ff' * 256)]]
+    names = ['value']
+    types = [get_from_name('String')]
+    output = native_insert_block(data, names, types)
+    print (output)

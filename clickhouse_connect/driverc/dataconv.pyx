@@ -1,14 +1,18 @@
 import struct
-from typing import Sequence
+from _testbuffer import PyBUF_READ
+from typing import Sequence, Optional
 
 import array
 from datetime import datetime, date
 
 import cython
+
 from .buffer cimport ResponseBuffer
-from cpython cimport Py_INCREF, Py_DECREF
+from cpython cimport Py_INCREF, Py_DECREF, PyBytes_AsStringAndSize
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
+from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize
+from cpython.memoryview cimport PyMemoryView_FromMemory
 from cython.view cimport array as cvarray
 from ipaddress import IPv4Address
 from uuid import UUID, SafeUUID
@@ -239,3 +243,66 @@ def build_lc_nullable_column(keys: Sequence, index: array.array, object null_obj
         Py_INCREF(v)
         PyTuple_SET_ITEM(column, x, v)
     return column
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef inline extend_byte_array(target: bytearray, Py_ssize_t start, object source, Py_ssize_t sz):
+    PyByteArray_Resize(target, start + sz)
+    target[start:start + sz] = source[0:sz]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
+    cdef unsigned long long buff_size = len(column) << 5
+    cdef Py_ssize_t buff_loc = 0, sz = 0, dsz = 0
+    cdef Py_ssize_t array_size = PyByteArray_GET_SIZE(dest)
+    cdef char * temp_buff = <char *>PyMem_Malloc(<size_t>buff_size)
+    cdef object mv = PyMemoryView_FromMemory(temp_buff, buff_size, PyBUF_READ)
+    cdef char b
+    cdef char * data
+    for x in column:
+        if not x:
+            temp_buff[buff_loc] = 0
+            buff_loc += 1
+            if buff_loc == buff_size:
+                extend_byte_array(dest, array_size, mv, buff_loc)
+                array_size += buff_loc
+                buff_loc = 0
+        else:
+            if not encoding:
+                PyBytes_AsStringAndSize(x, &data, &dsz)
+            else:
+                PyBytes_AsStringAndSize(x.encode(encoding), &data, &dsz)
+            sz = dsz
+            while True:
+                b = sz & 0x7f
+                sz >>= 7
+                if sz != 0:
+                    b |= 0x80
+                temp_buff[buff_loc] = b
+                buff_loc += 1
+                if buff_loc == buff_size:
+                    extend_byte_array(dest, array_size, mv, buff_loc)
+                    array_size += buff_loc
+                    buff_loc = 0
+                if sz == 0:
+                    break
+            if dsz + buff_loc > buff_size:
+                if buff_loc > 0:  # Write what we have so far
+                    extend_byte_array(dest, array_size, mv, buff_loc)
+                    array_size += buff_loc
+                    buff_loc = 0
+                if (dsz << 4) > buff_size:  # resize our buffer for very large strings
+                    PyMem_Free(<void *> temp_buff)
+                    mv.release()
+                    buff_size = dsz << 6
+                    temp_buff = <char *> PyMem_Malloc(<size_t> buff_size)
+                    mv = PyMemoryView_FromMemory(temp_buff, buff_size, PyBUF_READ)
+            memcpy(<void *>temp_buff + buff_loc, <void *>data, dsz)
+            buff_loc += dsz
+    if buff_loc > 0:
+        extend_byte_array(dest, array_size, mv, buff_loc)
+    mv.release()
+    PyMem_Free(<void *>temp_buff)
