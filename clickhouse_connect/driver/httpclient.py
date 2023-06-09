@@ -66,6 +66,7 @@ class HttpClient(Client):
                  http_proxy: Optional[str] = None,
                  https_proxy: Optional[str] = None,
                  server_host_name: Optional[str] = None,
+                 max_error_chars: Optional[int] = 240,
                  apply_server_timezone: Optional[Union[str, bool]] = True):
         """
         Create an HTTP ClickHouse Connect client
@@ -119,6 +120,7 @@ class HttpClient(Client):
         self._send_comp_setting = False
         self._progress_interval = None
         self._active_session = None
+        self.max_error_chars = max_error_chars
 
         if session_id:
             ch_settings['session_id'] = session_id
@@ -325,10 +327,11 @@ class HttpClient(Client):
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
         err_content = get_response_data(response)
+        max_error_size = self.max_error_chars
         if err_content:
             err_msg = err_content.decode(errors='backslashreplace')
             logger.error(err_msg)
-            err_str = f':{err_str}\n {err_msg[0:240]}'
+            err_str = f':{err_str}\n {err_msg[0:max_error_size]}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,
