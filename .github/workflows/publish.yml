@@ -111,8 +111,6 @@ jobs:
   build_windows_wheels:
     name: Build wheels on Windows
     runs-on: windows-latest
-    env:
-       CIBW_SKIP: 'cp36-* cp37-*'
     steps:
       - uses: actions/checkout@v3
       - name: Build wheels
