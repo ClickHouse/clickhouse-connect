@@ -57,6 +57,7 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
         raise ProgrammingError('Unable to create Python array.  This is usually caused by trying to insert None ' +
                                'values into a ClickHouse column that is not Nullable') from ex
 
+
 def write_uint64(value: int, dest: MutableSequence):
     """
     Write a single UInt64 value to a binary write buffer
