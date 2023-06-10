@@ -15,6 +15,10 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 - Cython version upgraded to 3.0.0b3
 - Inserts for string columns are now C optimized (approximately 2x faster)
 
+### Bug Fix
+- Very long running queries could break because ClickHouse returned too many progress headers.  Thanks to
+[Ivan](https://github.com/istrebitel-1) for the fix
+
 ## 0.6.1, 2023-06-06
 ### Improvements
 Minor documentation clean up regarding Superset compatibility
