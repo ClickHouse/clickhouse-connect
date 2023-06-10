@@ -52,6 +52,17 @@ def dr_write_python_columns(ix, insert):
     _print_result(start, len(data[0]))
 
 
+def dr_write_python_rows(ix, insert):
+    print('\n\tclickhouse-driver Python Insert (row oriented):')
+    data = cd_client.execute(insert['query'], columnar=False)
+    table = f'perf_test_insert_{run_id}_{ix}'
+    with test_ctx(table, insert) as ctx:
+        cols = ','.join(ctx.column_names)
+        start = time.time()
+        cd_client.execute(f'INSERT INTO {table} ({cols}) VALUES', data, columnar=False)
+    _print_result(start, len(data))
+
+
 def test_ctx(table, insert):
     return TableContext(cc_client, table, insert['columns'])
 
@@ -66,9 +77,10 @@ def main():
         if ix in excluded:
             continue
         print(f"\n{insert['query']}")
-        write_python_columns(ix, insert)
+        # write_python_columns(ix, insert)
         write_python_rows(ix, insert)
-        dr_write_python_columns(ix, insert)
+        # dr_write_python_columns(ix, insert)
+        dr_write_python_rows(ix, insert)
 
 
 class CDWrapper:

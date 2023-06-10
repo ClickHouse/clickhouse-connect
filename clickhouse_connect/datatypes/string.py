@@ -1,5 +1,7 @@
 from typing import Sequence, MutableSequence, Union, Collection
 
+from clickhouse_connect.driver.ctypes import data_conv
+
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -41,63 +43,10 @@ class String(ClickHouseType):
 
     # pylint: disable=duplicate-code,too-many-nested-blocks,too-many-branches
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
-        encoding = ctx.encoding or self.encoding
-        app = dest.append
-        first = self._first_value(column)
-        if isinstance(first, str):
-            if self.nullable:
-                for x in column:
-                    if x is None:
-                        app(0)
-                    else:
-                        y = x.encode(encoding)
-                        sz = len(y)
-                        while True:
-                            b = sz & 0x7f
-                            sz >>= 7
-                            if sz == 0:
-                                app(b)
-                                break
-                            app(0x80 | b)
-                        dest += y
-            else:
-                for x in column:
-                    y = x.encode(encoding)
-                    sz = len(y)
-                    while True:
-                        b = sz & 0x7f
-                        sz >>= 7
-                        if sz == 0:
-                            app(b)
-                            break
-                        app(0x80 | b)
-                    dest += y
-        else:
-            if self.nullable:
-                for x in column:
-                    if x is None:
-                        app(0)
-                    else:
-                        sz = len(x)
-                        while True:
-                            b = sz & 0x7f
-                            sz >>= 7
-                            if sz == 0:
-                                app(b)
-                                break
-                            app(0x80 | b)
-                        dest += x
-            else:
-                for x in column:
-                    sz = len(x)
-                    while True:
-                        b = sz & 0x7f
-                        sz >>= 7
-                        if sz == 0:
-                            app(b)
-                            break
-                        app(0x80 | b)
-                    dest += x
+        encoding = None
+        if isinstance(self._first_value(column), str):
+            encoding = ctx.encoding or self.encoding
+        data_conv.write_str_col(column, encoding, dest)
 
     def _active_null(self, ctx):
         if ctx.use_none:

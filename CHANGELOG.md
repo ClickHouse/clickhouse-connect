@@ -10,6 +10,11 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.2, 2023-06-10
+### Improvements
+- Cython version upgraded to 3.0.0b3
+- Inserts for string columns are now C optimized (approximately 2x faster)
+
 ## 0.6.1, 2023-06-06
 ### Improvements
 Minor documentation clean up regarding Superset compatibility

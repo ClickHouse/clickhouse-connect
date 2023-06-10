@@ -1,4 +1,5 @@
 import array
+import struct
 import sys
 
 from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
@@ -50,13 +51,11 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
         else:
             column = [int(x) for x in column]
     try:
-        buff = array.array(code, column)
-    except (TypeError, OverflowError) as ex:
+        buff = struct.Struct(f'<{len(column)}{code}')
+        dest += buff.pack(*column)
+    except (TypeError, OverflowError, struct.error) as ex:
         raise ProgrammingError('Unable to create Python array.  This is usually caused by trying to insert None ' +
                                'values into a ClickHouse column that is not Nullable') from ex
-    if must_swap:
-        buff.byteswap()
-    dest += buff.tobytes()
 
 
 def write_uint64(value: int, dest: MutableSequence):

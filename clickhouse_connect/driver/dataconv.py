@@ -108,3 +108,22 @@ def to_numpy_array(column: Sequence):
 
 def pivot(data: Sequence[Sequence], start_row: int, end_row: int) -> Sequence[Sequence]:
     return tuple(zip(*data[start_row: end_row]))
+
+
+def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
+    app = dest.append
+    for x in column:
+        if not x:
+            app(0)
+        else:
+            if encoding:
+                x = x.encode(encoding)
+            sz = len(x)
+            while True:
+                b = sz & 0x7f
+                sz >>= 7
+                if sz == 0:
+                    app(b)
+                    break
+                app(0x80 | b)
+            dest += x

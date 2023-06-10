@@ -1,3 +1,5 @@
+from clickhouse_connect.driver.exceptions import ProgrammingError
+
 from clickhouse_connect.datatypes.registry import get_from_name
 from tests.helpers import to_bytes, native_insert_block
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
@@ -73,3 +75,33 @@ def test_string_accepts_bytes():
     types = [get_from_name('String')]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(STRING_ACCEPTS_BYTES_OUTPUT)
+
+
+def test_long_str():
+    x = ('蹝ㅝǅ잍鞏≈ﬞ㉢嫩杻⤧㛕錍к❭䦳텶샖爤㍅䱃䰅ἐ䤖엋㰾멛蹒뀃쩷섡፳聣᮵峧쒝咋觀હ鷁䯕͢퐠㏈猡칆빃밥뜼৫葘鹯勲掾ᬗ罧炼䏦險ヤⴕ懺릨봟죩ᬨ칰ԁ凢' +
+         '䰚娞祃獿휢듕鞜甲뉛⠆ᗫ䐼詠圂ᱞ出裒ਗ਼ᩜ㉤扷ꑐ晏镄焬㞧ノⷶ枆侪㇉摨⒞펦埏穊僛䦃吹ꗣ麥䔲鸈麡┨࣓ꢫႮﬆᝢ妢曢ꗠᆪ擽烣졀씥⣏便꽉슕盈㪃拪풻ᯖ럐峨' +
+         '箻躰䆲⏂錬횬渪㜟첯鋘ꊩ㾝톶╁茒牾붮뚂О灪噚놾蠂쌇龥䁼')
+    data = [[x]]
+    names = ['value']
+    types = [get_from_name('String')]
+    output = native_insert_block(data, names, types)
+    assert bytes(output) == b'\x01\x01\x05value\x06String\xe7\x03' + x.encode()
+
+
+def test_bad_columns():
+    data = [['str'], [3.5]]
+    names = ['value']
+    types = [get_from_name('String')]
+    try:
+        native_insert_block(data, names, types)
+    except TypeError:
+        pass
+
+    data = [[3.5], [str]]
+    names = ['value']
+    types = [get_from_name('Float64')]
+
+    try:
+        native_insert_block(data, names, types)
+    except ProgrammingError:
+        pass
