@@ -8,7 +8,7 @@ from datetime import datetime, date
 import cython
 
 from .buffer cimport ResponseBuffer
-from cpython cimport Py_INCREF, Py_DECREF, PyBytes_AsStringAndSize
+from cpython cimport Py_INCREF, Py_DECREF
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize
@@ -260,6 +260,7 @@ def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
     cdef Py_ssize_t array_size = PyByteArray_GET_SIZE(dest)
     cdef char * temp_buff = <char *>PyMem_Malloc(<size_t>buff_size)
     cdef object mv = PyMemoryView_FromMemory(temp_buff, buff_size, PyBUF_READ)
+    cdef object encoded
     cdef char b
     cdef char * data
     for x in column:
@@ -272,9 +273,12 @@ def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
                 buff_loc = 0
         else:
             if not encoding:
-                PyBytes_AsStringAndSize(x, &data, &dsz)
+                data = x
+                dsz = len(x)
             else:
-                PyBytes_AsStringAndSize(x.encode(encoding), &data, &dsz)
+                encoded = x.encode(encoding)
+                dsz = len(encoded)
+                data = encoded
             sz = dsz
             while True:
                 b = sz & 0x7f
@@ -289,7 +293,7 @@ def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
                     buff_loc = 0
                 if sz == 0:
                     break
-            if dsz + buff_loc > buff_size:
+            if dsz + buff_loc >= buff_size:
                 if buff_loc > 0:  # Write what we have so far
                     extend_byte_array(dest, array_size, mv, buff_loc)
                     array_size += buff_loc
