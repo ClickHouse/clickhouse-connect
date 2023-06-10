@@ -304,7 +304,7 @@ def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
                     buff_size = dsz << 6
                     temp_buff = <char *> PyMem_Malloc(<size_t> buff_size)
                     mv = PyMemoryView_FromMemory(temp_buff, buff_size, PyBUF_READ)
-            memcpy(<void *>temp_buff + buff_loc, <void *>data, dsz)
+            memcpy(temp_buff + buff_loc, data, dsz)
             buff_loc += dsz
     if buff_loc > 0:
         extend_byte_array(dest, array_size, mv, buff_loc)
