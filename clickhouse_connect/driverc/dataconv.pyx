@@ -247,7 +247,7 @@ def build_lc_nullable_column(keys: Sequence, index: array.array, object null_obj
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef inline extend_byte_array(target: bytearray, Py_ssize_t start, object source, Py_ssize_t sz):
+cdef inline extend_byte_array(target: bytearray, int start, object source, Py_ssize_t sz):
     PyByteArray_Resize(target, start + sz)
     target[start:start + sz] = source[0:sz]
 
@@ -256,8 +256,8 @@ cdef inline extend_byte_array(target: bytearray, Py_ssize_t start, object source
 @cython.wraparound(False)
 def write_str_col(column: Sequence, encoding: Optional[str], dest: bytearray):
     cdef unsigned long long buff_size = len(column) << 5
-    cdef Py_ssize_t buff_loc = 0, sz = 0, dsz = 0
-    cdef Py_ssize_t array_size = PyByteArray_GET_SIZE(dest)
+    cdef unsigned long long buff_loc = 0, sz = 0, dsz = 0
+    cdef unsigned long long array_size = PyByteArray_GET_SIZE(dest)
     cdef char * temp_buff = <char *>PyMem_Malloc(<size_t>buff_size)
     cdef object mv = PyMemoryView_FromMemory(temp_buff, buff_size, PyBUF_READ)
     cdef object encoded
