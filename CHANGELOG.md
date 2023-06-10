@@ -12,7 +12,6 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 
 ## 0.6.2, 2023-06-10
 ### Improvements
-- Cython version upgraded to 3.0.0b3
 - Inserts for string columns are now C optimized (approximately 2x faster)
 
 ### Bug Fix
