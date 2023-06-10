@@ -111,6 +111,8 @@ jobs:
   build_windows_wheels:
     name: Build wheels on Windows
     runs-on: windows-latest
+    env:
+      CIBW_BUILD_VERBOSITY: 2
     steps:
       - uses: actions/checkout@v3
       - name: Build wheels
