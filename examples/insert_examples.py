@@ -69,7 +69,7 @@ ORDER BY key
 
 
 def main():
-    global client
+    global client  # pylint:  disable=global-statement
     client = clickhouse_connect.get_client()
     print ('Nested example flatten_nested = 1 (Default)')
     inserted_nested_flat()
