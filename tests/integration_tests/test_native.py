@@ -1,3 +1,4 @@
+import decimal
 import uuid
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
@@ -135,3 +136,13 @@ def test_agg_function(test_client: Client, table_context: Callable):
         row = test_client.query('SELECT str, lc_str FROM agg_func_test').first_row
         assert row[0] == 'str'
         assert row[1] == 'lc_str'
+
+
+def test_decimal_rounding(test_client: Client, table_context: Callable):
+    test_vals = [732.4, 75.57, 75.49, 40.16]
+    with table_context('test_decimal', ['key Int32, value Decimal(10, 2)']):
+        test_client.insert('test_decimal', [[ix, x] for ix, x in enumerate(test_vals)])
+        values = test_client.query('SELECT value FROM test_decimal').result_columns[0]
+    with decimal.localcontext() as dec_ctx:
+        dec_ctx.prec = 10
+        assert [decimal.Decimal(str(x)) for x in test_vals] == values
