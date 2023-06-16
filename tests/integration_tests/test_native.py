@@ -1,3 +1,4 @@
+import decimal
 import uuid
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
@@ -18,10 +19,14 @@ def test_low_card(test_client: Client, table_context: Callable):
 
 def test_bare_datetime64(test_client: Client, table_context: Callable):
     with table_context('bare_datetime64_test', ['key UInt32', 'dt64 DateTime64']):
-        test_client.insert('bare_datetime64_test', [[1, datetime(2023, 3, 25, 10, 5, 44, 772402)], [2, datetime.now()]])
+        test_client.insert('bare_datetime64_test',
+                           [[1, datetime(2023, 3, 25, 10, 5, 44, 772402)],
+                            [2, datetime.now()],
+                            [3, datetime(1965, 10, 15, 12, 0, 0)]])
         result = test_client.query('SELECT * FROM bare_datetime64_test ORDER BY key').result_rows
         assert result[0][0] == 1
         assert result[0][1] == datetime(2023, 3, 25, 10, 5, 44, 772000)
+        assert result[2][1] == datetime(1965, 10, 15, 12, 0, 0)
 
 
 def test_nulls(test_client: Client, table_context: Callable):
@@ -135,3 +140,13 @@ def test_agg_function(test_client: Client, table_context: Callable):
         row = test_client.query('SELECT str, lc_str FROM agg_func_test').first_row
         assert row[0] == 'str'
         assert row[1] == 'lc_str'
+
+
+def test_decimal_rounding(test_client: Client, table_context: Callable):
+    test_vals = [732.4, 75.57, 75.49, 40.16]
+    with table_context('test_decimal', ['key Int32, value Decimal(10, 2)']):
+        test_client.insert('test_decimal', [[ix, x] for ix, x in enumerate(test_vals)])
+        values = test_client.query('SELECT value FROM test_decimal').result_columns[0]
+    with decimal.localcontext() as dec_ctx:
+        dec_ctx.prec = 10
+        assert [decimal.Decimal(str(x)) for x in test_vals] == values

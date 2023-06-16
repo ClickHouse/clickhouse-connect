@@ -169,7 +169,7 @@ class DateTime64(DateTimeBase):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
-            return source.read_array('Q', num_rows)
+            return source.read_array('q', num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
         if active_tz == pytz.UTC:
             active_tz = None
@@ -178,7 +178,7 @@ class DateTime64(DateTimeBase):
             if ctx.as_pandas and active_tz and active_tz != pytz.UTC:
                 return pd.DatetimeIndex(np_array, tz='UTC').tz_convert(active_tz)
             return np_array
-        column = source.read_array('Q', num_rows)
+        column = source.read_array('q', num_rows)
         if active_tz and active_tz != pytz.UTC:
             return self._read_binary_tz(column, active_tz)
         return self._read_binary_naive(column)
@@ -217,4 +217,4 @@ class DateTime64(DateTimeBase):
                           for x in column]
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
-        write_array('Q', column, dest)
+        write_array('q', column, dest)
