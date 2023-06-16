@@ -10,10 +10,11 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.3, TBD
+## 0.6.3, 2023-06-16
 ### Bug Fix
 - Inserts into decimal columns first convert the source value to a Python Decimal to work around floating point
 rounding issues.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/203
+- DateTime64 values were broken for dates before 01-01-1970.  This is fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/204
 
 ## 0.6.2, 2023-06-10
 ### Improvements
