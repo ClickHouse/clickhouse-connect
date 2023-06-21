@@ -16,9 +16,11 @@ def test_params(test_client: Client, table_context: callable):
     first_date = test_client.server_tz.localize(first_date)
     second_date = datetime.strptime('Dec 25 2022  5:00AM', '%b %d %Y %I:%M%p')
     second_date = test_client.server_tz.localize(second_date)
-    with table_context('test_bind_params', ['key UInt64', 'dt DateTime', 'value String']):
-        test_client.insert('test_bind_params', [[1, first_date, 'v11'], [2, second_date, 'v21'],
-                                                [3, datetime.now(), 'v31']])
+    with table_context('test_bind_params', ['key UInt64', 'dt DateTime', 'value String', 't Tuple(String, String)']):
+        test_client.insert('test_bind_params',
+                           [[1, first_date, 'v11', ('one', 'two')],
+                            [2, second_date, 'v21', ('t1', 't2')],
+                            [3, datetime.now(), 'v31', ('str1', 'str2')]])
         result = test_client.query('SELECT * FROM test_bind_params WHERE dt = {dt:DateTime}',
                                    parameters={'dt': second_date})
         assert result.first_item['key'] == 2
@@ -28,6 +30,9 @@ def test_params(test_client: Client, table_context: callable):
         result = test_client.query("SELECT * FROM test_bind_params WHERE value != %(v)s AND value like '%%1'",
                                    parameters={'v': 'v11'})
         assert result.row_count == 2
+        result = test_client.query('SELECT * FROM test_bind_params WHERE value IN %(tp)s',
+                                   parameters={'tp': ('v18', 'v31')})
+        assert result.first_item['key'] == 3
 
     result = test_client.query('SELECT number FROM numbers(10) WHERE {n:Nullable(String)} IS NULL',
                                parameters={'n': None}).result_rows
@@ -40,3 +45,7 @@ def test_params(test_client: Client, table_context: callable):
     dt_params = [datetime(2023, 6, 1, 7, 40, 2), datetime(2023, 8, 17, 20, 0, 10)]
     result = test_client.query('SELECT {l:Array(DateTime)}', parameters={'l': dt_params}).first_row
     assert dt_params == result[0]
+
+    tp_params = ('str1', 'str2')
+    result = test_client.query('SELECT %(tp)s', parameters={'tp': tp_params}).first_row
+    assert tp_params == result[0]

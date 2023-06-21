@@ -1,11 +1,14 @@
+
 from sqlalchemy.engine.default import DefaultDialect
 
 from clickhouse_connect import dbapi
+
 from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy import ischema_names, dialect_name
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
+from clickhouse_connect.driver.query import quote_identifier, format_str
 
 
 # pylint: disable=too-many-public-methods,no-self-use,unused-argument
@@ -42,12 +45,13 @@ class ClickHouseDialect(DefaultDialect):
 
     @staticmethod
     def has_database(connection, db_name):
-        return (connection.execute(f"SELECT name FROM system.databases WHERE name = '{db_name}'")).rowcount > 0
+        return (connection.execute('SELECT name FROM system.databases ' +
+                                   f'WHERE name = {format_str(db_name)}')).rowcount > 0
 
     def get_table_names(self, connection, schema=None, **kw):
         cmd = 'SHOW TABLES'
         if schema:
-            cmd += ' FROM ' + schema
+            cmd += ' FROM ' + quote_identifier(schema)
         return [row.name for row in connection.execute(cmd)]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
