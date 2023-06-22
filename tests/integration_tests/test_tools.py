@@ -25,3 +25,13 @@ def test_parquet_upload(test_client: Client, table_context: Callable):
             'SELECT count() as count, sum(rating) as rating, max(year) as year FROM test_parquet_upload').first_item
         assert res['count'] == 250
         assert res['year'] == 2022
+
+
+def test_json_insert(test_client: Client, table_context: Callable):
+    data_file = f'{Path(__file__).parent}/json_test.ndjson'
+    with table_context('test_json_upload', ['key UInt16', 'flt_val Float64', 'int_val Int8']):
+        insert_file(test_client, 'test_json_upload', data_file, 'JSONEachRow')
+        res = test_client.query('SELECT * FROM test_json_upload ORDER BY key').result_rows
+        assert res[1][0] == 17
+        assert res[1][1] == 5.3
+        assert res[1][2] == 121

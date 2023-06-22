@@ -35,6 +35,7 @@ class Client(ABC):
     protocol_version = 0
     valid_transport_settings = set()
     optional_transport_settings = set()
+    database = None
 
     def __init__(self,
                  database: str,
@@ -53,8 +54,8 @@ class Client(ABC):
         self.query_retries = coerce_int(query_retries)
         self.server_host_name = server_host_name
         self.server_tz = pytz.UTC
-        self.server_version, server_tz, self.database = \
-            tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
+        self.server_version, server_tz = \
+            tuple(self.command('SELECT version(), timezone()', use_database=False))
         try:
             self.server_tz = pytz.timezone(server_tz)
         except UnknownTimeZoneError:

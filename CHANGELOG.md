@@ -10,10 +10,13 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.4, TBD
-### Bug Fix
+## 0.6.4, 2023-06-22
+### Bug Fixes
 - Quote database name when retrieving tables via SQLAlchemy.  Fixes the Superset issue https://github.com/apache/superset/issues/24372
 for recent versions of Superset using clickhouse-connect
+- Don't rely on the ClickHouse currentDatabase() function to set an explicit database parameter.  This should not change functionality
+when no database is specified in Client creation since ClickHouse will use the user's default database in that situation regardless.
+Fixes https://github.com/ClickHouse/clickhouse-connect/issues/207
 
 ## 0.6.3, 2023-06-16
 ### Bug Fix
