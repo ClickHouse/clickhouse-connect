@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
-import pkg_resources
+from importlib_metadata import PackageNotFoundError, distribution
 
 EXPECTED_EPS = {'sqlalchemy.dialects:clickhousedb',
                 'sqlalchemy.dialects:clickhousedb.connect'}
@@ -10,8 +10,8 @@ EXPECTED_EPS = {'sqlalchemy.dialects:clickhousedb',
 def validate_entrypoints():
     expected_eps = EXPECTED_EPS.copy()
     try:
-        dist = pkg_resources.get_distribution('clickhouse-connect')
-    except pkg_resources.DistributionNotFound:
+        dist = distribution('clickhouse-connect')
+    except PackageNotFoundError:
         print ('\nClickHouse Connect package not found in this Python installation')
         return -1
     entry_map = dist.get_entry_map()
