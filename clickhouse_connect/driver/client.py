@@ -651,11 +651,13 @@ class Client(ABC):
     def min_version(self, version_str: str) -> bool:
         """
         Determine whether the connected server is at least the submitted version
+        For Altinity Stable versions like 22.8.15.25.altinitystable
+        the last condition in the first list comprehension expression is added
         :param version_str: A version string consisting of up to 4 integers delimited by dots
         :return: True if version_str is greater than the server_version, False if less than
         """
         try:
-            server_parts = [int(x) for x in self.server_version.split('.')]
+            server_parts = [int(x) for x in self.server_version.split('.') if x.isnumeric()]
             server_parts.extend([0] * (4 - len(server_parts)))
             version_parts = [int(x) for x in version_str.split('.')]
             version_parts.extend([0] * (4 - len(version_parts)))
