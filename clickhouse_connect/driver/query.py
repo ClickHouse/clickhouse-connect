@@ -28,6 +28,11 @@ select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
 insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
 command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
 external_bind_re = re.compile(r'{.+:.+}')
+local_tz = datetime.astimezone(datetime.now()).tzinfo
+
+
+if local_tz.tzname(datetime.now()) in ('UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich'):
+    local_tz = pytz.UTC
 
 
 # pylint: disable=too-many-instance-attributes
@@ -158,17 +163,24 @@ class QueryContext(BaseQueryContext):
             self.column_tz = None
 
     def active_tz(self, datatype_tz: Optional[tzinfo]):
+        tz: pytz.timezone = None
         if self.column_tz:
-            return self.column_tz
-        if datatype_tz:
-            return datatype_tz
-        if self.query_tz:
-            return self.query_tz
-        if self.response_tz:
-            return self.response_tz
-        if self.apply_server_tz:
-            return self.server_tz
-        return None
+            tz = self.column_tz
+        elif datatype_tz:
+            tz = datatype_tz
+        elif self.query_tz:
+            tz = self.query_tz
+        elif self.response_tz:
+            tz = self.response_tz
+        elif self.apply_server_tz:
+            tz = self.server_tz
+        else:
+            tz = local_tz
+        #  Special case where if everything is UTC, including the local timezone, we use naive timezones
+        #  for performance reasons
+        if tz == pytz.UTC and tz.utcoffset(datetime.now()) == local_tz.utcoffset(datetime.now()):
+            return None
+        return tz
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -328,7 +340,6 @@ class QueryResult(Closable):
             self._block_gen = None
 
 
-local_tz = datetime.now().astimezone().tzinfo
 BS = '\\'
 must_escape = (BS, '\'')
 

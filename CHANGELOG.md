@@ -18,7 +18,13 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 ### Bug Fixes
 - The Client min_version function now ignores additional text elements.  This could cause issues for unofficial
 ClickHouse releases. Thanks to [Diego Nieto](https://github.com/lesandie) for the fix!
-- In most cases insert query is now sent as part of the POST body instead 
+- In most cases insert query is now sent as part of the POST body instead of as a query parameter.  This fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/213.  Note that this does not happen for direct file inserts
+using the `driver.tools` module, since these rely on an unmodified buffered input stream to efficiently upload files.
+In that case the actual insert query will still be passed as a query parameter.
+- All datetime objects returned from a query will now be timezone aware.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/210.
+There remains one exception to this -- if the calculated timezone and the local timezone are both UTC, then naive timezones
+will be used for performance reasons in cloud/production environments
 
 ### Improvements
 - Client error messages used to be cut off at 240 characters to avoid creating huge log files.  This value is now
