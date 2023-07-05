@@ -66,3 +66,5 @@ _init_common('readonly', (0, 1), 0)  # Implied "read_only" ClickHouse settings f
 # Use the client protocol version  This is needed for DateTime timezone columns but breaks with current version of
 # chproxy
 _init_common('use_protocol_version', (True, False), True)
+
+_init_common('max_error_size', (), 240)

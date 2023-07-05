@@ -325,10 +325,14 @@ class HttpClient(Client):
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
         err_content = get_response_data(response)
+        max_error_size = common.get_setting('max_error_size')
         if err_content:
             err_msg = err_content.decode(errors='backslashreplace')
             logger.error(err_msg)
-            err_str = f':{err_str}\n {err_msg[0:240]}'
+        if max_error_size > 0:
+            err_str = f':{err_str}\n {err_msg[0:max_error_size]}'
+        else:
+            err_str = f':{err_str}\n {err_msg}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,
