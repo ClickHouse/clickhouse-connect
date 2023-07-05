@@ -3,8 +3,9 @@ import time
 from datetime import datetime
 
 import pytz
+from clickhouse_connect.driver.context import BaseQueryContext
 
-from clickhouse_connect.driver import Client, query
+from clickhouse_connect.driver import Client
 
 # We have to localize a datetime from a timezone to get a current, sensible timezone object for testing.  See
 # https://stackoverflow.com/questions/35462876/python-pytz-timezone-function-returns-a-timezone-that-is-off-by-9-minutes
@@ -80,7 +81,7 @@ def test_local_timezones(test_client: Client):
     os.environ['TZ'] = 'America/Denver'
     time.tzset()
     denver_tz = datetime.now().astimezone().tzinfo
-    query.local_tz = denver_tz
+    BaseQueryContext.local_tz = denver_tz
     try:
         row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                                 "toDateTime('2023-07-05 15:10:40') as utc").first_row
@@ -92,7 +93,7 @@ def test_local_timezones(test_client: Client):
     finally:
         os.environ['TZ'] = 'UTC'
         time.tzset()
-        query.local_tz = pytz.UTC
+        BaseQueryContext.local_tz = pytz.UTC
 
 
 def test_naive_timezones(test_client: Client):

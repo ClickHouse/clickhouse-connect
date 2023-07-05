@@ -1,14 +1,15 @@
 import os
 import time
-import pytest
 import pytz
+import pytest
+
+from clickhouse_connect.driver.context import BaseQueryContext
 
 from clickhouse_connect.datatypes.format import clear_all_formats
-from clickhouse_connect.driver import query
 
 os.environ['TZ'] = 'UTC'
 time.tzset()
-query.local_tz = pytz.UTC
+BaseQueryContext.local_tz = pytz.UTC
 
 
 @pytest.fixture(autouse=True)

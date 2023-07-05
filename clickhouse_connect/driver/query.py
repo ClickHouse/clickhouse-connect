@@ -28,11 +28,6 @@ select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
 insert_re = re.compile(r'(^|\s)INSERT\s*INTO', re.IGNORECASE)
 command_re = re.compile(r'(^\s*)(' + commands + r')\s', re.IGNORECASE)
 external_bind_re = re.compile(r'{.+:.+}')
-local_tz = datetime.astimezone(datetime.now()).tzinfo
-
-
-if local_tz.tzname(datetime.now()) in ('UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich'):
-    local_tz = pytz.UTC
 
 
 # pylint: disable=too-many-instance-attributes
@@ -163,24 +158,24 @@ class QueryContext(BaseQueryContext):
             self.column_tz = None
 
     def active_tz(self, datatype_tz: Optional[tzinfo]):
-        tz: pytz.timezone = None
+        active_tz: pytz.timezone = None
         if self.column_tz:
-            tz = self.column_tz
+            active_tz = self.column_tz
         elif datatype_tz:
-            tz = datatype_tz
+            active_tz = datatype_tz
         elif self.query_tz:
-            tz = self.query_tz
+            active_tz = self.query_tz
         elif self.response_tz:
-            tz = self.response_tz
+            active_tz = self.response_tz
         elif self.apply_server_tz:
-            tz = self.server_tz
+            active_tz = self.server_tz
         else:
-            tz = local_tz
+            active_tz = self.local_tz
         #  Special case where if everything is UTC, including the local timezone, we use naive timezones
         #  for performance reasons
-        if tz == pytz.UTC and tz.utcoffset(datetime.now()) == local_tz.utcoffset(datetime.now()):
+        if active_tz == pytz.UTC and active_tz.utcoffset(datetime.now()) == self.local_tz.utcoffset(datetime.now()):
             return None
-        return tz
+        return active_tz
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -391,7 +386,7 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, str):
         return format_str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None and server_tz != local_tz:
+        if value.tzinfo is None:
             value = value.replace(tzinfo=server_tz)
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
@@ -434,7 +429,7 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
             return escape_str(value)
         return format_str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None and server_tz != local_tz:
+        if value.tzinfo is None:
             value = value.replace(tzinfo=server_tz)
         val = value.strftime('%Y-%m-%d %H:%M:%S')
         if top_level:

@@ -319,13 +319,16 @@ class HttpClient(Client):
 
         method = 'POST' if payload or fields else 'GET'
         response = self._raw_request(payload, params, headers, method, fields=fields)
-        result = response.data.decode()[:-1].split('\t')
-        if len(result) == 1:
-            try:
-                return int(result[0])
-            except ValueError:
-                return result[0]
-        return result
+        try:
+            result = response.data.decode()[:-1].split('\t')
+            if len(result) == 1:
+                try:
+                    return int(result[0])
+                except ValueError:
+                    return result[0]
+            return result
+        except UnicodeDecodeError:
+            return str(response.data)
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
