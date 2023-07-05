@@ -2,6 +2,8 @@ import logging
 from math import log
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
+from clickhouse_connect.driver.query import quote_identifier
+
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.options import np, pd
@@ -15,6 +17,7 @@ DEFAULT_BLOCK_BYTES = 1 << 24   # Try to generate blocks between 16 and 32MB in 
 
 
 class InsertBlock(NamedTuple):
+    prefix: bytes
     column_count: int
     row_count: int
     column_names: Iterable[str]
@@ -122,9 +125,14 @@ class InsertContext(BaseQueryContext):
             row_count = block_end - self.current_row
             if row_count <= 0:
                 return
+            if self.current_block == 0:
+                cols = f" ({', '.join([quote_identifier(x) for x in self.column_names])})"
+                prefix = f'INSERT INTO {self.table}{cols} FORMAT Native\n'.encode()
+            else:
+                prefix = bytes()
             self.current_block += 1
             data = self._next_block_data(self.current_row, block_end)
-            yield InsertBlock(self.column_count, row_count, self.column_names, self.column_types, data)
+            yield InsertBlock(prefix, self.column_count, row_count, self.column_names, self.column_types, data)
             self.current_row = block_end
 
     def _column_block_data(self, block_start, block_end):

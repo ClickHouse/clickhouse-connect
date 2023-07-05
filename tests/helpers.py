@@ -154,6 +154,7 @@ def add_test_entry_points():
 
 def native_insert_block(data, column_names, column_types):
     context = InsertContext('table', column_names, column_types, data)
+    context.current_block = 1
     output = bytearray()
     for chunk in native_transform.build_insert(context):
         output.extend(chunk)

@@ -36,6 +36,7 @@ class Client(ABC):
     valid_transport_settings = set()
     optional_transport_settings = set()
     database = None
+    max_error_message = 0
 
     def __init__(self,
                  database: str,

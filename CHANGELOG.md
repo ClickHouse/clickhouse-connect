@@ -1,5 +1,9 @@
 # ClickHouse Connect ChangeLog
 
+### WARNING -- Python 3.7 EOL
+Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
+Python 3.7, and as of January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
+
 ### WARNING -- Engine Spec removed from v0.6.x
 ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
 As a result, the Superset Engine Spec has been removed from clickhouse-connect and is now maintained in main
@@ -9,6 +13,19 @@ v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect 
 In any case, this should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
+
+## 0.6.5, TBD
+### Bug Fixes
+- The Client min_version function now ignores additional text elements.  This could cause issues for unofficial
+ClickHouse releases. Thanks to [Diego Nieto](https://github.com/lesandie) for the fix!
+- In most cases insert query is now sent as part of the POST body instead 
+
+### Improvements
+- Client error messages used to be cut off at 240 characters to avoid creating huge log files.  This value is now
+configurable using the `common` `max_error_size` settings.  Use `0` for this setting to get the full ClickHouse
+error message.  In addition, the default has been changed to `1024` to capture more SQL errors without needing to
+change the global value.  Thanks to [Ramlah Aziz](https://github.com/RamlahAziz) for the update!
+
 
 ## 0.6.4, 2023-06-22
 ### Bug Fixes

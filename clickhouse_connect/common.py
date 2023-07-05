@@ -14,6 +14,13 @@ def version():
         return 'development'
 
 
+def format_error(msg: str) -> str:
+    max_size = _common_settings['max_error_size'].value
+    if max_size:
+        return msg[:max_size]
+    return msg
+
+
 @dataclass
 class CommonSetting:
     name: str
@@ -67,4 +74,4 @@ _init_common('readonly', (0, 1), 0)  # Implied "read_only" ClickHouse settings f
 # chproxy
 _init_common('use_protocol_version', (True, False), True)
 
-_init_common('max_error_size', (), 240)
+_init_common('max_error_size', (), 1024)

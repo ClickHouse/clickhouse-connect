@@ -244,16 +244,13 @@ class HttpClient(Client):
                                        'in an inserted row or column') from ex  # type: ignore
             self._error_handler(response)
 
-        self.raw_insert(context.table,
-                        context.column_names,
-                        block_gen,
-                        context.settings,
-                        self._write_format,
-                        context.compression,
-                        error_handler)
+        self.raw_insert(insert_block=block_gen,
+                        settings=context.settings,
+                        compression=context.compression,
+                        status_handler=error_handler)
         context.data = None
 
-    def raw_insert(self, table: str,
+    def raw_insert(self, table: str = None,
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
@@ -264,11 +261,19 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         write_format = fmt if fmt else self._write_format
+        params = {}
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
-        cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
-        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}'}
+        if table:
+            cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
+            query = f'INSERT INTO {table}{cols} FORMAT {write_format}'
+            if isinstance(insert_block, str):
+                insert_block = query + '\n' + insert_block
+            elif isinstance(insert_block, (bytes, bytearray, BinaryIO)):
+                insert_block = (query + '\n').encode() + insert_block
+            else:
+                params['query'] = query
         if self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
@@ -325,13 +330,9 @@ class HttpClient(Client):
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
         err_content = get_response_data(response)
-        max_error_size = common.get_setting('max_error_size')
+
         if err_content:
-            err_msg = err_content.decode(errors='backslashreplace')
-            logger.error(err_msg)
-        if max_error_size > 0:
-            err_str = f':{err_str}\n {err_msg[0:max_error_size]}'
-        else:
+            err_msg = common.format_error(err_content.decode(errors='backslashreplace'))
             err_str = f':{err_str}\n {err_msg}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
