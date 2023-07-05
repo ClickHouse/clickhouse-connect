@@ -198,3 +198,21 @@ class InsertContext(BaseQueryContext):
                 data[ix] = data[ix].tolist()
         self.column_oriented = True
         return data
+
+
+class InsertResult:
+    summary = {}
+
+    def __init__(self, summary: Optional[dict] = None):
+        if summary is not None:
+            self.summary = summary
+
+    @property
+    def written_rows(self) -> int:
+        return int(self.summary.get('written_rows', 0))
+
+    def written_bytes(self) -> int:
+        return int(self.summary.get('written_bytes', 0))
+
+    def query_id(self) -> str:
+        return self.summary.get('query_id', '')

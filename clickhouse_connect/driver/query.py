@@ -240,11 +240,11 @@ class QueryResult(Closable):
         self._result_columns = None
         self._block_gen = block_gen or empty_gen()
         self._in_context = False
+        self._query_id = query_id
         self.column_names = column_names
         self.column_types = column_types
         self.column_oriented = column_oriented
         self.source = source
-        self.query_id = query_id
         self.summary = {} if summary is None else summary
 
     @property
@@ -273,6 +273,13 @@ class QueryResult(Closable):
                     result.extend(block)
             self._result_rows = result
         return self._result_rows
+
+    @property
+    def query_id(self) -> str:
+        query_id = self.summary.get('query_id')
+        if query_id:
+            return query_id
+        return self._query_id
 
     def _column_block_stream(self):
         if self._block_gen is None:

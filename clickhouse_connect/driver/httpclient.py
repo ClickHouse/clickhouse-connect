@@ -22,7 +22,7 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_reset
-from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.insert import InsertContext, InsertResult
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -215,22 +215,16 @@ class HttpClient(Client):
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
-        if 'X-ClickHouse-Summary' in response.headers:
-            try:
-                summary = json.loads(response.headers['X-ClickHouse-Summary'])
-                query_result.summary = summary
-            except json.JSONDecodeError:
-                pass
-        query_result.query_id = response.headers.get('X-ClickHouse-Query-Id')
+        query_result.summary = self._summary(response)
         return query_result
 
-    def data_insert(self, context: InsertContext):
+    def data_insert(self, context: InsertContext) -> InsertResult:
         """
         See BaseClient doc_string for this method
         """
         if context.empty:
             logger.debug('No data included in insert, skipping')
-            return
+            return InsertResult()
         if context.compression is None:
             context.compression = self.write_compression
         block_gen = self._transform.build_insert(context)
@@ -244,11 +238,12 @@ class HttpClient(Client):
                                        'in an inserted row or column') from ex  # type: ignore
             self._error_handler(response)
 
-        self.raw_insert(insert_block=block_gen,
-                        settings=context.settings,
-                        compression=context.compression,
-                        status_handler=error_handler)
+        resp = self.raw_insert(insert_block=block_gen,
+                               settings=context.settings,
+                               compression=context.compression,
+                               status_handler=error_handler)
         context.data = None
+        return resp
 
     def raw_insert(self, table: str = None,
                    column_names: Optional[Sequence[str]] = None,
@@ -256,7 +251,7 @@ class HttpClient(Client):
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
                    compression: Optional[str] = None,
-                   status_handler: Optional[Callable] = None):
+                   status_handler: Optional[Callable] = None) -> InsertResult:
         """
         See BaseClient doc_string for this method
         """
@@ -281,6 +276,18 @@ class HttpClient(Client):
                                      error_handler=status_handler,
                                      server_wait=False)
         logger.debug('Insert response code: %d, content: %s', response.status, response.data)
+        return InsertResult(self._summary(response))
+
+    @staticmethod
+    def _summary(response: HTTPResponse):
+        summary = {}
+        if 'X-ClickHouse-Summary' in response.headers:
+            try:
+                summary = json.loads(response.headers['X-ClickHouse-Summary'])
+            except json.JSONDecodeError:
+                pass
+        summary['query_id'] = response.headers.get('X-ClickHouse-Query-Id')
+        return summary
 
     def command(self,
                 cmd,

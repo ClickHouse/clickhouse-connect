@@ -16,7 +16,7 @@ from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_in
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
-from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.insert import InsertContext, InsertResult
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, QueryContext, arrow_buffer
 
@@ -63,7 +63,7 @@ class Client(ABC):
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         offsets_differ = datetime.now().astimezone().utcoffset() != datetime.now(tz=self.server_tz).utcoffset()
         self.apply_server_timezone = apply_server_timezone == 'always' or (
-                    coerce_bool(apply_server_timezone) and offsets_differ)
+                coerce_bool(apply_server_timezone) and offsets_differ)
         readonly = 'readonly'
         if not self.min_version('19.17'):
             readonly = common.get_setting('readonly')
@@ -514,7 +514,7 @@ class Client(ABC):
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
                settings: Optional[Dict[str, Any]] = None,
-               context: InsertContext = None) -> None:
+               context: InsertContext = None) -> InsertResult:
         """
         Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
         other than data are ignored
@@ -547,7 +547,7 @@ class Client(ABC):
             if not context.empty:
                 raise ProgrammingError('Attempting to insert new data with non-empty insert context') from None
             context.data = data
-        self.data_insert(context)
+        return self.data_insert(context)
 
     def insert_df(self, table: str = None,
                   df=None,
@@ -556,7 +556,7 @@ class Client(ABC):
                   column_names: Optional[Sequence[str]] = None,
                   column_types: Sequence[ClickHouseType] = None,
                   column_type_names: Sequence[str] = None,
-                  context: InsertContext = None) -> None:
+                  context: InsertContext = None) -> InsertResult:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
         :param table: ClickHouse table
@@ -578,8 +578,13 @@ class Client(ABC):
                 column_names = df.columns
             elif len(column_names) != len(df.columns):
                 raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-        self.insert(table, df, column_names, database, column_types=column_types, column_type_names=column_type_names,
-                    settings=settings, context=context)
+        return self.insert(table,
+                           df,
+                           column_names,
+                           database,
+                           column_types=column_types,
+                           column_type_names=column_type_names,
+                           settings=settings, context=context)
 
     def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
         """
@@ -592,7 +597,7 @@ class Client(ABC):
         """
         full_table = table if '.' in table or not database else f'{database}.{table}'
         column_names, insert_block = arrow_buffer(arrow_table)
-        self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
+        return self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
 
     def create_insert_context(self,
                               table: str,
@@ -674,7 +679,7 @@ class Client(ABC):
         return True
 
     @abstractmethod
-    def data_insert(self, context: InsertContext):
+    def data_insert(self, context: InsertContext) -> InsertResult:
         """
         Subclass implementation of the data insert
         :context: InsertContext parameter object
@@ -686,7 +691,7 @@ class Client(ABC):
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
-                   fmt: Optional[str] = None):
+                   fmt: Optional[str] = None) -> InsertResult:
         """
         Insert data already formatted in a bytes object
         :param table: Table name (whether qualified with the database name or not)
