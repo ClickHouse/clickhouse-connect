@@ -85,10 +85,10 @@ def test_local_timezones(test_client: Client):
     try:
         row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                                 "toDateTime('2023-07-05 15:10:40') as utc").first_row
-
-        denver_tz = datetime.now().astimezone().tzinfo
-
-        assert row[0].tzinfo == chicago_tz
+        if test_client.protocol_version:
+            assert row[0].tzinfo == chicago_tz
+        else:
+            assert row[0].tzinfo is denver_tz
         assert row[1].tzinfo == denver_tz
     finally:
         os.environ['TZ'] = 'UTC'
@@ -100,5 +100,8 @@ def test_naive_timezones(test_client: Client):
     row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                             "toDateTime('2023-07-05 15:10:40') as utc").first_row
 
-    assert row[0].tzinfo == chicago_tz
+    if test_client.protocol_version:
+        assert row[0].tzinfo == chicago_tz
+    else:
+        assert row[0].tzinfo is None
     assert row[1].tzinfo is None

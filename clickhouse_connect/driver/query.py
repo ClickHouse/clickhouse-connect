@@ -158,7 +158,6 @@ class QueryContext(BaseQueryContext):
             self.column_tz = None
 
     def active_tz(self, datatype_tz: Optional[tzinfo]):
-        active_tz: pytz.timezone = None
         if self.column_tz:
             active_tz = self.column_tz
         elif datatype_tz:
