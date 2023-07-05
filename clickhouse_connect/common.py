@@ -2,15 +2,15 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Sequence, Optional, Dict
 
-import pkg_resources
+from importlib_metadata import PackageNotFoundError, distribution
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
 def version():
     try:
-        return pkg_resources.get_distribution('clickhouse-connect').version
-    except pkg_resources.ResolutionError:
+        return distribution('clickhouse-connect').version
+    except PackageNotFoundError:
         return 'development'
 
 

@@ -49,6 +49,7 @@ def run_setup(try_c: bool = True):
         license='Apache License 2.0',
         install_requires=[
             'certifi',
+            'importlib_metadata',
             'urllib3>=1.26',
             'pytz',
             'zstandard',
