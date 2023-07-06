@@ -23,6 +23,7 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_reset
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -215,22 +216,16 @@ class HttpClient(Client):
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
-        if 'X-ClickHouse-Summary' in response.headers:
-            try:
-                summary = json.loads(response.headers['X-ClickHouse-Summary'])
-                query_result.summary = summary
-            except json.JSONDecodeError:
-                pass
-        query_result.query_id = response.headers.get('X-ClickHouse-Query-Id')
+        query_result.summary = self._summary(response)
         return query_result
 
-    def data_insert(self, context: InsertContext):
+    def data_insert(self, context: InsertContext) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
         if context.empty:
             logger.debug('No data included in insert, skipping')
-            return
+            return QuerySummary()
         if context.compression is None:
             context.compression = self.write_compression
         block_gen = self._transform.build_insert(context)
@@ -244,31 +239,37 @@ class HttpClient(Client):
                                        'in an inserted row or column') from ex  # type: ignore
             self._error_handler(response)
 
-        self.raw_insert(context.table,
-                        context.column_names,
-                        block_gen,
-                        context.settings,
-                        self._write_format,
-                        context.compression,
-                        error_handler)
+        resp = self.raw_insert(insert_block=block_gen,
+                               settings=context.settings,
+                               compression=context.compression,
+                               status_handler=error_handler)
         context.data = None
+        return resp
 
-    def raw_insert(self, table: str,
+    def raw_insert(self, table: str = None,
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
                    compression: Optional[str] = None,
-                   status_handler: Optional[Callable] = None):
+                   status_handler: Optional[Callable] = None) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
         write_format = fmt if fmt else self._write_format
+        params = {}
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
-        cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
-        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}'}
+        if table:
+            cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
+            query = f'INSERT INTO {table}{cols} FORMAT {write_format}'
+            if isinstance(insert_block, str):
+                insert_block = query + '\n' + insert_block
+            elif isinstance(insert_block, (bytes, bytearray, BinaryIO)):
+                insert_block = (query + '\n').encode() + insert_block
+            else:
+                params['query'] = query
         if self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
@@ -276,6 +277,18 @@ class HttpClient(Client):
                                      error_handler=status_handler,
                                      server_wait=False)
         logger.debug('Insert response code: %d, content: %s', response.status, response.data)
+        return QuerySummary(self._summary(response))
+
+    @staticmethod
+    def _summary(response: HTTPResponse):
+        summary = {}
+        if 'X-ClickHouse-Summary' in response.headers:
+            try:
+                summary = json.loads(response.headers['X-ClickHouse-Summary'])
+            except json.JSONDecodeError:
+                pass
+        summary['query_id'] = response.headers.get('X-ClickHouse-Query-Id', '')
+        return summary
 
     def command(self,
                 cmd,
@@ -283,7 +296,7 @@ class HttpClient(Client):
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
                 use_database: int = True,
-                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str]]:
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
         See BaseClient doc_string for this method
         """
@@ -314,24 +327,25 @@ class HttpClient(Client):
 
         method = 'POST' if payload or fields else 'GET'
         response = self._raw_request(payload, params, headers, method, fields=fields)
-        result = response.data.decode()[:-1].split('\t')
-        if len(result) == 1:
+        if response.data:
             try:
-                return int(result[0])
-            except ValueError:
-                return result[0]
-        return result
+                result = response.data.decode()[:-1].split('\t')
+                if len(result) == 1:
+                    try:
+                        return int(result[0])
+                    except ValueError:
+                        return result[0]
+                return result
+            except UnicodeDecodeError:
+                return str(response.data)
+        return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
         err_content = get_response_data(response)
-        max_error_size = common.get_setting('max_error_size')
+
         if err_content:
-            err_msg = err_content.decode(errors='backslashreplace')
-            logger.error(err_msg)
-        if max_error_size > 0:
-            err_str = f':{err_str}\n {err_msg[0:max_error_size]}'
-        else:
+            err_msg = common.format_error(err_content.decode(errors='backslashreplace'))
             err_str = f':{err_str}\n {err_msg}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 

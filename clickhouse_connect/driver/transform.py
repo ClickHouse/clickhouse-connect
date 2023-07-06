@@ -83,6 +83,7 @@ class NativeTransform:
         def chunk_gen():
             for x in context.next_block():
                 output = bytearray()
+                output += x.prefix
                 write_leb128(x.column_count, output)
                 write_leb128(x.row_count, output)
                 for col_name, col_type, data in zip(x.column_names, x.column_types, x.column_data):

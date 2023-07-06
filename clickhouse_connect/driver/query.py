@@ -159,16 +159,22 @@ class QueryContext(BaseQueryContext):
 
     def active_tz(self, datatype_tz: Optional[tzinfo]):
         if self.column_tz:
-            return self.column_tz
-        if datatype_tz:
-            return datatype_tz
-        if self.query_tz:
-            return self.query_tz
-        if self.response_tz:
-            return self.response_tz
-        if self.apply_server_tz:
-            return self.server_tz
-        return None
+            active_tz = self.column_tz
+        elif datatype_tz:
+            active_tz = datatype_tz
+        elif self.query_tz:
+            active_tz = self.query_tz
+        elif self.response_tz:
+            active_tz = self.response_tz
+        elif self.apply_server_tz:
+            active_tz = self.server_tz
+        else:
+            active_tz = self.local_tz
+        #  Special case where if everything is UTC, including the local timezone, we use naive timezones
+        #  for performance reasons
+        if active_tz == pytz.UTC and active_tz.utcoffset(datetime.now()) == self.local_tz.utcoffset(datetime.now()):
+            return None
+        return active_tz
 
     def updated_copy(self,
                      query: Optional[str] = None,
@@ -234,11 +240,11 @@ class QueryResult(Closable):
         self._result_columns = None
         self._block_gen = block_gen or empty_gen()
         self._in_context = False
+        self._query_id = query_id
         self.column_names = column_names
         self.column_types = column_types
         self.column_oriented = column_oriented
         self.source = source
-        self.query_id = query_id
         self.summary = {} if summary is None else summary
 
     @property
@@ -268,6 +274,13 @@ class QueryResult(Closable):
             self._result_rows = result
         return self._result_rows
 
+    @property
+    def query_id(self) -> str:
+        query_id = self.summary.get('query_id')
+        if query_id:
+            return query_id
+        return self._query_id
+
     def _column_block_stream(self):
         if self._block_gen is None:
             raise StreamClosedError
@@ -278,7 +291,6 @@ class QueryResult(Closable):
     def _row_block_stream(self):
         for block in self._column_block_stream():
             yield list(zip(*block))
-            # yield data_conv.pivot(block, 0, len(block))
 
     @property
     def column_block_stream(self) -> StreamContext:
@@ -328,7 +340,6 @@ class QueryResult(Closable):
             self._block_gen = None
 
 
-local_tz = datetime.now().astimezone().tzinfo
 BS = '\\'
 must_escape = (BS, '\'')
 
@@ -380,7 +391,7 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, str):
         return format_str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None and server_tz != local_tz:
+        if value.tzinfo is None:
             value = value.replace(tzinfo=server_tz)
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
@@ -423,7 +434,7 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
             return escape_str(value)
         return format_str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None and server_tz != local_tz:
+        if value.tzinfo is None:
             value = value.replace(tzinfo=server_tz)
         val = value.strftime('%Y-%m-%d %H:%M:%S')
         if top_level:

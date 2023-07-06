@@ -22,5 +22,8 @@ test.env
 *.pyc
 .python-version
 
+# Apple garbage
+.DS_Store
+
 # C extensions
 *.pyd

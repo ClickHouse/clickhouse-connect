@@ -45,10 +45,12 @@ def test_arrow_map(test_client: Client, table_context: Callable):
                                           'update_time DateTime DEFAULT now()']):
         data = [[date(2023, 10, 15), 'C1', {'k': 2.5, 'd': 0, 'j': 0}],
                 [date(2023, 10, 16), 'C2', {'k': 3.5, 'd': 0, 'j': -.372}]]
-        test_client.insert('test_arrow_map', data, column_names=('trade_date', 'code', 'kdj'))
+        insert_result = test_client.insert('test_arrow_map', data, column_names=('trade_date', 'code', 'kdj'))
+        assert 2 == insert_result.written_rows
         arrow_table = test_client.query_arrow('SELECT * FROM test_arrow_map ORDER BY trade_date',
                                               use_strings=True)
         print(arrow_table)
         assert isinstance(arrow_table.schema, arrow.Schema)
-        test_client.insert_arrow('test_arrow_map', arrow_table)
+        insert_result = test_client.insert_arrow('test_arrow_map', arrow_table)
         assert 4 == test_client.command('SELECT count() FROM test_arrow_map')
+        assert 2 == insert_result.written_rows

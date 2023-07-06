@@ -4,7 +4,6 @@ from typing import Sequence, Union, Type
 
 import math
 import pytz
-import pkg_resources
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
@@ -140,20 +139,9 @@ def to_hex(b: bytes):
     return '\n'.join(lines)
 
 
-def add_test_entry_points():
-    dist = pkg_resources.Distribution('clickhouse-connect')
-    ep1 = pkg_resources.EntryPoint.parse(
-        'clickhousedb.connect = clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect', dist=dist)
-    ep2 = pkg_resources.EntryPoint.parse(
-        'clickhousedb = clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect', dist=dist)
-    entry_map = dist.get_entry_map()
-    entry_map['sqlalchemy.dialects'] = {'clickhousedb.connect': ep1, 'clickhousedb': ep2}
-    pkg_resources.working_set.add(dist)
-    print('test eps added to distribution')
-
-
 def native_insert_block(data, column_names, column_types):
     context = InsertContext('table', column_names, column_types, data)
+    context.current_block = 1
     output = bytearray()
     for chunk in native_transform.build_insert(context):
         output.extend(chunk)

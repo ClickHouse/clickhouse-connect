@@ -119,8 +119,6 @@ class DateTime(DateTimeBase):
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
-        if active_tz == pytz.UTC:
-            active_tz = None
         if ctx.use_numpy:
             np_array = numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
             if ctx.as_pandas and active_tz:
@@ -171,8 +169,6 @@ class DateTime64(DateTimeBase):
         if self.read_format(ctx) == 'int':
             return source.read_array('q', num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
-        if active_tz == pytz.UTC:
-            active_tz = None
         if ctx.use_numpy:
             np_array = numpy_conv.read_numpy_array(source, self.np_type, num_rows)
             if ctx.as_pandas and active_tz and active_tz != pytz.UTC:

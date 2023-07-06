@@ -1,5 +1,9 @@
 # ClickHouse Connect ChangeLog
 
+### WARNING -- Python 3.7 EOL
+Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
+Python 3.7, and in release after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
+
 ### WARNING -- Engine Spec removed from v0.6.x
 ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
 As a result, the Superset Engine Spec has been removed from clickhouse-connect and is now maintained in main
@@ -9,6 +13,32 @@ v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect 
 In any case, this should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
+
+## 0.6.5, 2023-07-06
+### Bug Fixes
+- The Client min_version method now ignores unrecognized "text" elements.  This could cause issues for unofficial
+ClickHouse releases. Thanks to [Diego Nieto](https://github.com/lesandie) for the fix!
+- In most cases insert query is now sent as part of the POST body instead of as a query parameter.  This fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/213.  Note that this does not happen for direct file inserts
+using the `driver.tools` module, since these rely on an unmodified buffered input stream to efficiently upload files.
+In that case the actual insert query will still be passed as a query parameter.
+- All datetime objects returned from a query will now be timezone aware.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/210.
+There remains one exception to this -- if the calculated timezone and the local timezone are both UTC, then naive timezones
+will be used to improve performance in such "all UTC" environments.
+- Inserting Python dictionaries into a ClickHouse "named" Tuple column now works correctly.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/215.
+Note that using dictionaries for inserts will be noticeably slower than inserting the equivalent Python tuple value
+(with elements in the correct order)
+
+### Improvements
+- Client error messages used to be cut off at 240 characters to avoid creating huge log files.  This value is now
+configurable using the `common.max_error_size` setting.  Use `0` for this setting to get the full ClickHouse
+error message.  In addition, the default has been changed to `1024` to capture more SQL errors without needing to
+modify the global setting value.  Thanks to [Ramlah Aziz](https://github.com/RamlahAziz) for the update!
+- All Client insert methods now return a simple QuerySummary object, which includes properties `written_rows`,
+`written_bytes`, and `query_id` calculated from ClickHouse HTTP response headers.  A QuerySummary object is also
+returned from the Client `command` method if the command does not return other data. Closes https://github.com/ClickHouse/clickhouse-connect/issues/216
+- Version determination no longer indirectly depends on the setuptools `pkg_resources` package.  This also
+avoids some indirect dependency problems.  Thanks to [cwegener](https://github.com/cwegener) for the PR!
 
 ## 0.6.4, 2023-06-22
 ### Bug Fixes
