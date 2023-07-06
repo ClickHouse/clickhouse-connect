@@ -287,7 +287,7 @@ class HttpClient(Client):
                 summary = json.loads(response.headers['X-ClickHouse-Summary'])
             except json.JSONDecodeError:
                 pass
-        summary['query_id'] = response.headers.get('X-ClickHouse-Query-Id')
+        summary['query_id'] = response.headers.get('X-ClickHouse-Query-Id', '')
         return summary
 
     def command(self,
