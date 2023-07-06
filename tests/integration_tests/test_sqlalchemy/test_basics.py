@@ -53,7 +53,7 @@ def test_execute(test_engine: Engine):
     assert len(rows) == 2
 
     rows = list(row for row in connection.execute('DROP TABLE IF EXISTS dummy_table'))
-    assert rows[0][0] == ''
+    assert rows[0][0] == 0
 
     rows = list(row for row in connection.execute('describe TABLE system.columns'))
     assert len(rows) > 5

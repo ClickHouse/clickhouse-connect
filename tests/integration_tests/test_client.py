@@ -202,7 +202,7 @@ def test_error_decode(test_client: Client):
 
 def test_command_as_query(test_client: Client):
     result = test_client.query("SET count_distinct_implementation = 'uniq'")
-    assert result.result_set[0][0] == ''
+    assert result.first_item['written_rows'] == 0
 
 
 def test_show_create(test_client: Client):

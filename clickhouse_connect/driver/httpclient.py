@@ -22,7 +22,8 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_reset
-from clickhouse_connect.driver.insert import InsertContext, InsertResult
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -218,13 +219,13 @@ class HttpClient(Client):
         query_result.summary = self._summary(response)
         return query_result
 
-    def data_insert(self, context: InsertContext) -> InsertResult:
+    def data_insert(self, context: InsertContext) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
         if context.empty:
             logger.debug('No data included in insert, skipping')
-            return InsertResult()
+            return QuerySummary()
         if context.compression is None:
             context.compression = self.write_compression
         block_gen = self._transform.build_insert(context)
@@ -251,7 +252,7 @@ class HttpClient(Client):
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
                    compression: Optional[str] = None,
-                   status_handler: Optional[Callable] = None) -> InsertResult:
+                   status_handler: Optional[Callable] = None) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
@@ -276,7 +277,7 @@ class HttpClient(Client):
                                      error_handler=status_handler,
                                      server_wait=False)
         logger.debug('Insert response code: %d, content: %s', response.status, response.data)
-        return InsertResult(self._summary(response))
+        return QuerySummary(self._summary(response))
 
     @staticmethod
     def _summary(response: HTTPResponse):
@@ -295,7 +296,7 @@ class HttpClient(Client):
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
                 use_database: int = True,
-                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str]]:
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
         See BaseClient doc_string for this method
         """
@@ -326,16 +327,18 @@ class HttpClient(Client):
 
         method = 'POST' if payload or fields else 'GET'
         response = self._raw_request(payload, params, headers, method, fields=fields)
-        try:
-            result = response.data.decode()[:-1].split('\t')
-            if len(result) == 1:
-                try:
-                    return int(result[0])
-                except ValueError:
-                    return result[0]
-            return result
-        except UnicodeDecodeError:
-            return str(response.data)
+        if response.data:
+            try:
+                result = response.data.decode()[:-1].split('\t')
+                if len(result) == 1:
+                    try:
+                        return int(result[0])
+                    except ValueError:
+                        return result[0]
+                return result
+            except UnicodeDecodeError:
+                return str(response.data)
+        return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'

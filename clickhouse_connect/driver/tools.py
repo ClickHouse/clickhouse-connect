@@ -1,7 +1,7 @@
 from typing import Optional, Sequence, Dict, Any
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.insert import InsertResult
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.query import quote_identifier
 
 
@@ -11,7 +11,7 @@ def insert_file(client: Client,
                 fmt: Optional[str] = None,
                 column_names: Optional[Sequence[str]] = None,
                 database: Optional[str] = None,
-                settings: Optional[Dict[str, Any]] = None) -> InsertResult:
+                settings: Optional[Dict[str, Any]] = None) -> QuerySummary:
     full_table = f'{quote_identifier(database)}.{quote_identifier(table)}' if database else quote_identifier(table)
     if not fmt:
         fmt = 'CSV' if column_names else 'CSVWithNames'

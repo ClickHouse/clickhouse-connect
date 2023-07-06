@@ -16,7 +16,8 @@ from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_in
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
-from clickhouse_connect.driver.insert import InsertContext, InsertResult
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, QueryContext, arrow_buffer
 
@@ -186,6 +187,8 @@ class Client(ABC):
                                     parameters=query_context.parameters,
                                     settings=query_context.settings,
                                     external_data=query_context.external_data)
+            if isinstance(response, QuerySummary):
+                return response.as_query_result()
             return QueryResult([response] if isinstance(response, list) else [[response]])
         return self._query_with_context(query_context)
 
@@ -483,7 +486,7 @@ class Client(ABC):
                 data: Union[str, bytes] = None,
                 settings: Dict[str, Any] = None,
                 use_database: bool = True,
-                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str]]:
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
@@ -494,7 +497,8 @@ class Client(ABC):
          database context.  Otherwise, no database will be specified with the command.  This is useful for determining
          the default user database
         :param external_data ClickHouse "external data" to send with command/query
-        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
+        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings, or QuerySummary
+        if no data returned
         """
 
     @abstractmethod
@@ -514,7 +518,7 @@ class Client(ABC):
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
                settings: Optional[Dict[str, Any]] = None,
-               context: InsertContext = None) -> InsertResult:
+               context: InsertContext = None) -> QuerySummary:
         """
         Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
         other than data are ignored
@@ -531,7 +535,7 @@ class Client(ABC):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param context: Optional reusable insert context to allow repeated inserts into the same table with
             different data batches
-        :return: No return, throws an exception if the insert fails
+        :return: QuerySummary with summary information, throws exception if insert fails
         """
         if (context is None or context.empty) and data is None:
             raise ProgrammingError('No data specified for insert') from None
@@ -556,7 +560,7 @@ class Client(ABC):
                   column_names: Optional[Sequence[str]] = None,
                   column_types: Sequence[ClickHouseType] = None,
                   column_type_names: Sequence[str] = None,
-                  context: InsertContext = None) -> InsertResult:
+                  context: InsertContext = None) -> QuerySummary:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
         :param table: ClickHouse table
@@ -571,7 +575,7 @@ class Client(ABC):
             retrieved from the server
         :param context: Optional reusable insert context to allow repeated inserts into the same table with
             different data batches
-        :return: No return, throws an exception if the insert fails
+        :return: QuerySummary with summary information, throws exception if insert fails
         """
         if context is None:
             if column_names is None:
@@ -586,14 +590,16 @@ class Client(ABC):
                            column_type_names=column_type_names,
                            settings=settings, context=context)
 
-    def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
+    def insert_arrow(self, table: str,
+                     arrow_table, database: str = None,
+                     settings: Optional[Dict] = None) -> QuerySummary:
         """
         Insert a PyArrow table DataFrame into ClickHouse using raw Arrow format
         :param table: ClickHouse table
         :param arrow_table: PyArrow Table object
         :param database: Optional ClickHouse database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :return: No return, throws an exception if the insert fails
+        :return: QuerySummary with summary information, throws exception if insert fails
         """
         full_table = table if '.' in table or not database else f'{database}.{table}'
         column_names, insert_block = arrow_buffer(arrow_table)
@@ -679,7 +685,7 @@ class Client(ABC):
         return True
 
     @abstractmethod
-    def data_insert(self, context: InsertContext) -> InsertResult:
+    def data_insert(self, context: InsertContext) -> QuerySummary:
         """
         Subclass implementation of the data insert
         :context: InsertContext parameter object
@@ -691,7 +697,7 @@ class Client(ABC):
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
-                   fmt: Optional[str] = None) -> InsertResult:
+                   fmt: Optional[str] = None) -> QuerySummary:
         """
         Insert data already formatted in a bytes object
         :param table: Table name (whether qualified with the database name or not)

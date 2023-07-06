@@ -96,6 +96,6 @@ def test_external_command(test_client: Client):
     if test_client.min_version('22.8'):
         query_result = test_client.query('CREATE TABLE movies_ext ENGINE MergeTree() ORDER BY tuple() EMPTY ' +
                                          'AS SELECT * FROM movies', external_data=data)
-        assert '' == query_result.first_row[0]
+        assert 'query_id' in query_result.first_item
         test_client.raw_query('INSERT INTO movies_ext SELECT * FROM movies', external_data=data)
         assert 250 == test_client.command('SELECT COUNT() FROM movies_ext')
