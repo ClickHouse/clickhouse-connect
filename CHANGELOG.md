@@ -14,7 +14,7 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.5, TBD
+## 0.6.5, 2023-07-06
 ### Bug Fixes
 - The Client min_version function now ignores unrecognized "text" elements.  This could cause issues for unofficial
 ClickHouse releases. Thanks to [Diego Nieto](https://github.com/lesandie) for the fix!
@@ -25,6 +25,9 @@ In that case the actual insert query will still be passed as a query parameter.
 - All datetime objects returned from a query will now be timezone aware.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/210.
 There remains one exception to this -- if the calculated timezone and the local timezone are both UTC, then naive timezones
 will be used to improve performance in "all UTC" cloud/production environments.
+- Inserting Python dictionaries into a ClickHouse named Tuple column now works correctly.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/215.
+Note that using dictionaries will be noticeably slower than insert Python tuple values (with elements in the correct order)
+into a named Tuple column
 
 ### Improvements
 - Client error messages used to be cut off at 240 characters to avoid creating huge log files.  This value is now

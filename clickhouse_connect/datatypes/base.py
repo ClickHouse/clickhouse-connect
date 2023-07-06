@@ -94,7 +94,7 @@ class ClickHouseType(ABC):
             name = f'{wrapper}({name})'
         return name
 
-    def data_size(self, sample: Collection) -> int:
+    def data_size(self, sample: Sequence) -> int:
         if self.low_card:
             values = set(sample)
             d_size = self._data_size(values) + 2

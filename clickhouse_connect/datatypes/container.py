@@ -10,7 +10,6 @@ from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.common import must_swap
 from clickhouse_connect.datatypes.registry import get_from_name
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -88,7 +87,7 @@ class Array(ClickHouseType):
 class Tuple(ClickHouseType):
     _slots = 'element_names', 'element_types'
     python_type = tuple
-    valid_formats = 'tuple', 'json', 'native'  # native is 'tuple' for unnamed tuples, and dict for named tuples
+    valid_formats = 'tuple', 'dict', 'json', 'native'  # native is 'tuple' for unnamed tuples, and dict for named tuples
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -103,9 +102,12 @@ class Tuple(ClickHouseType):
         if len(sample) == 0:
             return 0
         elem_size = 0
+        is_dict = self.element_names and isinstance(self._first_value(list(sample)), dict)
         for ix, e_type in enumerate(self.element_types):
             if e_type.byte_size > 0:
                 elem_size += e_type.byte_size
+            elif is_dict:
+                elem_size += e_type.data_size([x.get(self.element_names[ix], None) for x in sample])
             else:
                 elem_size += e_type.data_size([x[ix] for x in sample])
         return elem_size
@@ -136,9 +138,20 @@ class Tuple(ClickHouseType):
             e_type.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        columns = list(zip(*column))
+        if self.element_names and isinstance(self._first_value(column), dict):
+            columns = self.convert_dict_insert(column)
+        else:
+            columns = list(zip(*column))
         for e_type, elem_column in zip(self.element_types, columns):
             e_type.write_column_data(elem_column, dest, ctx)
+
+    def convert_dict_insert(self, column: Sequence) -> Sequence:
+        names = self.element_names
+        col = [[] for _ in names]
+        for x in column:
+            for ix, name in enumerate(names):
+                col[ix].append(x.get(name))
+        return col
 
 
 class Map(ClickHouseType):

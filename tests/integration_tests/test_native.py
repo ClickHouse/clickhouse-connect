@@ -6,7 +6,8 @@ from typing import Callable
 
 import pytest
 
-from clickhouse_connect.datatypes.format import set_default_formats, clear_default_format, set_read_format, set_write_format
+from clickhouse_connect.datatypes.format import set_default_formats, clear_default_format, set_read_format, \
+    set_write_format
 from clickhouse_connect.driver import Client
 
 
@@ -100,7 +101,7 @@ def test_read_formats(test_client: Client, test_table_engine: str):
 
     # Test query formats
     result = test_client.query('SELECT * FROM read_format_test', query_formats={'IP*': 'string',
-                               'tup': 'json'}).result_set
+                                                                                'tup': 'json'}).result_set
     assert result[1][3] == '10.44.75.20'
     assert result[0][5] == b'{"u1":7372,"ip2":"10.20.30.203"}'
 
@@ -111,7 +112,7 @@ def test_read_formats(test_client: Client, test_table_engine: str):
 
     # Test column formats
     result = test_client.query('SELECT * FROM read_format_test', column_formats={'ipv4': 'string',
-                               'tup': 'tuple'}).result_set
+                                                                                 'tup': 'tuple'}).result_set
     assert result[1][3] == '10.44.75.20'
     assert result[0][5][1] == IPv4Address('10.20.30.203')
 
@@ -122,7 +123,7 @@ def test_read_formats(test_client: Client, test_table_engine: str):
 
     # Test sub column formats
     set_read_format('tuple', 'tuple')
-    result = test_client.query('SELECT * FROM read_format_test', column_formats={'tup' : {'ip*': 'string'}}).result_set
+    result = test_client.query('SELECT * FROM read_format_test', column_formats={'tup': {'ip*': 'string'}}).result_set
     assert result[0][5][1] == '10.20.30.203'
 
     set_read_format('tuple', 'native')
@@ -130,12 +131,27 @@ def test_read_formats(test_client: Client, test_table_engine: str):
     assert result[0][5]['ip2'] == '10.20.30.203'
 
 
+def test_tuple_inserts(test_client: Client, table_context: Callable):
+    with table_context('insert_tuple_test', ['key Int32', 'named Tuple(fl Float64, ns Nullable(String))',
+                                             'unnamed Tuple(Float64, Nullable(String))']):
+        data = [[1, (3.55, 'str1'), (555, None)], [2, (-43.2, None), (0, 'str2')]]
+        result = test_client.insert('insert_tuple_test', data)
+        assert 2 == result.written_rows
+
+        data = [[1, {'fl': 3.55, 'ns': 'str1'}, (555, None)], [2, {'fl': -43.2}, (0, 'str2')]]
+        result = test_client.insert('insert_tuple_test', data)
+        assert 2 == result.written_rows
+
+        query_result = test_client.query('SELECT * FROM insert_tuple_test ORDER BY key').result_rows
+        assert query_result[0] == query_result[1]
+        assert query_result[2] == query_result[3]
+
+
 def test_agg_function(test_client: Client, table_context: Callable):
     with table_context('agg_func_test', ['key Int32',
                                          'str SimpleAggregateFunction(any, String)',
                                          'lc_str SimpleAggregateFunction(any, LowCardinality(String))'],
                        engine='AggregatingMergeTree'):
-
         test_client.insert('agg_func_test', [(1, 'str', 'lc_str')])
         row = test_client.query('SELECT str, lc_str FROM agg_func_test').first_row
         assert row[0] == 'str'
