@@ -6,7 +6,6 @@ from sqlalchemy import MetaData
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.ext.declarative import declarative_base
 
-from tests import helpers
 from tests.integration_tests.conftest import TestConfig
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
@@ -14,8 +13,6 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, De
     UInt32, IPv4
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
-
-helpers.add_test_entry_points()
 
 
 def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: str):
