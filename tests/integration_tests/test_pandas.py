@@ -145,7 +145,7 @@ def test_pandas_large_types(test_client: Client, table_context: Callable):
 
 def test_pandas_enums(test_client: Client, table_context: Callable):
     columns = ['key String', "value Enum8('Moscow' = 0, 'Rostov' = 1, 'Kiev' = 2)"]
-    with table_context("test_pandas_enums", columns):
+    with table_context('test_pandas_enums', columns):
         df = pd.DataFrame([['key1', 1], ['key2', 0]], columns=['key', 'value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_enums', df)
