@@ -220,7 +220,7 @@ class Enum(ClickHouseType):
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         first = self._first_value(column)
-        if first is None or isinstance(first, int):
+        if first is None or not isinstance(first, str):
             if self.nullable:
                 column = [0 if not x else x for x in column]
             write_array(self._array_type, column, dest)

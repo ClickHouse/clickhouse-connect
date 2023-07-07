@@ -134,13 +134,31 @@ def test_pandas_large_types(test_client: Client, table_context: Callable):
         columns = ['key String', 'value Int64']
         key2_value = 3000000000000000000
     with table_context('test_pandas_big_int', columns):
-        df = pd.DataFrame([['key1', 2000, ], ['key2', key2_value]], columns=['key', 'value'])
+        df = pd.DataFrame([['key1', 2000], ['key2', key2_value]], columns=['key', 'value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_big_int', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_big_int')
         assert result_df.iloc[0]['value'] == 2000
         assert result_df.iloc[1]['value'] == key2_value
         assert df.equals(source_df)
+
+
+def test_pandas_enums(test_client: Client, table_context: Callable):
+    columns = ['key String', "value Enum8('Moscow' = 0, 'Rostov' = 1, 'Kiev' = 2)"]
+    with table_context('test_pandas_enums', columns):
+        df = pd.DataFrame([['key1', 1], ['key2', 0]], columns=['key', 'value'])
+        source_df = df.copy()
+        test_client.insert_df('test_pandas_enums', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_enums ORDER BY key')
+        assert result_df.iloc[0]['value'] == 'Rostov'
+        assert result_df.iloc[1]['value'] == 'Moscow'
+        assert df.equals(source_df)
+        df = pd.DataFrame([['key3', 'Rostov'], ['key4', 'Moscow']], columns=['key', 'value'])
+        test_client.insert_df('test_pandas_enums', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_enums ORDER BY key')
+        assert result_df.iloc[2]['key'] == 'key3'
+        assert result_df.iloc[2]['value'] == 'Rostov'
+        assert result_df.iloc[3]['value'] == 'Moscow'
 
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):

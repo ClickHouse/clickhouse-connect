@@ -14,6 +14,11 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.6, 2023-07-07
+### Bug Fix
+- Inserting into an Enum column from a Pandas DataFrame with integer values only inserted 0 values.  This is fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/219
+
 ## 0.6.5, 2023-07-06
 ### Bug Fixes
 - The Client min_version method now ignores unrecognized "text" elements.  This could cause issues for unofficial
