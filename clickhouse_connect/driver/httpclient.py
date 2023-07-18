@@ -226,57 +226,60 @@ class HttpClient(Client):
         if context.empty:
             logger.debug('No data included in insert, skipping')
             return QuerySummary()
-        if context.compression is None:
-            context.compression = self.write_compression
-        block_gen = self._transform.build_insert(context)
 
-        def error_handler(response: HTTPResponse):
+        def error_handler(resp: HTTPResponse):
             # If we actually had a local exception when building the insert, throw that instead
             if context.insert_exception:
                 ex = context.insert_exception
                 context.insert_exception = None
                 raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
                                        'in an inserted row or column') from ex  # type: ignore
-            self._error_handler(response)
+            self._error_handler(resp)
 
-        resp = self.raw_insert(insert_block=block_gen,
-                               settings=context.settings,
-                               compression=context.compression,
-                               status_handler=error_handler)
+        headers = {'Content-Type': 'application/octet-stream'}
+        if context.compression is None:
+            context.compression = self.write_compression
+        if context.compression:
+            headers['Content-Encoding'] = context.compression
+        block_gen = self._transform.build_insert(context)
+
+        params = {}
+        if self.database:
+            params['database'] = self.database
+        params.update(self._validate_settings(context.settings))
+
+        response = self._raw_request(block_gen, params, headers, error_handler=error_handler, server_wait=False)
+        logger.debug('Context insert response code: %d, content: %s', response.status, response.data)
         context.data = None
-        return resp
+        return QuerySummary(self._summary(response))
 
     def raw_insert(self, table: str = None,
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
-                   compression: Optional[str] = None,
-                   status_handler: Optional[Callable] = None) -> QuerySummary:
+                   compression: Optional[str] = None) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
-        write_format = fmt if fmt else self._write_format
         params = {}
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
         if table:
             cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
-            query = f'INSERT INTO {table}{cols} FORMAT {write_format}'
-            if isinstance(insert_block, str):
+            query = f'INSERT INTO {table}{cols} FORMAT {fmt if fmt else self._write_format}'
+            if not compression and isinstance(insert_block, str):
                 insert_block = query + '\n' + insert_block
-            elif isinstance(insert_block, (bytes, bytearray, BinaryIO)):
+            elif not compression and isinstance(insert_block, (bytes, bytearray, BinaryIO)):
                 insert_block = (query + '\n').encode() + insert_block
             else:
                 params['query'] = query
         if self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
-        response = self._raw_request(insert_block, params, headers,
-                                     error_handler=status_handler,
-                                     server_wait=False)
-        logger.debug('Insert response code: %d, content: %s', response.status, response.data)
+        response = self._raw_request(insert_block, params, headers, server_wait=False)
+        logger.debug('Raw insert response code: %d, content: %s', response.status, response.data)
         return QuerySummary(self._summary(response))
 
     @staticmethod
