@@ -2,7 +2,7 @@
 
 ### WARNING -- Python 3.7 EOL
 Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
-Python 3.7, and in release after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
+Python 3.7, and in releases after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
 
 ### WARNING -- Engine Spec removed from v0.6.x
 ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
@@ -22,6 +22,10 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 ### Bug Fix
 - Inserting into an Enum column from a Pandas DataFrame with integer values only inserted 0 values.  This is fixed.
 https://github.com/ClickHouse/clickhouse-connect/issues/219
+
+### Improvements
+- Upgraded to Cython 3.0.0 final release!
+- Reversed the internal variable names of keys and indexes for low cardinality columns to be consistent with the ClickHouse server nomenclature.
 
 ## 0.6.5, 2023-07-06
 ### Bug Fixes
