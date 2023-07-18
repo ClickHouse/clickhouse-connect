@@ -18,14 +18,14 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 ### Bug Fix
 - Fix the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
 
+### Improvements
+- Upgraded to Cython 3.0.0 final release!
+- Reversed the internal variable names of keys and indexes for low cardinality columns to be consistent with the ClickHouse server nomenclature.
+
 ## 0.6.6, 2023-07-07
 ### Bug Fix
 - Inserting into an Enum column from a Pandas DataFrame with integer values only inserted 0 values.  This is fixed.
 https://github.com/ClickHouse/clickhouse-connect/issues/219
-
-### Improvements
-- Upgraded to Cython 3.0.0 final release!
-- Reversed the internal variable names of keys and indexes for low cardinality columns to be consistent with the ClickHouse server nomenclature.
 
 ## 0.6.5, 2023-07-06
 ### Bug Fixes
