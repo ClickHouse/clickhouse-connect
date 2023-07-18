@@ -90,13 +90,13 @@ def build_nullable_column(source: Sequence, null_map: bytes, null_obj: Any):
     return [source[ix] if null_map[ix] == 0 else null_obj for ix in range(len(source))]
 
 
-def build_lc_nullable_column(keys: Sequence, index: array.array, null_obj: Any):
+def build_lc_nullable_column(index: Sequence, keys: array.array, null_obj: Any):
     column = []
-    for ix in index:
-        if ix == 0:
+    for key in keys:
+        if key == 0:
             column.append(null_obj)
         else:
-            column.append(keys[ix])
+            column.append(index[key])
     return column
 
 

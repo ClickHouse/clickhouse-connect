@@ -2,7 +2,7 @@
 
 ### WARNING -- Python 3.7 EOL
 Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
-Python 3.7, and in release after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
+Python 3.7, and in releases after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
 
 ### WARNING -- Engine Spec removed from v0.6.x
 ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
@@ -13,6 +13,16 @@ v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect 
 In any case, this should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
+
+## 0.6.7, 2023-07-18
+### Bug Fixes
+- Fixed an issue for older versions of ClickHouse where the server would send an initial block of 0 rows for larger queries.
+This would break some queries with LowCardinality columns.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/221 
+- Fixed the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
+
+### Improvements
+- Upgraded to Cython 3.0.0 final release!
+- Reversed the internal variable names of keys and indexes for low cardinality columns to be consistent with the ClickHouse server nomenclature.
 
 ## 0.6.6, 2023-07-07
 ### Bug Fix

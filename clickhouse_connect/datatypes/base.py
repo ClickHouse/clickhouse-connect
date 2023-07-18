@@ -221,60 +221,60 @@ class ClickHouseType(ABC):
         if num_rows == 0:
             return []
         key_data = source.read_uint64()
-        index_sz = 2 ** (key_data & 0xff)
-        key_cnt = source.read_uint64()
-        keys = self._read_column_binary(source, key_cnt, ctx)
+        key_sz = 2 ** (key_data & 0xff)
         index_cnt = source.read_uint64()
-        index = source.read_array(array_type(index_sz, False), index_cnt)
+        index = self._read_column_binary(source, index_cnt, ctx)
+        key_cnt = source.read_uint64()
+        keys = source.read_array(array_type(key_sz, False), key_cnt)
         if self.nullable:
-            return self._build_lc_nullable_column(keys, index, ctx)
-        return self._build_lc_column(keys, index, ctx)
+            return self._build_lc_nullable_column(index, keys, ctx)
+        return self._build_lc_column(index, keys, ctx)
 
-    def _build_lc_column(self, keys: Sequence, index: array.array, _ctx: QueryContext):
-        return [keys[ix] for ix in index]
+    def _build_lc_column(self, index: Sequence, keys: array.array, _ctx: QueryContext):
+        return [index[key] for key in keys]
 
-    def _build_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
-        return data_conv.build_lc_nullable_column(keys, index, self._active_null(ctx))
+    def _build_lc_nullable_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
+        return data_conv.build_lc_nullable_column(index, keys, self._active_null(ctx))
 
     def _write_column_low_card(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
-        index = []
         keys = []
+        index = []
         rev_map = {}
         rmg = rev_map.get
         if self.nullable:
-            keys.append(None)
+            index.append(None)
             key = 1
             for x in column:
                 if x is None:
-                    index.append(0)
+                    keys.append(0)
                 else:
                     ix = rmg(x)
                     if ix is None:
-                        index.append(key)
-                        keys.append(x)
+                        keys.append(key)
+                        index.append(x)
                         rev_map[x] = key
                         key += 1
                     else:
-                        index.append(ix)
+                        keys.append(ix)
         else:
             key = 0
             for x in column:
                 ix = rmg(x)
                 if ix is None:
-                    index.append(key)
-                    keys.append(x)
+                    keys.append(key)
+                    index.append(x)
                     rev_map[x] = key
                     key += 1
                 else:
-                    index.append(ix)
-        ix_type = int(log(len(keys), 2)) >> 3  # power of two bytes needed to store the total number of keys
+                    keys.append(ix)
+        ix_type = int(log(len(index), 2)) >> 3  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
-        write_uint64(len(keys), dest)
-        self._write_column_binary(keys, dest, ctx)
         write_uint64(len(index), dest)
-        write_array(array_type(1 << ix_type, False), index, dest)
+        self._write_column_binary(index, dest, ctx)
+        write_uint64(len(keys), dest)
+        write_array(array_type(1 << ix_type, False), keys, dest)
 
     def _active_null(self, _ctx: QueryContext) -> Any:
         return None
@@ -321,10 +321,10 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         return data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
 
-    def _build_lc_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+    def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         if ctx.use_numpy:
-            return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=len(index))
-        return super()._build_lc_column(keys, index, ctx)
+            return np.fromiter((index[key] for key in keys), dtype=index.dtype, count=len(index))
+        return super()._build_lc_column(index, keys, ctx)
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if self.read_format(ctx) == 'string':

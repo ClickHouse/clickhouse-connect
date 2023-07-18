@@ -100,6 +100,9 @@ def create_client(host: str = None,
             for name, value in generic_args.items():
                 if name in client_params:
                     kwargs[name] = value
+                elif name == 'compression':
+                    if 'compress' not in kwargs:
+                        kwargs['compress'] = value
                 else:
                     if name.startswith('ch_'):
                         name = name[3:]
