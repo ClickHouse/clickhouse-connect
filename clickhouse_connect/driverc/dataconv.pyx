@@ -231,15 +231,15 @@ def build_nullable_column(source: Sequence, char * null_map, object null_obj):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def build_lc_nullable_column(keys: Sequence, index: array.array, object null_obj):
-    cdef unsigned long long num_rows = len(index), x, y
+def build_lc_nullable_column(index: Sequence, keys: array.array, object null_obj):
+    cdef unsigned long long num_rows = len(keys), x, y
     cdef object column = PyTuple_New(num_rows), v
     for x in range(num_rows):
-        y = index[x]
+        y = keys[x]
         if y == 0:
             v = null_obj
         else:
-            v = keys[y]
+            v = index[y]
         Py_INCREF(v)
         PyTuple_SET_ITEM(column, x, v)
     return column

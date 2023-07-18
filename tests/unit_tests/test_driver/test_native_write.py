@@ -34,6 +34,24 @@ STRING_ACCEPTS_BYTES_OUTPUT = """
 ff
 """
 
+MAP_LOW_CARDINALITY_OUTPUT = """
+0102 034D 4150 234D 6170 284C 6F77 4361
+7264 696E 616C 6974 7928 5374 7269 6E67
+292C 2053 7472 696E 6729 0100 0000 0000
+0000 0200 0000 0000 0000 0200 0000 0000
+0000 0006 0000 0000 0000 0200 0000 0000
+0000 046B 6579 3104 6B65 7932 0200 0000
+0000 0000 0001 0131 0374 776F
+"""
+
+LOW_CARDINALITY_NULLABLE_OUTPUT = """
+0102 0373 7472 204C 6F77 4361 7264 696E
+616C 6974 7928 4E75 6C6C 6162 6C65 2853
+7472 696E 6729 2901 0000 0000 0000 0000
+0600 0000 0000 0002 0000 0000 0000 0000
+0566 6972 7374 0200 0000 0000 0000 0100
+"""
+
 
 def test_low_card_null():
     data = [['three']]
@@ -86,6 +104,22 @@ def test_long_str():
     types = [get_from_name('String')]
     output = native_insert_block(data, names, types)
     assert bytes(output) == b'\x01\x01\x05value\x06String\xe7\x03' + x.encode()
+
+
+def test_low_card_map():
+    data = [[{'key1': '1', 'key2': 'two'}], [{}]]
+    names = ['MAP']
+    types = [get_from_name('Map(LowCardinality(String), String)')]
+    output = native_insert_block(data, names, types)
+    assert bytes(output) == bytes.fromhex(MAP_LOW_CARDINALITY_OUTPUT)
+
+
+def test_low_card_nullable():
+    data = [['first'], [None]]
+    names = ['str']
+    types = [get_from_name('LowCardinality(Nullable(String))')]
+    output = native_insert_block(data, names, types)
+    assert bytes(output) == bytes.fromhex(LOW_CARDINALITY_NULLABLE_OUTPUT)
 
 
 def test_bad_columns():
