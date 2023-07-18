@@ -14,9 +14,11 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.7, TBD
-### Bug Fix
-- Fix the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
+## 0.6.7, 2023-07-18
+### Bug Fixes
+- Fixed an issue for older versions of ClickHouse where the server would send an initial block of 0 rows for larger queries.
+This would break some queries with LowCardinality columns.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/221 
+- Fixed the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
 
 ### Improvements
 - Upgraded to Cython 3.0.0 final release!
