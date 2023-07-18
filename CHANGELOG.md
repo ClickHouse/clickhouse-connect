@@ -14,6 +14,14 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.8, 2023-07-18
+### Bug Fix
+- Fixed client `raw_insert` method when a compression method specified.  https://github.com/ClickHouse/clickhouse-connect/issues/223
+
+### Improvement
+- Add compression parameter to the clickhouse `tools.insert_file` method.  '.gz' and '.gzip' extensions are automatically
+recognized.  
+
 ## 0.6.7, 2023-07-18
 ### Bug Fixes
 - Fixed an issue for older versions of ClickHouse where the server would send an initial block of 0 rows for larger queries.

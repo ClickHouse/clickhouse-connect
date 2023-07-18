@@ -697,13 +697,15 @@ class Client(ABC):
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
-                   fmt: Optional[str] = None) -> QuerySummary:
+                   fmt: Optional[str] = None,
+                   compression: Optional[str] = None) -> QuerySummary:
         """
         Insert data already formatted in a bytes object
         :param table: Table name (whether qualified with the database name or not)
         :param column_names: Sequence of column names
         :param insert_block: Binary or string data already in a recognized ClickHouse format
         :param settings:  Optional dictionary of ClickHouse settings (key/string values)
+        :param compression:  Recognized ClickHouse `Accept-Encoding` header compression value
         :param fmt: Valid clickhouse format
         """
 
