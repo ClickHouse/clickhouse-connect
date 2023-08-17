@@ -20,10 +20,10 @@ jobs:
           -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
           --ulimit nofile=262144:262144
           clickhouse/clickhouse-server:head
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.11
       - name: Install pip
         run: python -m pip install --upgrade pip
       - name: Install Test Dependencies
