@@ -12,6 +12,8 @@ on:
       - '**.md'
       - 'examples'
       - 'publish.yaml'
+      - '.github/workflows/clickhouse_ci.yml'
+      - '.github/workflows/on_push.yml'
 
 jobs:
   lint:

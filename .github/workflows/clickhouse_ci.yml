@@ -1,3 +1,5 @@
+name: ClickHouse CI Tests
+
 on:
   workflow_dispatch:
 
@@ -35,7 +37,7 @@ jobs:
       - name: Run HEAD tests
         run: pytest tests/integration_tests
       - name: stop local docker
-        run: docker stop fred
+        run: docker stop clickhouse
       - name: run ClickHouse Cloud tests
         env:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
