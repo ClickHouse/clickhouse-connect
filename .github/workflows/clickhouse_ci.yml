@@ -2,6 +2,8 @@ name: ClickHouse CI Tests
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '34 17 * * *'
 
 jobs:
   head:
