@@ -1,0 +1,45 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  head:
+    runs-on: ubuntu-latest
+    name:  ClickHouse CI Tests
+    env:
+      CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
+      CLICKHOUSE_CONNECT_TEST_FUZZ: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Run ClickHouse Container
+        run: docker run
+          -d
+          -p 8123:8123
+          --name clickhouse
+          -v /var/lib/clickhouse
+          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
+          --ulimit nofile=262144:262144
+          clickhouse/clickhouse-server:head
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pip
+        run: python -m pip install --upgrade pip
+      - name: Install Test Dependencies
+        run: pip install -r tests/test_requirements.txt
+      - name: Build cython extensions
+        run: python setup.py build_ext --inplace
+      - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
+        run: python setup.py develop
+      - name: Run HEAD tests
+        run: pytest tests/integration_tests
+      - name: stop local docker
+        run: docker stop fred
+      - name: run ClickHouse Cloud tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_PORT: 8443
+          CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM: 3
+          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
+          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
+        run: pytest tests/integration_tests
