@@ -1,17 +1,14 @@
 import sys
 from dataclasses import dataclass
 from typing import Any, Sequence, Optional, Dict
+from clickhouse_connect import __version__
 
-from importlib_metadata import PackageNotFoundError, distribution
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
 def version():
-    try:
-        return distribution('clickhouse-connect').version
-    except PackageNotFoundError:
-        return 'development'
+    return __version__.version
 
 
 def format_error(msg: str) -> str:

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+# This script is used for validating installed entrypoints.  Note that it fails on Python 3.7
+
 import sys
-from importlib_metadata import PackageNotFoundError, distribution
+from importlib.metadata import PackageNotFoundError, distribution
 
 EXPECTED_EPS = {'sqlalchemy.dialects:clickhousedb',
                 'sqlalchemy.dialects:clickhousedb.connect'}
