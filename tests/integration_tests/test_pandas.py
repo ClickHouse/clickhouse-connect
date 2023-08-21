@@ -6,7 +6,8 @@ from io import StringIO
 
 import pytest
 
-from clickhouse_connect.driver import Client, ProgrammingError
+from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.options import np, pd
 from tests.helpers import random_query
 from tests.integration_tests.datasets import null_ds, null_ds_columns, null_ds_types
@@ -39,7 +40,7 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
 
         try:
             test_client.insert_df('test_pandas_nulls_bad', df, column_names=insert_columns)
-        except ProgrammingError:
+        except DataError:
             pass
     with table_context('test_pandas_nulls_good',
                        ['key String', 'num Nullable(Int32)', 'flt Nullable(Float32)',

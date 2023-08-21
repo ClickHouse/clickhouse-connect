@@ -1,3 +1,4 @@
+import logging
 from typing import Union
 
 from clickhouse_connect.datatypes import registry
@@ -10,6 +11,8 @@ from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.compression import get_compressor
 
 _EMPTY_CTX = QueryContext()
+
+logger = logging.getLogger(__name__)
 
 
 class NativeTransform:
@@ -84,12 +87,12 @@ class NativeTransform:
         compressor = get_compressor(context.compression)
 
         def chunk_gen():
-            for x in context.next_block():
+            for block in context.next_block():
                 output = bytearray()
-                output += x.prefix
-                write_leb128(x.column_count, output)
-                write_leb128(x.row_count, output)
-                for col_name, col_type, data in zip(x.column_names, x.column_types, x.column_data):
+                output += block.prefix
+                write_leb128(block.column_count, output)
+                write_leb128(block.row_count, output)
+                for col_name, col_type, data in zip(block.column_names, block.column_types, block.column_data):
                     write_leb128(len(col_name), output)
                     output += col_name.encode()
                     write_leb128(len(col_type.name), output)
@@ -102,6 +105,8 @@ class NativeTransform:
                         # the insert if the user has included bad data in the column.  We need to ensure that the
                         # insert fails (using garbage data) to avoid a partial insert, and use the context to
                         # propagate the correct exception to the user
+                        logger.error('Error serializing column `%s` into into data type `%s`',
+                                     col_name, col_type.name, exc_info=True)
                         context.insert_exception = ex
                         yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
                         return

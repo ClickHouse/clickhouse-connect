@@ -14,6 +14,17 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.9, 2023-08-21
+### Improvements
+- Logging and exception handling for failed insert transformations has been reworked.  If an exception is thrown when attempting to
+convert Python, Pandas, or Numpy data into ClickHouse Native format, the column name and type will be logged, as well as a
+stack trace of actual exception (note this may be in the C/Cython code, so the exception data may still be difficult to interpret).
+This partially addresses https://github.com/ClickHouse/clickhouse-connect/issues/229.  Unfortunately determining data errors on a row level in
+addition to the column level is not practical in most cases without seriously impacting performance.
+- Version information has been moved from a top level `VERSION` to a Python `__version__` file in the package.  This removes the Python 3.7 dependency
+on importlib_metadata.
+- Cython `.pyx`, and `.pxd` files are now included in the PyPI source distribution to improve compatibility with 3rd party build tools.
+
 ## 0.6.8, 2023-07-18
 ### Bug Fix
 - Fixed client `raw_insert` method when a compression method specified.  https://github.com/ClickHouse/clickhouse-connect/issues/223
