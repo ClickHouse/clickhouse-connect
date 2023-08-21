@@ -4,7 +4,7 @@ import sys
 
 from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
-from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
+from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
 from clickhouse_connect.driver.types import Closable
 
 # pylint: disable=invalid-name
@@ -54,8 +54,8 @@ def write_array(code: str, column: Sequence, dest: MutableSequence):
         buff = struct.Struct(f'<{len(column)}{code}')
         dest += buff.pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        raise ProgrammingError('Unable to create Python array.  This is usually caused by trying to insert None ' +
-                               'values into a ClickHouse column that is not Nullable') from ex
+        raise DataError('Unable to create Python array.  This is usually caused by trying to insert None ' +
+                        'values into a ClickHouse column that is not Nullable') from ex
 
 
 def write_uint64(value: int, dest: MutableSequence):

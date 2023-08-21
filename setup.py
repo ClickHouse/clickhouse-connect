@@ -1,4 +1,5 @@
 import os
+import re
 from setuptools import setup, find_packages
 
 c_modules = []
@@ -29,9 +30,16 @@ def run_setup(try_c: bool = True):
     with open(os.path.join(project_dir, 'README.md'), encoding='utf-8') as read_me:
         long_desc = read_me.read()
 
-    version_fn = '.dev_version' if os.path.isfile('.dev_version') else 'clickhouse_connect/VERSION'
-    with open(os.path.join(project_dir, version_fn), encoding='utf-8') as version_file:
-        version = version_file.readline()
+    version = 'development'
+    if os.path.isfile('.dev_version'):
+        with open(os.path.join(project_dir, '.dev_version'), encoding='utf-8') as version_file:
+            version = version_file.readline()
+    else:
+        with open(os.path.join(project_dir, 'clickhouse_connect', '__version__.py'), encoding='utf-8') as version_file:
+            match = re.search(r"version\s*=\s*'(.+)'", version_file.read().strip())
+            if match is None:
+                raise ValueError(f'invalid version in clickhouse_connect/__version__.py')
+            version = match.group(1)
 
     setup(
         name='clickhouse-connect',
@@ -49,7 +57,6 @@ def run_setup(try_c: bool = True):
         license='Apache License 2.0',
         install_requires=[
             'certifi',
-            'importlib_metadata',
             'urllib3>=1.26',
             'pytz',
             'zstandard',

@@ -232,8 +232,7 @@ class HttpClient(Client):
             if context.insert_exception:
                 ex = context.insert_exception
                 context.insert_exception = None
-                raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
-                                       'in an inserted row or column') from ex  # type: ignore
+                raise ex
             self._error_handler(resp)
 
         headers = {'Content-Type': 'application/octet-stream'}
@@ -345,7 +344,12 @@ class HttpClient(Client):
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
-        err_content = get_response_data(response)
+        try:
+            err_content = get_response_data(response)
+        except Exception: # pylint: disable=broad-except
+            pass
+        finally:
+            response.close()
 
         if err_content:
             err_msg = common.format_error(err_content.decode(errors='backslashreplace'))
@@ -422,9 +426,9 @@ class HttpClient(Client):
                 if attempts > retries:
                     self._error_handler(response, True)
                 logger.debug('Retrying requests with status code %d', response.status)
+            elif error_handler:
+                error_handler(response)
             else:
-                if error_handler:
-                    error_handler(response)
                 self._error_handler(response)
 
     def ping(self):
