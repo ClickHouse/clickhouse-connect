@@ -301,7 +301,8 @@ class Object(JSON):
     python_type = dict
 
     def __init__(self, type_def):
-        if type_def.values[0].lower() != "'json'":
-            raise NotImplementedError('Only json Object type is currently supported')
+        data_type = type_def.values[0].lower().replace(' ', '')
+        if data_type not in ("'json'", "nullable('json')"):
+            raise NotImplementedError('Only json or Nullable(json) Object type is currently supported')
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str

@@ -48,10 +48,20 @@ def test_nulls(test_client: Client, table_context: Callable):
 def test_json(test_client: Client, table_context: Callable):
     if not test_client.min_version('22.6.1'):
         pytest.skip('JSON test skipped for old version {test_client.server_version}')
-    with table_context('native_json_test', ['key Int32', 'value JSON', 'e2 Int32']):
+    with table_context('native_json_test', [
+        'key Int32',
+        'value JSON',
+        'e2 Int32',
+        "null_value Object(Nullable('json'))"
+    ]):
         jv1 = {'key1': 337, 'value.2': 'vvvv', 'HKD@spéçiäl': 'Special K', 'blank': 'not_really_blank'}
         jv3 = {'key3': 752, 'value.2': 'v2_rules', 'blank': None}
-        test_client.insert('native_json_test', [[5, jv1, -44], [20, None, 5200], [25, jv3, 7302]])
+        njv2 = {'nk1': -302, 'nk2': {'sub1': 372, 'sub2': 'a string'}}
+        njv3 = {'nk1': 5832.44, 'nk2': {'sub1': 47788382, 'sub2':'sub2val', 'sub3': 'sub3str'}}
+        test_client.insert('native_json_test', [
+            [5, jv1, -44, None],
+            [20, None, 5200, njv2],
+            [25, jv3, 7302, njv3]])
 
         result = test_client.query('SELECT * FROM native_json_test ORDER BY key')
         json1 = result.result_set[0][1]
@@ -59,12 +69,18 @@ def test_json(test_client: Client, table_context: Callable):
         assert json1['key3'] == 0
         json3 = result.result_set[2][1]
         assert json3['value.2'] == 'v2_rules'
+        assert json3['blank'] == ''
         assert json3['key1'] == 0
         assert json3['key3'] == 752
+        json2 = result.result_set[1][3]
+        assert json2['nk1'] == -302.0
+        assert json2['nk2']['sub2'] == 'a string'
+        assert json2['nk2']['sub3'] is None
         set_write_format('JSON', 'string')
-        test_client.insert('native_json_test', [[999, '{"key4": 283, "value.2": "str_value"}', 77]])
-        result = test_client.query('SELECT value.key4 FROM native_json_test ORDER BY key')
+        test_client.insert('native_json_test', [[999, '{"key4": 283, "value.2": "str_value"}', 77, '{"nk1":53}']])
+        result = test_client.query('SELECT value.key4, null_value.nk1 FROM native_json_test ORDER BY key')
         assert result.result_set[3][0] == 283
+        assert result.result_set[3][1] == 53
 
 
 def test_read_formats(test_client: Client, test_table_engine: str):
