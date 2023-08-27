@@ -14,6 +14,10 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.10, 2023-08-27
+### Improvement
+- Add support and tests for the `Object(Nullable('json'))` type, which is sometimes detected by schema inference.
+
 ## 0.6.9, 2023-08-21
 ### Improvements
 - Logging and exception handling for failed insert transformations has been reworked.  If an exception is thrown when attempting to
