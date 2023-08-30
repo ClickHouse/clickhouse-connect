@@ -14,6 +14,15 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.11, 2023-08-30
+### Bug fixes
+- Inserts using Pandas 2.1 would fail due to a removed method in the Pandas library.  There is now a workaround/fix for
+this.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/234
+- Inserts into a FixedString column that were not the expected size could cause corrupt insert blocksd and mysterious errors
+from the ClickHouse server.  Validation has been added so that more meaningful error messages are generated if a fixed string
+value is an invalid size.  A reminder that strings which are "too short" for a FixedString column will be padded with 0 bytes, while
+strings that are "too long" will generate an exception during the insert.
+
 ## 0.6.10, 2023-08-27
 ### Improvement
 - Add support and tests for the `Object(Nullable('json'))` type, which is sometimes detected by schema inference.

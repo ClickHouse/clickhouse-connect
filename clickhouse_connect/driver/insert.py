@@ -6,7 +6,7 @@ from clickhouse_connect.driver.query import quote_identifier
 
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.context import BaseQueryContext
-from clickhouse_connect.driver.options import np, pd
+from clickhouse_connect.driver.options import np, pd, pd_time_test
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class InsertContext(BaseQueryContext):
         self.column_oriented = False if column_oriented is None else column_oriented
         self.compression = compression
         self.req_block_size = block_size
-        self.block_size = DEFAULT_BLOCK_BYTES
+        self.block_row_count = DEFAULT_BLOCK_BYTES
         self.data = data
         self.insert_exception = None
 
@@ -93,7 +93,7 @@ class InsertContext(BaseQueryContext):
             if self.column_count != len(self.column_names):
                 raise ProgrammingError('Insert data column count does not match column names')
             self._data = data
-            self.block_size = self._calc_block_size()
+            self.block_row_count = self._calc_block_size()
 
     def _calc_block_size(self) -> int:
         if self.req_block_size:
@@ -121,7 +121,7 @@ class InsertContext(BaseQueryContext):
 
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:
-            block_end = min(self.current_row + self.block_size, self.row_count)
+            block_end = min(self.current_row + self.block_row_count, self.row_count)
             row_count = block_end - self.current_row
             if row_count <= 0:
                 return
@@ -153,8 +153,7 @@ class InsertContext(BaseQueryContext):
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
                 else:
                     df_col = df_col.astype(ch_type.base_type, copy=False)
-            elif 'datetime' in ch_type.np_type and (pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df_col)
-                                                    or 'datetime64[ns' in d_type):
+            elif 'datetime' in ch_type.np_type and (pd_time_test(df_col) or 'datetime64[ns' in d_type):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'

@@ -3,6 +3,7 @@ from typing import Sequence, MutableSequence, Union, Collection
 from clickhouse_connect.driver.ctypes import data_conv
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -79,7 +80,7 @@ class FixedString(ClickHouseType):
             return source.read_fixed_str_col(self.byte_size, num_rows, ctx.encoding or self.encoding )
         return source.read_bytes_col(self.byte_size, num_rows)
 
-    # pylint: disable=too-many-branches
+    # pylint: disable=too-many-branches,duplicate-code
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         ext = dest.extend
         sz = self.byte_size
@@ -97,6 +98,8 @@ class FixedString(ClickHouseType):
                             b = str_enc(x, enc)
                         except UnicodeEncodeError:
                             b = empty
+                        if len(b) > sz:
+                            raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                         ext(b)
                         if len(b) < sz:
                             ext(empty[:-len(b)])
@@ -106,15 +109,21 @@ class FixedString(ClickHouseType):
                         b = str_enc(x, enc)
                     except UnicodeEncodeError:
                         b = empty
+                    if len(b) > sz:
+                        raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                     ext(b)
                     if len(b) < sz:
                         ext(empty[:-len(b)])
         elif self.nullable:
-            for x in column:
-                if not x:
+            for b in column:
+                if not b:
                     ext(empty)
+                elif len(b) != sz:
+                    raise DataError(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
                 else:
-                    ext(x)
+                    ext(b)
         else:
-            for x in column:
-                ext(x)
+            for b in column:
+                if len(b) != sz:
+                    raise DataError(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
+                ext(b)
