@@ -1,6 +1,7 @@
-from typing import Sequence, Optional, Union
+from typing import Sequence, Optional, Union, Dict, Any
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.query import format_query_value
 
 
 class TableContext:
@@ -9,9 +10,11 @@ class TableContext:
                  columns: Union[str, Sequence[str]],
                  column_types: Optional[Sequence[str]] = None,
                  engine: str = 'MergeTree',
-                 order_by: str = None):
+                 order_by: str = None,
+                 settings: Optional[Dict[str, Any]] = None):
         self.client = client
         self.table = table
+        self.settings = settings
         if isinstance(columns, str):
             columns = columns.split(',')
         if column_types is None:
@@ -34,7 +37,15 @@ class TableContext:
         else:
             self.client.command(f'DROP TABLE IF EXISTS {self.table} SYNC')
         col_defs = ','.join(f'{name} {col_type}' for name, col_type in zip(self.column_names, self.column_types))
-        self.client.command(f'CREATE TABLE {self.table} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}')
+        create_cmd = f'CREATE TABLE {self.table} ({col_defs}) ENGINE {self.engine} ORDER BY {self.order_by}'
+        if self.settings:
+            create_cmd += ' SETTINGS '
+            for key, value in self.settings.items():
+
+                create_cmd += f'{key} = {format_query_value(value)}, '
+            if create_cmd.endswith(', '):
+                create_cmd = create_cmd[:-2]
+        self.client.command(create_cmd)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
