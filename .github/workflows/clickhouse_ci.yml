@@ -15,15 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Run ClickHouse Container
-        run: docker run
-          -d
-          -p 8123:8123
-          --name clickhouse
-          -v /var/lib/clickhouse
-          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
-          --ulimit nofile=262144:262144
-          clickhouse/clickhouse-server:head
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
@@ -36,7 +27,29 @@ jobs:
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
         run: python setup.py develop
+      - name: Run ClickHouse Container (HEAD)
+        run: docker run
+          -d
+          -p 8123:8123
+          --name clickhouse
+          -v /var/lib/clickhouse
+          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
+          --ulimit nofile=262144:262144
+          clickhouse/clickhouse-server:head
       - name: Run HEAD tests
+        run: pytest tests/integration_tests
+      - name: stop local docker
+        run: docker stop clickhouse
+      - name: Run ClickHouse Container (LATEST)
+        run: docker run
+          -d
+          -p 8123:8123
+          --name clickhouse
+          -v /var/lib/clickhouse
+          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
+          --ulimit nofile=262144:262144
+          clickhouse/clickhouse-server:latest
+      - name: Run LATEST tests
         run: pytest tests/integration_tests
       - name: stop local docker
         run: docker stop clickhouse
