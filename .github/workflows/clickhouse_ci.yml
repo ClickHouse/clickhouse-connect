@@ -38,8 +38,10 @@ jobs:
           clickhouse/clickhouse-server:head
       - name: Run HEAD tests
         run: pytest tests/integration_tests
-      - name: stop local docker
+      - name: stop head container
         run: docker stop clickhouse_head
+      - name: remove head container
+        run: docker remove clickhouse_head
       - name: Run ClickHouse Container (LATEST)
         run: docker run
           -d
@@ -51,8 +53,10 @@ jobs:
           clickhouse/clickhouse-server:latest
       - name: Run LATEST tests
         run: pytest tests/integration_tests
-      - name: stop local docker
+      - name: stop latest container
         run: docker stop clickhouse_latest
+      - name: remove latest container
+        run: docker remove clickhouse_latest
       - name: run ClickHouse Cloud tests
         env:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
