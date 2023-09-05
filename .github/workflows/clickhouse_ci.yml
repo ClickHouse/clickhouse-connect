@@ -31,7 +31,7 @@ jobs:
         run: docker run
           -d
           -p 8123:8123
-          --name clickhouse
+          --name clickhouse_head
           -v /var/lib/clickhouse
           -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
           --ulimit nofile=262144:262144
@@ -39,12 +39,12 @@ jobs:
       - name: Run HEAD tests
         run: pytest tests/integration_tests
       - name: stop local docker
-        run: docker stop clickhouse
+        run: docker stop clickhouse_head
       - name: Run ClickHouse Container (LATEST)
         run: docker run
           -d
           -p 8123:8123
-          --name clickhouse
+          --name clickhouse_latest
           -v /var/lib/clickhouse
           -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
           --ulimit nofile=262144:262144
@@ -52,7 +52,7 @@ jobs:
       - name: Run LATEST tests
         run: pytest tests/integration_tests
       - name: stop local docker
-        run: docker stop clickhouse
+        run: docker stop clickhouse_latest
       - name: run ClickHouse Cloud tests
         env:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
