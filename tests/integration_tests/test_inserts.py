@@ -32,3 +32,23 @@ def test_bad_data_insert(test_client: Client, table_context: Callable):
             test_client.insert('test_bad_insert', data)
         except DataError as ex:
             assert 'array' in str(ex)
+
+
+def test_bad_strings(test_client: Client, table_context: Callable):
+    with table_context('test_bad_strings', 'key Int32, fs FixedString(6), nsf Nullable(FixedString(4))'):
+        try:
+            test_client.insert('test_bad_strings', [[1, b'\x0535', None]])
+        except DataError as ex:
+            assert 'match' in str(ex)
+        try:
+            test_client.insert('test_bad_strings', [[1, b'\x0535abc', '😀🙃']])
+        except DataError as ex:
+            assert 'encoded' in str(ex)
+
+
+def test_low_card_dictionary_size(test_client: Client, table_context: Callable):
+    with table_context('test_low_card_dict', 'key Int32, lc LowCardinality(String)',
+                       settings={'index_granularity': 65536 }):
+        data = [[x, str(x)] for x in range(30000)]
+        test_client.insert('test_low_card_dict', data)
+        assert 30000 == test_client.command('SELECT count() FROM test_low_card_dict')
