@@ -180,7 +180,7 @@ class Map(ClickHouseType):
     # pylint: disable=too-many-locals
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         offsets = source.read_array('Q', num_rows)
-        total_rows = offsets[-1]
+        total_rows = 0 if len(offset) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx)
         values = self.value_type.read_column_data(source, total_rows, ctx)
         all_pairs = tuple(zip(keys, values))
