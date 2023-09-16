@@ -182,3 +182,8 @@ def test_decimal_rounding(test_client: Client, table_context: Callable):
     with decimal.localcontext() as dec_ctx:
         dec_ctx.prec = 10
         assert [decimal.Decimal(str(x)) for x in test_vals] == values
+
+
+def test_empty_maps(test_client: Client):
+    result = test_client.query("select Cast(([],[]), 'Map(String, Map(String, String))')")
+    assert result.first_row[0] == {}

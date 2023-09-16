@@ -14,6 +14,11 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.12, 2023-08-30
+### Bug Fix
+- Nested empty Maps would return an IndexError when queried.  https://github.com/ClickHouse/clickhouse-connect/issues/239.  Thanks
+to [Ashton Hudson](https://github.com/CaptainCuddleCube) for the report and the fix
+
 ## 0.6.11, 2023-08-30
 ### Bug fixes
 - Inserts using Pandas 2.1 would fail due to a removed method in the Pandas library.  There is now a workaround/fix for
