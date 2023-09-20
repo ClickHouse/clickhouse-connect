@@ -347,7 +347,7 @@ class HttpClient(Client):
         try:
             err_content = get_response_data(response)
         except Exception: # pylint: disable=broad-except
-            pass
+            err_content = None
         finally:
             response.close()
 
@@ -412,7 +412,7 @@ class HttpClient(Client):
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
                     # related to the Keep Alive settings
-                    if attempts == 1:
+                    if attempts == 0:
                         logger.debug('Retrying remotely closed connection')
                         continue
                 logger.warning('Unexpected Http Driver Exception')

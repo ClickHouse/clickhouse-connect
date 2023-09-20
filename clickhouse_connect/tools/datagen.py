@@ -142,7 +142,7 @@ def random_datetime_tz(timezone: tzinfo):
 
 
 def random_ascii_str(max_len: int = 200, min_len: int = 0):
-    return ''.join((chr(int(random() * 95) + 32) for _ in range(int(random() * max_len) + min_len)))
+    return ''.join((chr(int(random() * 95) + 32) for _ in range(int(random() * (max_len - min_len)) + min_len)))
 
 
 def random_utf8_str(max_len: int = 200):
