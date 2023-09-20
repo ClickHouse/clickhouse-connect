@@ -397,6 +397,7 @@ class HttpClient(Client):
         check_conn_reset(self.http)
         query_session = final_params.get('session_id')
         while True:
+            attempts += 1
             if query_session:
                 if query_session == self._active_session:
                     raise ProgrammingError('Attempt to execute concurrent queries within the same session.' +
@@ -405,14 +406,14 @@ class HttpClient(Client):
                 # throw an error instead, but in most cases this more helpful error will be thrown first
                 self._active_session = query_session
             try:
-                response: HTTPResponse = self.http.request(method, url, **kwargs)
+                response = self.http.request(method, url, **kwargs)
             except HTTPError as ex:
                 if isinstance(ex.__context__, ConnectionResetError):
                     # The server closed the connection, probably because the Keep Alive has expired
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
                     # related to the Keep Alive settings
-                    if attempts == 0:
+                    if attempts == 1:
                         logger.debug('Retrying remotely closed connection')
                         continue
                 logger.warning('Unexpected Http Driver Exception')
