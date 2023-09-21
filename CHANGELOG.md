@@ -14,6 +14,10 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.14, TBD
+### Bug Fix
+- Fixed insert error when inserting a zero length string into a FixedString column.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/244
+
 ## 0.6.13, 2023-09-20
 ### Bug Fix
 - Fixed an issue with the automatic retry of "connection reset errors".  This should prevent exceptions when the
@@ -32,7 +36,7 @@ to [Ashton Hudson](https://github.com/CaptainCuddleCube) for the report and the 
 ### Bug fixes
 - Inserts using Pandas 2.1 would fail due to a removed method in the Pandas library.  There is now a workaround/fix for
 this.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/234
-- Inserts into a FixedString column that were not the expected size could cause corrupt insert blocksd and mysterious errors
+- Inserts into a FixedString column that were not the expected size could cause corrupt insert blocks and mysterious errors
 from the ClickHouse server.  Validation has been added so that more meaningful error messages are generated if a fixed string
 value is an invalid size.  A reminder that strings which are "too short" for a FixedString column will be padded with 0 bytes, while
 strings that are "too long" will generate an exception during the insert.

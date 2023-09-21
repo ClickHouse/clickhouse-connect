@@ -1,8 +1,9 @@
 #!/usr/bin/env python -u
 
+# pylint: disable=import-error
 import time
 import random
-import clickhouse_driver  # pylint: disable=import-error
+import clickhouse_driver
 
 import clickhouse_connect
 from clickhouse_connect.tools.testing import TableContext

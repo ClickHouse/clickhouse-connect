@@ -101,8 +101,7 @@ class FixedString(ClickHouseType):
                         if len(b) > sz:
                             raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                         ext(b)
-                        if len(b) < sz:
-                            ext(empty[:-len(b)])
+                        ext(empty[:sz - len(b)])
             else:
                 for x in column:
                     try:
@@ -112,8 +111,7 @@ class FixedString(ClickHouseType):
                     if len(b) > sz:
                         raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                     ext(b)
-                    if len(b) < sz:
-                        ext(empty[:-len(b)])
+                    ext(empty[:sz - len(b)])
         elif self.nullable:
             for b in column:
                 if not b:

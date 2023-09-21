@@ -187,3 +187,13 @@ def test_decimal_rounding(test_client: Client, table_context: Callable):
 def test_empty_maps(test_client: Client):
     result = test_client.query("select Cast(([],[]), 'Map(String, Map(String, String))')")
     assert result.first_row[0] == {}
+
+
+def test_fixed_str_padding(test_client: Client, table_context: Callable):
+    table = 'test_fixed_str_padding'
+    with table_context(table, 'key Int32, value FixedString(3)'):
+        test_client.insert(table, [[1, 'abc']])
+        test_client.insert(table, [[2, 'a']])
+        test_client.insert(table, [[3, '']])
+        result = test_client.query(f'select * from {table} ORDER BY key')
+        assert result.result_columns[1] == [b'abc', b'a\x00\x00', b'\x00\x00\x00']
