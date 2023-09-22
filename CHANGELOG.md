@@ -15,8 +15,10 @@ your Superset installation, the ClickHouse datasource will be available with eit
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
 ## 0.6.14, TBD
-### Bug Fix
+### Bug Fixes
 - Fixed insert error when inserting a zero length string into a FixedString column.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/244
+- Removed unnecessary validate_entrypoints import from top level package __init__ that was breaking Python 3.7.  Note that Python 3.7 is EOL
+and will no longer be supported as of January 1, 2024.
 
 ## 0.6.13, 2023-09-20
 ### Bug Fix
