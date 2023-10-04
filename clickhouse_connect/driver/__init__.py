@@ -10,7 +10,8 @@ from clickhouse_connect.driver.httpclient import HttpClient
 
 
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
-def create_client(host: str = None,
+def create_client(*,
+                  host: str = None,
                   username: str = None,
                   password: str = '',
                   database: str = '__default__',
