@@ -4,6 +4,14 @@ on:
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - 'VERSION'
+      - 'LICENSE'
+      - '**.md'
+      - 'examples'
+      - 'publish.yaml'
+      - '.github/workflows/clickhouse_ci.yml'
+      - '.github/workflows/on_push.yml'
   workflow_dispatch:
   push:
     branches-ignore:
