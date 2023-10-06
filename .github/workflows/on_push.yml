@@ -1,11 +1,16 @@
 name: 'Lint and Test'
 
 on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
   push:
     branches-ignore:
       - '*_test'
       - '*_dev'
       - '*_build'
+      - main
     paths-ignore:
       - 'VERSION'
       - 'LICENSE'
