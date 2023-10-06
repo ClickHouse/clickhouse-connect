@@ -14,7 +14,12 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.14, TBD
+## 0.6.15, TBD
+### Improvement
+- The main `clickhouse-connect.get_client` method now displays type hints and ignores non-keyword arguments.  Thanks to
+[Avery Fischer](https://github.com/biggerfisch) for the usability improvement!
+
+## 0.6.14, 2023-09-22
 ### Bug Fixes
 - Fixed insert error when inserting a zero length string into a FixedString column.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/244
 - Removed unnecessary validate_entrypoints import from top level package __init__ that was breaking Python 3.7.  Note that Python 3.7 is EOL
