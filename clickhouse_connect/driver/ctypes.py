@@ -19,7 +19,7 @@ if coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_USE_C', True)):
 
         data_conv = cdc
         RespBuffCls = CResponseBuffer
-        logger.info('Successfully imported ClickHouse Connect C data optimizations')
+        logger.debug('Successfully imported ClickHouse Connect C data optimizations')
     except ImportError as ex:
         CResponseBuffer = None
         logger.warning('Unable to connect optimized C data functions [%s], falling back to pure Python',

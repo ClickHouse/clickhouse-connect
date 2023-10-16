@@ -42,7 +42,7 @@ def set_json_library(impl: str = None):
         raise NotImplementedError(f'JSON library {impl} is not supported')
     for library, func in _to_json.items():
         if func:
-            logger.info('Using %s library for writing JSON byte strings', library)
+            logger.debug('Using %s library for writing JSON byte strings', library)
             any_to_json = func
             break
 
