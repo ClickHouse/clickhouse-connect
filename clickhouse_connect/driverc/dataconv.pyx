@@ -1,5 +1,4 @@
 import struct
-from _testbuffer import PyBUF_READ
 from typing import Sequence, Optional
 
 import array
@@ -9,6 +8,7 @@ import cython
 
 from .buffer cimport ResponseBuffer
 from cpython cimport Py_INCREF, Py_DECREF
+from cpython.buffer cimport PyBUF_READ
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize
