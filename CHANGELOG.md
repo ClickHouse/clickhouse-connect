@@ -14,6 +14,10 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.16, 2023-10-18
+### Bug Fix
+- Remove bad private import to fix C Linkage.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/252
+
 ## 0.6.15, 2023-10-16
 ### Improvement
 - Added Python 3.12 wheels and CI tests.  Note that PyArrow is not yet available for 3.12, but should be soon.  See https://github.com/apache/arrow/issues/37880
