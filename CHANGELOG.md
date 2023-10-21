@@ -14,6 +14,10 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.17, 2023-10-21
+### Bug Fix
+- Fix "negative" Date32 (before 1970-01-01) values for numpy and Pandas queries.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/254
+
 ## 0.6.16, 2023-10-18
 ### Bug Fix
 - Remove bad private import to fix C Linkage.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/252
