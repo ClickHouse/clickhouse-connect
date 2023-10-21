@@ -225,6 +225,22 @@ def test_pandas_date(test_client: Client, table_context:Callable):
         assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
 
 
+def test_pandas_date32(test_client: Client, table_context:Callable):
+    with table_context('test_pandas_date32', ['key UInt32', 'dt Date32', 'null_dt Nullable(Date32)']):
+        df = pd.DataFrame([[1, pd.Timestamp(1992, 10, 15), pd.Timestamp(2023, 5, 4)],
+                           [2, pd.Timestamp(2088, 1, 31), pd.NaT],
+                           [3, pd.Timestamp(1968, 4, 15), pd.Timestamp(2101, 12, 31)]],
+                          columns=['key', 'dt', 'null_dt'])
+        test_client.insert_df('test_pandas_date32', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_date32')
+        assert result_df.iloc[1]['dt'] == pd.Timestamp(2088, 1, 31)
+        assert result_df.iloc[0]['dt'] == pd.Timestamp(1992, 10, 15)
+        assert result_df.iloc[0]['null_dt'] == pd.Timestamp(2023, 5, 4)
+        assert pd.isnull(result_df.iloc[1]['null_dt'])
+        assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
+        assert result_df.iloc[2]['dt'] == pd.Timestamp(1968, 4, 15)
+
+
 def test_pandas_row_df(test_client: Client, table_context:Callable):
     with table_context('test_pandas_row_df', ['key UInt64', 'dt DateTime64(6)']):
         df = pd.DataFrame({'key': [1, 2],
