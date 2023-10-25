@@ -145,21 +145,26 @@ def test_pandas_large_types(test_client: Client, table_context: Callable):
 
 
 def test_pandas_enums(test_client: Client, table_context: Callable):
-    columns = ['key String', "value Enum8('Moscow' = 0, 'Rostov' = 1, 'Kiev' = 2)"]
+    columns = ['key String', "value Enum8('Moscow' = 0, 'Rostov' = 1, 'Kiev' = 2)",
+               "null_value Nullable(Enum8('red'=0,'blue'=5,'yellow'=10))"]
     with table_context('test_pandas_enums', columns):
-        df = pd.DataFrame([['key1', 1], ['key2', 0]], columns=['key', 'value'])
+        df = pd.DataFrame([['key1', 1, 0], ['key2', 0, None]], columns=['key', 'value', 'null_value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_enums', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_enums ORDER BY key')
         assert result_df.iloc[0]['value'] == 'Rostov'
         assert result_df.iloc[1]['value'] == 'Moscow'
+        assert result_df.iloc[1]['null_value'] is None
+        assert result_df.iloc[0]['null_value'] == 'red'
         assert df.equals(source_df)
-        df = pd.DataFrame([['key3', 'Rostov'], ['key4', 'Moscow']], columns=['key', 'value'])
+        df = pd.DataFrame([['key3', 'Rostov', 'blue'], ['key4', 'Moscow', None]], columns=['key', 'value', 'null_value'])
         test_client.insert_df('test_pandas_enums', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_enums ORDER BY key')
         assert result_df.iloc[2]['key'] == 'key3'
         assert result_df.iloc[2]['value'] == 'Rostov'
         assert result_df.iloc[3]['value'] == 'Moscow'
+        assert result_df.iloc[2]['null_value'] == 'blue'
+        assert result_df.iloc[3]['null_value'] is None
 
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):
