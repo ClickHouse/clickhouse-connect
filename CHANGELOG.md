@@ -14,6 +14,14 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.18, 2023-10-25
+### Bug Fixes
+- Reduce the estimated insert block size from 16-32MB to 1-2MB for large inserts.  The large data transfers could cause
+"write timeout" errors in the Python code or "empty query" responses from ClickHouse over HTTPS connections.
+Should fix https://github.com/ClickHouse/clickhouse-connect/issues/258
+- Ensure that the internal client _progress_interval is positive even if a very small `send_receive_timeout` value is specified.
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/259.  Note that a very short `send_receive_timeout` is not recommended.
+
 ## 0.6.17, 2023-10-21
 ### Bug Fix
 - Fix "negative" Date32 (before 1970-01-01) values for numpy and Pandas queries.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/254

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from clickhouse_connect.datatypes.base import ClickHouseType
 
 logger = logging.getLogger(__name__)
-DEFAULT_BLOCK_BYTES = 1 << 24   # Try to generate blocks between 16 and 32MB in raw size
+DEFAULT_BLOCK_BYTES = 1 << 21   # Try to generate blocks between 1MB and 2MB in raw size
 
 
 class InsertBlock(NamedTuple):
@@ -117,7 +117,7 @@ class InsertContext(BaseQueryContext):
                 sample = [data[j][i] for j in range(0, self.row_count, sample_freq)]
                 d_size = d_type.data_size(sample)
             row_size += d_size
-        return 1 << (24 - int(log(row_size, 2)))
+        return 1 << (21 - int(log(row_size, 2)))
 
     def next_block(self) -> Generator[InsertBlock, None, None]:
         while True:

@@ -152,7 +152,7 @@ class HttpClient(Client):
         self._send_progress = not send_setting.is_set and send_setting.is_writable
         if (send_setting.is_set or send_setting.is_writable) and \
                 self._setting_status('http_headers_progress_interval_ms').is_writable:
-            self._progress_interval = str(min(120000, (send_receive_timeout - 5) * 1000))
+            self._progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
 
     def set_client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))

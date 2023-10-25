@@ -78,8 +78,8 @@ class NativeTransform:
                 yield next_block
 
         if context.use_numpy:
-            d_types = [col.dtype if hasattr(col, 'dtype') else 'O' for col in first_block]
-            return NumpyResult(gen(), tuple(names), tuple(col_types), d_types, source)
+            res_types = [col.dtype if hasattr(col, 'dtype') else 'O' for col in first_block]
+            return NumpyResult(gen(), tuple(names), tuple(col_types), res_types, source)
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
