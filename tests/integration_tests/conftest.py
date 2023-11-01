@@ -10,8 +10,9 @@ from pytest import fixture
 
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
+from clickhouse_connect import common
 from clickhouse_connect.driver.exceptions import OperationalError
-from tests.helpers import TableContext
+from clickhouse_connect.tools.testing import TableContext
 
 
 class TestConfig(NamedTuple):
@@ -28,8 +29,13 @@ class TestConfig(NamedTuple):
     __test__ = False
 
 
+class TestException(BaseException):
+    pass
+
+
 @fixture(scope='session', autouse=True, name='test_config')
 def test_config_fixture() -> Iterator[TestConfig]:
+    common.set_setting('max_connection_age', 15)  # Make sure resetting connections doesn't break stuff
     host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
     docker = host == 'localhost' and \
         os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True').lower() in ('true', '1', 'y', 'yes')
@@ -65,10 +71,10 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         sys.stderr.write('Starting docker compose')
         pull_result = run_cmd(['docker-compose', '-f', compose_file, 'pull'])
         if pull_result[0]:
-            raise Exception(f'Failed to pull latest docker image(s): {pull_result[2]}')
+            raise TestException(f'Failed to pull latest docker image(s): {pull_result[2]}')
         up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
         if up_result[0]:
-            raise Exception(f'Failed to start docker: {up_result[2]}')
+            raise TestException(f'Failed to start docker: {up_result[2]}')
         time.sleep(5)
     tries = 0
     while True:
@@ -79,17 +85,17 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                 port=test_config.port,
                 username=test_config.username,
                 password=test_config.password,
-                send_progress=False,
                 query_limit=0,
                 compress=test_config.compress,
                 client_name='int_tests/test',
                 apply_server_timezone=False,
-                settings={'allow_suspicious_low_cardinality_types': True}
+                settings={'allow_suspicious_low_cardinality_types': True,
+                          'insert_deduplicate': False}
             )
             break
         except OperationalError as ex:
             if tries > 10:
-                raise Exception('Failed to connect to ClickHouse server after 30 seconds') from ex
+                raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
     if client.min_version('22.6.1'):
         client.set_client_setting('allow_experimental_object_type', 1)
@@ -112,12 +118,18 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
 
 @fixture(scope='session', name='table_context')
 def table_context_fixture(test_client: Client, test_table_engine: str):
-    def context(name: str,
+    def context(table: str,
                 columns: Sequence[str],
                 column_types: Optional[Sequence[str]] = None,
-                order_by: Optional[str] = None):
-        return TableContext(test_client, name, columns, column_types,
-                            test_table_engine, order_by)
+                order_by: Optional[str] = None,
+                **kwargs):
+        if 'engine' not in kwargs:
+            kwargs['engine'] = test_table_engine
+        return TableContext(test_client,
+                            table=table,
+                            columns=columns,
+                            column_types=column_types,
+                            order_by=order_by, **kwargs)
 
     yield context
 

@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.external import ExternalData
+from clickhouse_connect.driver.options import arrow
 
 ext_settings = {'input_format_allow_errors_num': 10, 'input_format_allow_errors_ratio': .2}
 
@@ -14,6 +17,20 @@ def test_external_simple(test_client: Client):
                                external_data=data,
                                settings=ext_settings).result_rows
     assert result[0][0] == '12 Angry Men'
+
+
+def test_external_arrow(test_client: Client):
+    if not arrow:
+        pytest.skip('PyArrow package not available')
+    if not test_client.min_version('21'):
+        pytest.skip(f'PyArrow is not supported in this server version {test_client.server_version}')
+    data_file = f'{Path(__file__).parent}/movies.csv'
+    data = ExternalData(data_file, fmt='CSVWithNames',
+                        structure=['movie String', 'year UInt16', 'rating Decimal32(3)'])
+    result = test_client.query_arrow('SELECT * FROM movies ORDER BY movie',
+                                     external_data=data,
+                                     settings=ext_settings)
+    assert str(result[0][0]) == '12 Angry Men'
 
 
 def test_external_multiple(test_client: Client):
@@ -67,3 +84,18 @@ def test_external_raw(test_client: Client):
     data = ExternalData(movies_file, fmt='Parquet', structure=['movie String', 'year UInt16', 'rating Float64'])
     result = test_client.raw_query('SELECT avg(rating) FROM movies', external_data=data)
     assert '8.25' == result.decode()[0:4]
+
+
+def test_external_command(test_client: Client):
+    movies_file = f'{Path(__file__).parent}/movies.parquet'
+    data = ExternalData(movies_file, fmt='Parquet', structure=['movie String', 'year UInt16', 'rating Float64'])
+    result = test_client.command('SELECT avg(rating) FROM movies', external_data=data)
+    assert '8.25' == result[0:4]
+
+    test_client.command('DROP TABLE IF EXISTS movies_ext')
+    if test_client.min_version('22.8'):
+        query_result = test_client.query('CREATE TABLE movies_ext ENGINE MergeTree() ORDER BY tuple() EMPTY ' +
+                                         'AS SELECT * FROM movies', external_data=data)
+        assert 'query_id' in query_result.first_item
+        test_client.raw_query('INSERT INTO movies_ext SELECT * FROM movies', external_data=data)
+        assert 250 == test_client.command('SELECT COUNT() FROM movies_ext')

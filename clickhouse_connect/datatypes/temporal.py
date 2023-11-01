@@ -22,6 +22,7 @@ class Date(ClickHouseType):
     nano_divisor = 86400 * 1000000000
     valid_formats = 'native', 'int'
     python_type = date
+    byte_size = 2
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
@@ -30,7 +31,7 @@ class Date(ClickHouseType):
             return numpy_conv.read_numpy_array(source, '<u2', num_rows).astype(self.np_type)
         return data_conv.read_date_col(source, num_rows)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -48,7 +49,7 @@ class Date(ClickHouseType):
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
-        if ctx.use_pandas_na:
+        if ctx.use_extended_dtypes:
             return pd.NA if fmt == 'int' else pd.NaT
         if ctx.use_none:
             return None
@@ -67,11 +68,12 @@ class Date(ClickHouseType):
 
 
 class Date32(Date):
+    byte_size = 4
     _array_type = 'l' if int_size == 2 else 'i'
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if ctx.use_numpy:
-            return numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
+            return numpy_conv.read_numpy_array(source, '<i4', num_rows).astype(self.np_type)
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_date32_col(source, num_rows)
@@ -88,7 +90,7 @@ class DateTimeBase(ClickHouseType, registered=False):
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
-        if ctx.use_pandas_na:
+        if ctx.use_extended_dtypes:
             return pd.NA if fmt == 'int' else pd.NaT
         if ctx.use_none:
             return None
@@ -103,6 +105,7 @@ class DateTime(DateTimeBase):
     _array_type = 'L' if int_size == 2 else 'I'
     np_type = 'datetime64[s]'
     nano_divisor = 1000000000
+    byte_size = 4
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -116,8 +119,6 @@ class DateTime(DateTimeBase):
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
-        if active_tz == pytz.UTC:
-            active_tz = None
         if ctx.use_numpy:
             np_array = numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
             if ctx.as_pandas and active_tz:
@@ -125,7 +126,7 @@ class DateTime(DateTimeBase):
             return np_array
         return data_conv.read_datetime_col(source, num_rows, active_tz)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -140,6 +141,7 @@ class DateTime(DateTimeBase):
 
 class DateTime64(DateTimeBase):
     __slots__ = 'scale', 'prec', 'unit'
+    byte_size = 8
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -165,16 +167,14 @@ class DateTime64(DateTimeBase):
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if self.read_format(ctx) == 'int':
-            return source.read_array('Q', num_rows)
+            return source.read_array('q', num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
-        if active_tz == pytz.UTC:
-            active_tz = None
         if ctx.use_numpy:
             np_array = numpy_conv.read_numpy_array(source, self.np_type, num_rows)
             if ctx.as_pandas and active_tz and active_tz != pytz.UTC:
                 return pd.DatetimeIndex(np_array, tz='UTC').tz_convert(active_tz)
             return np_array
-        column = source.read_array('Q', num_rows)
+        column = source.read_array('q', num_rows)
         if active_tz and active_tz != pytz.UTC:
             return self._read_binary_tz(column, active_tz)
         return self._read_binary_naive(column)
@@ -201,7 +201,7 @@ class DateTime64(DateTimeBase):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         first = self._first_value(column)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
@@ -213,4 +213,4 @@ class DateTime64(DateTimeBase):
                           for x in column]
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
-        write_array('Q', column, dest)
+        write_array('q', column, dest)

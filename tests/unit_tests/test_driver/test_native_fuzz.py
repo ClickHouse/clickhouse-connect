@@ -32,7 +32,7 @@ def test_native_round_trips():
         dataset = data_result.result_set
         for row in range(data_rows):
             for col in range(TEST_COLUMNS):
-                assert data[row][col] == dataset[row][col]
+                assert dataset[row][col] == data[row][col]
 
 
 def test_native_small():

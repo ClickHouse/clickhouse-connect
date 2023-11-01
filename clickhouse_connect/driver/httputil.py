@@ -1,9 +1,11 @@
 import atexit
 import http
 import logging
+import multiprocessing
 import os
 import sys
 import socket
+import time
 from typing import Dict, Any, Optional
 
 import certifi
@@ -14,6 +16,7 @@ from urllib3.poolmanager import PoolManager, ProxyManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect import common
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ logger = logging.getLogger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Increase this number just to be safe when ClickHouse is returning progress headers
-http._MAXHEADERS = 10000  # pylint: disable=protected-access
+http.client._MAXHEADERS = 10000  # pylint: disable=protected-access
 
 DEFAULT_KEEP_INTERVAL = 30
 DEFAULT_KEEP_COUNT = 3
@@ -38,7 +41,7 @@ core_socket_options = [
 
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 _proxy_managers = {}
-all_managers = set()
+all_managers = {}
 
 
 @atexit.register
@@ -111,8 +114,19 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
         manager = ProxyManager(https_proxy, **options)
     else:
         manager = PoolManager(**options)
-    all_managers.add(manager)
+    all_managers[manager] = int(time.time())
     return manager
+
+
+def check_conn_reset(manager: PoolManager):
+    reset_seconds = common.get_setting('max_connection_age')
+    if reset_seconds:
+        last_reset = all_managers.get(manager, 0)
+        now = int(time.time())
+        if last_reset < now - reset_seconds:
+            logger.debug('connection reset')
+            manager.clear()
+            all_managers[manager] = now
 
 
 def get_proxy_manager(host: str, http_proxy):
@@ -164,7 +178,14 @@ def check_env_proxy(scheme: str, host: str, port: int) -> Optional[str]:
     return proxy
 
 
-default_pool_manager = get_pool_manager()
+_default_pool_manager = get_pool_manager()
+
+
+def default_pool_manager():
+    if multiprocessing.current_process().name == 'MainProcess':
+        return _default_pool_manager
+    #  PoolManagers don't seem to be safe for some multiprocessing environments, always return a new one
+    return get_pool_manager()
 
 
 class ResponseSource:
@@ -176,7 +197,7 @@ class ResponseSource:
 
             def decompress():
                 while True:
-                    chunk = response.read(chunk_size)
+                    chunk = response.read(chunk_size, decode_content=False)
                     if not chunk:
                         break
                     yield zstd_decom.decompress(chunk)
@@ -187,7 +208,7 @@ class ResponseSource:
 
             def decompress():
                 while lz4_decom.needs_input:
-                    data = self.response.read(chunk_size)
+                    data = self.response.read(chunk_size, decode_content=False)
                     if lz4_decom.unused_data:
                         data = lz4_decom.unused_data + data
                     if not data:

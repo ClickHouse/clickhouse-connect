@@ -69,7 +69,7 @@ class UInt64(ArrayType):
         fmt = self.read_format(ctx)
         if fmt == 'string':
             return [str(x) for x in column]
-        if ctx.use_pandas_na and self.nullable:
+        if ctx.use_extended_dtypes and self.nullable:
             return pd.array(column, dtype='Int64' if fmt == 'signed' else 'UInt64')
         if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype='<q' if fmt == 'signed' else '<u8')
@@ -95,10 +95,10 @@ class BigInt(ClickHouseType, registered=False):
         return column
 
     # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
-        first = self._first_value(column)
-        if not column:
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
+        if len(column) == 0:
             return
+        first = self._first_value(column)
         sz = self.byte_size
         signed = self._signed
         empty = bytes(b'\x00' * sz)
@@ -157,7 +157,7 @@ class Float(ArrayType, registered=False):
         return column
 
     def _active_null(self, ctx: QueryContext):
-        if ctx.use_pandas_na:
+        if ctx.use_extended_dtypes:
             return nan
         if ctx.use_none:
             return None
@@ -178,6 +178,7 @@ class Float64(Float):
 class Bool(ClickHouseType):
     np_type = '?'
     python_type = bool
+    byte_size = 1
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext):
         column = source.read_bytes(num_rows)
@@ -217,9 +218,9 @@ class Enum(ClickHouseType):
         lookup = self._int_map.get
         return [lookup(x, None) for x in column]
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         first = self._first_value(column)
-        if first is None or isinstance(first, int):
+        if first is None or not isinstance(first, str):
             if self.nullable:
                 column = [0 if not x else x for x in column]
             write_array(self._array_type, column, dest)
@@ -230,10 +231,12 @@ class Enum(ClickHouseType):
 
 class Enum8(Enum):
     _array_type = 'b'
+    byte_size = 1
 
 
 class Enum16(Enum):
     _array_type = 'h'
+    byte_size = 2
 
 
 class Decimal(ClickHouseType):
@@ -282,12 +285,15 @@ class Decimal(ClickHouseType):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
-        mult = self._mult
-        if self.nullable:
-            write_array(self._array_type, [int(x * mult) if x else 0 for x in column], dest)
-        else:
-            write_array(self._array_type, [int(x * mult) for x in column], dest)
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
+        with decimal.localcontext() as ctx:
+            ctx.prec = self.prec
+            dec = decimal.Decimal
+            mult = self._mult
+            if self.nullable:
+                write_array(self._array_type, [int(dec(x) * mult) if x else 0 for x in column], dest)
+            else:
+                write_array(self._array_type, [int(dec(x) * mult) for x in column], dest)
 
     def _active_null(self, ctx: QueryContext):
         if ctx.use_none:
@@ -320,7 +326,7 @@ class BigDecimal(Decimal, registered=False):
                 app(dec(f'-{digits[:-scale]}.{digits[-scale:]}'))
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, _ctx):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, _ctx):
         with decimal.localcontext() as ctx:
             ctx.prec = self.prec
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")

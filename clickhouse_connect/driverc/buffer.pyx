@@ -47,12 +47,17 @@ cdef class ResponseBuffer:
         cdef unsigned long long x, e, tail, cur_len, temp
         cdef char* ptr
         e = self.buf_sz
+
         if self.buf_loc + sz <= e:
+            # We still have "sz" unread bytes available in the buffer, return the currently loc and advance it
             temp = self.buf_loc
             self.buf_loc += sz
             return self.buffer + temp
+
+        # We need more data than is currently in the buffer, copy what's left into the temporary slice,
+        # get a new buffer, and append what we need from the new buffer into that slice
         cur_len = e - self.buf_loc
-        temp = self.slice_sz
+        temp = self.slice_sz #
         while temp < sz * 2:
             temp <<= 1
         if temp > self.slice_sz:
@@ -63,6 +68,8 @@ cdef class ResponseBuffer:
             memcpy(self.slice, self.buffer + self.buf_loc, cur_len)
         self.buf_loc = 0
         self.buf_sz = 0
+
+        # Loop until we've read enough chunks to fill the requested size
         while cur_len < sz:
             chunk = next(self.gen, None)
             if not chunk:
@@ -70,9 +77,12 @@ cdef class ResponseBuffer:
             x = len(chunk)
             ptr = <char *> chunk
             if cur_len + x <= sz:
+                # We need this whole chunk for the requested size, copy it into the temporary slice and get the next one
                 memcpy(self.slice + cur_len, ptr, x)
                 cur_len += x
             else:
+                # We need just the beginning of this chunk to finish the temporary, copy that and set
+                # the pointer into our stored buffer to the first unread data
                 tail = sz - cur_len
                 memcpy(self.slice + cur_len, ptr, tail)
                 PyBuffer_Release(&self.buff_source)

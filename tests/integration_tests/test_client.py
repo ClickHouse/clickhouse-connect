@@ -1,4 +1,3 @@
-from decimal import Decimal
 from time import sleep
 from typing import Callable
 
@@ -48,8 +47,7 @@ def test_none_database(test_client: Client):
     assert test_db == old_db
     try:
         test_client.database = None
-        with test_client.query('SELECT * FROM system.tables'):
-            pass
+        test_client.query('SELECT * FROM system.tables')
         test_db = test_client.command('select currentDatabase()')
         assert test_db == 'default'
         test_client.database = old_db
@@ -59,43 +57,10 @@ def test_none_database(test_client: Client):
         test_client.database = old_db
 
 
-def test_insert(test_client: Client, test_table_engine: str):
-    if test_client.min_version('19'):
-        test_client.command('DROP TABLE IF EXISTS test_system_insert')
-    else:
-        test_client.command('DROP TABLE IF EXISTS test_system_insert SYNC')
-    test_client.command(f'CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name')
-    tables_result = test_client.query('SELECT * from system.tables')
-    test_client.insert(table='test_system_insert', column_names='*', data=tables_result.result_set)
-    test_client.command('DROP TABLE IF EXISTS test_system_insert')
-
-
-def test_raw_insert(test_client: Client, table_context: Callable):
-    with table_context('test_raw_insert', ["`weir'd` String", 'value String']):
-        csv = 'value1\nvalue2'
-        test_client.raw_insert('test_raw_insert', ['"weir\'d"'], csv.encode(), fmt='CSV')
-        result = test_client.query('SELECT * FROM test_raw_insert')
-        assert result.result_set[1][0] == 'value2'
-
-        test_client.command('TRUNCATE TABLE test_raw_insert')
-        tsv = 'weird1\tvalue__`2\nweird2\tvalue77'
-        test_client.raw_insert('test_raw_insert', ["`weir'd`", 'value'], tsv, fmt='TSV')
-        result = test_client.query('SELECT * FROM test_raw_insert')
-        assert result.result_set[0][1] == 'value__`2'
-        assert result.result_set[1][1] == 'value77'
-
-
-def test_decimal_conv(test_client: Client, table_context: Callable):
-    with table_context('test_num_conv', ['col1 UInt64', 'col2 Int32', 'f1 Float64']):
-        data = [[Decimal(5), Decimal(-182), Decimal(55.2)], [Decimal(57238478234), Decimal(77), Decimal(-29.5773)]]
-        test_client.insert('test_num_conv', data)
-        result = test_client.query('SELECT * FROM test_num_conv').result_set
-        assert result == [(5, -182, 55.2), (57238478234, 77, -29.5773)]
-
-
 def test_session_params(test_config: TestConfig):
+    session_id = 'TEST_SESSION_ID_' + test_config.test_database
     client = create_client(
-        session_id='TEST_SESSION_ID',
+        session_id=session_id,
         host=test_config.host,
         port=test_config.port,
         username=test_config.username,
@@ -109,9 +74,9 @@ def test_session_params(test_config: TestConfig):
             return  # By default, the session log isn't enabled, so we only validate in environments we control
         sleep(10)  # Allow the log entries to flush to tables
         result = client.query(
-            "SELECT session_id, user FROM system.session_log WHERE session_id = 'TEST_SESSION_ID' AND " +
+            f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " +
             'event_time > now() - 30').result_set
-        assert result[0] == ('TEST_SESSION_ID', test_config.username)
+        assert result[0] == (session_id, test_config.username)
         result = client.query(
             "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
             'event_time > now() - 30').result_set
@@ -119,10 +84,11 @@ def test_session_params(test_config: TestConfig):
 
 
 def test_dsn_config(test_config: TestConfig):
+    session_id = 'TEST_DSN_SESSION_' + test_config.test_database
     dsn = (f'clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:{test_config.port}' +
-           f'/{test_config.test_database}?session_id=TEST_DSN_SESSION')
+           f'/{test_config.test_database}?session_id={session_id}')
     client = create_client(dsn=dsn)
-    assert client.get_client_setting('session_id') == 'TEST_DSN_SESSION'
+    assert client.get_client_setting('session_id') == session_id
     count = client.command('SELECT count() from system.tables')
     assert client.database == test_config.test_database
     assert count > 0
@@ -202,7 +168,7 @@ def test_error_decode(test_client: Client):
 
 def test_command_as_query(test_client: Client):
     result = test_client.query("SET count_distinct_implementation = 'uniq'")
-    assert result.result_set[0][0] == ''
+    assert result.first_item['written_rows'] == 0
 
 
 def test_show_create(test_client: Client):

@@ -14,9 +14,10 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int, coerce_bool
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, QueryContext, arrow_buffer
 
@@ -35,6 +36,8 @@ class Client(ABC):
     protocol_version = 0
     valid_transport_settings = set()
     optional_transport_settings = set()
+    database = None
+    max_error_message = 0
 
     def __init__(self,
                  database: str,
@@ -53,15 +56,15 @@ class Client(ABC):
         self.query_retries = coerce_int(query_retries)
         self.server_host_name = server_host_name
         self.server_tz = pytz.UTC
-        self.server_version, server_tz, self.database = \
-            tuple(self.command('SELECT version(), timezone(), currentDatabase()', use_database=False))
+        self.server_version, server_tz = \
+            tuple(self.command('SELECT version(), timezone()', use_database=False))
         try:
             self.server_tz = pytz.timezone(server_tz)
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         offsets_differ = datetime.now().astimezone().utcoffset() != datetime.now(tz=self.server_tz).utcoffset()
         self.apply_server_timezone = apply_server_timezone == 'always' or (
-                    coerce_bool(apply_server_timezone) and offsets_differ)
+                coerce_bool(apply_server_timezone) and offsets_differ)
         readonly = 'readonly'
         if not self.min_version('19.17'):
             readonly = common.get_setting('readonly')
@@ -70,7 +73,13 @@ class Client(ABC):
         if database and not database == '__default__':
             self.database = database
         if self.min_version(CH_VERSION_WITH_PROTOCOL):
-            self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
+            #  Unfortunately we have to validate that the client protocol version is actually used by ClickHouse
+            #  since the query parameter could be stripped off (in particular, by CHProxy)
+            test_data = self.raw_query('SELECT 1 AS check', fmt='Native', settings={
+                'client_protocol_version': PROTOCOL_VERSION_WITH_LOW_CARD
+            })
+            if test_data[8:16] == b'\x01\x01\x05check':
+                self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
         self.uri = uri
 
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -116,12 +125,13 @@ class Client(ABC):
         return context.final_query
 
     def _check_tz_change(self, new_tz) -> Optional[tzinfo]:
-        try:
-            new_tzinfo = pytz.timezone(new_tz)
-            if new_tzinfo != self.server_tz:
-                return new_tzinfo
-        except UnknownTimeZoneError:
-            logger.warning('Unrecognized timezone %s received from ClickHouse', new_tz)
+        if new_tz:
+            try:
+                new_tzinfo = pytz.timezone(new_tz)
+                if new_tzinfo != self.server_tz:
+                    return new_tzinfo
+            except UnknownTimeZoneError:
+                logger.warning('Unrecognized timezone %s received from ClickHouse', new_tz)
         return None
 
     @abstractmethod
@@ -173,7 +183,12 @@ class Client(ABC):
         del kwargs['self']
         query_context = self.create_query_context(**kwargs)
         if query_context.is_command:
-            response = self.command(query, parameters=query_context.parameters, settings=query_context.settings)
+            response = self.command(query,
+                                    parameters=query_context.parameters,
+                                    settings=query_context.settings,
+                                    external_data=query_context.external_data)
+            if isinstance(response, QuerySummary):
+                return response.as_query_result()
             return QueryResult([response] if isinstance(response, list) else [[response]])
         return self._query_with_context(query_context)
 
@@ -305,7 +320,8 @@ class Client(ABC):
                  query_tz: Optional[str] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                  context: QueryContext = None,
-                 external_data: Optional[ExternalData] = None):
+                 external_data: Optional[ExternalData] = None,
+                 use_extended_dtypes: Optional[bool] = None):
         """
         Query method that results the results as a pandas dataframe.  For parameter values, see the
         create_query_context method
@@ -327,7 +343,8 @@ class Client(ABC):
                         query_tz: Optional[str] = None,
                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                         context: QueryContext = None,
-                        external_data: Optional[ExternalData] = None) -> StreamContext:
+                        external_data: Optional[ExternalData] = None,
+                        use_extended_dtypes: Optional[bool] = None) -> StreamContext:
         """
         Query method that returns the results as a StreamContext.  For parameter values, see the
         create_query_context method
@@ -354,7 +371,8 @@ class Client(ABC):
                              use_na_values: Optional[bool] = None,
                              streaming: bool = False,
                              as_pandas: bool = False,
-                             external_data: Optional[ExternalData] = None) -> QueryContext:
+                             external_data: Optional[ExternalData] = None,
+                             use_extended_dtypes: Optional[bool] = None) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -377,11 +395,13 @@ class Client(ABC):
           objects with the selected timezone.
         :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
           tzinfo objects).  The timezone will be applied to datetime objects returned in the query
-        :param use_na_values:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
-          pandas.NA and pandas.NaT for ClickHouse NULL values.  Defaulted to True for query_df methods
+        :param use_na_values: Deprecated alias for use_advanced_dtypes
         :param as_pandas Return the result columns as pandas.Series objects
         :param streaming Marker used to correctly configure streaming queries
         :param external_data ClickHouse "external data" to send with query
+        :param use_extended_dtypes:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
+          pandas.NA and pandas.NaT for ClickHouse NULL values, as well as extended Pandas dtypes such as IntegerArray
+          and StringArray.  Defaulted to True for query_df methods
         :return: Reusable QueryContext
         """
         if context:
@@ -399,13 +419,15 @@ class Client(ABC):
                                         query_tz=query_tz,
                                         column_tzs=column_tzs,
                                         as_pandas=as_pandas,
-                                        use_na_values=use_na_values,
+                                        use_extended_dtypes=use_extended_dtypes,
                                         streaming=streaming,
                                         external_data=external_data)
         if use_numpy and max_str_len is None:
             max_str_len = 0
-        if as_pandas and use_na_values is None:
-            use_na_values = True
+        if use_extended_dtypes is None:
+            use_extended_dtypes = use_na_values
+        if as_pandas and use_extended_dtypes is None:
+            use_extended_dtypes = True
         return QueryContext(query=query,
                             parameters=parameters,
                             settings=settings,
@@ -419,7 +441,7 @@ class Client(ABC):
                             max_str_len=max_str_len,
                             query_tz=query_tz,
                             column_tzs=column_tzs,
-                            use_na_values=use_na_values,
+                            use_extended_dtypes=use_extended_dtypes,
                             as_pandas=as_pandas,
                             streaming=streaming,
                             apply_server_tz=self.apply_server_timezone,
@@ -429,21 +451,33 @@ class Client(ABC):
                     query: str,
                     parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                     settings: Optional[Dict[str, Any]] = None,
-                    use_strings: bool = True):
+                    use_strings: Optional[bool] = None,
+                    external_data: Optional[ExternalData] = None):
         """
         Query method using the ClickHouse Arrow format to return a PyArrow table
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
+        :param external_data ClickHouse "external data" to send with query
         :return: PyArrow.Table
         """
         settings = dict_copy(settings)
         if self.database:
             settings['database'] = self.database
-        if arrow_str_setting in self.server_settings and arrow_str_setting not in settings:
+        str_status = self._setting_status(arrow_str_setting)
+        if use_strings is None:
+            if str_status.is_writable and not str_status.is_set:
+                settings[arrow_str_setting] = '1'  # Default to returning strings if possible
+        elif use_strings != str_status.is_set:
+            if not str_status.is_writable:
+                raise OperationalError(f'Cannot change readonly {arrow_str_setting} to {use_strings}')
             settings[arrow_str_setting] = '1' if use_strings else '0'
-        return to_arrow(self.raw_query(query, parameters, settings, 'Arrow'))
+        return to_arrow(self.raw_query(query,
+                                       parameters,
+                                       settings,
+                                       fmt='Arrow',
+                                       external_data=external_data))
 
     @abstractmethod
     def command(self,
@@ -451,7 +485,8 @@ class Client(ABC):
                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Dict[str, Any] = None,
-                use_database: bool = True) -> Union[str, int, Sequence[str]]:
+                use_database: bool = True,
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
         Client method that returns a single value instead of a result set
         :param cmd: ClickHouse query/command as a python format string
@@ -461,7 +496,9 @@ class Client(ABC):
         :param use_database: Send the database parameter to ClickHouse so the command will be executed in the client
          database context.  Otherwise, no database will be specified with the command.  This is useful for determining
          the default user database
-        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings
+        :param external_data ClickHouse "external data" to send with command/query
+        :return: Decoded response from ClickHouse as either a string, int, or sequence of strings, or QuerySummary
+        if no data returned
         """
 
     @abstractmethod
@@ -481,7 +518,7 @@ class Client(ABC):
                column_type_names: Sequence[str] = None,
                column_oriented: bool = False,
                settings: Optional[Dict[str, Any]] = None,
-               context: InsertContext = None) -> None:
+               context: InsertContext = None) -> QuerySummary:
         """
         Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
         other than data are ignored
@@ -498,7 +535,7 @@ class Client(ABC):
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param context: Optional reusable insert context to allow repeated inserts into the same table with
             different data batches
-        :return: No return, throws an exception if the insert fails
+        :return: QuerySummary with summary information, throws exception if insert fails
         """
         if (context is None or context.empty) and data is None:
             raise ProgrammingError('No data specified for insert') from None
@@ -514,7 +551,7 @@ class Client(ABC):
             if not context.empty:
                 raise ProgrammingError('Attempting to insert new data with non-empty insert context') from None
             context.data = data
-        self.data_insert(context)
+        return self.data_insert(context)
 
     def insert_df(self, table: str = None,
                   df=None,
@@ -523,7 +560,7 @@ class Client(ABC):
                   column_names: Optional[Sequence[str]] = None,
                   column_types: Sequence[ClickHouseType] = None,
                   column_type_names: Sequence[str] = None,
-                  context: InsertContext = None) -> None:
+                  context: InsertContext = None) -> QuerySummary:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
         :param table: ClickHouse table
@@ -538,28 +575,35 @@ class Client(ABC):
             retrieved from the server
         :param context: Optional reusable insert context to allow repeated inserts into the same table with
             different data batches
-        :return: No return, throws an exception if the insert fails
+        :return: QuerySummary with summary information, throws exception if insert fails
         """
         if context is None:
             if column_names is None:
                 column_names = df.columns
             elif len(column_names) != len(df.columns):
                 raise ProgrammingError('DataFrame column count does not match insert_columns') from None
-        self.insert(table, df, column_names, database, column_types=column_types, column_type_names=column_type_names,
-                    settings=settings, context=context)
+        return self.insert(table,
+                           df,
+                           column_names,
+                           database,
+                           column_types=column_types,
+                           column_type_names=column_type_names,
+                           settings=settings, context=context)
 
-    def insert_arrow(self, table: str, arrow_table, database: str = None, settings: Optional[Dict] = None):
+    def insert_arrow(self, table: str,
+                     arrow_table, database: str = None,
+                     settings: Optional[Dict] = None) -> QuerySummary:
         """
         Insert a PyArrow table DataFrame into ClickHouse using raw Arrow format
         :param table: ClickHouse table
         :param arrow_table: PyArrow Table object
         :param database: Optional ClickHouse database
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
-        :return: No return, throws an exception if the insert fails
+        :return: QuerySummary with summary information, throws exception if insert fails
         """
         full_table = table if '.' in table or not database else f'{database}.{table}'
         column_names, insert_block = arrow_buffer(arrow_table)
-        self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
+        return self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow')
 
     def create_insert_context(self,
                               table: str,
@@ -619,11 +663,13 @@ class Client(ABC):
     def min_version(self, version_str: str) -> bool:
         """
         Determine whether the connected server is at least the submitted version
+        For Altinity Stable versions like 22.8.15.25.altinitystable
+        the last condition in the first list comprehension expression is added
         :param version_str: A version string consisting of up to 4 integers delimited by dots
         :return: True if version_str is greater than the server_version, False if less than
         """
         try:
-            server_parts = [int(x) for x in self.server_version.split('.')]
+            server_parts = [int(x) for x in self.server_version.split('.') if x.isnumeric()]
             server_parts.extend([0] * (4 - len(server_parts)))
             version_parts = [int(x) for x in version_str.split('.')]
             version_parts.extend([0] * (4 - len(version_parts)))
@@ -639,7 +685,7 @@ class Client(ABC):
         return True
 
     @abstractmethod
-    def data_insert(self, context: InsertContext):
+    def data_insert(self, context: InsertContext) -> QuerySummary:
         """
         Subclass implementation of the data insert
         :context: InsertContext parameter object
@@ -651,13 +697,15 @@ class Client(ABC):
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
-                   fmt: Optional[str] = None):
+                   fmt: Optional[str] = None,
+                   compression: Optional[str] = None) -> QuerySummary:
         """
         Insert data already formatted in a bytes object
         :param table: Table name (whether qualified with the database name or not)
         :param column_names: Sequence of column names
         :param insert_block: Binary or string data already in a recognized ClickHouse format
         :param settings:  Optional dictionary of ClickHouse settings (key/string values)
+        :param compression:  Recognized ClickHouse `Accept-Encoding` header compression value
         :param fmt: Valid clickhouse format
         """
 

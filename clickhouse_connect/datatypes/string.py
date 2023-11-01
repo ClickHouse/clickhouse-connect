@@ -1,6 +1,9 @@
-from typing import Sequence, MutableSequence, Union
+from typing import Sequence, MutableSequence, Union, Collection
+
+from clickhouse_connect.driver.ctypes import data_conv
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -17,6 +20,15 @@ class String(ClickHouseType):
             return ctx.encoding
         return self.encoding
 
+    def _data_size(self, sample: Collection) -> int:
+        if len(sample) == 0:
+            return 0
+        total = 0
+        for x in sample:
+            if x:
+                total += len(x)
+        return total // len(sample) + 1
+
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         return source.read_str_col(num_rows, self._active_encoding(ctx))
 
@@ -24,71 +36,18 @@ class String(ClickHouseType):
         return source.read_str_col(num_rows, self._active_encoding(ctx), True, self._active_null(ctx))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        if ctx.use_na_values and self.read_format(ctx) == 'native':
+        if ctx.use_extended_dtypes and self.read_format(ctx) == 'native':
             return pd.array(column, dtype=pd.StringDtype())
         if ctx.use_numpy and ctx.max_str_len:
             return np.array(column, dtype=f'<U{ctx.max_str_len}')
         return column
 
     # pylint: disable=duplicate-code,too-many-nested-blocks,too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
-        encoding = ctx.encoding or self.encoding
-        app = dest.append
-        first = self._first_value(column)
-        if isinstance(first, str):
-            if self.nullable:
-                for x in column:
-                    if x is None:
-                        app(0)
-                    else:
-                        y = x.encode(encoding)
-                        sz = len(y)
-                        while True:
-                            b = sz & 0x7f
-                            sz >>= 7
-                            if sz == 0:
-                                app(b)
-                                break
-                            app(0x80 | b)
-                        dest += y
-            else:
-                for x in column:
-                    y = x.encode(encoding)
-                    sz = len(y)
-                    while True:
-                        b = sz & 0x7f
-                        sz >>= 7
-                        if sz == 0:
-                            app(b)
-                            break
-                        app(0x80 | b)
-                    dest += y
-        else:
-            if self.nullable:
-                for x in column:
-                    if x is None:
-                        app(0)
-                    else:
-                        sz = len(x)
-                        while True:
-                            b = sz & 0x7f
-                            sz >>= 7
-                            if sz == 0:
-                                app(b)
-                                break
-                            app(0x80 | b)
-                        dest += x
-            else:
-                for x in column:
-                    sz = len(x)
-                    while True:
-                        b = sz & 0x7f
-                        sz >>= 7
-                        if sz == 0:
-                            app(b)
-                            break
-                        app(0x80 | b)
-                    dest += x
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
+        encoding = None
+        if isinstance(self._first_value(column), str):
+            encoding = ctx.encoding or self.encoding
+        data_conv.write_str_col(column, encoding, dest)
 
     def _active_null(self, ctx):
         if ctx.use_none:
@@ -121,8 +80,8 @@ class FixedString(ClickHouseType):
             return source.read_fixed_str_col(self.byte_size, num_rows, ctx.encoding or self.encoding )
         return source.read_bytes_col(self.byte_size, num_rows)
 
-    # pylint: disable=too-many-branches
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    # pylint: disable=too-many-branches,duplicate-code
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         ext = dest.extend
         sz = self.byte_size
         empty = bytes((0,) * sz)
@@ -139,24 +98,30 @@ class FixedString(ClickHouseType):
                             b = str_enc(x, enc)
                         except UnicodeEncodeError:
                             b = empty
+                        if len(b) > sz:
+                            raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                         ext(b)
-                        if len(b) < sz:
-                            ext(empty[:-len(b)])
+                        ext(empty[:sz - len(b)])
             else:
                 for x in column:
                     try:
                         b = str_enc(x, enc)
                     except UnicodeEncodeError:
                         b = empty
+                    if len(b) > sz:
+                        raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                     ext(b)
-                    if len(b) < sz:
-                        ext(empty[:-len(b)])
+                    ext(empty[:sz - len(b)])
         elif self.nullable:
-            for x in column:
-                if not x:
+            for b in column:
+                if not b:
                     ext(empty)
+                elif len(b) != sz:
+                    raise DataError(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
                 else:
-                    ext(x)
+                    ext(b)
         else:
-            for x in column:
-                ext(x)
+            for b in column:
+                if len(b) != sz:
+                    raise DataError(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
+                ext(b)

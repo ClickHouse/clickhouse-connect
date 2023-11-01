@@ -1,21 +1,222 @@
 # ClickHouse Connect ChangeLog
 
-### Deprecation Warning -- Context interface and stream* methods to be removed from QueryResult
-In v0.5.0-0.5.3 releases, streaming was implemented by returning generators from the QueryResult methods
-`stream_column_blocks`, `stream_row_blocks`, and `stream_rows`.  Safe usage of these methods required executing them
-within a Python context created `with` the QueryResult itself.  Otherwise, the HTTP response could be left open in the
-case of an exception or other failure to consume the stream.
+### WARNING -- Python 3.7 EOL
+Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
+Python 3.7, and in releases after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
 
-Using QueryResult as a context is unintuitive, and that usage pattern is deprecated and will be completely disabled in
-a future release.  Instead, streaming query results should be obtained using the new Client `*stream` methods described
-under New Features in the 0.5.4 release, below.
+### WARNING -- Engine Spec removed from v0.6.x
+ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
+As a result, the Superset Engine Spec has been removed from clickhouse-connect and is now maintained in main
+Superset project. However,if you need compatibility with older versions of Superset, you may need clickhouse-connect
+v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect project.
 
-### Deprecation Warning -- send_progress Client argument now ignored
-The `send_progress` keyword argument to the get_client method has been deprecated.  It now does nothing and will be removed
-in a future release.  Starting with 0.5.9 the driver now requests ClickHouse progress headers in all cases to provide
-"keep alive" functionality for both long-running streaming query result processing, and long-running insert/DDL queries.
-The secondary effect of the `send_progress` argument -- to set `wait_end_of_query=1` -- is now handled automatically based
-on whether the query is streaming or not.
+In any case, this should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in
+your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
+or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
+
+## 0.6.18, 2023-10-25
+### Bug Fixes
+- Reduce the estimated insert block size from 16-32MB to 1-2MB for large inserts.  The large data transfers could cause
+"write timeout" errors in the Python code or "empty query" responses from ClickHouse over HTTPS connections.
+Should fix https://github.com/ClickHouse/clickhouse-connect/issues/258
+- Ensure that the internal client _progress_interval is positive even if a very small `send_receive_timeout` value is specified.
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/259.  Note that a very short `send_receive_timeout` is not recommended.
+
+## 0.6.17, 2023-10-21
+### Bug Fix
+- Fix "negative" Date32 (before 1970-01-01) values for numpy and Pandas queries.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/254
+
+## 0.6.16, 2023-10-18
+### Bug Fix
+- Remove bad private import to fix C Linkage.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/252
+
+## 0.6.15, 2023-10-16
+### Improvement
+- Added Python 3.12 wheels and CI tests.  Note that PyArrow is not yet available for 3.12, but should be soon.  See https://github.com/apache/arrow/issues/37880
+- The main `clickhouse-connect.get_client` method now displays type hints and ignores non-keyword arguments.  Thanks to
+[Avery Fischer](https://github.com/biggerfisch) for the usability improvement!
+- Log messages regarding C optimization availability and JSON library selection have been change from INFO to DEBUG.  Closes
+https://github.com/ClickHouse/clickhouse-connect/issues/249
+
+## 0.6.14, 2023-09-22
+### Bug Fixes
+- Fixed insert error when inserting a zero length string into a FixedString column.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/244
+- Removed unnecessary validate_entrypoints import from top level package __init__ that was breaking Python 3.7.  Note that Python 3.7 is EOL
+and will no longer be supported as of January 1, 2024.
+
+## 0.6.13, 2023-09-20
+### Bug Fix
+- Fixed an issue with the automatic retry of "connection reset errors".  This should prevent exceptions when the
+ClickHouse server closes a Keep Alive connection while a new request is in flight.
+
+### Improvement
+- Improved support for typing tools by adding a `py.typed` file.  Thanks to [Avery Fischer](https://github.com/biggerfisch)
+for the contribution.
+
+## 0.6.12, 2023-08-30
+### Bug Fix
+- Nested empty Maps would return an IndexError when queried.  https://github.com/ClickHouse/clickhouse-connect/issues/239.  Thanks
+to [Ashton Hudson](https://github.com/CaptainCuddleCube) for the report and the fix
+
+## 0.6.11, 2023-08-30
+### Bug fixes
+- Inserts using Pandas 2.1 would fail due to a removed method in the Pandas library.  There is now a workaround/fix for
+this.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/234
+- Inserts into a FixedString column that were not the expected size could cause corrupt insert blocks and mysterious errors
+from the ClickHouse server.  Validation has been added so that more meaningful error messages are generated if a fixed string
+value is an invalid size.  A reminder that strings which are "too short" for a FixedString column will be padded with 0 bytes, while
+strings that are "too long" will generate an exception during the insert.
+
+## 0.6.10, 2023-08-27
+### Improvement
+- Add support and tests for the `Object(Nullable('json'))` type, which is sometimes detected by schema inference.
+
+## 0.6.9, 2023-08-21
+### Improvements
+- Logging and exception handling for failed insert transformations has been reworked.  If an exception is thrown when attempting to
+convert Python, Pandas, or Numpy data into ClickHouse Native format, the column name and type will be logged, as well as a
+stack trace of actual exception (note this may be in the C/Cython code, so the exception data may still be difficult to interpret).
+This partially addresses https://github.com/ClickHouse/clickhouse-connect/issues/229.  Unfortunately determining data errors on a row level in
+addition to the column level is not practical in most cases without seriously impacting performance.
+- Version information has been moved from a top level `VERSION` to a Python `__version__` file in the package.  This removes the Python 3.7 dependency
+on importlib_metadata.
+- Cython `.pyx`, and `.pxd` files are now included in the PyPI source distribution to improve compatibility with 3rd party build tools.
+
+## 0.6.8, 2023-07-18
+### Bug Fix
+- Fixed client `raw_insert` method when a compression method specified.  https://github.com/ClickHouse/clickhouse-connect/issues/223
+
+### Improvement
+- Add compression parameter to the clickhouse `tools.insert_file` method.  '.gz' and '.gzip' extensions are automatically
+recognized.  
+
+## 0.6.7, 2023-07-18
+### Bug Fixes
+- Fixed an issue for older versions of ClickHouse where the server would send an initial block of 0 rows for larger queries.
+This would break some queries with LowCardinality columns.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/221 
+- Fixed the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
+
+### Improvements
+- Upgraded to Cython 3.0.0 final release!
+- Reversed the internal variable names of keys and indexes for low cardinality columns to be consistent with the ClickHouse server nomenclature.
+
+## 0.6.6, 2023-07-07
+### Bug Fix
+- Inserting into an Enum column from a Pandas DataFrame with integer values only inserted 0 values.  This is fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/219
+
+## 0.6.5, 2023-07-06
+### Bug Fixes
+- The Client min_version method now ignores unrecognized "text" elements.  This could cause issues for unofficial
+ClickHouse releases. Thanks to [Diego Nieto](https://github.com/lesandie) for the fix!
+- In most cases insert query is now sent as part of the POST body instead of as a query parameter.  This fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/213.  Note that this does not happen for direct file inserts
+using the `driver.tools` module, since these rely on an unmodified buffered input stream to efficiently upload files.
+In that case the actual insert query will still be passed as a query parameter.
+- All datetime objects returned from a query will now be timezone aware.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/210.
+There remains one exception to this -- if the calculated timezone and the local timezone are both UTC, then naive timezones
+will be used to improve performance in such "all UTC" environments.
+- Inserting Python dictionaries into a ClickHouse "named" Tuple column now works correctly.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/215.
+Note that using dictionaries for inserts will be noticeably slower than inserting the equivalent Python tuple value
+(with elements in the correct order)
+
+### Improvements
+- Client error messages used to be cut off at 240 characters to avoid creating huge log files.  This value is now
+configurable using the `common.max_error_size` setting.  Use `0` for this setting to get the full ClickHouse
+error message.  In addition, the default has been changed to `1024` to capture more SQL errors without needing to
+modify the global setting value.  Thanks to [Ramlah Aziz](https://github.com/RamlahAziz) for the update!
+- All Client insert methods now return a simple QuerySummary object, which includes properties `written_rows`,
+`written_bytes`, and `query_id` calculated from ClickHouse HTTP response headers.  A QuerySummary object is also
+returned from the Client `command` method if the command does not return other data. Closes https://github.com/ClickHouse/clickhouse-connect/issues/216
+- Version determination no longer indirectly depends on the setuptools `pkg_resources` package.  This also
+avoids some indirect dependency problems.  Thanks to [cwegener](https://github.com/cwegener) for the PR!
+
+## 0.6.4, 2023-06-22
+### Bug Fixes
+- Quote database name when retrieving tables via SQLAlchemy.  Fixes the Superset issue https://github.com/apache/superset/issues/24372
+for recent versions of Superset using clickhouse-connect
+- Don't rely on the ClickHouse currentDatabase() function to set an explicit database parameter.  This should not change functionality
+when no database is specified in Client creation since ClickHouse will use the user's default database in that situation regardless.
+Fixes https://github.com/ClickHouse/clickhouse-connect/issues/207
+
+## 0.6.3, 2023-06-16
+### Bug Fix
+- Inserts into decimal columns first convert the source value to a Python Decimal to work around floating point
+rounding issues.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/203
+- DateTime64 values were broken for dates before 01-01-1970.  This is fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/204
+
+## 0.6.2, 2023-06-10
+### Improvements
+- Cython version upgraded to 3.0.0b3
+- Inserts for string columns are now C optimized (approximately 2x faster)
+
+### Bug Fix
+- Very long running queries could break because ClickHouse returned too many progress headers.  Thanks to
+[Ivan](https://github.com/istrebitel-1) for the fix
+
+## 0.6.1, 2023-06-06
+### Improvements
+Minor documentation clean up regarding Superset compatibility
+
+## 0.6.0, 2023-06-05
+### Bug Fixes
+- Use uuid4 instead of uuid1 for generating client level session_ids, as well as use a new urllib3 PoolManager
+when multiprocessing mode is detected.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/194.
+Thanks to [Guillaume Matheron](https://github.com/guillaumematheron) for filing the issue and digging into details.
+The underlying problem is that the Python uuid1() is not guaranteed to be unique in a `forked` multiprocessing environment.
+- Change log warning to debug message if numpy is not available for C bindings.  This check is harmless if numpy
+is not installed and should not have produced a warning.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/195
+
+### Improvements
+- Cython version upgraded to 3.0.0b2
+- The block size (number of rows) for chunked/streaming inserts is now dynamically determined based on sample of
+the insert data.  This allows more efficient streaming of large inserts and significantly improves insert performance
+in some circumstances.
+- Pivoting row based data to native columns for inserts has been optimized in C.  This improves insert performance
+for large inserts of row oriented data.
+
+## 0.5.25, 2023-05-23
+### Bug Fix
+- The client will now validate that the `client_protocol_version` query parameter is actually received and used by the ClickHouse
+server before assuming that data returned confirms to the expected protocol version.  This fixes an incompatibility with the
+current versions of CHProxy (and possibly other proxies that restrict the query parameters passed to the ClickHouse Server).
+Note that other features that require the use of query parameters (such as server side bound query parameters) may also fail
+because of this behavior in CHProxy.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/191
+
+## 0.5.24, 2023-05-11
+### Bug Fixes
+- The client `command` method now accepts ClickHouse "external data."  Closes https://github.com/ClickHouse/clickhouse-connect/issues/186
+- Arrays of Python date and datetime objects are now correctly formatted when use as server side parameters.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/188
+- Fixed inserts of SimpleAggregateFunction columns with a LowCardinality type parameter.  https://github.com/ClickHouse/clickhouse-connect/issues/187
+
+## 0.5.23, 2023-05-03
+### Bug Fixes
+- SQLAlchemy table reflection threw an exception for `SimpleAggregateFunction` columns.  This has been fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/180
+- The client no longer logs an invalid warning for query types that did not return a timezone header.
+https://github.com/ClickHouse/clickhouse-connect/issues/181
+- Querying `SimpleAggregateFunction` columns with a LowCardinality type parameter was broken.  This has been fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/182
+- The `query_arrow` method now correctly accepts the external_data parameter.  https://github.com/ClickHouse/clickhouse-connect/issues/183
+- The `query_arrow` method has been fixed for read only queries/settings.  https://github.com/ClickHouse/clickhouse-connect/issues/184
+
+### New Feature
+- A common setting `max_connection_age` has been added, which will ensure that HTTP connections are not reused forever (this
+can help with certain load balancing issues.  It defaults to 10 minutes
+
+## 0.5.22, 2023-04-27
+### Bug Fix
+- There was a critical issue when using zstd compression (the default) with urllib3 version 2.0+.  This has been fixed.
+
+## 0.5.21, 2023-04-26
+### Bug Fix
+- Logging "Unexpected Http Driver Exception" only as WARNING instead of ERROR. Use the raised OperationalError if you depend on this.  Thanks to
+[Alexandro Sandre](https://github.com/alexandrosandre) for the fix.
+- The `wait_end_of_query` setting is no longer automatically sent with inserts.  This caused unnecessary buffering on the ClickHouse server file system, especially
+in the case of many small inserts.  It can still be added using the `settings` dictionary of the client `*insert` methods if needed for some reason.
+- The query setting `use_na_values` has been renamed to `use_extended_dtypes` and now applies to all extended/special Pandas dtypes (except the Pandas Timestamp type).
+Set this to `False` to limit  the dtypes returned in Pandas dataframes to the "basic" numpy types.  (Note that this will force the use of numpy object arrays
+for most "nullable types")  This should allow creating "basic" dataframes for greater compatibility. Closes https://github.com/ClickHouse/clickhouse-connect/issues/172.  
 
 ## 0.5.20, 2023-04-06
 ### Bug Fixes
@@ -24,6 +225,7 @@ a subset of the original.)   https://github.com/ClickHouse/clickhouse-connect/is
 the report and suggested fix, and his continued stress testing of Pandas functionality.
 - Compression and other control settings were not properly sent with the request if the corresponding setting was not enabled on the server.
 Many thanks to [Alexander Khmelevskiy](https://github.com/khmelevskiy) for the extended investigation and subsequent fix.  https://github.com/ClickHouse/clickhouse-connect/issues/157
+
 
 ## 0.5.19, 2023-04-05
 ### Bug Fixes

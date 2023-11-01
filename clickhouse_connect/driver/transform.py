@@ -1,3 +1,4 @@
+import logging
 from typing import Union
 
 from clickhouse_connect.datatypes import registry
@@ -10,6 +11,8 @@ from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.compression import get_compressor
 
 _EMPTY_CTX = QueryContext()
+
+logger = logging.getLogger(__name__)
 
 
 class NativeTransform:
@@ -40,9 +43,12 @@ class NativeTransform:
                         col_types.append(col_type)
                     else:
                         col_type = col_types[col_num]
-                    context.start_column(name)
-                    column = col_type.read_column(source, num_rows, context)
-                    result_block.append(column)
+                    if num_rows == 0:
+                        result_block.append(tuple())
+                    else:
+                        context.start_column(name)
+                        column = col_type.read_column(source, num_rows, context)
+                        result_block.append(column)
             except Exception as ex:
                 source.close()
                 if isinstance(ex, StreamCompleteException):
@@ -72,8 +78,8 @@ class NativeTransform:
                 yield next_block
 
         if context.use_numpy:
-            d_types = [col.dtype if hasattr(col, 'dtype') else 'O' for col in first_block]
-            return NumpyResult(gen(), tuple(names), tuple(col_types), d_types, source)
+            res_types = [col.dtype if hasattr(col, 'dtype') else 'O' for col in first_block]
+            return NumpyResult(gen(), tuple(names), tuple(col_types), res_types, source)
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
@@ -81,11 +87,12 @@ class NativeTransform:
         compressor = get_compressor(context.compression)
 
         def chunk_gen():
-            for x in context.next_block():
+            for block in context.next_block():
                 output = bytearray()
-                write_leb128(x.column_count, output)
-                write_leb128(x.row_count, output)
-                for col_name, col_type, data in zip(x.column_names, x.column_types, x.column_data):
+                output += block.prefix
+                write_leb128(block.column_count, output)
+                write_leb128(block.row_count, output)
+                for col_name, col_type, data in zip(block.column_names, block.column_types, block.column_data):
                     write_leb128(len(col_name), output)
                     output += col_name.encode()
                     write_leb128(len(col_type.name), output)
@@ -98,6 +105,8 @@ class NativeTransform:
                         # the insert if the user has included bad data in the column.  We need to ensure that the
                         # insert fails (using garbage data) to avoid a partial insert, and use the context to
                         # propagate the correct exception to the user
+                        logger.error('Error serializing column `%s` into into data type `%s`',
+                                     col_name, col_type.name, exc_info=True)
                         context.insert_exception = ex
                         yield 'INTERNAL EXCEPTION WHILE SERIALIZING'.encode()
                         return

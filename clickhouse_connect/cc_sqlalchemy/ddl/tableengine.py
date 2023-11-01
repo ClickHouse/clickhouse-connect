@@ -218,6 +218,14 @@ class ReplicatedMergeTree(TableEngine):
         super().__init__(locals())
 
 
+class ReplicatedAggregatingMergeTree(ReplicatedMergeTree):
+    pass
+
+
+class ReplicatedSummingMergeTree(ReplicatedMergeTree):
+    pass
+
+
 def build_engine(full_engine: str) -> Optional[TableEngine]:
     """
     Factory function to create TableEngine class from ClickHouse full_engine expression

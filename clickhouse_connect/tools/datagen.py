@@ -142,12 +142,16 @@ def random_datetime_tz(timezone: tzinfo):
 
 
 def random_ascii_str(max_len: int = 200, min_len: int = 0):
-    return ''.join((chr(int(random() * 95) + 32) for _ in range(int(random() * max_len) + min_len)))
+    return ''.join((chr(int(random() * 95) + 32) for _ in range(int(random() * (max_len - min_len)) + min_len)))
 
 
 def random_utf8_str(max_len: int = 200):
     random_chars = [chr(int(random() * 65000) + 32) for _ in range(int(random() * max_len))]
     return ''.join((c for c in random_chars if c.isprintable()))
+
+
+def fixed_len_ascii_str(str_len: int = 200):
+    return ''.join((chr(int(random() * 95) + 32) for _ in range(str_len)))
 
 
 #   Only accepts precisions in multiples of 3 because others are extremely unlikely to be actually used

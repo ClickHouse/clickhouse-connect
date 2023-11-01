@@ -12,25 +12,38 @@ RespBuffCls = ResponseBuffer
 data_conv = pydc
 numpy_conv = pync
 
-if coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_USE_C', True)):
+
+# pylint: disable=import-outside-toplevel,global-statement
+
+def connect_c_modules():
+    if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_USE_C', True)):
+        logger.info('ClickHouse Connect C optimizations disabled')
+        return
+
+    global RespBuffCls, data_conv
     try:
         from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
         import clickhouse_connect.driverc.dataconv as cdc
 
         data_conv = cdc
         RespBuffCls = CResponseBuffer
-        logger.info('Successfully imported ClickHouse Connect C data optimizations')
+        logger.debug('Successfully imported ClickHouse Connect C data optimizations')
+        connect_numpy()
     except ImportError as ex:
-        CResponseBuffer = None
         logger.warning('Unable to connect optimized C data functions [%s], falling back to pure Python',
                        str(ex))
+
+
+def connect_numpy():
+    global numpy_conv
     try:
         import clickhouse_connect.driverc.npconv as cnc
 
         numpy_conv = cnc
-        logger.info('Successfully import ClickHouse Connect C/Numpy optimizations')
+        logger.debug('Successfully import ClickHouse Connect C/Numpy optimizations')
     except ImportError as ex:
-        logger.warning('Unable to connect ClickHouse Connect C to Numpy API [%s], falling back to pure Python',
-                       str(ex))
-else:
-    logger.info('ClickHouse Connect C optimizations disabled')
+        logger.debug('Unable to connect ClickHouse Connect C to Numpy API [%s], falling back to pure Python',
+             str(ex))
+
+
+connect_c_modules()

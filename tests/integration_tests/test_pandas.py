@@ -6,7 +6,8 @@ from io import StringIO
 
 import pytest
 
-from clickhouse_connect.driver import Client, ProgrammingError
+from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.options import np, pd
 from tests.helpers import random_query
 from tests.integration_tests.datasets import null_ds, null_ds_columns, null_ds_types
@@ -39,7 +40,7 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
 
         try:
             test_client.insert_df('test_pandas_nulls_bad', df, column_names=insert_columns)
-        except ProgrammingError:
+        except DataError:
             pass
     with table_context('test_pandas_nulls_good',
                        ['key String', 'num Nullable(Int32)', 'flt Nullable(Float32)',
@@ -134,13 +135,36 @@ def test_pandas_large_types(test_client: Client, table_context: Callable):
         columns = ['key String', 'value Int64']
         key2_value = 3000000000000000000
     with table_context('test_pandas_big_int', columns):
-        df = pd.DataFrame([['key1', 2000, ], ['key2', key2_value]], columns=['key', 'value'])
+        df = pd.DataFrame([['key1', 2000], ['key2', key2_value]], columns=['key', 'value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_big_int', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_big_int')
         assert result_df.iloc[0]['value'] == 2000
         assert result_df.iloc[1]['value'] == key2_value
         assert df.equals(source_df)
+
+
+def test_pandas_enums(test_client: Client, table_context: Callable):
+    columns = ['key String', "value Enum8('Moscow' = 0, 'Rostov' = 1, 'Kiev' = 2)",
+               "null_value Nullable(Enum8('red'=0,'blue'=5,'yellow'=10))"]
+    with table_context('test_pandas_enums', columns):
+        df = pd.DataFrame([['key1', 1, 0], ['key2', 0, None]], columns=['key', 'value', 'null_value'])
+        source_df = df.copy()
+        test_client.insert_df('test_pandas_enums', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_enums ORDER BY key')
+        assert result_df.iloc[0]['value'] == 'Rostov'
+        assert result_df.iloc[1]['value'] == 'Moscow'
+        assert result_df.iloc[1]['null_value'] is None
+        assert result_df.iloc[0]['null_value'] == 'red'
+        assert df.equals(source_df)
+        df = pd.DataFrame([['key3', 'Rostov', 'blue'], ['key4', 'Moscow', None]], columns=['key', 'value', 'null_value'])
+        test_client.insert_df('test_pandas_enums', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_enums ORDER BY key')
+        assert result_df.iloc[2]['key'] == 'key3'
+        assert result_df.iloc[2]['value'] == 'Rostov'
+        assert result_df.iloc[3]['value'] == 'Moscow'
+        assert result_df.iloc[2]['null_value'] == 'blue'
+        assert result_df.iloc[3]['null_value'] is None
 
 
 def test_pandas_datetime64(test_client: Client, table_context: Callable):
@@ -204,6 +228,22 @@ def test_pandas_date(test_client: Client, table_context:Callable):
         assert result_df.iloc[0]['null_dt'] == pd.Timestamp(2023, 5, 4)
         assert pd.isnull(result_df.iloc[1]['null_dt'])
         assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
+
+
+def test_pandas_date32(test_client: Client, table_context:Callable):
+    with table_context('test_pandas_date32', ['key UInt32', 'dt Date32', 'null_dt Nullable(Date32)']):
+        df = pd.DataFrame([[1, pd.Timestamp(1992, 10, 15), pd.Timestamp(2023, 5, 4)],
+                           [2, pd.Timestamp(2088, 1, 31), pd.NaT],
+                           [3, pd.Timestamp(1968, 4, 15), pd.Timestamp(2101, 12, 31)]],
+                          columns=['key', 'dt', 'null_dt'])
+        test_client.insert_df('test_pandas_date32', df)
+        result_df = test_client.query_df('SELECT * FROM test_pandas_date32')
+        assert result_df.iloc[1]['dt'] == pd.Timestamp(2088, 1, 31)
+        assert result_df.iloc[0]['dt'] == pd.Timestamp(1992, 10, 15)
+        assert result_df.iloc[0]['null_dt'] == pd.Timestamp(2023, 5, 4)
+        assert pd.isnull(result_df.iloc[1]['null_dt'])
+        assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
+        assert result_df.iloc[2]['dt'] == pd.Timestamp(1968, 4, 15)
 
 
 def test_pandas_row_df(test_client: Client, table_context:Callable):

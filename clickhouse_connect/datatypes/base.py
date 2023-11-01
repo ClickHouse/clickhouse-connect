@@ -3,7 +3,7 @@ import logging
 
 from abc import ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Iterable
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Collection
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
@@ -94,7 +94,22 @@ class ClickHouseType(ABC):
             name = f'{wrapper}({name})'
         return name
 
-    def write_column_prefix(self, dest: MutableSequence):
+    def data_size(self, sample: Sequence) -> int:
+        if self.low_card:
+            values = set(sample)
+            d_size = self._data_size(values) + 2
+        else:
+            d_size = self._data_size(sample)
+        if self.nullable:
+            d_size += 1
+        return d_size
+
+    def _data_size(self, _sample: Collection) -> int:
+        if self.byte_size:
+            return self.byte_size
+        return 0
+
+    def write_column_prefix(self, dest: bytearray):
         """
         Prefix is primarily used is for the LowCardinality version (but see the JSON data type).  Because of the
         way the ClickHouse C++ code is written, this must be done before any data is written even if the
@@ -167,7 +182,7 @@ class ClickHouseType(ABC):
     def _finalize_column(self, column: Sequence, _ctx: QueryContext) -> Sequence:
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         """
         Lowest level write method for ClickHouseType data columns
         :param column: Python data column
@@ -175,7 +190,7 @@ class ClickHouseType(ABC):
         :param ctx: Insert Context with insert specific settings
         """
 
-    def write_column(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         """
         Wrapping write method for ClickHouseTypes.  Only overridden for container types that so that
         the write_native_prefix is done at the right time for contained types
@@ -186,7 +201,7 @@ class ClickHouseType(ABC):
         self.write_column_prefix(dest)
         self.write_column_data(column, dest, ctx)
 
-    def write_column_data(self, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         """
         Public native write method for ClickHouseTypes.  Delegates the actual write to either the LowCardinality
         write method or the _write_native_binary method of the type
@@ -206,60 +221,60 @@ class ClickHouseType(ABC):
         if num_rows == 0:
             return []
         key_data = source.read_uint64()
-        index_sz = 2 ** (key_data & 0xff)
-        key_cnt = source.read_uint64()
-        keys = self._read_column_binary(source, key_cnt, ctx)
+        key_sz = 2 ** (key_data & 0xff)
         index_cnt = source.read_uint64()
-        index = source.read_array(array_type(index_sz, False), index_cnt)
+        index = self._read_column_binary(source, index_cnt, ctx)
+        key_cnt = source.read_uint64()
+        keys = source.read_array(array_type(key_sz, False), key_cnt)
         if self.nullable:
-            return self._build_lc_nullable_column(keys, index, ctx)
-        return self._build_lc_column(keys, index, ctx)
+            return self._build_lc_nullable_column(index, keys, ctx)
+        return self._build_lc_column(index, keys, ctx)
 
-    def _build_lc_column(self, keys: Sequence, index: array.array, _ctx: QueryContext):
-        return [keys[ix] for ix in index]
+    def _build_lc_column(self, index: Sequence, keys: array.array, _ctx: QueryContext):
+        return [index[key] for key in keys]
 
-    def _build_lc_nullable_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
-        return data_conv.build_lc_nullable_column(keys, index, self._active_null(ctx))
+    def _build_lc_nullable_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
+        return data_conv.build_lc_nullable_column(index, keys, self._active_null(ctx))
 
-    def _write_column_low_card(self, column: Iterable, dest: MutableSequence, ctx: InsertContext):
-        if not column:
+    def _write_column_low_card(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if len(column) == 0:
             return
-        index = []
         keys = []
+        index = []
         rev_map = {}
         rmg = rev_map.get
         if self.nullable:
-            keys.append(None)
+            index.append(None)
             key = 1
             for x in column:
                 if x is None:
-                    index.append(0)
+                    keys.append(0)
                 else:
                     ix = rmg(x)
                     if ix is None:
-                        index.append(key)
-                        keys.append(x)
+                        keys.append(key)
+                        index.append(x)
                         rev_map[x] = key
                         key += 1
                     else:
-                        index.append(ix)
+                        keys.append(ix)
         else:
             key = 0
             for x in column:
                 ix = rmg(x)
                 if ix is None:
-                    index.append(key)
-                    keys.append(x)
+                    keys.append(key)
+                    index.append(x)
                     rev_map[x] = key
                     key += 1
                 else:
-                    index.append(ix)
-        ix_type = int(log(len(keys), 2)) >> 3  # power of two bytes needed to store the total number of keys
+                    keys.append(ix)
+        ix_type = int(log(len(index), 2)) >> 3  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
-        write_uint64(len(keys), dest)
-        self._write_column_binary(keys, dest, ctx)
         write_uint64(len(index), dest)
-        write_array(array_type(1 << ix_type, False), index, dest)
+        self._write_column_binary(index, dest, ctx)
+        write_uint64(len(keys), dest)
+        write_array(array_type(1 << ix_type, False), keys, dest)
 
     def _active_null(self, _ctx: QueryContext) -> Any:
         return None
@@ -306,35 +321,27 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         return data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
 
-    def _build_lc_column(self, keys: Sequence, index: array.array, ctx: QueryContext):
+    def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         if ctx.use_numpy:
-            return np.fromiter((keys[ix] for ix in index), dtype=keys.dtype, count=len(index))
-        return super()._build_lc_column(keys, index, ctx)
+            return np.fromiter((index[key] for key in keys), dtype=index.dtype, count=len(index))
+        return super()._build_lc_column(index, keys, ctx)
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if self.read_format(ctx) == 'string':
             return [str(x) for x in column]
-        if ctx.use_pandas_na and self.nullable:
+        if ctx.use_extended_dtypes and self.nullable:
             return pd.array(column, dtype=self.base_type)
         if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype=self.np_type)
         return column
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         if len(column) and self.nullable:
-            first = column[0]
-            try:
-                column[0] = None
-                for ix, x in enumerate(column):
-                    if not x:
-                        column[ix] = 0
-                column[0] = first or 0
-            except TypeError:
-                column = [0 if x is None else x for x in column]
+            column = [0 if x is None else x for x in column]
         write_array(self._array_type, column, dest)
 
     def _active_null(self, ctx: QueryContext):
-        if ctx.as_pandas and ctx.use_na_values:
+        if ctx.as_pandas and ctx.use_extended_dtypes:
             return pd.NA
         if ctx.use_none:
             return None
@@ -353,5 +360,5 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
     def _read_column_binary(self, source: Sequence, num_rows: int, ctx: QueryContext):
         raise NotSupportedError(f'{self.name} deserialization not supported')
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: MutableSequence, ctx: InsertContext):
+    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         raise NotSupportedError(f'{self.name} serialization  not supported')

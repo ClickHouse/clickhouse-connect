@@ -21,8 +21,9 @@ from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
-    default_pool_manager, get_proxy_manager, all_managers, check_env_proxy
+    default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_reset
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -56,7 +57,6 @@ class HttpClient(Client):
                  connect_timeout: int = 10,
                  send_receive_timeout: int = 300,
                  client_name: Optional[str] = None,
-                 send_progress: bool = True,
                  verify: bool = True,
                  ca_cert: Optional[str] = None,
                  client_cert: Optional[str] = None,
@@ -105,7 +105,7 @@ class HttpClient(Client):
             if http_proxy:
                 self.http = get_proxy_manager(host, http_proxy)
             else:
-                self.http = default_pool_manager
+                self.http = default_pool_manager()
 
         if not client_cert and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
@@ -119,11 +119,12 @@ class HttpClient(Client):
         self._send_progress = None
         self._send_comp_setting = False
         self._progress_interval = None
+        self._active_session = None
 
         if session_id:
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and common.get_setting('autogenerate_session_id'):
-            ch_settings['session_id'] = str(uuid.uuid1())
+            ch_settings['session_id'] = str(uuid.uuid4())
 
         if coerce_bool(compress):
             compression = ','.join(available_compression)
@@ -140,7 +141,7 @@ class HttpClient(Client):
                          uri=self.url,
                          query_limit=query_limit,
                          query_retries=query_retries,
-                         server_host_name = server_host_name,
+                         server_host_name=server_host_name,
                          apply_server_timezone=apply_server_timezone)
         self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
@@ -151,7 +152,7 @@ class HttpClient(Client):
         self._send_progress = not send_setting.is_set and send_setting.is_writable
         if (send_setting.is_set or send_setting.is_writable) and \
                 self._setting_status('http_headers_progress_interval_ms').is_writable:
-            self._progress_interval = str(min(120000, (send_receive_timeout - 5) * 1000))
+            self._progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
 
     def set_client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
@@ -215,110 +216,144 @@ class HttpClient(Client):
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
-        if 'X-ClickHouse-Summary' in response.headers:
-            try:
-                summary = json.loads(response.headers['X-ClickHouse-Summary'])
-                query_result.summary = summary
-            except json.JSONDecodeError:
-                pass
-        query_result.query_id = response.headers.get('X-ClickHouse-Query-Id')
+        query_result.summary = self._summary(response)
         return query_result
 
-    def data_insert(self, context: InsertContext):
+    def data_insert(self, context: InsertContext) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
         if context.empty:
             logger.debug('No data included in insert, skipping')
-            return
-        if context.compression is None:
-            context.compression = self.write_compression
-        block_gen = self._transform.build_insert(context)
+            return QuerySummary()
 
-        def error_handler(response: HTTPResponse):
+        def error_handler(resp: HTTPResponse):
             # If we actually had a local exception when building the insert, throw that instead
             if context.insert_exception:
                 ex = context.insert_exception
                 context.insert_exception = None
-                raise ProgrammingError('Internal serialization error.  This usually indicates invalid data types ' +
-                                       'in an inserted row or column') from ex  # type: ignore
-            self._error_handler(response)
+                raise ex
+            self._error_handler(resp)
 
-        self.raw_insert(context.table,
-                        context.column_names,
-                        block_gen,
-                        context.settings,
-                        self._write_format,
-                        context.compression,
-                        error_handler)
+        headers = {'Content-Type': 'application/octet-stream'}
+        if context.compression is None:
+            context.compression = self.write_compression
+        if context.compression:
+            headers['Content-Encoding'] = context.compression
+        block_gen = self._transform.build_insert(context)
+
+        params = {}
+        if self.database:
+            params['database'] = self.database
+        params.update(self._validate_settings(context.settings))
+
+        response = self._raw_request(block_gen, params, headers, error_handler=error_handler, server_wait=False)
+        logger.debug('Context insert response code: %d, content: %s', response.status, response.data)
         context.data = None
+        return QuerySummary(self._summary(response))
 
-    def raw_insert(self, table: str,
+    def raw_insert(self, table: str = None,
                    column_names: Optional[Sequence[str]] = None,
                    insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
                    settings: Optional[Dict] = None,
                    fmt: Optional[str] = None,
-                   compression: Optional[str] = None,
-                   status_handler: Optional[Callable] = None):
+                   compression: Optional[str] = None) -> QuerySummary:
         """
         See BaseClient doc_string for this method
         """
-        write_format = fmt if fmt else self._write_format
+        params = {}
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
             headers['Content-Encoding'] = compression
-        cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
-        params = {'query': f'INSERT INTO {table}{cols} FORMAT {write_format}'}
+        if table:
+            cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ''
+            query = f'INSERT INTO {table}{cols} FORMAT {fmt if fmt else self._write_format}'
+            if not compression and isinstance(insert_block, str):
+                insert_block = query + '\n' + insert_block
+            elif not compression and isinstance(insert_block, (bytes, bytearray, BinaryIO)):
+                insert_block = (query + '\n').encode() + insert_block
+            else:
+                params['query'] = query
         if self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
-        response = self._raw_request(insert_block, params, headers, error_handler=status_handler)
-        logger.debug('Insert response code: %d, content: %s', response.status, response.data)
+        response = self._raw_request(insert_block, params, headers, server_wait=False)
+        logger.debug('Raw insert response code: %d, content: %s', response.status, response.data)
+        return QuerySummary(self._summary(response))
+
+    @staticmethod
+    def _summary(response: HTTPResponse):
+        summary = {}
+        if 'X-ClickHouse-Summary' in response.headers:
+            try:
+                summary = json.loads(response.headers['X-ClickHouse-Summary'])
+            except json.JSONDecodeError:
+                pass
+        summary['query_id'] = response.headers.get('X-ClickHouse-Query-Id', '')
+        return summary
 
     def command(self,
                 cmd,
                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
-                use_database: int = True) -> Union[str, int, Sequence[str]]:
+                use_database: int = True,
+                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
         See BaseClient doc_string for this method
         """
         cmd, params = bind_query(cmd, parameters, self.server_tz)
         headers = {}
         payload = None
-        if isinstance(data, str):
+        fields = None
+        if external_data:
+            if data:
+                raise ProgrammingError('Cannot combine command data with external data') from None
+            fields = external_data.form_data
+            params.update(external_data.query_params)
+        elif isinstance(data, str):
             headers['Content-Type'] = 'text/plain; charset=utf-8'
             payload = data.encode()
         elif isinstance(data, bytes):
             headers['Content-Type'] = 'application/octet-stream'
             payload = data
-        if payload is None:
-            if not cmd:
-                raise ProgrammingError('Command sent without query or recognized data') from None
-            payload = cmd
-        elif cmd:
+        if payload is None and not cmd:
+            raise ProgrammingError('Command sent without query or recognized data') from None
+        if payload or fields:
             params['query'] = cmd
+        else:
+            payload = cmd
         if use_database and self.database:
             params['database'] = self.database
         params.update(self._validate_settings(settings or {}))
-        method = 'POST' if payload else 'GET'
-        response = self._raw_request(payload, params, headers, method)
-        result = response.data.decode()[:-1].split('\t')
-        if len(result) == 1:
+
+        method = 'POST' if payload or fields else 'GET'
+        response = self._raw_request(payload, params, headers, method, fields=fields)
+        if response.data:
             try:
-                return int(result[0])
-            except ValueError:
-                return result[0]
-        return result
+                result = response.data.decode()[:-1].split('\t')
+                if len(result) == 1:
+                    try:
+                        return int(result[0])
+                    except ValueError:
+                        return result[0]
+                return result
+            except UnicodeDecodeError:
+                return str(response.data)
+        return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
-        err_content = get_response_data(response)
+        try:
+            err_content = get_response_data(response)
+        except Exception: # pylint: disable=broad-except
+            err_content = None
+        finally:
+            response.close()
+
         if err_content:
-            err_msg = err_content.decode(errors='backslashreplace')
-            logger.error(err_msg)
-            err_str = f':{err_str}\n {err_msg[0:240]}'
+            err_msg = common.format_error(err_content.decode(errors='backslashreplace'))
+            err_str = f':{err_str}\n {err_msg}'
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,
@@ -359,10 +394,19 @@ class HttpClient(Client):
             kwargs['fields'] = fields
         else:
             kwargs['body'] = data
+        check_conn_reset(self.http)
+        query_session = final_params.get('session_id')
         while True:
             attempts += 1
+            if query_session:
+                if query_session == self._active_session:
+                    raise ProgrammingError('Attempt to execute concurrent queries within the same session.' +
+                                           'Please use a separate client instance per thread/process.')
+                # There is a race condition here when using multiprocessing -- in that case the server will
+                # throw an error instead, but in most cases this more helpful error will be thrown first
+                self._active_session = query_session
             try:
-                response: HTTPResponse = self.http.request(method, url, **kwargs)
+                response = self.http.request(method, url, **kwargs)
             except HTTPError as ex:
                 if isinstance(ex.__context__, ConnectionResetError):
                     # The server closed the connection, probably because the Keep Alive has expired
@@ -372,17 +416,20 @@ class HttpClient(Client):
                     if attempts == 1:
                         logger.debug('Retrying remotely closed connection')
                         continue
-                logger.exception('Unexpected Http Driver Exception')
-                raise OperationalError(f'Error {ex} executing HTTP request {self.url}') from ex
+                logger.warning('Unexpected Http Driver Exception')
+                raise OperationalError(f'Error {ex} executing HTTP request attempt {attempts} {self.url}') from ex
+            finally:
+                if query_session:
+                    self._active_session = None  # Make sure we always clear this
             if 200 <= response.status < 300:
                 return response
             if response.status in (429, 503, 504):
                 if attempts > retries:
                     self._error_handler(response, True)
                 logger.debug('Retrying requests with status code %d', response.status)
+            elif error_handler:
+                error_handler(response)
             else:
-                if error_handler:
-                    error_handler(response)
                 self._error_handler(response)
 
     def ping(self):
@@ -423,4 +470,4 @@ class HttpClient(Client):
     def close(self):
         if self._owns_pool_manager:
             self.http.clear()
-            all_managers.remove(self.http)
+            all_managers.pop(self.http, None)
