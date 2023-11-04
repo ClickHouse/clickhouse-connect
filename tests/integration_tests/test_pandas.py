@@ -73,7 +73,7 @@ key1,555,25.44,string1,2022-11-22 15:00:44,2001-02-14
 key2,6666,,string2,,
 """
     csv_file = StringIO(csv)
-    df = pd.read_csv(csv_file, parse_dates=['dt', 'd'], date_parser=pd.Timestamp)
+    df = pd.read_csv(csv_file, parse_dates=['dt', 'd'])
     df = df[['num', 'flt']].astype('Float32')
     source_df = df.copy()
     with table_context('test_pandas_csv', null_ds_columns, null_ds_types):
@@ -258,3 +258,16 @@ def test_pandas_row_df(test_client: Client, table_context:Callable):
         assert result_df.iloc[0]['dt'] == pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)
         assert len(result_df) == 1
         assert source_df.equals(df)
+
+
+def test_pandas_null_strings(test_client: Client, table_context:Callable):
+    with table_context('test_pandas_null_strings', ['id String', 'test_col LowCardinality(String)']):
+        row = {'id': 'id', 'test_col': None}
+        df = pd.DataFrame([row])
+        assert df['test_col'].isnull().values.all()
+        with pytest.raises(DataError):
+            test_client.insert_df('test_pandas_null_strings', df)
+        row2 = {'id': 'id2', 'test_col': 'val'}
+        df = pd.DataFrame([row, row2])
+        with pytest.raises(DataError):
+            test_client.insert_df('test_pandas_null_strings', df)

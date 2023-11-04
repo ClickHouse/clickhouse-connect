@@ -14,6 +14,12 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.19, TBD
+### Bug Fix
+- In some circumstances it was possible to insert a `None` value into a non-Nullable String column.  As this could mask
+invalid input data, any attempt to insert None into a non-Nullable String or LowCardinality(String) will now throw
+a DataError
+
 ## 0.6.18, 2023-10-25
 ### Bug Fixes
 - Reduce the estimated insert block size from 16-32MB to 1-2MB for large inserts.  The large data transfers could cause
