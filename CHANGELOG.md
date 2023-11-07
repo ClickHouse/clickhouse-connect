@@ -14,11 +14,15 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.19, TBD
-### Bug Fix
+## 0.6.19, 2023-11-07
+### Bug Fixes
 - In some circumstances it was possible to insert a `None` value into a non-Nullable String column.  As this could mask
 invalid input data, any attempt to insert None into a non-Nullable String or LowCardinality(String) will now throw
 a DataError
+- Reading a named Tuple column where the Tuple element names contained spaces would fail. In particular this would
+cause expected failures reading the experimental JSON column type with spaces in the keys.  This has been fixed.  Closes
+https://github.com/ClickHouse/clickhouse-connect/issues/265.  Note that handling spaces in column types is tricky and
+fragile in several respects, so the best approach remains to use simple column names without spaces.
 
 ## 0.6.18, 2023-10-25
 ### Bug Fixes
