@@ -44,16 +44,16 @@ def test_cursor(test_engine: Engine):
 
 def test_execute(test_engine: Engine):
     common.set_setting('invalid_setting_action', 'drop')
-    connection = test_engine.connect()
-    sql = test_query
-    if not connection.connection.connection.client.min_version('21'):
-        sql = test_query_ver19
 
-    rows = list(row for row in connection.execute(sql))
-    assert len(rows) == 2
+    with test_engine.begin() as conn:
+        sql = test_query
+        if not conn.connection.connection.client.min_version('21'):
+            sql = test_query_ver19
+        rows = list(row for row in conn.execute(sql))
+        assert len(rows) == 2
 
-    rows = list(row for row in connection.execute('DROP TABLE IF EXISTS dummy_table'))
-    assert rows[0][0] == 0
+        rows = list(row for row in conn.execute('DROP TABLE IF EXISTS dummy_table'))
+        assert rows[0][0] == 0
 
-    rows = list(row for row in connection.execute('describe TABLE system.columns'))
-    assert len(rows) > 5
+        rows = list(row for row in conn.execute('describe TABLE system.columns'))
+        assert len(rows) > 5
