@@ -14,6 +14,11 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.20, 2023-11-09
+### Bug Fix
+- Fixed an issue where client side binding of datetimes with timezones would produce the incorrect time string if
+timezones differed between the client and ClickHouse server.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/268
+
 ## 0.6.19, 2023-11-07
 ### Bug Fixes
 - In some circumstances it was possible to insert a `None` value into a non-Nullable String column.  As this could mask

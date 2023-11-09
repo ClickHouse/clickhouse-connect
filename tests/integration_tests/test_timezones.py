@@ -38,8 +38,9 @@ def test_server_timezone(test_client: Client):
     #  This test is really for manual testing since changing the timezone on the test ClickHouse server
     #  still requires a restart.  Other tests will depend on https://github.com/ClickHouse/ClickHouse/pull/44149
     test_client.apply_server_timezone = True
+    test_datetime = datetime(2023, 3, 18, 16, 4, 25)
     try:
-        date = test_client.query("SELECT toDateTime('2023-03-18 16:04:25') as st").first_row[0]
+        date = test_client.query('SELECT toDateTime(%s) as st', parameters=[test_datetime]).first_row[0]
         if test_client.server_tz == pytz.UTC:
             assert date.tzinfo is None
             assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=None)
@@ -105,3 +106,55 @@ def test_naive_timezones(test_client: Client):
     else:
         assert row[0].tzinfo is None
     assert row[1].tzinfo is None
+
+
+def test_timezone_binding_client(test_client: Client):
+    os.environ['TZ'] = 'America/Denver'
+    time.tzset()
+    denver_tz = datetime.now().astimezone().tzinfo
+    BaseQueryContext.local_tz = denver_tz
+    denver_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=denver_tz)
+    try:
+        server_time = test_client.query(
+            'SELECT toDateTime(%(dt)s) as dt', parameters={'dt': denver_time}).first_row[0]
+        assert server_time == denver_time
+    finally:
+        os.environ['TZ'] = 'UTC'
+        time.tzset()
+        BaseQueryContext.local_tz = pytz.UTC
+
+    naive_time = datetime(2023, 3, 18, 16, 4, 25)
+    server_time = test_client.query(
+        'SELECT toDateTime(%(dt)s) as dt', parameters={'dt': naive_time}).first_row[0]
+    assert server_time.astimezone(pytz.UTC) == naive_time.astimezone(pytz.UTC)
+
+    utc_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=pytz.UTC)
+    server_time = test_client.query(
+        'SELECT toDateTime(%(dt)s) as dt', parameters={'dt': utc_time}).first_row[0]
+    assert server_time.astimezone(pytz.UTC) == utc_time
+
+
+def test_timezone_binding_server(test_client: Client):
+    denver_tz = datetime.now().astimezone().tzinfo
+    os.environ['TZ'] = 'America/Denver'
+    time.tzset()
+    BaseQueryContext.local_tz = denver_tz
+    denver_time = datetime(2022, 3, 18, 16, 4, 25, tzinfo=denver_tz)
+    try:
+        server_time = test_client.query(
+            'SELECT toDateTime({dt:DateTime}) as dt', parameters={'dt': denver_time}).first_row[0]
+        assert server_time == denver_time
+    finally:
+        os.environ['TZ'] = 'UTC'
+        time.tzset()
+        BaseQueryContext.local_tz = pytz.UTC
+
+    naive_time = datetime(2022, 3, 18, 16, 4, 25)
+    server_time = test_client.query(
+        'SELECT toDateTime({dt:DateTime}) as dt', parameters={'dt': naive_time}).first_row[0]
+    assert naive_time.astimezone(pytz.UTC) == server_time.astimezone(pytz.UTC)
+
+    utc_time = datetime(2020, 3, 18, 16, 4, 25, tzinfo=pytz.UTC)
+    server_time = test_client.query(
+        'SELECT toDateTime({dt:DateTime}) as dt', parameters={'dt': utc_time}).first_row[0]
+    assert server_time.astimezone(pytz.UTC) == utc_time
