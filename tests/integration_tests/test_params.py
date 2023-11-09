@@ -1,9 +1,10 @@
 from datetime import datetime, date
+from typing import Callable
 
 from clickhouse_connect.driver import Client
 
 
-def test_params(test_client: Client, table_context: callable):
+def test_params(test_client: Client, table_context: Callable):
     result = test_client.query('SELECT name, database FROM system.tables WHERE database = {db:String}',
                                parameters={'db': 'system'})
     assert result.first_item['database'] == 'system'
