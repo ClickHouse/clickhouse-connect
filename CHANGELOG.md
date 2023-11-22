@@ -15,7 +15,7 @@ your Superset installation, the ClickHouse datasource will be available with eit
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
 ## 0.6.21, 2023-11-22
-### Bug Fix
+### New Feature
 - Added support for Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/151
 
 ## 0.6.20, 2023-11-09
