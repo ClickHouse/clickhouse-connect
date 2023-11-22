@@ -81,7 +81,8 @@ def test_tuple_three():
     types = [get_from_name('Tuple(String)')]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(TUPLE_THREE_OUTPUT)
-    
+
+
 def test_point():
     data = [[(3.22, 3.22)]]
     names = ['value']
