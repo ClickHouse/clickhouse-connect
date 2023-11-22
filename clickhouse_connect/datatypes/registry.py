@@ -35,6 +35,9 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     elif base.startswith('Tuple'):
         keys, values = parse_columns(base[5:])
         base = 'Tuple'
+    elif base == "Point":
+        values = tuple(['Float64', 'Float64'])
+        base = 'Tuple'
     else:
         try:
             base, values, _ = parse_callable(base)

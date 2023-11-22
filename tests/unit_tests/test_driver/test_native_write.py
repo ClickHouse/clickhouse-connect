@@ -29,6 +29,12 @@ TUPLE_THREE_OUTPUT = """
 7472 696e 6732 0773 7472 696e 6733
 """
 
+POINT_OUTPUT = """
+0101 0576 616c 7565 1754 7570 6c65 2846
+6c6f 6174 3634 2c20 466c 6f61 7436 3429
+c3f5 285c 8fc2 0940 c3f5 285c 8fc2 0940
+"""
+
 STRING_ACCEPTS_BYTES_OUTPUT = """
 0101 0576 616c 7565 0653 7472 696e 6701
 ff
@@ -75,6 +81,13 @@ def test_tuple_three():
     types = [get_from_name('Tuple(String)')]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(TUPLE_THREE_OUTPUT)
+    
+def test_point():
+    data = [[(3.22, 3.22)]]
+    names = ['value']
+    types = [get_from_name('Point')]
+    output = native_insert_block(data, names, types)
+    assert bytes(output) == bytes.fromhex(POINT_OUTPUT)
 
 
 def test_nested():
