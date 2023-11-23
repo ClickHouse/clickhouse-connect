@@ -19,7 +19,7 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 - Added support for Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/151.  Thanks to
 [Dhruvit Maniya](https://github.com/Dhruvit96) for the PR!
 - Upgraded to Cython 3.0.5
-- 
+- Change exception handling in C API to stop spamming stderr
 
 ## 0.6.20, 2023-11-09
 ### Bug Fix
