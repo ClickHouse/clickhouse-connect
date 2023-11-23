@@ -14,9 +14,12 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.21, 2023-11-22
-### New Feature
-- Added support for Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/151
+## 0.6.21, 2023-11-23
+### Improvements
+- Added support for Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/151.  Thanks to
+[Dhruvit Maniya](https://github.com/Dhruvit96) for the PR!
+- Upgraded to Cython 3.0.5
+- Change exception handling in C API to stop spamming stderr
 
 ## 0.6.20, 2023-11-09
 ### Bug Fix
