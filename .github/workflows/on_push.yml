@@ -103,19 +103,24 @@ jobs:
 
   check-secret:
     runs-on: ubuntu-latest
+    needs: tests
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.defined }}
     steps:
-      - id: has_secrets
+      - name: dummy
+        run: echo "Validating Secret"
+      - name: has_secrets
+        id: has_secrets
         env:
           CLOUD_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
-        if: "${{ env.CLOUD_HOSE != '' }}"
+        if: "${{ env.CLOUD_HOST != '' }}"
         run: echo "::set-output name=defined::true"
+
 
   cloud-tests:
     runs-on: ubuntu-latest
     name: Cloud Tests Py=${{ matrix.python-version }}
-    needs: tests
+    needs: check-secret
     if: needs.check-secret.outputs.has_secrets == 'true'
 
     strategy:
