@@ -107,10 +107,7 @@ jobs:
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.defined }}
     steps:
-      - name: dummy
-        run: echo "Validating Secret"
-      - name: has_secrets
-        id: has_secrets
+      - id: has_secrets
         env:
           CLOUD_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
         if: "${{ env.CLOUD_HOST != '' }}"
@@ -130,9 +127,6 @@ jobs:
           - '3.11'
 
     steps:
-      - name: Validate Secrets
-        env:
-        CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
       - name: Checkout
         uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
