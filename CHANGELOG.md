@@ -24,7 +24,6 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 - `ATTACH` queries were not be correctly processed as "commands".  Thanks to [Aleksei Palshin](https://github.com/alekseipalshin)
 for the PR!
 
-### Bug Fix
 
 ## 0.6.21, 2023-11-23
 ### Improvements
