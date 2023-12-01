@@ -14,10 +14,17 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
-## 0.6.22, TBD
+## 0.6.22, 2023-12-01
 ### Improvements
 - Fix typo in log message for bad inserts.  Thanks to [Stas](https://github.com/reijnnn) for the fix.
 - Allow non ClickHouse Cloud tests to run on community Pull Requests
+- Update to Cython 3.0.6
+
+### Bug Fix
+- `ATTACH` queries were not be correctly processed as "commands".  Thanks to [Aleksei Palshin](https://github.com/alekseipalshin)
+for the PR!
+
+### Bug Fix
 
 ## 0.6.21, 2023-11-23
 ### Improvements
