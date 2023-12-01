@@ -111,7 +111,7 @@ jobs:
         env:
           CLOUD_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
         if: "${{ env.CLOUD_HOST != '' }}"
-        run: echo "::set-output name=defined::true"
+        run: echo "has_secrets=true" >> $GITHUB_OUTPUT
 
 
   cloud-tests:
