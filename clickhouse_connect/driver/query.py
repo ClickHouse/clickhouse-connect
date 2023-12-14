@@ -20,7 +20,7 @@ from clickhouse_connect.driver.options import check_arrow, pd_extended_dtypes
 from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
-commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|DROP|DELETE|KILL|' + \
+commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|ATTACH|DROP|DELETE|KILL|' + \
            'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
 
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
@@ -341,7 +341,7 @@ class QueryResult(Closable):
 
 
 BS = '\\'
-must_escape = (BS, '\'')
+must_escape = (BS, '\'', '`')
 
 
 def quote_identifier(identifier: str):
@@ -349,7 +349,7 @@ def quote_identifier(identifier: str):
     if first_char in ('`', '"') and identifier[-1] == first_char:
         # Identifier is already quoted, assume that it's valid
         return identifier
-    return f'`{identifier}`'
+    return f'`{escape_str(identifier)}`'
 
 
 def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],
@@ -391,8 +391,8 @@ def format_query_value(value: Any, server_tz: tzinfo = pytz.UTC):
     if isinstance(value, str):
         return format_str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=server_tz)
+        if value.tzinfo is not None or server_tz != pytz.UTC:
+            value = value.astimezone(server_tz)
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
         return f"'{value.isoformat()}'"

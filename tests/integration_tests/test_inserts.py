@@ -52,3 +52,14 @@ def test_low_card_dictionary_size(test_client: Client, table_context: Callable):
         data = [[x, str(x)] for x in range(30000)]
         test_client.insert('test_low_card_dict', data)
         assert 30000 == test_client.command('SELECT count() FROM test_low_card_dict')
+
+
+def test_column_names_spaces(test_client: Client, table_context: Callable):
+    with table_context('test_column_spaces',
+                       columns=['key 1', 'value 1'],
+                       column_types=['Int32', 'String']):
+        data = [[1, 'str 1'], [2, 'str 2']]
+        test_client.insert('test_column_spaces', data)
+        result = test_client.query('SELECT * FROM test_column_spaces').result_rows
+        assert result[0][0] == 1
+        assert result[1][1] == 'str 2'

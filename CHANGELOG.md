@@ -14,6 +14,39 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.22, 2023-12-01
+### Improvements
+- Fix typo in log message for bad inserts.  Thanks to [Stas](https://github.com/reijnnn) for the fix.
+- Allow non ClickHouse Cloud tests to run on community Pull Requests
+- Update to Cython 3.0.6
+
+### Bug Fix
+- `ATTACH` queries were not be correctly processed as "commands".  Thanks to [Aleksei Palshin](https://github.com/alekseipalshin)
+for the PR!
+
+
+## 0.6.21, 2023-11-23
+### Improvements
+- Added support for Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/151.  Thanks to
+[Dhruvit Maniya](https://github.com/Dhruvit96) for the PR!
+- Upgraded to Cython 3.0.5
+- Change exception handling in C API to stop spamming stderr
+
+## 0.6.20, 2023-11-09
+### Bug Fix
+- Fixed an issue where client side binding of datetimes with timezones would produce the incorrect time string if
+timezones differed between the client and ClickHouse server.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/268
+
+## 0.6.19, 2023-11-07
+### Bug Fixes
+- In some circumstances it was possible to insert a `None` value into a non-Nullable String column.  As this could mask
+invalid input data, any attempt to insert None into a non-Nullable String or LowCardinality(String) will now throw
+a DataError
+- Reading a named Tuple column where the Tuple element names contained spaces would fail. In particular this would
+cause expected failures reading the experimental JSON column type with spaces in the keys.  This has been fixed.  Closes
+https://github.com/ClickHouse/clickhouse-connect/issues/265.  Note that handling spaces in column types is tricky and
+fragile in several respects, so the best approach remains to use simple column names without spaces.
+
 ## 0.6.18, 2023-10-25
 ### Bug Fixes
 - Reduce the estimated insert block size from 16-32MB to 1-2MB for large inserts.  The large data transfers could cause

@@ -97,6 +97,15 @@ def test_ip():
     assert tuple(python) == tuple(IPv4Address(ip) for ip in ips)
 
 
+def test_point():
+    points = ((3.22, 3.22),(5.22, 5.22),(4.22, 4.22))
+    point_type = registry.get_from_name('Point')
+    dest = bytearray()
+    point_type.write_column(points, dest, BaseQueryContext())
+    python = point_type.read_column(bytes_source(bytes(dest)), 3, QueryContext())
+    assert tuple(python) == tuple(point for point in points)
+
+
 def test_nested():
     result = parse_response (bytes_source(NESTED_BINARY))
     check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)
