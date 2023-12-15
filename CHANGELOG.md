@@ -16,7 +16,8 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 
 ## 0.6.23, 2023-12-15
 ### Bug Fix
-- Add missing Nothing SQLAlchemy datatype
+- Add missing Nothing SQLAlchemy datatype, which fixes some edge case Superset queries.
+Thanks to [elchyn-cheliabiyeu](https://github.com/elchyn-cheliabiyeu) for the PR!
 
 ## 0.6.22, 2023-12-01
 ### Improvements
