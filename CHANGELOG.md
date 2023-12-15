@@ -1,8 +1,5 @@
 # ClickHouse Connect ChangeLog
 
-### Improvements
-- Avoid concatenation of empty dataframes during `query_df` due to Pandas future warning.
-
 ### WARNING -- Python 3.7 EOL
 Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
 Python 3.7, and in releases after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
@@ -21,6 +18,10 @@ or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password
 ### Bug Fix
 - Add missing Nothing SQLAlchemy datatype, which fixes some edge case Superset queries.
 Thanks to [elchyn-cheliabiyeu](https://github.com/elchyn-cheliabiyeu) for the PR!
+
+### Improvement
+- Avoid concatenation of empty dataframes during `query_df` due to Pandas future warning.  Thanks to [Dylan Modesitt](https://github.com/DylanModesitt)
+for the PR!
 
 ## 0.6.22, 2023-12-01
 ### Improvements
