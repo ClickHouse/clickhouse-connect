@@ -1,7 +1,6 @@
 # ClickHouse Connect ChangeLog
 
 ### Improvements
-
 - Avoid concatenation of empty dataframes during `query_df` due to Pandas future warning.
 
 ### WARNING -- Python 3.7 EOL
