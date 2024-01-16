@@ -98,17 +98,18 @@ class Client(ABC):
 
     def _validate_setting(self, key: str, value: Any, invalid_action: str) -> Optional[str]:
         if key not in self.valid_transport_settings:
-            setting_def = self.server_settings.get(key)
-            if setting_def is None or setting_def.readonly:
-                if key in self.optional_transport_settings:
-                    return None
-                if invalid_action == 'send':
-                    logger.warning('Attempting to send unrecognized or readonly setting %s', key)
-                elif invalid_action == 'drop':
-                    logger.warning('Dropping unrecognized or readonly settings %s', key)
-                    return None
-                else:
-                    raise ProgrammingError(f'Setting {key} is unknown or readonly') from None
+            if hasattr(self, 'server_settings'):
+                setting_def = self.server_settings.get(key)
+                if setting_def is None or setting_def.readonly:
+                    if key in self.optional_transport_settings:
+                        return None
+                    if invalid_action == 'send':
+                        logger.warning('Attempting to send unrecognized or readonly setting %s', key)
+                    elif invalid_action == 'drop':
+                        logger.warning('Dropping unrecognized or readonly settings %s', key)
+                        return None
+                    else:
+                        raise ProgrammingError(f'Setting {key} is unknown or readonly') from None
         if isinstance(value, bool):
             return '1' if value else '0'
         return str(value)

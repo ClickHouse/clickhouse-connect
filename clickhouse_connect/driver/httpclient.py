@@ -137,13 +137,13 @@ class HttpClient(Client):
         else:
             compression = None
 
+        self.params = self._validate_settings(ch_settings)
         super().__init__(database=database,
                          uri=self.url,
                          query_limit=query_limit,
                          query_retries=query_retries,
                          server_host_name=server_host_name,
                          apply_server_timezone=apply_server_timezone)
-        self.params = self._validate_settings(ch_settings)
         comp_setting = self._setting_status('enable_http_compression')
         self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
         if comp_setting.is_set or comp_setting.is_writable:
