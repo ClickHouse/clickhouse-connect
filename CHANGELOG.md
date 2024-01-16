@@ -14,6 +14,15 @@ In any case, this should not affect the basic usage of Superset with ClickHouse.
 your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
 or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
 
+## 0.6.23, 2023-12-15
+### Bug Fix
+- Add missing Nothing SQLAlchemy datatype, which fixes some edge case Superset queries.
+Thanks to [elchyn-cheliabiyeu](https://github.com/elchyn-cheliabiyeu) for the PR!
+
+### Improvement
+- Avoid concatenation of empty dataframes during `query_df` due to Pandas future warning.  Thanks to [Dylan Modesitt](https://github.com/DylanModesitt)
+for the PR!
+
 ## 0.6.22, 2023-12-01
 ### Improvements
 - Fix typo in log message for bad inserts.  Thanks to [Stas](https://github.com/reijnnn) for the fix.

@@ -27,21 +27,7 @@ jobs:
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
         run: python setup.py develop
-      - name: Run ClickHouse Container (HEAD)
-        run: docker run
-          -d
-          -p 8123:8123
-          --name clickhouse_head
-          -v /var/lib/clickhouse
-          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
-          --ulimit nofile=262144:262144
-          clickhouse/clickhouse-server:head
-      - name: Run HEAD tests
-        run: pytest tests/integration_tests
-      - name: stop head container
-        run: docker stop clickhouse_head
-      - name: remove head container
-        run: docker remove clickhouse_head
+
       - name: Run ClickHouse Container (LATEST)
         run: docker run
           -d
@@ -57,6 +43,7 @@ jobs:
         run: docker stop clickhouse_latest
       - name: remove latest container
         run: docker remove clickhouse_latest
+
       - name: run ClickHouse Cloud tests
         env:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
@@ -64,3 +51,20 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
           CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
         run: pytest tests/integration_tests
+
+      - name: Run ClickHouse Container (HEAD)
+        run: docker run
+          -d
+          -p 8123:8123
+          --name clickhouse_head
+          -v /var/lib/clickhouse
+          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
+          --ulimit nofile=262144:262144
+          clickhouse/clickhouse-server:head
+      - name: Run HEAD tests
+        run: pytest tests/integration_tests
+      - name: stop head container
+        run: docker stop clickhouse_head
+      - name: remove head container
+        run: docker remove clickhouse_head
+
