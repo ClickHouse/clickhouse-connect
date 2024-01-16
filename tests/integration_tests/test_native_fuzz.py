@@ -8,8 +8,6 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
 from tests.helpers import random_data, random_columns
 
-import pytest
-
 TEST_COLUMNS = 10
 MAX_DATA_ROWS = 40
 
