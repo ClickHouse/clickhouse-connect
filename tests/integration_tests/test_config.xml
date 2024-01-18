@@ -1,3 +1,4 @@
 <clickhouse>
+    <custom_settings_prefixes>SQL_</custom_settings_prefixes>
     <session_log></session_log>
 </clickhouse>
