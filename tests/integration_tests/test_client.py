@@ -8,8 +8,6 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
 
-import pytest
-
 CSV_CONTENT = """abc,1,1
 abc,1,0
 def,1,0

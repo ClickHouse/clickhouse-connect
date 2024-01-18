@@ -1,7 +1,5 @@
 from enum import Enum as PyEnum
 
-from clickhouse_connect import common
-
 import sqlalchemy as db
 from sqlalchemy import MetaData
 
