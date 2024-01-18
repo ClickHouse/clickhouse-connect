@@ -13,6 +13,7 @@ from clickhouse_connect import create_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
+from clickhouse_connect.driver.httpclient import HttpClient
 
 
 class TestConfig(NamedTuple):
@@ -80,6 +81,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
     while True:
         tries += 1
         try:
+            HttpClient.params = {'SQL_test': 'setting'}
+            HttpClient.valid_transport_settings.add('SQL_test')
             client = create_client(
                 host=test_config.host,
                 port=test_config.port,

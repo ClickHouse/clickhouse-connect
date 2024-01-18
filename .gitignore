@@ -17,6 +17,7 @@
 /dev
 test.env
 .env
+.dev_version
 
 # Python cruft
 *.pyc

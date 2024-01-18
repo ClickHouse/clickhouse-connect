@@ -116,13 +116,15 @@ def empty_gen():
     yield from ()
 
 
-def coerce_int(val: Optional[Union[str, int]]) -> int:
+def coerce_int(val: Optional[Union[str, int]] = None, *, none_valid: bool = False) -> Optional[int]:
+    if none_valid and not val:
+        return val
     if not val:
         return 0
     return int(val)
 
 
-def coerce_bool(val: Optional[Union[str, bool]]):
+def coerce_bool(val: Optional[Union[str, bool]] = None) -> bool:
     if not val:
         return False
     return val in (True, 'True', 'true', '1')

@@ -74,7 +74,7 @@ class HttpClient(Client):
         """
         self.url = f'{interface}://{host}:{port}'
         self.headers = {}
-        ch_settings = settings or {}
+        ch_settings = dict_copy(settings or {}, self.params)
         self.http = pool_mgr
         if interface == 'https':
             if not https_proxy:
@@ -113,7 +113,9 @@ class HttpClient(Client):
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
 
-        connect_timeout, send_receive_timeout = coerce_int(connect_timeout), coerce_int(send_receive_timeout)
+        # There is use cases when client need to disable timeouts. 
+        connect_timeout, send_receive_timeout = (coerce_int(connect_timeout, none_valid=True),
+                                                 coerce_int(send_receive_timeout, none_valid=True))
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
         self.http_retries = 1
         self._send_progress = None
