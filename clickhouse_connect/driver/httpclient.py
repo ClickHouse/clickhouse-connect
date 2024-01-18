@@ -113,7 +113,7 @@ class HttpClient(Client):
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
 
-        # There is use cases when client need to disable timeouts. 
+        # There is use cases when client need to disable timeouts.
         connect_timeout, send_receive_timeout = (coerce_int(connect_timeout, none_valid=True),
                                                  coerce_int(send_receive_timeout, none_valid=True))
         self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
