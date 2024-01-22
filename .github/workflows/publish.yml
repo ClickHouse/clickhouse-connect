@@ -12,14 +12,14 @@ on:
           - release
           - build
 env:
-  CIBW_SKIP: 'cp36-* cp37-*'
+  CIBW_SKIP: 'cp36-* cp37-* pp37-*'
 
 jobs:
   build_x86_manylinux_wheels:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp36-* cp37-* *-musllinux*'
+      CIBW_SKIP: 'cp36-* cp37-* pp37-* *-musllinux*'
     steps:
       - uses: actions/checkout@v3
       - name: Build wheels
@@ -32,7 +32,7 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp36-* cp37-* *-manylinux*'
+      CIBW_SKIP: 'cp36-* cp37-* pp37-* *-manylinux*'
     steps:
       - uses: actions/checkout@v3
       - name: Build wheels
