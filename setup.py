@@ -53,7 +53,7 @@ def run_setup(try_c: bool = True):
         package_data={'clickhouse_connect': ['VERSION', 'py.typed']},
         url='https://github.com/ClickHouse/clickhouse-connect',
         packages=find_packages(exclude=['tests*']),
-        python_requires='~=3.7',
+        python_requires='~=3.8',
         license='Apache License 2.0',
         install_requires=[
             'certifi',
@@ -78,7 +78,6 @@ def run_setup(try_c: bool = True):
             'Development Status :: 4 - Beta',
             'Intended Audience :: Developers',
             'License :: OSI Approved :: Apache Software License',
-            'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10',
