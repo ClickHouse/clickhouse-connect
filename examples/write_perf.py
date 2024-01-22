@@ -1,6 +1,6 @@
 #!/usr/bin/env python -u
 
-# pylint: disable=import-error
+# pylint: disable=import-error,no-name-in-module
 import time
 import random
 import clickhouse_driver

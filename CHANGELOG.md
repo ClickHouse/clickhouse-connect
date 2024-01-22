@@ -1,18 +1,33 @@
 # ClickHouse Connect ChangeLog
 
 ### WARNING -- Python 3.7 EOL
-Official support for Python 3.7 ended on June 27, 2023.  As of the 0.6.5 release, clickhouse-connect will not test against
-Python 3.7, and in releases after January 1, 2024, all support for Python 3.7 will end, including 3.7 binary wheels.
+Official support for Python 3.7 ended on June 27, 2023.  As of `clickhouse-connect` v0.7.0, Python 3.7 is no
+longer supported and binary wheels are not published for versions 0.7.0 and later 
 
-### WARNING -- Engine Spec removed from v0.6.x
+### WARNING -- Superset Compatibility
 ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
-As a result, the Superset Engine Spec has been removed from clickhouse-connect and is now maintained in main
-Superset project. However,if you need compatibility with older versions of Superset, you may need clickhouse-connect
-v0.5.25, which will dynamically load the EngineSpec from the clickhouse-connect project.
+However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
+v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
-In any case, this should not affect the basic usage of Superset with ClickHouse.  If clickhouse-connect is included in
-your Superset installation, the ClickHouse datasource will be available with either the enhanced connection dialog
-or a standard SqlAlchemy DSN in the form of `clickhousedb://{username}:{password}@{host}:{port}`.
+## 0.7.0, 2024-01-22
+### Breaking Change
+- Python 3.7 builds are no longer part of the wheels deployed to PyPI
+
+### Bug Fix
+- Due to a change in default ClickHouse settings, inserts with "named" Tuple types no longer worked with ClickHouse
+version 24.1 and later.  This has been fixed.
+
+### Improvements
+- Some types of security and other proxies require additional query parameters on any call to ClickHouse server behind
+such a proxy.  Because the HTTPClient makes certain initialization queries to ClickHouse before any query parameters
+are set, it was difficult or impossible to create a Client successfully.  You can now modify the HTTPClient class level
+properties `params` and `valid_transport_settings` before calling `get_client` so that such "special" query parameters will be
+included even on initialization queries.  Thanks to [Aleksey Astafiev](https://github.com/aastafiev) for highlighting
+the problem and contributing a PR.
+- In some cases the user make want to disable urllib3 timeout settings `connect_timeout` and `send_receive_timeout` by
+setting them to none.  The same PR from Aleksey Astafiev now allows setting to values to `None`
+- Update to Cython 3.0.8
+
 
 ## 0.6.23, 2023-12-15
 ### Bug Fix
