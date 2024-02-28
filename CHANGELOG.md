@@ -9,6 +9,13 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.1, 2024-02-28
+### Bug Fixes
+- Changed type hint of the `query` parameter in Client `query*` methods to `Optional[str]` to work correctly with type analyzers.
+This also highlights that using a query_context instead of a query in these methods is supported (and preferred for repeated queries).
+Thanks to [Avery Fischer](https://github.com/biggerfisch) for the PR!
+- Fixed sending a full table name to the `insert_file` tools function.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/305
+
 ## 0.7.0, 2024-01-22
 ### Breaking Change
 - Python 3.7 builds are no longer part of the wheels deployed to PyPI
