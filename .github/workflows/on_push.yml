@@ -105,30 +105,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: tests
     outputs:
-      has_secrets: ${{ steps.has_secrets.outputs.defined }}
+      has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:
       - id: has_secrets
         env:
           CLOUD_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
         if: "${{ env.CLOUD_HOST != '' }}"
         run: echo "HAS_SECRETS=true" >> $GITHUB_OUTPUT
-      - id: echo_has_secrets
-        run: echo "${{steps.has_secrets.outputs.HAS_SECRETS}}"
 
-  debug-secret:
-    runs-on: ubuntu-latest
-    needs: check-secret
-    env:
-      HAS_SECRETS: ${{ needs.check-secret.outputs.HAS_SECRETS }}
-    steps:
-      - name: echo
-        run: echo $HAS_SECRETS
 
   cloud-tests:
     runs-on: ubuntu-latest
     name: Cloud Tests Py=${{ matrix.python-version }}
     needs: check-secret
-    if: needs.check-secret.outputs.HAS_SECRETS == 'true'
+    if: needs.check-secret.outputs.has_secrets == 'true'
 
     strategy:
       matrix:
