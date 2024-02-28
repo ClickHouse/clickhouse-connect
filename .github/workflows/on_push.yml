@@ -33,9 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     name: PyLint
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Set up Python (3.11)
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11
       - name: Install dependencies
@@ -72,7 +72,7 @@ jobs:
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Run ClickHouse Container
         run: docker run
           -d
@@ -83,7 +83,7 @@ jobs:
           --ulimit nofile=262144:262144
           clickhouse/clickhouse-server:${{ matrix.clickhouse-version }}
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install pip
@@ -105,13 +105,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: tests
     outputs:
-      has_secrets: ${{ steps.has_secrets.outputs.defined }}
+      has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:
       - id: has_secrets
         env:
           CLOUD_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
         if: "${{ env.CLOUD_HOST != '' }}"
-        run: echo "has_secrets=true" >> $GITHUB_OUTPUT
+        run: echo "HAS_SECRETS=true" >> $GITHUB_OUTPUT
 
 
   cloud-tests:
@@ -128,9 +128,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
