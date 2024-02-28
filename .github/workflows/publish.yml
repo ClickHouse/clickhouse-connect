@@ -26,6 +26,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.5
       - uses: actions/upload-artifact@v4
         with:
+          name: build-x86-manylinux
           path: ./wheelhouse/*.whl
 
   build_x86_musllinux_wheels:
@@ -39,6 +40,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.5
       - uses: actions/upload-artifact@v4
         with:
+          name: build-x86-musllinux
           path: ./wheelhouse/*.whl
 
   build_aarch64_manylinux_wheels:
@@ -57,6 +59,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.5
       - uses: actions/upload-artifact@v4
         with:
+          name: build-aarch64-manylinux
           path: ./wheelhouse/*.whl
 
   build_aarch64_musllinux_wheels:
@@ -75,6 +78,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.5
       - uses: actions/upload-artifact@v4
         with:
+          name: build-aarch64-musllinux
           path: ./wheelhouse/*.whl
 
   build_aarch64_pypy_wheels:
@@ -93,6 +97,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.5
       - uses: actions/upload-artifact@v4
         with:
+          name: build-aarch64-pypy
           path: ./wheelhouse/*.whl
 
   build_macos_wheels:
@@ -106,6 +111,7 @@ jobs:
           CIBW_ARCHS_MACOS: x86_64 arm64
       - uses: actions/upload-artifact@v4
         with:
+          name: build-macos
           path: ./wheelhouse/*.whl
 
   build_windows_wheels:
@@ -119,6 +125,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.16.5
       - uses: actions/upload-artifact@v4
         with:
+          name: build-windows
           path: ./wheelhouse/*.whl
 
   publish:
@@ -142,6 +149,8 @@ jobs:
       - name: Retrieve wheels
         uses: actions/download-artifact@v4
         with:
+          pattern: build-*
+          merge_multiple: true
           path: wheelhouse
       - name: move and list artifacts
         run: |
