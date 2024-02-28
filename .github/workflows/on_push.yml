@@ -119,7 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: check-secret
     env:
-      HAS_SECRETS: ${{ needs.check-secret.outputs.has_secrets }}
+      HAS_SECRETS: ${{ needs.check-secret.outputs.HAS_SECRETS }}
     steps:
       - name: echo
         run: echo $HAS_SECRETS
@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Cloud Tests Py=${{ matrix.python-version }}
     needs: check-secret
-    if: needs.check-secret.outputs.has_secret == 'true'
+    if: needs.check-secret.outputs.HAS_SECRETS == 'true'
 
     strategy:
       matrix:
