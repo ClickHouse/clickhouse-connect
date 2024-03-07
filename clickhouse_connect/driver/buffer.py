@@ -18,6 +18,7 @@ class ResponseBuffer(ByteSource):
         self.source = source
         self.gen = source.gen
         self.buffer = bytes()
+        self.consumed = 0
 
     def read_bytes(self, sz: int):
         if self.buf_loc + sz <= self.buf_sz:
@@ -28,11 +29,13 @@ class ResponseBuffer(ByteSource):
         self.buf_loc = 0
         self.buf_sz = 0
         while len(bridge) < sz:
+            self.consumed += self.buf_sz
             chunk = next(self.gen, None)
             if not chunk:
                 raise StreamCompleteException
             x = len(chunk)
             if len(bridge) + x <= sz:
+                self.consumed += x
                 bridge.extend(chunk)
             else:
                 tail = sz - len(bridge)
@@ -46,6 +49,7 @@ class ResponseBuffer(ByteSource):
         if self.buf_loc < self.buf_sz:
             self.buf_loc += 1
             return self.buffer[self.buf_loc - 1]
+        self.consumed += self.buf_sz
         self.buf_sz = 0
         self.buf_loc = 0
         chunk = next(self.gen, None)
@@ -127,6 +131,9 @@ class ResponseBuffer(ByteSource):
         if must_swap:
             column.byteswap()
         return column
+
+    def total_consumed(self) -> int:
+        return self.consumed + self.buf_loc
 
     @property
     def last_message(self):

@@ -48,3 +48,7 @@ class ByteSource(Closable):
     @abstractmethod
     def read_byte(self) -> int:
         pass
+
+    @abstractmethod
+    def total_consumed(self) -> int:
+        pass

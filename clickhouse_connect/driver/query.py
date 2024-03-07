@@ -170,9 +170,7 @@ class QueryContext(BaseQueryContext):
             active_tz = self.server_tz
         else:
             active_tz = self.local_tz
-        #  Special case where if everything is UTC, including the local timezone, we use naive timezones
-        #  for performance reasons
-        if active_tz == pytz.UTC and active_tz.utcoffset(datetime.now()) == self.local_tz.utcoffset(datetime.now()):
+        if active_tz == pytz.UTC:
             return None
         return active_tz
 
@@ -354,6 +352,8 @@ def quote_identifier(identifier: str):
 
 def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],
                    server_tz: Optional[tzinfo] = None) -> str:
+    if query.endswith(';'):
+        query = query[:-1]
     if not parameters:
         return query
     if hasattr(parameters, 'items'):
@@ -363,6 +363,8 @@ def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, An
 
 def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],
                server_tz: Optional[tzinfo] = None) -> Tuple[str, Dict[str, str]]:
+    if query.endswith(';'):
+        query = query[:-1]
     if not parameters:
         return query, {}
     if external_bind_re.search(query) is None:

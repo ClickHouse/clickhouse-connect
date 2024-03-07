@@ -84,13 +84,16 @@ def test_local_timezones(test_client: Client):
     denver_tz = datetime.now().astimezone().tzinfo
     BaseQueryContext.local_tz = denver_tz
     try:
-        row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
-                                "toDateTime('2023-07-05 15:10:40') as utc").first_row
+        row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22'," +
+                                "'America/Chicago') as chicago," +
+                                "toDateTime('2023-07-05 15:10:40') as utc," +
+                                "toDateTime('2023-07-05 12:44:22', 'UTC')").first_row
         if test_client.protocol_version:
             assert row[0].tzinfo == chicago_tz
         else:
             assert row[0].tzinfo is denver_tz
         assert row[1].tzinfo == denver_tz
+        assert row[2].tzinfo is None
     finally:
         os.environ['TZ'] = 'UTC'
         time.tzset()

@@ -33,6 +33,7 @@ cdef class ResponseBuffer:
         self.slice_sz = 4096
         self.buf_loc = 0
         self.buf_sz = 0
+        self.consumed = 0
         self.source = source
         self.gen = source.gen
         self.buffer = NULL
@@ -66,6 +67,7 @@ cdef class ResponseBuffer:
             self.slice_sz = temp
         if cur_len > 0:
             memcpy(self.slice, self.buffer + self.buf_loc, cur_len)
+        self.consumed += self.buf_sz
         self.buf_loc = 0
         self.buf_sz = 0
 
@@ -80,6 +82,7 @@ cdef class ResponseBuffer:
                 # We need this whole chunk for the requested size, copy it into the temporary slice and get the next one
                 memcpy(self.slice + cur_len, ptr, x)
                 cur_len += x
+                self.consumed += x
             else:
                 # We need just the beginning of this chunk to finish the temporary, copy that and set
                 # the pointer into our stored buffer to the first unread data
@@ -96,6 +99,7 @@ cdef class ResponseBuffer:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef inline unsigned char _read_byte_load(self) except ?255:
+        self.consumed += self.buf_sz
         self.buf_loc = 0
         self.buf_sz = 0
         chunk = next(self.gen, None)
@@ -183,7 +187,7 @@ cdef class ResponseBuffer:
             Py_INCREF(v)
         PyMem_Free(<void *> null_map)
         return column
-
+    
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def  read_byte(self) -> int:
@@ -290,6 +294,9 @@ cdef class ResponseBuffer:
             Py_INCREF(v)
             b += sz
         return column
+
+    def total_consumed(self) -> int:
+        return self.consumed + self.buf_loc
 
     def close(self):
         if self.source:

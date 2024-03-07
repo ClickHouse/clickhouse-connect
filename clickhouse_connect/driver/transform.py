@@ -13,6 +13,7 @@ from clickhouse_connect.driver.compression import get_compressor
 _EMPTY_CTX = QueryContext()
 
 logger = logging.getLogger(__name__)
+min_read = 1024 * 1024 * 2
 
 
 class NativeTransform:
@@ -70,12 +71,26 @@ class NativeTransform:
             return NumpyResult() if context.use_numpy else QueryResult([])
 
         def gen():
-            yield first_block
+            start_consumed = 0
+            end_consumed = source.total_consumed()
+            next_block = first_block
             while True:
-                next_block = get_block()
-                if next_block is None:
-                    return
-                yield next_block
+                if end_consumed - start_consumed > min_read:
+                    start_consumed = end_consumed
+                    yield next_block
+                    next_block = None
+                else:
+                    temp_block = get_block()
+                    end_consumed = source.total_consumed()
+                    if temp_block is None:
+                        if next_block:
+                            yield next_block
+                        return
+                    if next_block is None:
+                        next_block = temp_block
+                    else:
+                        for base, added in zip(next_block, temp_block):
+                            base += added
 
         if context.use_numpy:
             res_types = [col.dtype if hasattr(col, 'dtype') else 'O' for col in first_block]

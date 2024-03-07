@@ -39,7 +39,7 @@ def test_external_multiple(test_client: Client):
                         structure=['movie String', 'year UInt16', 'rating Decimal32(3)'])
     actors_file = f'{Path(__file__).parent}/actors.csv'
     data.add_file(actors_file, fmt='CSV', types='String,UInt16,String')
-    result = test_client.query('SELECT * FROM actors', external_data=data, settings={
+    result = test_client.query('SELECT * FROM actors;', external_data=data, settings={
         'input_format_allow_errors_num': 10, 'input_format_allow_errors_ratio': .2}).result_rows
     assert result[1][1] == 1940
     result = test_client.query(

@@ -97,7 +97,7 @@ def test_read_formats(test_client: Client, test_table_engine: str):
     row2 = (2, uuid2, 'short str', '10.44.75.20', ['74:382::3332', '8700:5200::5782:3992'], (7320, '252.18.4.50'))
     test_client.insert('read_format_test', [row1, row2])
 
-    result = test_client.query('SELECT * FROM read_format_test').result_set
+    result = test_client.query('SELECT * FROM read_format_test;').result_set
     assert result[0][1] == uuid1
     assert result[1][3] == IPv4Address('10.44.75.20')
     assert result[0][2] == b'\x35\x33\x30\x30\x35\x35\x37\x37\x37\x6b'
