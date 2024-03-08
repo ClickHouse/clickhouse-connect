@@ -9,6 +9,20 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.2, 2024-03-07
+### Bug Fixes
+- If the result of applying the precedence of timezones to a column results in an explicit UTC timezone, the datetime object returned
+should now be timezone naive.  This should make the behavior consistent with the [documentation](https://clickhouse.com/docs/en/integrations/python#time-zones).
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/308 (except for a documentation update)
+- Extraneous semicolons are automatically removed from the end of queries.  Addresses the most basic behavior in https://github.com/ClickHouse/clickhouse-connect/issues/310
+
+### Performance Improvement
+- Pandas DataFrame returned from the client `query_df` method should be constructed somewhat faster in cases where the data returned in ClickHouse
+is in many small blocks.  Note that performance gains in this use case are somewhat limited because of the memory and copying cost of
+building a large DataFrame from many smaller ClickHouse Native block structures, so such performance problems should normally be addressed at the
+query or ClickHouse data storage level (by for example, reducing the number of partitions and/or shards referenced by the query).  This may partially
+address https://github.com/ClickHouse/clickhouse-connect/issues/307.
+
 ## 0.7.1, 2024-02-28
 ### Bug Fixes
 - Changed type hint of the `query` parameter in Client `query*` methods to `Optional[str]` to work correctly with type analyzers.
