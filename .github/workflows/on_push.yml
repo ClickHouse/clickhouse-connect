@@ -43,7 +43,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install setuptools wheel
           pip install -r tests/test_requirements.txt
-          pip install pylint==2.17
+          pip install pylint
           python setup.py build_ext --inplace
       - name: Run Pylint
         run: |
