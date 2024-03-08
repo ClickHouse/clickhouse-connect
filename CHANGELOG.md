@@ -11,6 +11,7 @@ v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect proj
 
 ## 0.7.2, 2024-03-07
 ### Bug Fixes
+- Inserts into columns with multibyte UTF-8 names were broken.  This has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/312
 - If the result of applying the precedence of timezones to a column results in an explicit UTC timezone, the datetime object returned
 should now be timezone naive.  This should make the behavior consistent with the [documentation](https://clickhouse.com/docs/en/integrations/python#time-zones).
 Closes https://github.com/ClickHouse/clickhouse-connect/issues/308 (except for a documentation update)

@@ -211,3 +211,11 @@ def test_fixed_str_padding(test_client: Client, table_context: Callable):
         test_client.insert(table, [[3, '']])
         result = test_client.query(f'select * from {table} ORDER BY key')
         assert result.result_columns[1] == [b'abc', b'a\x00\x00', b'\x00\x00\x00']
+
+
+def test_nonstandard_column_names(test_client: Client, table_context: Callable):
+    table = 'пример_кириллица'
+    with table_context(table, 'колонка String') as t:
+        test_client.insert(t.table, (('привет',),))
+        result = test_client.query(f'SELECT * FROM {t.table}').result_set
+        assert result[0][0] == 'привет'
