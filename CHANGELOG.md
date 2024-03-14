@@ -9,6 +9,10 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.3, 2024-03-14
+### Improvement
+- Add summary field to Cursor object to retrieve the result of 'X-Clickhouse-Summary' header
+
 ## 0.7.2, 2024-03-07
 ### Bug Fixes
 - Inserts into columns with multibyte UTF-8 names were broken.  This has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/312
