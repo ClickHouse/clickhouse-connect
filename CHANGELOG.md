@@ -11,7 +11,8 @@ v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect proj
 
 ## 0.7.3, 2024-03-14
 ### Improvement
-- Add summary field to Cursor object to retrieve the result of 'X-Clickhouse-Summary' header
+- Add summary field to Cursor object to retrieve the result of 'X-Clickhouse-Summary' header.  Thanks to 
+[elchyn-cheliabiyeu](https://github.com/elchyn-cheliabiyeu) for the PR!
 
 ## 0.7.2, 2024-03-07
 ### Bug Fixes
