@@ -102,8 +102,6 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             if tries > 10:
                 raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
-    if client.min_version('22.6.1'):
-        client.set_client_setting('allow_experimental_object_type', 1)
     if client.min_version('22.8'):
         client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
     if test_config.insert_quorum:
