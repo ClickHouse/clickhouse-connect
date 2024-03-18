@@ -1,4 +1,5 @@
 import decimal
+import os
 import uuid
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
@@ -9,6 +10,7 @@ import pytest
 from clickhouse_connect.datatypes.format import set_default_formats, clear_default_format, set_read_format, \
     set_write_format
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.common import coerce_bool
 
 
 def test_low_card(test_client: Client, table_context: Callable):
@@ -46,8 +48,8 @@ def test_nulls(test_client: Client, table_context: Callable):
 
 
 def test_json(test_client: Client, table_context: Callable):
-    if not test_client.min_version('22.6.1'):
-        pytest.skip('JSON test skipped for old version {test_client.server_version}')
+    if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_JSON_TYPE')):
+        pytest.skip('Deprecated JSON type not tested')
     with table_context('native_json_test', [
         'key Int32',
         'value JSON',
