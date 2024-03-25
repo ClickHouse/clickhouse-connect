@@ -64,6 +64,7 @@ WHERE (number > 1950) AND (number < 2025)
     data = ExternalData(movies_file, fmt='Parquet', structure=['movie String', 'year UInt16', 'rating Float64'])
     result = test_client.query(
         "SELECT * FROM movies INNER JOIN num ON movies.year = number AND t = '2000x' ORDER BY movie",
+        settings={'output_format_parquet_string_as_string': 1},
         external_data=data).result_rows
     assert len(result) == 5
     assert result[2][0] == 'Memento'
