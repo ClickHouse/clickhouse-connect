@@ -5,6 +5,7 @@ import pytest
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.options import arrow
+from tests.integration_tests.conftest import TestConfig
 
 ext_settings = {'input_format_allow_errors_num': 10, 'input_format_allow_errors_ratio': .2}
 
@@ -50,7 +51,9 @@ def test_external_multiple(test_client: Client):
     assert result[0][1] == 'Scarface'
 
 
-def test_external_parquet(test_client: Client):
+def test_external_parquet(test_config: TestConfig, test_client: Client):
+    if test_config.cloud:
+        pytest.skip('External data join not working in SMT, skipping')
     movies_file = f'{Path(__file__).parent}/movies.parquet'
     test_client.command("""
 CREATE TABLE IF NOT EXISTS num (number UInt64, t String)
@@ -64,6 +67,7 @@ WHERE (number > 1950) AND (number < 2025)
     data = ExternalData(movies_file, fmt='Parquet', structure=['movie String', 'year UInt16', 'rating Float64'])
     result = test_client.query(
         "SELECT * FROM movies INNER JOIN num ON movies.year = number AND t = '2000x' ORDER BY movie",
+        settings={'output_format_parquet_string_as_string': 1},
         external_data=data).result_rows
     assert len(result) == 5
     assert result[2][0] == 'Memento'

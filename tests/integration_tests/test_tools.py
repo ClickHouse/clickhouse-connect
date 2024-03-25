@@ -23,7 +23,8 @@ def test_parquet_upload(test_config: TestConfig, test_client: Client, table_cont
     data_file = f'{Path(__file__).parent}/movies.parquet'
     full_table = f'{test_config.test_database}.test_parquet_upload'
     with table_context(full_table, ['movie String', 'year UInt16', 'rating Float64']):
-        insert_result = insert_file(test_client, full_table, data_file, 'Parquet')
+        insert_result = insert_file(test_client, full_table, data_file, 'Parquet',
+                                    settings={'output_format_parquet_string_as_string': 1})
         assert 250 == insert_result.written_rows
         res = test_client.query(
             f'SELECT count() as count, sum(rating) as rating, max(year) as year FROM {full_table}').first_item
