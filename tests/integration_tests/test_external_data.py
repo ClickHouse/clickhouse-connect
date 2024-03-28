@@ -82,6 +82,11 @@ def test_external_binary(test_client: Client):
     assert len(result) == 2
     assert result[1][2] == 'The Sting'
 
+def test_external_empty_binary(test_client: Client):
+    data = ExternalData(file_name='empty.csv', data=b'', structure='name String')
+    result = test_client.query('SELECT * FROM empty', external_data=data).result_rows
+    assert len(result) == 0
+
 
 def test_external_raw(test_client: Client):
     movies_file = f'{Path(__file__).parent}/movies.parquet'
