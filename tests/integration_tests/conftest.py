@@ -107,6 +107,8 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
     if test_config.insert_quorum:
         client.set_client_setting('insert_quorum', test_config.insert_quorum)
+    elif test_config.cloud:
+        client.set_client_setting('select_sequential_consistency', 1)
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
     client.database = test_db
     yield client
