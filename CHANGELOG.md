@@ -9,6 +9,11 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.5, 2024-03-28
+### Bug Fixes
+- Allows empty `data` argument in the initializer of `ExternalFile` / `ExternalData` objects. Thanks to
+  [martijnthe](https://github.com/martijnthe) for the PR!
+
 ## 0.7.4, 2024-03-24
 ### Improvement
 - Added the new client method `query_arrow_stream` for streaming PyArrow queries from ClickHouse.  Big thanks to
