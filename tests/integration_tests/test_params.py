@@ -50,3 +50,8 @@ def test_params(test_client: Client, table_context: Callable):
     tp_params = ('str1', 'str2')
     result = test_client.query('SELECT %(tp)s', parameters={'tp': tp_params}).first_row
     assert tp_params == result[0]
+
+    num_params = {'p_0': 2, 'p_1': 100523.55}
+    result = test_client.query(
+        'SELECT count() FROM system.tables WHERE total_rows > %(p_0)d and total_rows < %(p_1)f', parameters=num_params)
+    assert result.first_row[0] > 0
