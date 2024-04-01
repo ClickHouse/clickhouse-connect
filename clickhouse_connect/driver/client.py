@@ -1,5 +1,6 @@
 import io
 import logging
+import typing
 from datetime import tzinfo, datetime
 
 import pytz
@@ -250,6 +251,40 @@ class Client(ABC):
         """
         return self._context_query(locals(), use_numpy=False, streaming=True).rows_stream
 
+    @typing.overload
+    @abstractmethod
+    def raw_query(self, query: str,
+                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                  settings: Optional[Dict[str, Any]] = None,
+                  fmt: str = None,
+                  use_database: bool = True,
+                  external_data: Optional[ExternalData] = None,
+                  stream: typing.Literal[False] = False,
+                  ) -> bytes: ...
+
+    @typing.overload
+    @abstractmethod
+    def raw_query(self, query: str,
+                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                  settings: Optional[Dict[str, Any]] = None,
+                  fmt: str = None,
+                  use_database: bool = True,
+                  external_data: Optional[ExternalData] = None,
+                  stream: typing.Literal[True] = ...,
+                  ) -> io.IOBase: ...
+
+    @typing.overload
+    @abstractmethod
+    def raw_query(self, query: str,
+                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                  settings: Optional[Dict[str, Any]] = None,
+                  fmt: str = None,
+                  use_database: bool = True,
+                  external_data: Optional[ExternalData] = None,
+                  stream: bool = ...,
+                  ) -> Union[bytes, io.IOBase]: ...
+
+
     @abstractmethod
     def raw_query(self, query: str,
                   parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -267,7 +302,9 @@ class Client(ABC):
         :param use_database  Send the database parameter to ClickHouse so the command will be executed in the client
          database context.
         :param external_data  External data to send with the query
-        :return: bytes representing raw ClickHouse return value based on format
+        :stream  True to return an object that implements io.IOBase, or False to return a bytes object.
+        :return: depending on the stream parameter, a bytes or io.IOBase representing raw ClickHouse return value based
+        on format
         """
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
