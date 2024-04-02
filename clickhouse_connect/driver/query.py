@@ -436,9 +436,7 @@ def format_bind_value(value: Any, server_tz: tzinfo = pytz.UTC, top_level: bool 
             return escape_str(value)
         return format_str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=server_tz)
-        val = value.strftime('%Y-%m-%d %H:%M:%S')
+        val = value.replace(tzinfo=None).isoformat(sep=' ')
         if top_level:
             return val
         return f"'{val}'"
