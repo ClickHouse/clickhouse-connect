@@ -9,6 +9,10 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.6, 2024-04-01
+### Bug Fix
+- Fixed issue with SQLAlchemy Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/332.
+
 ## 0.7.5, 2024-03-28
 ### Bug Fixes
 - Fixed client side binding for Python format strings using `%d` (int) and `%f` (float) format patterns.  Closes
