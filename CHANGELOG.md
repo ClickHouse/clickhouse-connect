@@ -9,6 +9,15 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.7, 2024-04-03
+### Bug Fix
+- Fixed client side binding for complex types containing floats or integers that was broken in version 0.7.5.
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/335.
+### Improvement
+- Added a `raw_stream` method to the Client the returns an io.Base.  Use this instead of the `raw_query` method
+with the (now removed) optional `stream` keyword boolean.  Thanks to [Martijn Thé](https://github.com/martijnthe) for
+the PR that highlighted the somewhat messy public API.
+
 ## 0.7.6, 2024-04-01
 ### Bug Fix
 - Fixed issue with SQLAlchemy Point type.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/332.
