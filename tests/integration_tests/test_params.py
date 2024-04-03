@@ -47,6 +47,12 @@ def test_params(test_client: Client, table_context: Callable):
     result = test_client.query('SELECT {l:Array(DateTime)}', parameters={'l': dt_params}).first_row
     assert dt_params == result[0]
 
+    num_array_params = [2.5, 5.3, 7.4]
+    result = test_client.query('SELECT {l:Array(Float64)}', parameters={'l': num_array_params}).first_row
+    assert num_array_params == result[0]
+    result = test_client.query('SELECT %(l)s', parameters={'l': num_array_params}).first_row
+    assert num_array_params == result[0]
+
     tp_params = ('str1', 'str2')
     result = test_client.query('SELECT %(tp)s', parameters={'tp': tp_params}).first_row
     assert tp_params == result[0]
