@@ -64,7 +64,7 @@ class Client(ABC):
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
         offsets_differ = datetime.now().astimezone().utcoffset() != datetime.now(tz=self.server_tz).utcoffset()
-        self.apply_server_timezone = apply_server_timezone == 'always' or (
+        self.apply_server_timezone = apply_server_timezone == True or (
                 coerce_bool(apply_server_timezone) and offsets_differ)
         readonly = 'readonly'
         if not self.min_version('19.17'):
