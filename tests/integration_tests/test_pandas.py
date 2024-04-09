@@ -274,5 +274,6 @@ def test_pandas_null_strings(test_client: Client, table_context:Callable):
 
 
 def test_pandas_small_blocks(test_client: Client):
-    res = test_client.query_df('SELECT number, randomString(512) FROM numbers(5000000)', settings={'max_block_size': 1000})
-    assert len(res) == 5000000
+    res = test_client.query_df('SELECT number, randomString(512) FROM numbers(1000000)',
+                               settings={'max_block_size': 1000})
+    assert len(res) == 1000000

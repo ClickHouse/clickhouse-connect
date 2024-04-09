@@ -18,8 +18,9 @@ could cause confusing results where datetime values would be rendered in a Dayli
 DST was not active, and vice versa.
 
 ### Bug Fix
-- Pandas DataFrames returned from the `query_df` method will now have a contiguous index.  This was broken by the
-related change in v0.7.2
+- Pandas DataFrames returned from the `query_df` method will now have a contiguous index.  This was broken in some
+Pandas version by the related change in v0.7.2, which has been reverted as that implementation did not seem to provide
+any meaningful performance improvement.
 
 ## 0.7.7, 2024-04-03
 ### Bug Fix
