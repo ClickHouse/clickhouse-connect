@@ -271,3 +271,8 @@ def test_pandas_null_strings(test_client: Client, table_context:Callable):
         df = pd.DataFrame([row, row2])
         with pytest.raises(DataError):
             test_client.insert_df('test_pandas_null_strings', df)
+
+
+def test_pandas_small_blocks(test_client: Client):
+    res = test_client.query_df('SELECT number, randomString(512) FROM numbers(5000000)', settings={'max_block_size': 1000})
+    assert len(res) == 5000000
