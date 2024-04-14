@@ -9,6 +9,14 @@ ClickHouse Connect has been included as an official Apache Superset database con
 However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
 v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
 
+## 0.7.8, 2024-04-14
+### Breaking Change
+- The default behavior of applying the client timezone if the GMT offset of the client matched the GMT offset
+of the server for the current time has been changed.  The new default is to **always** apply the server timezone
+unless the optional `apply_server_timezone` `get_client` parameter is explicitly set to `False`.  The previous behavior
+could cause confusing results where datetime values would be rendered in a Daylight Savings Time/Summer Time zone when
+DST was not active, and vice versa.
+
 ## 0.7.7, 2024-04-03
 ### Bug Fix
 - Fixed client side binding for complex types containing floats or integers that was broken in version 0.7.5.

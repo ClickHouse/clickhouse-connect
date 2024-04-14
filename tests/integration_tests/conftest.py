@@ -93,7 +93,6 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
                 query_limit=0,
                 compress=test_config.compress,
                 client_name='int_tests/test',
-                apply_server_timezone=False,
                 settings={'allow_suspicious_low_cardinality_types': True,
                           'insert_deduplicate': False,
                           'async_insert': 0}
