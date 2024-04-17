@@ -72,7 +72,7 @@ class Client(ABC):
 
         if not self.apply_server_timezone and not tzutil.local_tz_dst_safe:
             logger.warning('local timezone %s may return unexpected times due to Daylight Savings Time/' +
-                           'Summer Time differences', tzutil.local_tz.tzname())
+                           'Summer Time differences', tzutil.local_tz.tzname(None))
         readonly = 'readonly'
         if not self.min_version('19.17'):
             readonly = common.get_setting('readonly')
