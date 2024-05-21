@@ -1,13 +1,26 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Python 3.7 EOL
-Official support for Python 3.7 ended on June 27, 2023.  As of `clickhouse-connect` v0.7.0, Python 3.7 is no
-longer supported and binary wheels are not published for versions 0.7.0 and later 
+### WARNING -- Impending Breaking Change - Server Settings in DSN
+When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
+converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
+release (0.8.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
+instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
+The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
-### WARNING -- Superset Compatibility
-ClickHouse Connect has been included as an official Apache Superset database connector starting with release 2.1.0.
-However, if you need compatibility with older versions of Superset, you may need clickhouse-connect
-v0.5.25, which dynamically loads the EngineSpec from the clickhouse-connect project.
+## 0.7.9, 2024-05-21
+### Bug Fixes 
+- query_df would raise a deprecation warning with recent Pandas version if there were empty blocks.  This should be fixed.
+https://github.com/ClickHouse/clickhouse-connect/issues/349
+- avoid a warning in timezone handling using the tzlocal library.  Thanks to [Tanner](https://github.com/tstenson) for the
+fix
+
+### Improvement
+- The new client keyword argument `show_clickhouse_errors` controls whether the full ClickHouse error (including possibly
+sensitive information) is displayed when there is an error in ClickHouse processing.  It defaults to True.  If False,
+the simple string 'The ClickHouse server returned an error.' will be displayed.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/344.
+- Updated to Cython 3.0.10
+
+### Improvement
 
 ## 0.7.8, 2024-04-14
 ### Breaking Change
@@ -615,7 +628,7 @@ all that is needed, but multiple PoolManagers may be required for advanced serve
 * ClickHouse Connect no longer requires the popular `requests` library.  The `requests` library is built on
 [urllib3](https://pypi.org/project/urllib3/), but ClickHouse Connect was utilizing very little of the added functionality.
 Requests also has very restricted access to the `urllib3` streaming API, which made adding additional compression methods
-difficult.  Accordingly, the project now interfacdes to `urllib3` directly.  This should not change the public API (except as
+difficult.  Accordingly, the project now interfaces to `urllib3` directly.  This should not change the public API (except as
 noted in the warning above), but the HttpClient internals have changed to use the lower level library.
 * ClickHouse Connect now requires the [zstandard](https://pypi.org/project/zstandard/) and [lz4](https://pypi.org/project/lz4/)
 binding libraries to support zstd and lz4 compression.  ClickHouse itself uses these compression algorithms extensively and
