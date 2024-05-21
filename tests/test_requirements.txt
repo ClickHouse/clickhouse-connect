@@ -3,7 +3,7 @@ urllib3>=1.26
 setuptools
 certifi
 sqlalchemy>1.3.21,<2.0
-cython==3.0.8
+cython==3.0.10
 pyarrow
 pytest
 pytest-mock

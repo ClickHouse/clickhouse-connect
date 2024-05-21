@@ -84,12 +84,16 @@ def test_session_params(test_config: TestConfig):
 def test_dsn_config(test_config: TestConfig):
     session_id = 'TEST_DSN_SESSION_' + test_config.test_database
     dsn = (f'clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:{test_config.port}' +
-           f'/{test_config.test_database}?session_id={session_id}')
+           f'/{test_config.test_database}?session_id={session_id}&show_clickhouse_errors=false')
     client = create_client(dsn=dsn)
     assert client.get_client_setting('session_id') == session_id
     count = client.command('SELECT count() from system.tables')
     assert client.database == test_config.test_database
     assert count > 0
+    try:
+        client.query('SELECT nothing')
+    except DatabaseError as ex:
+        assert 'returned an error' in str(ex)
     client.close()
 
 
