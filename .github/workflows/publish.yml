@@ -150,7 +150,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: build-*
-          merge_multiple: true
+          merge-multiple: true
           path: wheelhouse
       - name: move and list artifacts
         run: |

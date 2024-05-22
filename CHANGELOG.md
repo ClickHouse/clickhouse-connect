@@ -7,6 +7,10 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.10, 2024-05-22
+### Bug Fix
+- Clean up pandas series concatenation issue
+
 ## 0.7.9, 2024-05-21
 ### Bug Fixes 
 - query_df would raise a deprecation warning with recent Pandas version if there were empty blocks.  This should be fixed.
