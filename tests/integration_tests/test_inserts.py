@@ -25,11 +25,11 @@ def test_decimal_conv(test_client: Client, table_context: Callable):
         assert result == [(5, -182, 55.2), (57238478234, 77, -29.5773)]
 
 def test_float_decimal_conv(test_client: Client, table_context: Callable):
-    with table_context('test_float_to_dec_conv', ['col1 Decimal','col2 Decimal', 'col3 Decimal32(8)', 'col4 Decimal32(6)']):
-        data = [[0.12345678, -0.12345678, 0.12345678, -0.12345678]]
+    with table_context('test_float_to_dec_conv', ['col1 Decimal32(8)','col2 Decimal32(8)', 'col3 Decimal128(8)', 'col4 Decimal128(8)']):
+        data = [[0.12345678, 0.1234567890, 0.12345678, 0.1234567890]]
         test_client.insert('test_float_to_dec_conv', data)
         result = test_client.query('SELECT * FROM test_float_to_dec_conv').result_set
-        assert result == [(0.12345678, -0.12345678, 0.12345678, -0.12345678)]
+        assert result == [(0.12345678, 0.12345678, 0.12345678, 0.12345678)]
 
 def test_bad_data_insert(test_client: Client, table_context: Callable):
     with table_context('test_bad_insert', ['key Int32', 'float_col Float64']):
