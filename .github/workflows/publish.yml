@@ -154,7 +154,7 @@ jobs:
           path: wheelhouse
       - name: move and list artifacts
         run: |
-          cp -R wheelhouse/*/*.whl dist
+          cp -R wheelhouse/*.whl dist
           ls -R dist
       - name: Install Twine
         run:  pip install twine
