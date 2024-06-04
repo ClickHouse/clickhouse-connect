@@ -247,15 +247,18 @@ def test_pandas_date32(test_client: Client, table_context:Callable):
 
 
 def test_pandas_row_df(test_client: Client, table_context:Callable):
-    with table_context('test_pandas_row_df', ['key UInt64', 'dt DateTime64(6)']):
+    with table_context('test_pandas_row_df', ['key UInt64', 'dt DateTime64(6)', 'fs FixedString(5)']):
         df = pd.DataFrame({'key': [1, 2],
-                          'dt': [pd.Timestamp(2023, 5, 4, 10, 20), pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)]})
+                          'dt': [pd.Timestamp(2023, 5, 4, 10, 20), pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)],
+                           'fs': ['seven', 'bit']})
         df = df.iloc[1:]
         source_df = df.copy()
         test_client.insert_df('test_pandas_row_df', df)
-        result_df = test_client.query_df('SELECT * FROM test_pandas_row_df')
+        result_df = test_client.query_df('SELECT * FROM test_pandas_row_df', column_formats={'fs': 'string'})
+        assert str(result_df.dtypes[2]) == 'string'
         assert result_df.iloc[0]['key'] == 2
         assert result_df.iloc[0]['dt'] == pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)
+        assert result_df.iloc[0]['fs'] == 'bit\0\0'
         assert len(result_df) == 1
         assert source_df.equals(df)
 
