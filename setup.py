@@ -69,7 +69,7 @@ def run_setup(try_c: bool = True):
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
             'orjson': ['orjson'],
-            'tzlocal': ['tzlocal'],
+            'tzlocal': ['tzlocal>=4.0'],
         },
         tests_require=['pytest'],
         entry_points={
