@@ -349,7 +349,7 @@ class HttpClient(Client):
         return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
-        err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
+        err_str = f'HTTPDriver returned response code {response.status})'
         try:
             err_content = get_response_data(response)
         except Exception: # pylint: disable=broad-except
