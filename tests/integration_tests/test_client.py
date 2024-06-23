@@ -1,3 +1,4 @@
+from pathlib import Path
 from time import sleep
 from typing import Callable
 
@@ -219,3 +220,22 @@ def test_str_as_bytes(test_client: Client, table_context: Callable):
         assert result_set[1][0] == b'str_0'
         assert result_set[1][4] == b'\x05\x78\x18'
         assert result_set[2][4] == b'\x10\x30\x34'
+
+
+def test_embedded_binary(test_client: Client):
+    binary_params = {'$xx$': 'col1,col2\n100,700'.encode()}
+    result = test_client.raw_query(
+        'SELECT col2, col1 FROM format(CSVWithNames, $xx$)', parameters=binary_params)
+    assert result == b'700\t100\n'
+
+    movies_file = f'{Path(__file__).parent}/movies.parquet'
+    with open(movies_file, 'rb') as f:  # read bytes
+        data = f.read()
+    binary_params = {'$parquet$': data}
+    result = test_client.query(
+        'SELECT movie, rating FROM format(Parquet, $parquet$) ORDER BY movie', parameters=binary_params)
+    assert result.first_item['movie'] == '12 Angry Men'
+
+    binary_params = {'$mult$': 'foobar'.encode()}
+    result = test_client.query("SELECT $mult$ as m1, $mult$ as m2 WHERE m1 = 'foobar'", parameters=binary_params)
+    assert result.first_item['m2'] == 'foobar'
