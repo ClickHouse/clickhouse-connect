@@ -426,7 +426,7 @@ class HttpClient(Client):
                         logger.debug('Retrying remotely closed connection')
                         continue
                 logger.warning('Unexpected Http Driver Exception')
-                raise OperationalError(f'Error {ex} executing HTTP request attempt {attempts} {self.url}') from ex
+                raise OperationalError(f'Error {ex} executing HTTP request attempt {attempts}') from ex
             finally:
                 if query_session:
                     self._active_session = None  # Make sure we always clear this
