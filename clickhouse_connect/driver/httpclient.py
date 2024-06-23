@@ -349,20 +349,21 @@ class HttpClient(Client):
         return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
-        err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
-        try:
-            err_content = get_response_data(response)
-        except Exception: # pylint: disable=broad-except
-            err_content = None
-        finally:
-            response.close()
+        if self.show_clickhouse_errors:
+            try:
+                err_content = get_response_data(response)
+            except Exception: # pylint: disable=broad-except
+                err_content = None
+            finally:
+                response.close()
 
-        if err_content:
-            if self.show_clickhouse_errors:
+            err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
+            if err_content:
                 err_msg = common.format_error(err_content.decode(errors='backslashreplace'))
-                err_str = f':{err_str}\n {err_msg}'
-            else:
-                err_str = 'The ClickHouse server returned an error.'
+                err_str = f'{err_str}\n {err_msg}'
+        else:
+            err_str = 'The ClickHouse server returned an error.'
+
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,
