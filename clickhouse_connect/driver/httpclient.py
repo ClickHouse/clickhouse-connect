@@ -15,17 +15,17 @@ from urllib3.response import HTTPResponse
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int
 from clickhouse_connect.driver.compression import available_compression
+from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_expiration
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
+from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform
 
 logger = logging.getLogger(__name__)
@@ -352,7 +352,7 @@ class HttpClient(Client):
         if self.show_clickhouse_errors:
             try:
                 err_content = get_response_data(response)
-            except Exception: # pylint: disable=broad-except
+            except Exception:  # pylint: disable=broad-except
                 err_content = None
             finally:
                 response.close()
@@ -427,7 +427,10 @@ class HttpClient(Client):
                         logger.debug('Retrying remotely closed connection')
                         continue
                 logger.warning('Unexpected Http Driver Exception')
-                err_str = f'Error {ex} executing HTTP request attempt {attempts} {self.url}' if self.show_clickhouse_errors else f'Error {ex} executing HTTP request attempt {attempts}'
+                if self.show_clickhouse_errors:
+                    err_str = f'Error {ex} executing HTTP request attempt {attempts} {self.url}'
+                else:
+                    err_str = f'Error {ex} executing HTTP request attempt {attempts}'
                 raise OperationalError(err_str) from ex
             finally:
                 if query_session:
