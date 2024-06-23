@@ -349,7 +349,7 @@ class HttpClient(Client):
         return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
-        err_str = f'HTTPDriver returned response code {response.status})'
+        err_str = f'HTTPDriver for {self.url} returned response code {response.status})'
         try:
             err_content = get_response_data(response)
         except Exception: # pylint: disable=broad-except
@@ -426,7 +426,8 @@ class HttpClient(Client):
                         logger.debug('Retrying remotely closed connection')
                         continue
                 logger.warning('Unexpected Http Driver Exception')
-                raise OperationalError(f'Error {ex} executing HTTP request attempt {attempts}') from ex
+                err_str = f'Error {ex} executing HTTP request attempt {attempts} {self.url}' if self.show_clickhouse_errors else f'Error {ex} executing HTTP request attempt {attempts}'
+                raise OperationalError(err_str) from ex
             finally:
                 if query_session:
                     self._active_session = None  # Make sure we always clear this
