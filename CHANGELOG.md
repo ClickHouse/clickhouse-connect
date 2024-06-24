@@ -7,6 +7,18 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.13, 2024-06-24
+### Bug Fix
+- Set required minimum version for optional tzlocal dependency.  Thanks to [drew-talon](https://github.com/drew-talon) for
+reporting the issue and submitting the fix.  Closes #360.
+
+### Improvement
+- Add the ability to bind arbitrary, "heredoc" data (including binary data) into the query, as described
+[here](https://clickhouse.com/docs/en/sql-reference/syntax#heredoc).  To use this functionality, use a single heredoc
+tag, such as `$my_tag$`, in the query, and add that tag and the associated data into the query method `parameters` argument.
+For some examples, see the `test_embedded_binary` test in [test_client.py](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_client.py).
+Closes #363.
+
 ## 0.7.12, 2024-06-04
 ### Bug Fix
 - When using `query_df` with a FixedString column with a read format of 'string' (and the default `query_df` setting
