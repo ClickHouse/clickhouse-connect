@@ -1,7 +1,7 @@
 import decimal
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from ipaddress import IPv4Address, IPv6Address
 from typing import Callable
 
@@ -18,6 +18,17 @@ def test_low_card(test_client: Client, table_context: Callable):
         test_client.insert('native_test', [[55, 'TV1'], [-578328, 'TV38882'], [57372, 'Kabc/defXX']])
         result = test_client.query("SELECT * FROM native_test WHERE value_1 LIKE '%abc/def%'")
         assert len(result.result_set) == 1
+
+
+def test_low_card_uuid(test_client: Client, table_context: Callable):
+    with table_context('low_card_uuid', ['dt Date', 'low_card_uuid LowCardinality(UUID)']):
+        data = ([date(2023, 1, 1), '80397B00E0B248AFAF34AE11A5546A3B'],
+               [date(2024, 1, 1), '70397B00-E0B2-48AF-AF34-AE11A5546A3B'])
+        test_client.insert('low_card_uuid', data)
+        result = test_client.query("SELECT * FROM low_card_uuid order by dt").result_set
+        assert len(result) == 2
+        assert str(result[0][1]) == '80397b00-e0b2-48af-af34-ae11a5546a3b'
+        assert str(result[1][1]) == '70397b00-e0b2-48af-af34-ae11a5546a3b'
 
 
 def test_bare_datetime64(test_client: Client, table_context: Callable):
