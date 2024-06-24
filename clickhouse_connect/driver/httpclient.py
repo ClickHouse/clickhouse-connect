@@ -173,7 +173,10 @@ class HttpClient(Client):
         final_query = super()._prep_query(context)
         if context.is_insert:
             return final_query
-        return f'{final_query}\n FORMAT {self._read_format}'
+        fmt = f'\n FORMAT {self._read_format}'
+        if isinstance(final_query, bytes):
+            return final_query + fmt.encode()
+        return final_query + fmt
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
         headers = {}
@@ -476,14 +479,16 @@ class HttpClient(Client):
                         fmt: str,
                         use_database: bool,
                         external_data: Optional[ExternalData]):
-        final_query, bind_params = bind_query(query, parameters, self.server_tz)
         if fmt:
-            final_query += f'\n FORMAT {fmt}'
+            query += f'\n FORMAT {fmt}'
+        final_query, bind_params = bind_query(query, parameters, self.server_tz)
         params = self._validate_settings(settings or {})
         if use_database and self.database:
             params['database'] = self.database
         params.update(bind_params)
         if external_data:
+            if isinstance(final_query, bytes):
+                raise ProgrammingError('Cannot combine binary query data with `External Data`')
             body = bytes()
             params['query'] = final_query
             params.update(external_data.query_params)
