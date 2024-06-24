@@ -7,10 +7,16 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
-## 0.7.13, 2024-06-24
+## 0.7.14, 2024-06-24
 ### Bug Fix
+- Fix insert of UUID strings including dashes.  Closes #368
+
+## 0.7.13, 2024-06-24
+### Bug Fixes
 - Set required minimum version for optional tzlocal dependency.  Thanks to [drew-talon](https://github.com/drew-talon) for
 reporting the issue and submitting the fix.  Closes #360.
+- Extended the effect of the `show_clickhouse_errors` client setting to exclude showing hostname and port for errors
+when that setting is False.  Thanks to [Andy](https://github.com/andy1xx8) for the PR!
 
 ### Improvement
 - Add the ability to bind arbitrary, "heredoc" data (including binary data) into the query, as described
