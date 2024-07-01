@@ -7,6 +7,12 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.15, 2024-07-01
+### Bug Fix
+- If the ClickHouse server was behind an https proxy that required mutual TLS authentication, the client would incorrectly
+attempt to use ClickHouse mutual TLS instead and authentication would fail.  It should now be possible to authenticate
+correctly in this situation by settings the `verify` parameter to `proxy`.  This should close https://github.com/ClickHouse/clickhouse-connect/issues/370
+
 ## 0.7.14, 2024-06-24
 ### Bug Fix
 - Fix insert of UUID strings including dashes.  Closes #368
