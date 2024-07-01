@@ -82,8 +82,6 @@ jobs:
         with:
           compose-file: 'docker-compose.yml'
           down-flags: '--volumes'
-          services: |
-            clickhouse
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
