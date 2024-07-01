@@ -8,7 +8,7 @@ on:
 jobs:
   head:
     runs-on: ubuntu-latest
-    name:  ClickHouse CI Tests
+    name: ClickHouse CI Tests
     env:
       CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
       CLICKHOUSE_CONNECT_TEST_FUZZ: 50
@@ -37,7 +37,7 @@ jobs:
         run: pytest tests/integration_tests
 
       - name: Run ClickHouse Container (LATEST)
-        run: CLICKHOUSE_VERSION=latest docker compose up -d
+        run: CLICKHOUSE_VERSION=latest docker compose up -d clickhouse
       - name: Run LATEST tests
         run: pytest tests/integration_tests
       - name: remove latest container
@@ -52,7 +52,7 @@ jobs:
         run: pytest tests/integration_tests
 
       - name: Run ClickHouse Container (HEAD)
-        run: CLICKHOUSE_VERSION=head docker compose up -d
+        run: CLICKHOUSE_VERSION=head docker compose up -d clickhouse
       - name: Run HEAD tests
         run: pytest tests/integration_tests
       - name: remove head container
