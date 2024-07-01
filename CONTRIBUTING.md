@@ -72,8 +72,18 @@ Go to Settings -> Project (clickhouse-connect) -> Project structure, right click
 
 ### Start ClickHouse in Docker
 
-The tests will require two ClickHouse instances to be running. One should have a default plain authentication, and the other should have a TLS configuration.
-The easiest way to start the required ClickHouse instances is to use the provided Docker Compose file.
+The tests will require two ClickHouse instances to be running. 
+One should have a default plain authentication (for integration tests), and the other should have a TLS configuration (for tls tests only).
+
+The integration tests will start and stop the ClickHouse instance automatically. 
+However, this adds a few seconds to each run, and this might not be ideal when you run a single test (using PyCharm, for example). 
+To disable this behavior, set the `CLICKHOUSE_CONNECT_TEST_DOCKER` environment variable to `0`.
+
+```bash
+export CLICKHOUSE_CONNECT_TEST_DOCKER=0
+```
+
+The easiest way to start all the required ClickHouse instances is to use the provided Docker Compose file (the integrations tests [setup script](tests/integration_tests/conftest.py) uses the same file).
 
 ```bash
 docker compose up -d

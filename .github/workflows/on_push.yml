@@ -75,15 +75,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Run ClickHouse Container
-        run: docker run
-          -d
-          -p 8123:8123
-          --name clickhouse
-          -v /var/lib/clickhouse
-          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
-          --ulimit nofile=262144:262144
-          clickhouse/clickhouse-server:${{ matrix.clickhouse-version }}
+      - name: Start ClickHouse (version - ${{ matrix.clickhouse }}) in Docker
+        uses: hoverkraft-tech/compose-action@v2.0.0
+        env:
+          CLICKHOUSE_VERSION: ${{ matrix.clickhouse }}
+        with:
+          compose-file: 'docker-compose.yml'
+          down-flags: '--volumes'
+          services: |
+            clickhouse
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -102,6 +102,10 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest tests
+      - name: Run TLS tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_TLS: 1
+        run: pytest tests/tls
 
   check-secret:
     runs-on: ubuntu-latest

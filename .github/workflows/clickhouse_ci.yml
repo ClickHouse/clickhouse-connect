@@ -28,7 +28,7 @@ jobs:
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
         run: python setup.py develop
 
-      - name: run ClickHouse Cloud tests
+      - name: run ClickHouse Cloud SMT tests
         env:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
           CLICKHOUSE_CONNECT_TEST_CLOUD: 'True'
@@ -37,20 +37,11 @@ jobs:
         run: pytest tests/integration_tests
 
       - name: Run ClickHouse Container (LATEST)
-        run: docker run
-          -d
-          -p 8123:8123
-          --name clickhouse_latest
-          -v /var/lib/clickhouse
-          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
-          --ulimit nofile=262144:262144
-          clickhouse/clickhouse-server:latest
+        run: CLICKHOUSE_VERSION=latest docker compose up -d
       - name: Run LATEST tests
         run: pytest tests/integration_tests
-      - name: stop latest container
-        run: docker stop clickhouse_latest
       - name: remove latest container
-        run: docker remove clickhouse_latest
+        run: docker compose down -v
 
       - name: run ClickHouse Cloud tests
         env:
@@ -61,18 +52,8 @@ jobs:
         run: pytest tests/integration_tests
 
       - name: Run ClickHouse Container (HEAD)
-        run: docker run
-          -d
-          -p 8123:8123
-          --name clickhouse_head
-          -v /var/lib/clickhouse
-          -v ${{ github.workspace }}/tests/integration_tests/test_config.xml:/etc/clickhouse-server/conf.d/test_config.xml
-          --ulimit nofile=262144:262144
-          clickhouse/clickhouse-server:head
+        run: CLICKHOUSE_VERSION=head docker compose up -d
       - name: Run HEAD tests
         run: pytest tests/integration_tests
-      - name: stop head container
-        run: docker stop clickhouse_head
       - name: remove head container
-        run: docker remove clickhouse_head
-
+        run: docker compose down -v
