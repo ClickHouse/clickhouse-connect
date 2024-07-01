@@ -6,6 +6,7 @@ services:
     ports:
       - '10723:8123'
       - '10743:8443'
+      - '19000:9000'
     ulimits:
       nofile:
         soft: 262144

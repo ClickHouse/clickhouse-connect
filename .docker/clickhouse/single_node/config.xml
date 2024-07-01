@@ -32,6 +32,11 @@
         <flush_interval_milliseconds>1000</flush_interval_milliseconds>
     </query_log>
 
+    <session_log>
+        <database>system</database>
+        <table>session_log</table>
+    </session_log>
+
     <http_options_response>
         <header>
             <name>Access-Control-Allow-Origin</name>
@@ -52,6 +57,4 @@
     </http_options_response>
 
     <custom_settings_prefixes>SQL_</custom_settings_prefixes>
-    <session_log></session_log>
-
 </clickhouse>
