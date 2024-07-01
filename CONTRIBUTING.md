@@ -89,8 +89,6 @@ The easiest way to start all the required ClickHouse instances is to use the pro
 docker compose up -d
 ```
 
-NB: both instances expose different ports instead of the default ones (see [docker-compose.yml](docker-compose.yml)).
-
 ### Run the tests
 
 The project uses [pytest](https://docs.pytest.org/) as a test runner. 

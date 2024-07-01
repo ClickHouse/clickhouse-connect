@@ -4,9 +4,8 @@ services:
     image: 'clickhouse/clickhouse-server:${CLICKHOUSE_VERSION-24.3-alpine}'
     container_name: 'clickhouse-connect-clickhouse-server'
     ports:
-      - '10723:8123'
-      - '10743:8443'
-      - '19000:9000'
+      - '8123:8123'
+      - '9000:9000'
     ulimits:
       nofile:
         soft: 262144
