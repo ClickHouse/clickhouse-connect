@@ -1,5 +1,6 @@
 import random
 import re
+from pathlib import Path
 from typing import Sequence, Union, Type
 
 import math
@@ -11,6 +12,8 @@ from clickhouse_connect.tools.datagen import random_col_data, random_ascii_str, 
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
 from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=no-name-in-module
+
+PROJECT_ROOT_DIR = Path(__file__).parent.parent
 
 LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2

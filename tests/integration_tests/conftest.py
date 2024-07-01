@@ -2,7 +2,6 @@ import sys
 import os
 import random
 import time
-from pathlib import Path
 from subprocess import Popen, PIPE
 from typing import Iterator, NamedTuple, Sequence, Optional
 
@@ -15,6 +14,7 @@ from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
 from clickhouse_connect.driver.httpclient import HttpClient
+from tests.helpers import PROJECT_ROOT_DIR
 
 
 class TestConfig(NamedTuple):
@@ -67,14 +67,14 @@ def test_table_engine_fixture() -> Iterator[str]:
 # pylint: disable=too-many-branches
 @fixture(scope='session', autouse=True, name='test_client')
 def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
-    compose_file = f'{Path(__file__).parent}/docker-compose.yml'
+    compose_file = f'{PROJECT_ROOT_DIR}/docker-compose.yml'
     if test_config.docker:
-        run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
+        run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
         sys.stderr.write('Starting docker compose')
-        pull_result = run_cmd(['docker-compose', '-f', compose_file, 'pull'])
+        pull_result = run_cmd(['docker', 'compose', '-f', compose_file, 'pull'])
         if pull_result[0]:
             raise TestException(f'Failed to pull latest docker image(s): {pull_result[2]}')
-        up_result = run_cmd(['docker-compose', '-f', compose_file, 'up', '-d'])
+        up_result = run_cmd(['docker', 'compose', '-f', compose_file, 'up', '-d', 'clickhouse'])
         if up_result[0]:
             raise TestException(f'Failed to start docker: {up_result[2]}')
         time.sleep(5)
@@ -114,7 +114,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
 
     client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
     if test_config.docker:
-        down_result = run_cmd(['docker-compose', '-f', compose_file, 'down', '-v'])
+        down_result = run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:
             sys.stderr.write(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')
         else:
