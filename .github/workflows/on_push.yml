@@ -96,6 +96,9 @@ jobs:
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
         run: python setup.py develop
+      - name: Add ClickHouse TLS instance to /etc/hosts
+        run: |
+          sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
       - name: Run tests
         env:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
