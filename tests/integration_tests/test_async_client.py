@@ -1,3 +1,5 @@
+from typing import Callable
+
 import pytest
 
 from clickhouse_connect.driver.asyncio import AsyncClient
@@ -147,7 +149,6 @@ async def test_query_arrow(test_async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_query_arrow_stream(test_async_client: AsyncClient):
-    import pyarrow as pa
     stream = await test_async_client.query_arrow_stream('SELECT number FROM numbers(5)')
     result = list()
     with stream:
@@ -165,3 +166,64 @@ async def test_command(test_async_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_ping(test_async_client: AsyncClient):
     assert await test_async_client.ping() is True
+
+
+@pytest.mark.asyncio
+async def test_insert(test_async_client: AsyncClient, table_context: Callable):
+    with table_context('test_async_client_insert', ['key UInt32', 'value String']) as ctx:
+        await test_async_client.insert(ctx.table, [[42, 'str_0'], [144, 'str_1']])
+        result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
+        assert result_set == [[42, 144], ['str_0', 'str_1']]
+
+
+@pytest.mark.asyncio
+async def test_insert_df(test_async_client: AsyncClient, table_context: Callable):
+    with table_context('test_async_client_insert_df', ['key UInt32', 'value String']) as ctx:
+        import pandas as pd
+        df = pd.DataFrame([[42, 'str_0'], [144, 'str_1']], columns=['key', 'value'])
+        await test_async_client.insert_df(ctx.table, df)
+        result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
+        assert result_set == [[42, 144], ['str_0', 'str_1']]
+
+
+@pytest.mark.asyncio
+async def test_insert_arrow(test_async_client: AsyncClient, table_context: Callable):
+    with table_context('test_async_client_insert_arrow', ['key UInt32', 'value String']) as ctx:
+        import pyarrow as pa
+        data = pa.Table.from_arrays([pa.array([42, 144]), pa.array(['str_0', 'str_1'])], names=['key', 'value'])
+        await test_async_client.insert_arrow(ctx.table, data)
+        result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
+        assert result_set == [[42, 144], ['str_0', 'str_1']]
+
+
+@pytest.mark.asyncio
+async def test_create_insert_context(test_async_client: AsyncClient, table_context: Callable):
+    with table_context('test_async_client_create_insert_context', ['key UInt32', 'value String']) as ctx:
+        data = [[1, 'a'], [2, 'b']]
+        insert_context = await test_async_client.create_insert_context(table=ctx.table, data=data)
+        await test_async_client.insert(context=insert_context)
+        result = (await test_async_client.query(f'SELECT * FROM {ctx.table} ORDER BY key ASC')).result_columns
+        assert result == [[1, 2], ['a', 'b']]
+
+
+@pytest.mark.asyncio
+async def test_data_insert(test_async_client: AsyncClient, table_context: Callable):
+    with table_context('test_async_client_data_insert', ['key UInt32', 'value String']) as ctx:
+        import pandas as pd
+        df = pd.DataFrame([[42, 'str_0'], [144, 'str_1']], columns=['key', 'value'])
+        insert_context = await test_async_client.create_insert_context(ctx.table, df.columns)
+        insert_context.data = df
+        await test_async_client.data_insert(insert_context)
+        result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
+        assert result_set == [[42, 144], ['str_0', 'str_1']]
+
+
+@pytest.mark.asyncio
+async def test_raw_insert(test_async_client: AsyncClient, table_context: Callable):
+    with table_context('test_async_client_raw_insert', ['key UInt32', 'value String']) as ctx:
+        await test_async_client.raw_insert(table=ctx.table,
+                                           column_names=['key', 'value'],
+                                           insert_block='42,"foo"\n144,"bar"\n',
+                                           fmt='CSV')
+        result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
+        assert result_set == [[42, 144], ['foo', 'bar']]
