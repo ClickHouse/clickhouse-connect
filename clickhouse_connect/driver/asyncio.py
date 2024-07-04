@@ -16,7 +16,7 @@ from clickhouse_connect.driver.insert import InsertContext
 class AsyncClient:
     """
     AsyncClient is a wrapper around the ClickHouse Client object that allows for async calls to the ClickHouse server.
-    Internally, each of the methods that uses IO is wrapped in a call to asyncio.to_thread.
+    Internally, each of the methods that uses IO is wrapped in a call to EventLoop.run_in_executor.
     """
 
     def __init__(self, *, client: Client):
@@ -83,7 +83,8 @@ class AsyncClient:
                                      context=context, query_tz=query_tz, column_tzs=column_tzs,
                                      external_data=external_data)
 
-        result = await asyncio.to_thread(_query)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query)
         return result
 
     async def query_column_block_stream(self,
@@ -111,7 +112,8 @@ class AsyncClient:
                                                          query_tz=query_tz, column_tzs=column_tzs,
                                                          external_data=external_data)
 
-        result = await asyncio.to_thread(_query_column_block_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_column_block_stream)
         return result
 
     async def query_row_block_stream(self,
@@ -139,7 +141,8 @@ class AsyncClient:
                                                       query_tz=query_tz, column_tzs=column_tzs,
                                                       external_data=external_data)
 
-        result = await asyncio.to_thread(_query_row_block_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_row_block_stream)
         return result
 
     async def query_rows_stream(self,
@@ -167,7 +170,8 @@ class AsyncClient:
                                                  query_tz=query_tz, column_tzs=column_tzs,
                                                  external_data=external_data)
 
-        result = await asyncio.to_thread(_query_rows_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_rows_stream)
         return result
 
     async def raw_query(self,
@@ -193,7 +197,8 @@ class AsyncClient:
             return self.client.raw_query(query=query, parameters=parameters, settings=settings, fmt=fmt,
                                          use_database=use_database, external_data=external_data)
 
-        result = await asyncio.to_thread(_raw_query)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _raw_query)
         return result
 
     async def raw_stream(self, query: str,
@@ -218,7 +223,8 @@ class AsyncClient:
             return self.client.raw_stream(query=query, parameters=parameters, settings=settings, fmt=fmt,
                                           use_database=use_database, external_data=external_data)
 
-        result = await asyncio.to_thread(_raw_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _raw_stream)
         return result
 
     async def query_np(self,
@@ -244,7 +250,8 @@ class AsyncClient:
                                         use_none=use_none, max_str_len=max_str_len, context=context,
                                         external_data=external_data)
 
-        result = await asyncio.to_thread(_query_np)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_np)
         return result
 
     async def query_np_stream(self,
@@ -270,7 +277,8 @@ class AsyncClient:
                                                encoding=encoding, use_none=use_none, max_str_len=max_str_len,
                                                context=context, external_data=external_data)
 
-        result = await asyncio.to_thread(_query_np_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_np_stream)
         return result
 
     async def query_df(self,
@@ -301,7 +309,8 @@ class AsyncClient:
                                         query_tz=query_tz, column_tzs=column_tzs, context=context,
                                         external_data=external_data, use_extended_dtypes=use_extended_dtypes)
 
-        result = await asyncio.to_thread(_query_df)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_df)
         return result
 
     async def query_df_stream(self,
@@ -333,7 +342,8 @@ class AsyncClient:
                                                query_tz=query_tz, column_tzs=column_tzs, context=context,
                                                external_data=external_data, use_extended_dtypes=use_extended_dtypes)
 
-        result = await asyncio.to_thread(_query_df_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_df_stream)
         return result
 
     def create_query_context(self,
@@ -418,7 +428,8 @@ class AsyncClient:
             return self.client.query_arrow(query=query, parameters=parameters, settings=settings,
                                            use_strings=use_strings, external_data=external_data)
 
-        result = await asyncio.to_thread(_query_arrow)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_arrow)
         return result
 
     async def query_arrow_stream(self,
@@ -441,7 +452,8 @@ class AsyncClient:
             return self.client.query_arrow_stream(query=query, parameters=parameters, settings=settings,
                                                   use_strings=use_strings, external_data=external_data)
 
-        result = await asyncio.to_thread(_query_arrow_stream)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _query_arrow_stream)
         return result
 
     async def command(self,
@@ -469,7 +481,8 @@ class AsyncClient:
             return self.client.command(cmd=cmd, parameters=parameters, data=data, settings=settings,
                                        use_database=use_database, external_data=external_data)
 
-        result = await asyncio.to_thread(_command)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _command)
         return result
 
     async def ping(self) -> bool:
@@ -481,7 +494,8 @@ class AsyncClient:
         def _ping():
             return self.client.ping()
 
-        result = await asyncio.to_thread(_ping)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _ping)
         return result
 
     async def insert(self,
@@ -518,7 +532,8 @@ class AsyncClient:
                                       column_types=column_types, column_type_names=column_type_names,
                                       column_oriented=column_oriented, settings=settings, context=context)
 
-        result = await asyncio.to_thread(_insert)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _insert)
         return result
 
     async def insert_df(self, table: str = None,
@@ -552,7 +567,8 @@ class AsyncClient:
                                          column_types=column_types, column_type_names=column_type_names,
                                          context=context)
 
-        result = await asyncio.to_thread(_insert_df)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _insert_df)
         return result
 
     async def insert_arrow(self, table: str,
@@ -570,7 +586,8 @@ class AsyncClient:
         def _insert_arrow():
             return self.client.insert_arrow(table=table, arrow_table=arrow_table, database=database, settings=settings)
 
-        result = await asyncio.to_thread(_insert_arrow)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _insert_arrow)
         return result
 
     async def create_insert_context(self,
@@ -603,7 +620,8 @@ class AsyncClient:
                                                      column_types=column_types, column_type_names=column_type_names,
                                                      column_oriented=column_oriented, settings=settings, data=data)
 
-        result = await asyncio.to_thread(_create_insert_context)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _create_insert_context)
         return result
 
     async def data_insert(self, context: InsertContext) -> QuerySummary:
@@ -616,7 +634,8 @@ class AsyncClient:
         def _data_insert():
             return self.client.data_insert(context=context)
 
-        result = await asyncio.to_thread(_data_insert)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _data_insert)
         return result
 
     async def raw_insert(self, table: str,
@@ -639,7 +658,8 @@ class AsyncClient:
             return self.client.raw_insert(table=table, column_names=column_names, insert_block=insert_block,
                                           settings=settings, fmt=fmt, compression=compression)
 
-        result = await asyncio.to_thread(_raw_insert)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _raw_insert)
         return result
 
 
@@ -708,5 +728,6 @@ async def create_async_client(*,
         return create_client(host=host, username=username, password=password, database=database, interface=interface,
                              port=port, secure=secure, dsn=dsn, settings=settings, generic_args=generic_args, **kwargs)
 
-    client = await asyncio.to_thread(_create_client)
+    loop = asyncio.get_running_loop()
+    client = await loop.run_in_executor(None, _create_client)
     return AsyncClient(client=client)
