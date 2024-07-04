@@ -1,12 +1,15 @@
-from typing import Callable
-
-import pytest
-
-from clickhouse_connect.driver.asyncio import AsyncClient
-
 """
 AsyncClient tests that verify that the wrapper for each method is working correctly.
 """
+
+from typing import Callable
+
+import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pytest
+
+from clickhouse_connect.driver.asyncio import AsyncClient
 
 
 @pytest.mark.asyncio
@@ -32,12 +35,14 @@ async def test_query(test_async_client: AsyncClient):
     assert result.first_item == next(result.named_results())
 
 
+stream_query = 'SELECT number, randomStringUTF8(50) FROM numbers(10000)'
+stream_settings = {'max_block_size': 4000}
+
+
+# pylint: disable=duplicate-code
 @pytest.mark.asyncio
 async def test_query_column_block_stream(test_async_client: AsyncClient):
-    random_string = 'randomStringUTF8(50)'
-    block_stream = await test_async_client.query_column_block_stream(
-        f'SELECT number, {random_string} FROM numbers(10000)',
-        settings={'max_block_size': 4000})
+    block_stream = await test_async_client.query_column_block_stream(stream_query, settings=stream_settings)
     total = 0
     block_count = 0
     with block_stream:
@@ -48,12 +53,10 @@ async def test_query_column_block_stream(test_async_client: AsyncClient):
     assert block_count > 1
 
 
+# pylint: disable=duplicate-code
 @pytest.mark.asyncio
 async def test_query_row_block_stream(test_async_client: AsyncClient):
-    random_string = 'randomStringUTF8(50)'
-    block_stream = await test_async_client.query_row_block_stream(
-        f'SELECT number, {random_string} FROM numbers(10000)',
-        settings={'max_block_size': 4000})
+    block_stream = await test_async_client.query_row_block_stream(stream_query, settings=stream_settings)
     total = 0
     block_count = 0
     with block_stream:
@@ -93,7 +96,6 @@ async def test_raw_stream(test_async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_query_np(test_async_client: AsyncClient):
-    import numpy as np
     result = await test_async_client.query_np('SELECT number FROM numbers(5)')
     assert isinstance(result, np.ndarray)
     assert list(result) == [[0], [1], [2], [3], [4]]
@@ -101,7 +103,6 @@ async def test_query_np(test_async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_query_np_stream(test_async_client: AsyncClient):
-    import numpy as np
     stream = await test_async_client.query_np_stream('SELECT number FROM numbers(5)')
     result = np.array([])
     with stream:
@@ -112,7 +113,6 @@ async def test_query_np_stream(test_async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_query_df(test_async_client: AsyncClient):
-    import pandas as pd
     result = await test_async_client.query_df('SELECT number FROM numbers(5)')
     assert isinstance(result, pd.DataFrame)
     assert list(result['number']) == [0, 1, 2, 3, 4]
@@ -121,7 +121,7 @@ async def test_query_df(test_async_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_query_df_stream(test_async_client: AsyncClient):
     stream = await test_async_client.query_df_stream('SELECT number FROM numbers(5)')
-    result = list()
+    result = []
     with stream:
         for block in stream:
             result.append(list(block['number']))
@@ -131,7 +131,7 @@ async def test_query_df_stream(test_async_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_create_query_context(test_async_client: AsyncClient):
     query_context = test_async_client.create_query_context(
-        query=f'SELECT {{k: Int32}}',
+        query='SELECT {k: Int32}',
         parameters={'k': 42},
         column_oriented=True)
     result = await test_async_client.query(context=query_context)
@@ -141,7 +141,6 @@ async def test_create_query_context(test_async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_query_arrow(test_async_client: AsyncClient):
-    import pyarrow as pa
     result = await test_async_client.query_arrow('SELECT number FROM numbers(5)')
     assert isinstance(result, pa.Table)
     assert list(result[0].to_pylist()) == [0, 1, 2, 3, 4]
@@ -150,7 +149,7 @@ async def test_query_arrow(test_async_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_query_arrow_stream(test_async_client: AsyncClient):
     stream = await test_async_client.query_arrow_stream('SELECT number FROM numbers(5)')
-    result = list()
+    result = []
     with stream:
         for block in stream:
             result.append(block[0].to_pylist())
@@ -179,7 +178,6 @@ async def test_insert(test_async_client: AsyncClient, table_context: Callable):
 @pytest.mark.asyncio
 async def test_insert_df(test_async_client: AsyncClient, table_context: Callable):
     with table_context('test_async_client_insert_df', ['key UInt32', 'value String']) as ctx:
-        import pandas as pd
         df = pd.DataFrame([[42, 'str_0'], [144, 'str_1']], columns=['key', 'value'])
         await test_async_client.insert_df(ctx.table, df)
         result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
@@ -189,7 +187,6 @@ async def test_insert_df(test_async_client: AsyncClient, table_context: Callable
 @pytest.mark.asyncio
 async def test_insert_arrow(test_async_client: AsyncClient, table_context: Callable):
     with table_context('test_async_client_insert_arrow', ['key UInt32', 'value String']) as ctx:
-        import pyarrow as pa
         data = pa.Table.from_arrays([pa.array([42, 144]), pa.array(['str_0', 'str_1'])], names=['key', 'value'])
         await test_async_client.insert_arrow(ctx.table, data)
         result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
@@ -209,7 +206,6 @@ async def test_create_insert_context(test_async_client: AsyncClient, table_conte
 @pytest.mark.asyncio
 async def test_data_insert(test_async_client: AsyncClient, table_context: Callable):
     with table_context('test_async_client_data_insert', ['key UInt32', 'value String']) as ctx:
-        import pandas as pd
         df = pd.DataFrame([[42, 'str_0'], [144, 'str_1']], columns=['key', 'value'])
         insert_context = await test_async_client.create_insert_context(ctx.table, df.columns)
         insert_context.data = df
