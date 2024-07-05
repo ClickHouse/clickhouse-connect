@@ -7,14 +7,13 @@ from typing import Iterator, NamedTuple, Sequence, Optional
 
 from pytest import fixture
 
-from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver import AsyncClient, Client
 from tests.helpers import PROJECT_ROOT_DIR
 
 

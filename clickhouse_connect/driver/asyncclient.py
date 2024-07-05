@@ -3,7 +3,7 @@ import io
 from datetime import tzinfo
 from typing import Optional, Union, Dict, Any, Sequence, Iterable, Generator, BinaryIO
 
-from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import StreamContext
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.query import QueryContext, QueryResult
@@ -661,4 +661,3 @@ class AsyncClient:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _raw_insert)
         return result
-
