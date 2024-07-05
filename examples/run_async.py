@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 
 import clickhouse_connect
-from clickhouse_connect.driver.asyncio import create_async_client
+from clickhouse_connect.driver import create_async_client
 
 QUERIES = 10
 SEMAPHORE = 2

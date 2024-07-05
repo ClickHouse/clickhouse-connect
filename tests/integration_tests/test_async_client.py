@@ -9,7 +9,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from clickhouse_connect.driver.asyncio import AsyncClient
+from clickhouse_connect.driver.asyncclient import AsyncClient
 
 
 @pytest.mark.asyncio

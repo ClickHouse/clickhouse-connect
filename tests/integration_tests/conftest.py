@@ -14,7 +14,7 @@ from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver.asyncio import AsyncClient
+from clickhouse_connect.driver.asyncclient import AsyncClient
 from tests.helpers import PROJECT_ROOT_DIR
 
 
