@@ -7,6 +7,14 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.16, 2024-07-08
+### Improvement
+- Added the `AsyncClient` wrapper which is intended for `asyncio` environment usage. `AsyncClient` has the same methods 
+with the same parameters as the standard `Client`, but they are coroutines when applicable. Internally, these methods 
+from the `Client` that perform I/O operations are wrapped in a 
+[run_in_executor](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.run_in_executor) call. 
+See also the updated [run_async example](./examples/run_async.py).
+
 ## 0.7.15, 2024-07-01
 ### Bug Fix
 - If the ClickHouse server was behind an https proxy that required mutual TLS authentication, the client would incorrectly

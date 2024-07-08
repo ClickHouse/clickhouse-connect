@@ -6,6 +6,7 @@ sqlalchemy>1.3.21,<2.0
 cython==3.0.10
 pyarrow
 pytest
+pytest-asyncio
 pytest-mock
 pytest-dotenv
 numpy~=1.22.0; python_version >= '3.8' and python_version <= '3.10'

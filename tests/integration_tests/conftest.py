@@ -7,13 +7,13 @@ from typing import Iterator, NamedTuple, Sequence, Optional
 
 from pytest import fixture
 
-from clickhouse_connect.driver.client import Client
 from clickhouse_connect import create_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
 from clickhouse_connect.driver.httpclient import HttpClient
+from clickhouse_connect.driver import AsyncClient, Client
 from tests.helpers import PROJECT_ROOT_DIR
 
 
@@ -39,7 +39,7 @@ class TestException(BaseException):
 def test_config_fixture() -> Iterator[TestConfig]:
     common.set_setting('max_connection_age', 15)  # Make sure resetting connections doesn't break stuff
     host = os.environ.get('CLICKHOUSE_CONNECT_TEST_HOST', 'localhost')
-    docker = host == 'localhost' and coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'True'))
+    docker = host == 'localhost' and coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'False'))
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
         port = 10723 if docker else 8123
@@ -119,6 +119,11 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             sys.stderr.write(f'Warning -- failed to cleanly bring down docker compose: {down_result[2]}')
         else:
             sys.stderr.write('Successfully stopped docker compose')
+
+
+@fixture(scope='session', autouse=True, name='test_async_client')
+def test_async_client_fixture(test_client: Client) -> Iterator[AsyncClient]:
+    yield AsyncClient(client=test_client)
 
 
 @fixture(scope='session', name='table_context')
