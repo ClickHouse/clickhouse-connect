@@ -70,6 +70,7 @@ def create_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
+    :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :return: ClickHouse Connect Client instance
     """
     if dsn:
@@ -137,6 +138,8 @@ async def create_async_client(*,
     The preferred method to get an async ClickHouse Connect Client instance.
     For sync version, see create_client.
 
+    Unlike sync version, the 'autogenerate_session_id' setting by default is False.
+
     :param host: The hostname or IP address of the ClickHouse server. If not set, localhost will be used.
     :param username: The ClickHouse username. If not set, the default ClickHouse user will be used.
     :param password: The password for username.
@@ -179,10 +182,13 @@ async def create_async_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
+    :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :return: ClickHouse Connect Client instance
     """
 
     def _create_client():
+        if 'autogenerate_session_id' not in kwargs:
+            kwargs['autogenerate_session_id'] = False
         return create_client(host=host, username=username, password=password, database=database, interface=interface,
                              port=port, secure=secure, dsn=dsn, settings=settings, generic_args=generic_args, **kwargs)
 

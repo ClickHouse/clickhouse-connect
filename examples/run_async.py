@@ -26,8 +26,6 @@ import clickhouse_connect
 QUERIES = 10
 SEMAPHORE = 2
 
-clickhouse_connect.common.set_setting("autogenerate_session_id", False)
-
 
 async def concurrent_queries():
     test_query = "SELECT sleep(2)"
