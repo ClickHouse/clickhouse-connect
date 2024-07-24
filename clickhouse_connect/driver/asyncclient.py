@@ -3,6 +3,7 @@ import io
 from datetime import tzinfo
 from typing import Optional, Union, Dict, Any, Sequence, Iterable, Generator, BinaryIO
 
+from clickhouse_connect.driver import HttpClient
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import StreamContext
 from clickhouse_connect.driver.external import ExternalData
@@ -12,7 +13,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.insert import InsertContext
 
 
-# pylint: disable=too-many-public-methods, too-many-instance-attributes, too-many-arguments, too-many-locals
+# pylint: disable=too-many-public-methods
 class AsyncClient:
     """
     AsyncClient is a wrapper around the ClickHouse Client object that allows for async calls to the ClickHouse server.
@@ -20,7 +21,10 @@ class AsyncClient:
     """
 
     def __init__(self, *, client: Client):
+        if isinstance(client, HttpClient):
+            client.headers['User-Agent'] = client.headers['User-Agent'].replace('mode:sync;', 'mode:async;')
         self.client = client
+
 
     def set_client_setting(self, key, value):
         """

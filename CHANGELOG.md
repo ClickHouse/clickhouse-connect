@@ -7,6 +7,14 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.17, 2024-07-24
+### Bug Fix
+- The client server_tz was not being correctly set if the server timezone was not UTC.  This should close https://github.com/ClickHouse/clickhouse-connect/issues/377
+
+### Improvement
+- The os user can now be sent as part of the User-Agent HTTP header.  To disable this functionality for privacy reasons,
+set the new common/global setting `send_os_user` to False.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/371.
+
 ## 0.7.16, 2024-07-08
 ### Improvement
 - Added the `AsyncClient` wrapper which is intended for `asyncio` environment usage. `AsyncClient` has the same methods 
