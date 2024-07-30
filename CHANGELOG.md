@@ -7,6 +7,11 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.18, 2024-07-30
+### Bug Fix
+- In some cases retrieving the os_user as part of the `client data` in the HTTP User-Agent header could throw an exception.  This
+has been fixed (os_user will not be sent in those cases).  Closes https://github.com/ClickHouse/clickhouse-connect/issues/380.
+
 ## 0.7.17, 2024-07-24
 ### Bug Fix
 - The client server_tz was not being correctly set if the server timezone was not UTC.  This should close https://github.com/ClickHouse/clickhouse-connect/issues/377
