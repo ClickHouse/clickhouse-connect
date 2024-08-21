@@ -7,6 +7,10 @@ release (0.8.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.7.19, 2024-08-23
+### Bug Fix
+- Insertion of large strings was triggering an exception. This has been fixed.
+
 ## 0.7.18, 2024-07-30
 ### Bug Fix
 - In some cases retrieving the os_user as part of the `client data` in the HTTP User-Agent header could throw an exception.  This
