@@ -7,7 +7,7 @@ from clickhouse_connect.driver.query import quote_identifier
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.options import np, pd, pd_time_test
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import ProgrammingError, DataError
 
 if TYPE_CHECKING:
     from clickhouse_connect.datatypes.base import ClickHouseType
@@ -53,6 +53,7 @@ class InsertContext(BaseQueryContext):
         self.block_row_count = DEFAULT_BLOCK_BYTES
         self.data = data
         self.insert_exception = None
+        self._column_name = None
 
     @property
     def empty(self) -> bool:
@@ -198,3 +199,12 @@ class InsertContext(BaseQueryContext):
                 data[ix] = data[ix].tolist()
         self.column_oriented = True
         return data
+
+    def start_column(self, name: str):
+        super().start_column(name)
+        self._column_name = name
+
+    def make_data_error(self, error_message: str) -> DataError:
+        if self._column_name is not None:
+            return DataError(f"Failed to write column '{self._column_name}': {error_message}")
+        return DataError(error_message)
