@@ -2,11 +2,13 @@ import array
 import struct
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
+from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator, TYPE_CHECKING
 
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
-from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.types import Closable
+
+if TYPE_CHECKING:
+    from clickhouse_connect.driver.insert import InsertContext
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
@@ -39,7 +41,7 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def write_array(code: str, column: Sequence, dest: MutableSequence, ctx: InsertContext):
+def write_array(code: str, column: Sequence, dest: MutableSequence, ctx: 'InsertContext'):
     """
     Write a column of native Python data matching the array.array code
     :param code: Python array.array code matching the column data type
