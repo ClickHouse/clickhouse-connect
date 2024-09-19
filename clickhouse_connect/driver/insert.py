@@ -200,6 +200,4 @@ class InsertContext(BaseQueryContext):
         return data
 
     def make_data_error(self, error_message: str) -> DataError:
-        if self._column_name is not None:
-            return DataError(f"Failed to write column '{self._column_name}': {error_message}")
-        return DataError(error_message)
+        return DataError(f"Failed to write column '{self._column_name}': {error_message}")
