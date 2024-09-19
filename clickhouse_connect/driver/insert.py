@@ -53,7 +53,6 @@ class InsertContext(BaseQueryContext):
         self.block_row_count = DEFAULT_BLOCK_BYTES
         self.data = data
         self.insert_exception = None
-        self._column_name = None
 
     @property
     def empty(self) -> bool:
@@ -199,10 +198,6 @@ class InsertContext(BaseQueryContext):
                 data[ix] = data[ix].tolist()
         self.column_oriented = True
         return data
-
-    def start_column(self, name: str):
-        super().start_column(name)
-        self._column_name = name
 
     def make_data_error(self, error_message: str) -> DataError:
         if self._column_name is not None:
