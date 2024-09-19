@@ -4,7 +4,8 @@ import sys
 
 from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
-from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
+from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.types import Closable
 
 # pylint: disable=invalid-name
@@ -38,7 +39,7 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def write_array(code: str, column: Sequence, dest: MutableSequence, ctx):
+def write_array(code: str, column: Sequence, dest: MutableSequence, ctx: InsertContext):
     """
     Write a column of native Python data matching the array.array code
     :param code: Python array.array code matching the column data type
