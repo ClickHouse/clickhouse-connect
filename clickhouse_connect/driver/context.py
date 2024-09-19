@@ -41,8 +41,10 @@ class BaseQueryContext:
         self.use_extended_dtypes = use_extended_dtypes
         self._active_col_fmt = None
         self._active_col_type_fmts = _empty_map
+        self._column_name = None
 
     def start_column(self, name: str):
+        self._column_name = name
         self._active_col_fmt = self.col_simple_formats.get(name)
         self._active_col_type_fmts = self.col_type_formats.get(name, _empty_map)
 
