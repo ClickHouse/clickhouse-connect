@@ -277,7 +277,7 @@ class ClickHouseType(ABC):
         write_uint64(len(index), dest)
         self._write_column_binary(index, dest, ctx)
         write_uint64(len(keys), dest)
-        write_array(array_type(1 << ix_type, False), keys, dest)
+        write_array(array_type(1 << ix_type, False), keys, dest, ctx)
 
     def _active_null(self, _ctx: QueryContext) -> Any:
         return None
@@ -341,7 +341,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         if len(column) and self.nullable:
             column = [0 if x is None else x for x in column]
-        write_array(self._array_type, column, dest)
+        write_array(self._array_type, column, dest, ctx)
 
     def _active_null(self, ctx: QueryContext):
         if ctx.as_pandas and ctx.use_extended_dtypes:

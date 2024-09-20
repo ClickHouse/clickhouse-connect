@@ -4,7 +4,6 @@ from clickhouse_connect.driver.ctypes import data_conv
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver.errors import handle_error
-from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -104,7 +103,7 @@ class FixedString(ClickHouseType):
                         except UnicodeEncodeError:
                             b = empty
                         if len(b) > sz:
-                            raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
+                            raise ctx.make_data_error(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                         ext(b)
                         ext(empty[:sz - len(b)])
             else:
@@ -114,7 +113,7 @@ class FixedString(ClickHouseType):
                     except UnicodeEncodeError:
                         b = empty
                     if len(b) > sz:
-                        raise DataError(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
+                        raise ctx.make_data_error(f'UTF-8 encoded FixedString value {b.hex(" ")} exceeds column size {sz}')
                     ext(b)
                     ext(empty[:sz - len(b)])
         elif self.nullable:
@@ -122,11 +121,11 @@ class FixedString(ClickHouseType):
                 if not b:
                     ext(empty)
                 elif len(b) != sz:
-                    raise DataError(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
+                    raise ctx.make_data_error(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
                 else:
                     ext(b)
         else:
             for b in column:
                 if len(b) != sz:
-                    raise DataError(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
+                    raise ctx.make_data_error(f'Fixed String binary value {b.hex(" ")} does not match column size {sz}')
                 ext(b)
