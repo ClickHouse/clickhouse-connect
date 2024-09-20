@@ -36,15 +36,15 @@ class BaseQueryContext:
                                                        for type_name, fmt in fmt.items()}
         self.query_formats = query_formats or {}
         self.column_formats = column_formats or {}
+        self.column_name = None
         self.encoding = encoding
         self.use_numpy = use_numpy
         self.use_extended_dtypes = use_extended_dtypes
         self._active_col_fmt = None
         self._active_col_type_fmts = _empty_map
-        self._column_name = None
 
     def start_column(self, name: str):
-        self._column_name = name
+        self.column_name = name
         self._active_col_fmt = self.col_simple_formats.get(name)
         self._active_col_type_fmts = self.col_type_formats.get(name, _empty_map)
 

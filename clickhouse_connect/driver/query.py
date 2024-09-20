@@ -363,7 +363,7 @@ def finalize_query(query: str, parameters: Optional[Union[Sequence, Dict[str, An
         return query
     if hasattr(parameters, 'items'):
         return query % {k: format_query_value(v, server_tz) for k, v in parameters.items()}
-    return query % tuple(format_query_value(v) for v in parameters)
+    return query % tuple(format_query_value(v, server_tz) for v in parameters)
 
 
 def bind_query(query: str, parameters: Optional[Union[Sequence, Dict[str, Any]]],

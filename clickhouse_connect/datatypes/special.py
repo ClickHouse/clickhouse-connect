@@ -1,4 +1,4 @@
-from typing import Union, Sequence, MutableSequence, Collection
+from typing import Union, Sequence, MutableSequence, Collection, List
 from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes import registry
@@ -160,11 +160,47 @@ class JSON(ClickHouseType):
 
 class Variant(ClickHouseType):
     _slots = 'element_types'
+    python_type = object
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        self.element_types = [get_from_name(name) for name in type_def.values]
+        self.element_types:List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
         self._name_suffix = f"({', '.join(ch_type.name for ch_type in self.element_types)})"
+
+    def read_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        e_count = len(self.element_types)
+        discriminator_mode = source.read_uint64()
+        for e_type in self.element_types:
+            e_type.read_column_prefix(source)
+
+        # "Basic" discriminator format, meaning we store a discriminator for each possible type
+        # This seems to be the only mode supported for HTTP(?)
+        if discriminator_mode == 0:
+            discriminators = source.read_array('B', num_rows)
+            # Currently we have to figure out how many of each discriminator there are in the block to read
+            # the sub columns correctly
+            disc_rows = [0] * e_count
+            for disc in discriminators:
+                if disc != 255:
+                    disc_rows[disc] += 1
+            sub_columns:List[List] = [[]] * e_count
+            # Read all the sub-columns
+            for ix, e_type in enumerate(self.element_types):
+                if disc_rows[ix] > 0:
+                    sub_columns[ix] = e_type.read_column_data(source, disc_rows[ix], ctx)
+            # Now we have to walk through each of the discriminators again to assign the correct value from
+            # the sub-column to the final result column
+            sub_indexes = [0] * e_count
+            col = []
+            app_col = col.append
+            for disc in discriminators:
+                if disc == 255:
+                    app_col(None)
+                else:
+                    app_col(sub_columns[disc][sub_indexes[disc]])
+                    sub_indexes[disc] += 1
+            return col
+        raise DataError(f'Unexpected discriminator format in Variant column {ctx.column_name}')
 
 
 class Dynamic(ClickHouseType):
