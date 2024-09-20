@@ -58,10 +58,10 @@ def test_nulls(test_client: Client, table_context: Callable):
         assert result[3] == (4, 'nonnull2', None)
 
 
-def test_json(test_client: Client, table_context: Callable):
-    if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_JSON_TYPE')):
+def test_old_json(test_client: Client, table_context: Callable):
+    if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_OLD_JSON_TYPE')):
         pytest.skip('Deprecated JSON type not tested')
-    with table_context('native_json_test', [
+    with table_context('old_json_test', [
         'key Int32',
         'value JSON',
         'e2 Int32',
@@ -71,12 +71,12 @@ def test_json(test_client: Client, table_context: Callable):
         jv3 = {'key3': 752, 'value.2': 'v2_rules', 'blank': None}
         njv2 = {'nk1': -302, 'nk2': {'sub1': 372, 'sub2': 'a string'}}
         njv3 = {'nk1': 5832.44, 'nk2': {'sub1': 47788382, 'sub2':'sub2val', 'sub3': 'sub3str', 'space key': 'spacey'}}
-        test_client.insert('native_json_test', [
+        test_client.insert('old_json_test', [
             [5, jv1, -44, None],
             [20, None, 5200, njv2],
             [25, jv3, 7302, njv3]])
 
-        result = test_client.query('SELECT * FROM native_json_test ORDER BY key')
+        result = test_client.query('SELECT * FROM old_json_test ORDER BY key')
         json1 = result.result_set[0][1]
         assert json1['HKD@spéçiäl'] == 'Special K'
         assert json1['key3'] == 0

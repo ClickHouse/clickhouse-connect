@@ -29,7 +29,7 @@
         <server>
             <certificateFile>/etc/clickhouse-server/certs/server.crt</certificateFile>
             <privateKeyFile>/etc/clickhouse-server/certs/server.key</privateKeyFile>
-            <verificationMode>relaxed</verificationMode>
+            <verificationMode>strict</verificationMode>
             <caConfig>/etc/clickhouse-server/certs/ca.crt</caConfig>
             <cacheSessions>true</cacheSessions>
             <disableProtocols>sslv2,sslv3,tlsv1</disableProtocols>

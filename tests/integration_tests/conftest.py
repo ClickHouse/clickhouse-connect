@@ -46,7 +46,8 @@ def test_config_fixture() -> Iterator[TestConfig]:
     cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'True'))
     username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
-    test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
+    test_database = os.environ.get('CLICKHOUSE_CONNECT_TEST_DATABASE',
+                                   f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}')
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
     proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
@@ -112,7 +113,7 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
     client.database = test_db
     yield client
 
-    client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
+    # client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
     if test_config.docker:
         down_result = run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:

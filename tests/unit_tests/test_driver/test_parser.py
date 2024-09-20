@@ -22,6 +22,11 @@ def test_map_type():
     assert ch_type.name == 'Map(String, Decimal(5, 5))'
 
 
+def test_variant_type():
+    ch_type = get_from_name('Variant(UInt64, String, Array(UInt64))')
+    assert ch_type.name == 'Variant(UInt64, String, Array(UInt64))'
+
+
 def test_remove_comments():
     sql = """SELECT -- 6dcd92a04feb50f14bbcf07c661680ba
 * FROM benchmark_results /*With an inline comment */ WHERE result = 'True'

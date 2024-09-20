@@ -104,10 +104,13 @@ class ClickHouseType(ABC):
             d_size += 1
         return d_size
 
-    def _data_size(self, _sample: Collection) -> int:
+    def _data_size(self, sample: Collection) -> int:
         if self.byte_size:
             return self.byte_size
-        return 0
+        total = 0
+        for x in sample:
+            total += str(x)
+        return total / len(sample) + 1
 
     def write_column_prefix(self, dest: bytearray):
         """

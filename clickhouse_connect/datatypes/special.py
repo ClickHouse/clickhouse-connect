@@ -1,12 +1,16 @@
-from typing import Union, Sequence, MutableSequence
+from typing import Union, Sequence, MutableSequence, Collection
 from uuid import UUID as PYUUID
 
+from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.errors import handle_error
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.json_impl import any_to_json
 
 empty_uuid_b = bytes(b'\x00' * 16)
 
@@ -107,3 +111,80 @@ class SimpleAggregateFunction(ClickHouseType):
 
 class AggregateFunction(UnsupportedType):
     pass
+
+
+def json_sample_size(_, sample: Collection) -> int:
+    if len(sample) == 0:
+        return 0
+    total = 0
+    for x in sample:
+        if isinstance(x, str):
+            total += len(x)
+        elif x:
+            total += len(any_to_json(x))
+    return total // len(sample) + 1
+
+def write_json(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+    first = self._first_value(column)
+    write_col = column
+    encoding = ctx.encoding or self.encoding
+    if not isinstance(first, str) and self.write_format(ctx) != 'string':
+        to_json = any_to_json
+        write_col = [to_json(v) for v in column]
+        encoding = None
+    handle_error(data_conv.write_str_col(write_col, self.nullable, encoding, dest))
+
+
+class JSON(ClickHouseType):
+    valid_formats = 'string', 'native'
+    _data_size = json_sample_size
+    write_column_data = write_json
+
+    def read_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        if source.read_uint64() != 0: # object serialization version, currently only 0 is recognized
+            raise DataError('unrecognized object serialization version')
+        source.read_leb128() # the max number of dynamic paths.  Used to preallocate storage in ClickHouse, we ignore it
+        dynamic_path_cnt = source.read_leb128()
+        dynamic_paths = [source.read_leb128_str() for _ in range(dynamic_path_cnt)]
+        shared_col_type = registry.get_from_name('Array(Tuple(String, String))')
+        shared_state = shared_col_type.read_column(source, num_rows, ctx)
+        sub_columns = []
+        sub_types = []
+        for _ in dynamic_paths:
+            type_name = source.read_leb128_str()
+            col_type = registry.get_from_name(type_name)
+            sub_types.append(col_type)
+            sub_columns.append(col_type.read_column(source, num_rows, ctx))
+        print(dynamic_paths)
+
+
+class Variant(ClickHouseType):
+    _slots = 'element_types'
+
+    def __init__(self, type_def: TypeDef):
+        super().__init__(type_def)
+        self.element_types = [get_from_name(name) for name in type_def.values]
+        self._name_suffix = f"({', '.join(ch_type.name for ch_type in self.element_types)})"
+
+
+class Dynamic(ClickHouseType):
+    python_type = object
+
+
+
+class Object(ClickHouseType):
+    python_type = dict
+    # Native is a Python type (primitive, dict, array), string is an actual JSON string
+    valid_formats = 'string', 'native'
+    _data_size = json_sample_size
+    write_column_data = write_json
+
+    def __init__(self, type_def):
+        data_type = type_def.values[0].lower().replace(' ', '')
+        if data_type not in ("'json'", "nullable('json')"):
+            raise NotImplementedError('Only json or Nullable(json) Object type is currently supported')
+        super().__init__(type_def)
+        self._name_suffix = type_def.arg_str
+
+    def write_column_prefix(self, dest: bytearray):
+        dest.append(0x01)
