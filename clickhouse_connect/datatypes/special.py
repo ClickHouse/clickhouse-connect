@@ -96,8 +96,8 @@ class SimpleAggregateFunction(ClickHouseType):
     def _data_size(self, sample: Sequence) -> int:
         return self.element_type.data_size(sample)
 
-    def read_column_prefix(self, source: ByteSource):
-        return self.element_type.read_column_prefix(source)
+    def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
+        return self.element_type.read_column_prefix(source, ctx)
 
     def write_column_prefix(self, dest: bytearray):
         self.element_type.write_column_prefix(dest)
@@ -140,22 +140,58 @@ class JSON(ClickHouseType):
     _data_size = json_sample_size
     write_column_data = write_json
 
-    def read_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+    def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         if source.read_uint64() != 0: # object serialization version, currently only 0 is recognized
             raise DataError('unrecognized object serialization version')
         source.read_leb128() # the max number of dynamic paths.  Used to preallocate storage in ClickHouse, we ignore it
         dynamic_path_cnt = source.read_leb128()
-        dynamic_paths = [source.read_leb128_str() for _ in range(dynamic_path_cnt)]
-        shared_col_type = registry.get_from_name('Array(Tuple(String, String))')
-        shared_state = shared_col_type.read_column(source, num_rows, ctx)
-        sub_columns = []
-        sub_types = []
-        for _ in dynamic_paths:
-            type_name = source.read_leb128_str()
-            col_type = registry.get_from_name(type_name)
-            sub_types.append(col_type)
-            sub_columns.append(col_type.read_column(source, num_rows, ctx))
-        print(dynamic_paths)
+        ctx.read_state['dynamic_paths'] = [source.read_leb128_str() for _ in range(dynamic_path_cnt)]
+        ctx.read_state['dynamic_variants'] = [read_dynamic_prefix(source) for _ in range(dynamic_path_cnt)]
+
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext):
+        dynamic_paths = ctx.read_state.pop('dynamic_paths')
+        sub_columns:List[Sequence] = [[]] * len(dynamic_paths)
+        for ix, _ in enumerate(dynamic_paths):
+            variant_types = ctx.read_state['dynamic_variants'][ix]
+            sub_columns[ix] = read_variant_column(variant_types, source, num_rows, ctx)
+        shared_type = registry.get_from_name('Array(Tuple(String, String))')
+        shared_type.read_column(source, num_rows, ctx)
+
+        col = [{}] * num_rows
+        for row_num in range(num_rows):
+            item = {}
+            for ix, field in enumerate(dynamic_paths):
+                item[field] = sub_columns[ix][row_num]
+            col[row_num] = item
+        return col
+
+
+def read_variant_column(variant_types: List[ClickHouseType], source: ByteSource, num_rows:int, ctx: QueryContext) -> Sequence:
+    v_count = len(variant_types)
+    discriminators = source.read_array('B', num_rows)
+    # Currently we have to figure out how many of each discriminator there are in the block to read
+    # the sub columns correctly
+    disc_rows = [0] * v_count
+    for disc in discriminators:
+        if disc != 255:
+            disc_rows[disc] += 1
+    sub_columns: List[Sequence] = [[]] * v_count
+    # Read all the sub-columns
+    for ix in range(v_count):
+        if disc_rows[ix] > 0:
+            sub_columns[ix] = variant_types[ix].read_column_data(source, disc_rows[ix], ctx)
+    # Now we have to walk through each of the discriminators again to assign the correct value from
+    # the sub-column to the final result column
+    sub_indexes = [0] * v_count
+    col = []
+    app_col = col.append
+    for disc in discriminators:
+        if disc == 255:
+            app_col(None)
+        else:
+            app_col(sub_columns[disc][sub_indexes[disc]])
+            sub_indexes[disc] += 1
+    return col
 
 
 class Variant(ClickHouseType):
@@ -167,45 +203,35 @@ class Variant(ClickHouseType):
         self.element_types:List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
         self._name_suffix = f"({', '.join(ch_type.name for ch_type in self.element_types)})"
 
-    def read_column(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
-        e_count = len(self.element_types)
-        discriminator_mode = source.read_uint64()
-        for e_type in self.element_types:
-            e_type.read_column_prefix(source)
+    def read_column_prefix(self, source: ByteSource, ctx:QueryContext):
+        if source.read_uint64() != 0:
+            raise DataError(f'Unexpected discriminator format in Variant column')
 
-        # "Basic" discriminator format, meaning we store a discriminator for each possible type
-        # This seems to be the only mode supported for HTTP(?)
-        if discriminator_mode == 0:
-            discriminators = source.read_array('B', num_rows)
-            # Currently we have to figure out how many of each discriminator there are in the block to read
-            # the sub columns correctly
-            disc_rows = [0] * e_count
-            for disc in discriminators:
-                if disc != 255:
-                    disc_rows[disc] += 1
-            sub_columns:List[List] = [[]] * e_count
-            # Read all the sub-columns
-            for ix, e_type in enumerate(self.element_types):
-                if disc_rows[ix] > 0:
-                    sub_columns[ix] = e_type.read_column_data(source, disc_rows[ix], ctx)
-            # Now we have to walk through each of the discriminators again to assign the correct value from
-            # the sub-column to the final result column
-            sub_indexes = [0] * e_count
-            col = []
-            app_col = col.append
-            for disc in discriminators:
-                if disc == 255:
-                    app_col(None)
-                else:
-                    app_col(sub_columns[disc][sub_indexes[disc]])
-                    sub_indexes[disc] += 1
-            return col
-        raise DataError(f'Unexpected discriminator format in Variant column {ctx.column_name}')
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        return read_variant_column(self.element_types, source, num_rows, ctx)
+
+
+def read_dynamic_prefix(source: ByteSource) -> List[ClickHouseType]:
+    dynamic_struct_ver = source.read_uint64()
+    if dynamic_struct_ver  != 1:  # dynamic structure serialization version, currently only 1 is recognized
+        raise DataError('unrecognized dynamic structure version')
+    source.read_leb128()  # max dynamic types, we ignore this value
+    num_variants = source.read_leb128()
+    variant_types = [get_from_name(source.read_leb128_str()) for _ in range(num_variants)]
+    variant_types.append(get_from_name('String'))
+    if source.read_uint64() != 0:
+        raise DataError(f'Unexpected discriminator format in Variant column prefix')
+    return variant_types
 
 
 class Dynamic(ClickHouseType):
     python_type = object
 
+    def read_column_prefix(self, source: ByteSource, ctx:QueryContext):
+        ctx.read_state['variant_types'] = read_dynamic_prefix(source)
+
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
+        return read_variant_column(ctx.read_state.pop('variant_types'), source, num_rows, ctx)
 
 
 class Object(ClickHouseType):

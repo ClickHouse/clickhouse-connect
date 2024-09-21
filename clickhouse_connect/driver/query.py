@@ -116,6 +116,7 @@ class QueryContext(BaseQueryContext):
                         raise ProgrammingError(f'column_tz {timezone} is not recognized') from ex
         self.column_tzs = column_tzs
         self.column_tz = None
+        self.read_state = {}
         self.response_tz = None
         self.block_info = False
         self.as_pandas = as_pandas

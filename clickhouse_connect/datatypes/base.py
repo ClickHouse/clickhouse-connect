@@ -122,7 +122,7 @@ class ClickHouseType(ABC):
         if self.low_card:
             write_uint64(low_card_version, dest)
 
-    def read_column_prefix(self, source: ByteSource):
+    def read_column_prefix(self, source: ByteSource, _ctx: QueryContext):
         """
         Read the low cardinality version.  Like the write method, this has to happen immediately for container classes
         :param source: The native protocol binary read buffer
@@ -142,7 +142,7 @@ class ClickHouseType(ABC):
         :param ctx: QueryContext for query specific settings
         :return: The decoded column data as a sequence and the updated location pointer
         """
-        self.read_column_prefix(source)
+        self.read_column_prefix(source, ctx)
         return self.read_column_data(source, num_rows, ctx)
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:

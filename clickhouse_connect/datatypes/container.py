@@ -22,8 +22,8 @@ class Array(ClickHouseType):
         self.element_type = get_from_name(type_def.values[0])
         self._name_suffix = f'({self.element_type.name})'
 
-    def read_column_prefix(self, source: ByteSource):
-        return self.element_type.read_column_prefix(source)
+    def read_column_prefix(self, source: ByteSource, ctx:QueryContext):
+        return self.element_type.read_column_prefix(source, ctx)
 
     def _data_size(self, sample: Sequence) -> int:
         if len(sample) == 0:
@@ -112,9 +112,9 @@ class Tuple(ClickHouseType):
                 elem_size += e_type.data_size([x[ix] for x in sample])
         return elem_size
 
-    def read_column_prefix(self, source: ByteSource):
+    def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         for e_type in self.element_types:
-            e_type.read_column_prefix(source)
+            e_type.read_column_prefix(source, ctx)
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         columns = []
@@ -180,9 +180,9 @@ class Map(ClickHouseType):
             total += self.value_type.data_size(x.values())
         return total // len(sample)
 
-    def read_column_prefix(self, source: ByteSource):
-        self.key_type.read_column_prefix(source)
-        self.value_type.read_column_prefix(source)
+    def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
+        self.key_type.read_column_prefix(source, ctx)
+        self.value_type.read_column_prefix(source, ctx)
 
     # pylint: disable=too-many-locals
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext):
@@ -237,8 +237,8 @@ class Nested(ClickHouseType):
         array_sample = [[tuple(sub_row[key] for key in keys) for sub_row in row] for row in sample]
         return self.tuple_array.data_size(array_sample)
 
-    def read_column_prefix(self, source: ByteSource):
-        self.tuple_array.read_column_prefix(source)
+    def read_column_prefix(self, source: ByteSource, ctx:QueryContext):
+        self.tuple_array.read_column_prefix(source, ctx)
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         keys = self.element_names
