@@ -22,7 +22,6 @@ class NativeTransform:
         names = []
         col_types = []
         block_num = 0
-        context.read_state = {}
 
         def get_block():
             nonlocal block_num
