@@ -38,6 +38,9 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     elif base.startswith('Variant'):
         key, values = parse_columns(base[7:])
         base = 'Variant'
+    elif base.startswith('JSON') and len(base) > 4 and base[4] == '(':
+        keys, values = parse_columns(base[4:])
+        base = 'JSON'
     elif base == 'Point':
         values = ('Float64', 'Float64')
     else:

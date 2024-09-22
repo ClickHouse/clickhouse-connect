@@ -93,6 +93,8 @@ class Client(ABC):
             })
             if test_data[8:16] == b'\x01\x01\x05check':
                 self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
+        if self._setting_status('date_time_input_format').is_writable:
+            self.set_client_setting('date_time_input_format', 'best_effort')
         self.uri = uri
 
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:

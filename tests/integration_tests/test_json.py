@@ -1,3 +1,4 @@
+import datetime
 from typing import Callable
 
 from clickhouse_connect.datatypes.format import set_write_format
@@ -40,3 +41,15 @@ def test_basic_json(test_client: Client, table_context: Callable):
         result = test_client.query('SELECT value.key4, null_value.nk1 FROM new_json_basic ORDER BY key')
         assert result.result_set[3][0] == 283
         assert result.result_set[3][1] == 53
+
+
+def test_typed_json(test_client: Client, table_context: Callable):
+    with table_context('new_json_typed', [
+        'key Int32',
+        'value JSON(max_dynamic_paths=150, `a.b` DateTime64(3), SKIP a.c)'
+        ]):
+        v1 = '{"a":{"b":"2020-10-15T10:15:44.877", "c":"skip_me"}}'
+        test_client.insert('new_json_typed', [[1, v1]])
+        result = test_client.query('SELECT * FROM new_json_typed ORDER BY key')
+        json1 = result.result_set[0][1]
+        assert json1['a']['b'] == datetime.datetime(2020, 10, 15, 10, 15, 44, 877000)

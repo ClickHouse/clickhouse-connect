@@ -96,8 +96,7 @@ class NativeTransform:
                     col_enc = col_name.encode()
                     write_leb128(len(col_enc), output)
                     output += col_enc
-                    t_name = 'String' if col_type.name == 'JSON' else col_type.name
-                    col_enc = t_name.encode()
+                    col_enc = col_type.insert_name.encode()
                     write_leb128(len(col_enc), output)
                     output += col_enc
                     context.start_column(col_name)

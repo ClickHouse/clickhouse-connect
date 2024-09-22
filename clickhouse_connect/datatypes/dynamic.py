@@ -2,6 +2,7 @@ from typing import List, Sequence, Collection
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.errors import handle_error
 from clickhouse_connect.driver.exceptions import DataError
@@ -60,6 +61,11 @@ def read_variant_column(variant_types: List[ClickHouseType], source: ByteSource,
 class Dynamic(ClickHouseType):
     python_type = object
 
+    def __init__(self, type_def:TypeDef):
+        super().__init__(type_def)
+        if type_def.keys and type_def.keys[0] == 'max_types':
+            self._name_suffix = f'(max_types={type_def.values[0]})'
+
     def read_column(self, source: ByteSource, num_rows:int, ctx:QueryContext):
         variant_types = read_dynamic_prefix(source)
         return read_variant_column(variant_types, source, num_rows, ctx)
@@ -101,11 +107,63 @@ def write_json(self, column: Sequence, dest: bytearray, ctx: InsertContext):
 
 
 class JSON(ClickHouseType):
+    _slots = 'typed_paths', 'typed_types'
     python_type = dict
     valid_formats = 'string', 'native'
     _data_size = json_sample_size
     write_column_data = write_json
     shared_data_type: ClickHouseType
+    max_dynamic_paths = 0
+    max_dynamic_types = 0
+    typed_paths = []
+    typed_types = []
+    skips = []
+
+    def __init__(self, type_def:TypeDef):
+        super().__init__(type_def)
+        typed_paths = []
+        typed_types = []
+        skips = []
+        parts = []
+        for key, value in zip(type_def.keys, type_def.values):
+            if key == 'max_dynamic_paths':
+                try:
+                    self.max_dynamic_paths = int(value)
+                    parts.append(f'{key} = {value}')
+                    continue
+                except ValueError:
+                    pass
+            if key == 'max_dynamic_types':
+                try:
+                    self.max_dynamic_types = int(value)
+                    parts.append(f'{key} = {value}')
+                    continue
+                except ValueError:
+                    pass
+            if key == 'SKIP':
+                if value.startswith('REGEXP'):
+                    value = 'REGEXP ' + value[6:]
+                else:
+                    if not value.startswith("`"):
+                        value = f'`{value}`'
+                skips.append(value)
+            else:
+                key = unescape_identifier(key)
+                typed_paths.append(key)
+                typed_types.append(get_from_name(value))
+                key = f'`{key}`'
+            parts.append(f'{key} {value}')
+        if typed_paths:
+            self.typed_paths = typed_paths
+            self.typed_types = typed_types
+        if skips:
+            self.skips = skips
+        if parts:
+            self._name_suffix = f'({", ".join(parts)})'
+
+    @property
+    def insert_name(self):
+        return 'String'
 
     def read_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if source.read_uint64() != 0: # object serialization version, currently only 0 is recognized
@@ -113,14 +171,30 @@ class JSON(ClickHouseType):
         source.read_leb128() # the max number of dynamic paths.  Used to preallocate storage in ClickHouse, we ignore it
         dynamic_path_cnt = source.read_leb128()
         dynamic_paths = [source.read_leb128_str() for _ in range(dynamic_path_cnt)]
+        for typed in self.typed_types:
+            typed.read_column_prefix(source, ctx)
         dynamic_variants = [read_dynamic_prefix(source) for _ in range(dynamic_path_cnt)]
-        sub_columns = [read_variant_column(dynamic_variants[ix], source, num_rows, ctx) for ix in range(dynamic_path_cnt)]
+        # C++ prefix read ends here
+
+        typed_columns = [ch_type.read_column_data(source, num_rows, ctx) for ch_type in self.typed_types]
+        dynamic_columns = [read_variant_column(dynamic_variants[ix], source, num_rows, ctx) for ix in range(dynamic_path_cnt)]
         SHARED_DATA_TYPE.read_column_data(source, num_rows, ctx)
         col = []
         for row_num in range(num_rows):
             top = {}
+            for ix, field in enumerate(self.typed_paths):
+                value = typed_columns[ix][row_num]
+                item = top
+                chain = field.split('.')
+                for key in chain[:-1]:
+                    child = item.get(key)
+                    if child is None:
+                        child = {}
+                        item[key] = child
+                    item = child
+                item[chain[-1]] = value
             for ix, field in enumerate(dynamic_paths):
-                value = sub_columns[ix][row_num]
+                value = dynamic_columns[ix][row_num]
                 if value is None:
                     continue
                 item = top

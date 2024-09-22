@@ -94,6 +94,10 @@ class ClickHouseType(ABC):
             name = f'{wrapper}({name})'
         return name
 
+    @property
+    def insert_name(self):
+        return self.name
+
     def data_size(self, sample: Sequence) -> int:
         if self.low_card:
             values = set(sample)
