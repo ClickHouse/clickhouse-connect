@@ -517,3 +517,6 @@ class HttpClient(Client):
         if self._owns_pool_manager:
             self.http.clear()
             all_managers.pop(self.http, None)
+
+    def close_connections(self):
+        self.http.clear()

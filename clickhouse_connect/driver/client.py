@@ -778,9 +778,16 @@ class Client(ABC):
         :param fmt: Valid clickhouse format
         """
 
+    @abstractmethod
     def close(self):
         """
         Subclass implementation to close the connection to the server/deallocate the client
+        """
+
+    @abstractmethod
+    def close_connections(self):
+        """
+        Subclass implementation to disconnect all "re-used" client connections
         """
 
     def _context_query(self, lcls: dict, **overrides):

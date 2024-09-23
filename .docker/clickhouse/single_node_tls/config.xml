@@ -29,7 +29,7 @@
         <server>
             <certificateFile>/etc/clickhouse-server/certs/server.crt</certificateFile>
             <privateKeyFile>/etc/clickhouse-server/certs/server.key</privateKeyFile>
-            <verificationMode>strict</verificationMode>
+            <verificationMode>relaxed</verificationMode>
             <caConfig>/etc/clickhouse-server/certs/ca.crt</caConfig>
             <cacheSessions>true</cacheSessions>
             <disableProtocols>sslv2,sslv3,tlsv1</disableProtocols>
@@ -43,4 +43,6 @@
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>1000</flush_interval_milliseconds>
     </query_log>
+
+    <custom_settings_prefixes>SQL_</custom_settings_prefixes>
 </clickhouse>

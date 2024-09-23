@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   clickhouse:
     image: 'clickhouse/clickhouse-server:${CLICKHOUSE_VERSION-24.8-alpine}'
