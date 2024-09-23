@@ -28,14 +28,14 @@ def test_basic_tls():
         get_client(interface='https', host='localhost', port=10843, ca_cert=f'{cert_dir}ca.crt')
         pytest.fail('Expected TLS exception with a different hostname')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__.reason, SSLError)
+        assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
     client.close_connections()
 
     try:
         get_client(interface='https', host='localhost', port=10843)
         pytest.fail('Expected TLS exception with a self-signed cert')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__.reason, SSLError)
+        assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
 
 
 def test_mutual_tls():
