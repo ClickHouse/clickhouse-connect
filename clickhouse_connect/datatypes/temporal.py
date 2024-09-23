@@ -4,7 +4,7 @@ from datetime import date, datetime, tzinfo
 from typing import Union, Sequence, MutableSequence
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
-from clickhouse_connect.driver.common import write_array, np_date_types, int_size
+from clickhouse_connect.driver.common import write_array, np_date_types, int_size, first_value
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
@@ -32,7 +32,7 @@ class Date(ClickHouseType):
         return data_conv.read_date_col(source, num_rows)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
                 column = [x if x else 0 for x in column]
@@ -127,7 +127,7 @@ class DateTime(DateTimeBase):
         return data_conv.read_datetime_col(source, num_rows, active_tz)
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
                 column = [x if x else 0 for x in column]
@@ -202,7 +202,7 @@ class DateTime64(DateTimeBase):
         return new_col
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
                 column = [x if x else 0 for x in column]

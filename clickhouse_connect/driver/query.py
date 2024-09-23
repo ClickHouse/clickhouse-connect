@@ -38,7 +38,7 @@ class QueryContext(BaseQueryContext):
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
 
-    # pylint: disable=duplicate-code,too-many-arguments,too-many-locals
+    # pylint: disable=duplicate-code,too-many-arguments,too-many-positional-arguments,too-many-locals
     def __init__(self,
                  query: Union[str, bytes] = '',
                  parameters: Optional[Dict[str, Any]] = None,
@@ -176,6 +176,7 @@ class QueryContext(BaseQueryContext):
             return None
         return active_tz
 
+    # pylint disable=too-many-positional-arguments
     def updated_copy(self,
                      query: Optional[Union[str, bytes]] = None,
                      parameters: Optional[Dict[str, Any]] = None,

@@ -36,7 +36,7 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
         keys, values = parse_columns(base[5:])
         base = 'Tuple'
     elif base.startswith('Variant'):
-        key, values = parse_columns(base[7:])
+        keys, values = parse_columns(base[7:])
         base = 'Variant'
     elif base.startswith('JSON') and len(base) > 4 and base[4] == '(':
         keys, values = parse_columns(base[4:])

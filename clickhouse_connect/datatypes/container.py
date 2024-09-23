@@ -7,7 +7,7 @@ from clickhouse_connect.driver.query import QueryContext, quote_identifier
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
-from clickhouse_connect.driver.common import must_swap
+from clickhouse_connect.driver.common import must_swap, first_value
 from clickhouse_connect.datatypes.registry import get_from_name
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ class Tuple(ClickHouseType):
         if len(sample) == 0:
             return 0
         elem_size = 0
-        is_dict = self.element_names and isinstance(self._first_value(list(sample)), dict)
+        is_dict = self.element_names and isinstance(first_value(list(sample), self.nullable), dict)
         for ix, e_type in enumerate(self.element_types):
             if e_type.byte_size > 0:
                 elem_size += e_type.byte_size
@@ -138,7 +138,7 @@ class Tuple(ClickHouseType):
             e_type.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        if self.element_names and isinstance(self._first_value(column), dict):
+        if self.element_names and isinstance(first_value(column, self.nullable), dict):
             columns = self.convert_dict_insert(column)
         else:
             columns = list(zip(*column))

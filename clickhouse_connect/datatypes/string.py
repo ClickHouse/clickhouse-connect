@@ -1,5 +1,6 @@
 from typing import Sequence, MutableSequence, Union, Collection
 
+from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
@@ -44,9 +45,9 @@ class String(ClickHouseType):
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         encoding = None
-        if not isinstance(self._first_value(column), bytes):
+        if not isinstance(first_value(column, self.nullable), bytes):
             encoding = ctx.encoding or self.encoding
-        handle_error(data_conv.write_str_col(column, self.nullable, encoding, dest))
+        handle_error(data_conv.write_str_col(column, self.nullable, encoding, dest), ctx)
 
     def _active_null(self, ctx):
         if ctx.use_none:
@@ -91,7 +92,7 @@ class FixedString(ClickHouseType):
         empty = bytes((0,) * sz)
         str_enc = str.encode
         enc = ctx.encoding or self.encoding
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         if isinstance(first, str) or self.write_format(ctx) == 'string':
             if self.nullable:
                 for x in column:

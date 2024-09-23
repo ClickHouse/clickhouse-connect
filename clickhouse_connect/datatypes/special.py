@@ -1,8 +1,9 @@
-from typing import Union, Sequence, MutableSequence, Collection, List
+from typing import Union, Sequence, MutableSequence
 from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType, ArrayType, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -37,7 +38,7 @@ class UUID(ClickHouseType):
 
     # pylint: disable=too-many-branches
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         empty = empty_uuid_b
         if isinstance(first, str) or self.write_format(ctx) == 'string':
             for v in column:

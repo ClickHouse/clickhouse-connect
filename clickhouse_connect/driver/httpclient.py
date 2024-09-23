@@ -44,7 +44,7 @@ class HttpClient(Client):
                                    'enable_http_compression'}
     _owns_pool_manager = False
 
-    # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
+    # pylint: disable=too-many-positional-arguments,too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
     def __init__(self,
                  interface: str,
                  host: str,

@@ -42,7 +42,7 @@ def test_config_fixture() -> Iterator[TestConfig]:
     docker = host == 'localhost' and coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'False'))
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
-        port = 10723 if docker else 8123
+        port = 8123
     cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'True'))
     username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
@@ -105,6 +105,10 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
             time.sleep(3)
     if client.min_version('22.8'):
         client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
+    if client.min_version('24.8'):
+        client.set_client_setting('allow_experimental_json_type', 1)
+        client.set_client_setting('allow_experimental_dynamic_type', 1)
+        client.set_client_setting('allow_experimental_variant_type', 1)
     if test_config.insert_quorum:
         client.set_client_setting('insert_quorum', test_config.insert_quorum)
     elif test_config.cloud:

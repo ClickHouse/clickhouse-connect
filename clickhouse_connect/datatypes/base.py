@@ -3,7 +3,7 @@ import logging
 
 from abc import ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Optional, Union, Collection
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Union, Collection
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
@@ -284,13 +284,6 @@ class ClickHouseType(ABC):
         write_array(array_type(1 << ix_type, False), keys, dest, ctx)
 
     def _active_null(self, _ctx: QueryContext) -> Any:
-        return None
-
-    def _first_value(self, column: Sequence) -> Optional[Any]:
-        if self.nullable:
-            return next((x for x in column if x is not None), None)
-        if len(column):
-            return column[0]
         return None
 
 

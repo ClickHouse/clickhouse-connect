@@ -31,7 +31,7 @@ class CreateDatabase(DDL):
         super().__init__(stmt)
 
 
-#  pylint: disable=too-many-ancestors,abstract-method
+# pylint: disable=too-many-ancestors,abstract-method
 class DropDatabase(DDL):
     """
     Alternative DDL statement for built in SqlAlchemy DropSchema DDL class

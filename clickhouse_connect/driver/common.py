@@ -138,6 +138,14 @@ def coerce_bool(val: Optional[Union[str, bool]]):
     return val is True or (isinstance(val, str) and val.lower() in ('true', '1', 'y', 'yes'))
 
 
+def first_value(column: Sequence, nullable:bool = True):
+    if nullable:
+        return next((x for x in column if x is not None), None)
+    if len(column):
+        return column[0]
+    return None
+
+
 class SliceView(Sequence):
     """
     Provides a view into a sequence rather than copying.  Borrows liberally from

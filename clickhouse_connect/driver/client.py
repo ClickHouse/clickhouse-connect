@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
 
 
-# pylint: disable=too-many-public-methods, too-many-instance-attributes
+# pylint: disable=too-many-public-methods,too-many-arguments,too-many-positional-arguments,too-many-instance-attributes
 class Client(ABC):
     """
     Base ClickHouse Connect client
@@ -173,7 +173,7 @@ class Client(ABC):
         :return: The string value of the setting, if it exists, or None
         """
 
-    # pylint: disable=too-many-arguments,unused-argument,too-many-locals
+    # pylint: disable=unused-argument,too-many-locals
     def query(self,
               query: Optional[str] = None,
               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -305,7 +305,7 @@ class Client(ABC):
        :return: io.IOBase stream/iterator for the result
        """
 
-    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
+    # pylint: disable=duplicate-code,unused-argument
     def query_np(self,
                  query: Optional[str] = None,
                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -343,7 +343,7 @@ class Client(ABC):
         """
         return self._context_query(locals(), use_numpy=True, streaming=True).np_stream
 
-    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
+    # pylint: disable=duplicate-code,unused-argument
     def query_df(self,
                  query: Optional[str] = None,
                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -366,7 +366,7 @@ class Client(ABC):
         """
         return self._context_query(locals(), use_numpy=True, as_pandas=True).df_result
 
-    # pylint: disable=duplicate-code,too-many-arguments,unused-argument
+    # pylint: disable=duplicate-code,unused-argument
     def query_df_stream(self,
                         query: Optional[str] = None,
                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -573,7 +573,6 @@ class Client(ABC):
         :return: ClickHouse server is up and reachable
         """
 
-    # pylint: disable=too-many-arguments
     def insert(self,
                table: Optional[str] = None,
                data: Sequence[Sequence[Any]] = None,

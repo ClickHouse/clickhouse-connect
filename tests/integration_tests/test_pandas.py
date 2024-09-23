@@ -258,7 +258,7 @@ def test_pandas_row_df(test_client: Client, table_context:Callable):
         assert str(result_df.dtypes[2]) == 'string'
         assert result_df.iloc[0]['key'] == 2
         assert result_df.iloc[0]['dt'] == pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)
-        assert result_df.iloc[0]['fs'] == 'bit\0\0'
+        assert result_df.iloc[0]['fs'] == 'bit'
         assert len(result_df) == 1
         assert source_df.equals(df)
 

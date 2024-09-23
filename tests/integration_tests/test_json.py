@@ -1,11 +1,15 @@
 import datetime
 from typing import Callable
 
+import pytest
+
 from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
 
 
 def test_basic_json(test_client: Client, table_context: Callable):
+    if not test_client.min_version('24.8'):
+        pytest.skip(f'New JSON type not available in this version: {test_client.server_version}')
     with table_context('new_json_basic', [
         'key Int32',
         'value JSON',
@@ -44,6 +48,8 @@ def test_basic_json(test_client: Client, table_context: Callable):
 
 
 def test_typed_json(test_client: Client, table_context: Callable):
+    if not test_client.min_version('24.8'):
+        pytest.skip(f'New JSON type not available in this version: {test_client.server_version}')
     with table_context('new_json_typed', [
         'key Int32',
         'value JSON(max_dynamic_paths=150, `a.b` DateTime64(3), SKIP a.c)'

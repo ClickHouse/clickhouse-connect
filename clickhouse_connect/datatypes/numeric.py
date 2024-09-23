@@ -4,7 +4,7 @@ from typing import Union, Type, Sequence, MutableSequence
 from math import nan
 
 from clickhouse_connect.datatypes.base import TypeDef, ArrayType, ClickHouseType
-from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec
+from clickhouse_connect.driver.common import array_type, write_array, decimal_size, decimal_prec, first_value
 from clickhouse_connect.driver.ctypes import numpy_conv, data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.options import pd, np
@@ -98,7 +98,7 @@ class BigInt(ClickHouseType, registered=False):
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         sz = self.byte_size
         signed = self._signed
         empty = bytes(b'\x00' * sz)
@@ -219,7 +219,7 @@ class Enum(ClickHouseType):
         return [lookup(x, None) for x in column]
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx):
-        first = self._first_value(column)
+        first = first_value(column, self.nullable)
         if first is None or not isinstance(first, str):
             if self.nullable:
                 column = [0 if not x else x for x in column]

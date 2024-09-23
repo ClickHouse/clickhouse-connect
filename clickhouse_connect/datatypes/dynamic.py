@@ -2,7 +2,7 @@ from typing import List, Sequence, Collection
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.common import unescape_identifier
+from clickhouse_connect.driver.common import unescape_identifier, first_value
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.errors import handle_error
 from clickhouse_connect.driver.exceptions import DataError
@@ -23,12 +23,19 @@ class Variant(ClickHouseType):
         self.element_types:List[ClickHouseType] = [get_from_name(name) for name in type_def.values]
         self._name_suffix = f"({', '.join(ch_type.name for ch_type in self.element_types)})"
 
+    @property
+    def insert_name(self):
+        return 'String'
+
     def read_column_prefix(self, source: ByteSource, ctx:QueryContext):
         if source.read_uint64() != 0:
             raise DataError(f'Unexpected discriminator format in Variant column {ctx.column_name}')
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext) -> Sequence:
         return read_variant_column(self.element_types, source, num_rows, ctx)
+
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        write_json(self, column, dest, ctx)
 
 
 def read_variant_column(variant_types: List[ClickHouseType], source: ByteSource, num_rows:int, ctx: QueryContext) -> Sequence:
@@ -73,13 +80,13 @@ class Dynamic(ClickHouseType):
 
 def read_dynamic_prefix(source: ByteSource) -> List[ClickHouseType]:
     if source.read_uint64() != 1:  # dynamic structure serialization version, currently only 1 is recognized
-        raise DataError('unrecognized dynamic structure version')
+        raise DataError('Unrecognized dynamic structure version')
     source.read_leb128()  # max dynamic types, we ignore this value
     num_variants = source.read_leb128()
     variant_types = [get_from_name(source.read_leb128_str()) for _ in range(num_variants)]
     variant_types.append(STRING_DATA_TYPE)
     if source.read_uint64() != 0: # discriminator format, currently only 0 is recognized
-        raise DataError(f'Unexpected discriminator format in Variant column prefix')
+        raise DataError('Unexpected discriminator format in Variant column prefix')
     return variant_types
 
 
@@ -95,15 +102,15 @@ def json_sample_size(_, sample: Collection) -> int:
     return total // len(sample) + 1
 
 
-def write_json(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-    first = self._first_value(column)
+def write_json(ch_type:ClickHouseType, column: Sequence, dest: bytearray, ctx: InsertContext):
+    first = first_value(column, ch_type.nullable)
     write_col = column
-    encoding = ctx.encoding or self.encoding
-    if not isinstance(first, str) and self.write_format(ctx) != 'string':
+    encoding = ctx.encoding or ch_type.encoding
+    if not isinstance(first, str) and ch_type.write_format(ctx) != 'string':
         to_json = any_to_json
         write_col = [to_json(v) for v in column]
         encoding = None
-    handle_error(data_conv.write_str_col(write_col, self.nullable, encoding, dest))
+    handle_error(data_conv.write_str_col(write_col, ch_type.nullable, encoding, dest), ctx)
 
 
 class JSON(ClickHouseType):
@@ -165,10 +172,11 @@ class JSON(ClickHouseType):
     def insert_name(self):
         return 'String'
 
+    # pylint: disable=too-many-locals
     def read_column(self, source: ByteSource, num_rows: int, ctx: QueryContext):
         if source.read_uint64() != 0: # object serialization version, currently only 0 is recognized
-            raise DataError('unrecognized object serialization version')
-        source.read_leb128() # the max number of dynamic paths.  Used to preallocate storage in ClickHouse, we ignore it
+            raise DataError(f'unrecognized object serialization version, column `{ctx.column_name}`')
+        source.read_leb128() # the max number of dynamic paths.  Used to preallocate storage in ClickHouse; we ignore it
         dynamic_path_cnt = source.read_leb128()
         dynamic_paths = [source.read_leb128_str() for _ in range(dynamic_path_cnt)]
         for typed in self.typed_types:
