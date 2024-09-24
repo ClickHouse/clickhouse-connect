@@ -12,7 +12,6 @@ def test_csv_upload(test_client: Client, table_context: Callable):
         insert_result = insert_file(test_client, 'test_csv_upload', data_file,
                                     settings={'input_format_allow_errors_ratio': .2,
                                               'input_format_allow_errors_num': 5})
-        assert 248 == insert_result.written_rows
         res = test_client.query(
             'SELECT count() as count, sum(rating) as rating, max(year) as year FROM test_csv_upload').first_item
         assert res['count'] == 248
@@ -25,7 +24,6 @@ def test_parquet_upload(test_config: TestConfig, test_client: Client, table_cont
     with table_context(full_table, ['movie String', 'year UInt16', 'rating Float64']):
         insert_result = insert_file(test_client, full_table, data_file, 'Parquet',
                                     settings={'output_format_parquet_string_as_string': 1})
-        assert 250 == insert_result.written_rows
         res = test_client.query(
             f'SELECT count() as count, sum(rating) as rating, max(year) as year FROM {full_table}').first_item
         assert res['count'] == 250

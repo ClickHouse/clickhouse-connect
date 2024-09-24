@@ -8,7 +8,7 @@ from clickhouse_connect.driver import Client
 
 
 def test_basic_json(test_client: Client, table_context: Callable):
-    if not test_client.min_version('24.8'):
+    if not test_client.get_client_setting('allow_experimental_json_type'):
         pytest.skip(f'New JSON type not available in this version: {test_client.server_version}')
     with table_context('new_json_basic', [
         'key Int32',
@@ -48,7 +48,7 @@ def test_basic_json(test_client: Client, table_context: Callable):
 
 
 def test_typed_json(test_client: Client, table_context: Callable):
-    if not test_client.min_version('24.8'):
+    if not test_client.get_client_setting('allow_experimental_json_type'):
         pytest.skip(f'New JSON type not available in this version: {test_client.server_version}')
     with table_context('new_json_typed', [
         'key Int32',

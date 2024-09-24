@@ -513,10 +513,11 @@ class HttpClient(Client):
             logger.debug('ping failed', exc_info=True)
             return False
 
+    def close_connections(self):
+        self.http.clear()
+
     def close(self):
         if self._owns_pool_manager:
             self.http.clear()
             all_managers.pop(self.http, None)
 
-    def close_connections(self):
-        self.http.clear()
