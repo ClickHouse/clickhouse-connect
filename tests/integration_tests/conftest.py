@@ -42,7 +42,7 @@ def test_config_fixture() -> Iterator[TestConfig]:
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
         port = 8123
-    cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'True'))
+    cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'False'))
     username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
     test_database = os.environ.get('CLICKHOUSE_CONNECT_TEST_DATABASE',
@@ -66,6 +66,7 @@ def test_create_client_fixture(test_config: TestConfig) -> Callable:
                                port=test_config.port,
                                user=test_config.username,
                                password=test_config.password,
+                               compress=test_config.compress,
                                settings={'allow_suspicious_low_cardinality_types': 1},
                                client_name='int_tests/test',
                                **kwargs)

@@ -195,7 +195,7 @@ class HttpClient(Client):
             context.block_info = True
         params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
-        if columns_only_re.search(context.uncommented_query):
+        if not context.is_insert and columns_only_re.search(context.uncommented_query):
             response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
                                          params, headers, retries=self.query_retries)
             json_result = json.loads(response.data)

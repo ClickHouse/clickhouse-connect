@@ -55,6 +55,8 @@ def test_external_parquet(test_config: TestConfig, test_client: Client):
     if test_config.cloud:
         pytest.skip('External data join not working in SMT, skipping')
     movies_file = f'{Path(__file__).parent}/movies.parquet'
+    test_client.command('DROP TABLE IF EXISTS movies')
+    test_client.command('DROP TABLE IF EXISTS num')
     test_client.command("""
 CREATE TABLE IF NOT EXISTS num (number UInt64, t String)
 ENGINE = MergeTree

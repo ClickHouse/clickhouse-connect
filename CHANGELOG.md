@@ -3,9 +3,30 @@
 ### WARNING -- Impending Breaking Change - Server Settings in DSN
 When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
 converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
-release (0.8.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
+release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
+
+## 0.8.0,
+### Bug Fixes
+- The server timezone was not being used for parameter binding if parameters were sent as a list instead of a dictionary.
+This should fully fix the reopened https://github.com/ClickHouse/clickhouse-connect/issues/377.
+- String port numbers (such as from environmental variables) are correctly interpreted to determine the correct interface/protocol.
+Fixes https://github.com/ClickHouse/clickhouse-connect/issues/395
+- Insert commands with a `SELECT FROM ... LIMIT 0` will no longer raise an exception.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/389.
+
+### Improvements
+- Some low level errors for problems with Native format inserts and queries now include the relevant column name in the
+error message.  Thanks to [Angus Holder](https://github.com/angusholder) for the PR!
+- There is a new intermediate buffer for HTTP streaming/chunked queries.  The buffer will store raw data from the HTTP request
+until it is actually requested in a stream.  This allows some lag between reading the data from ClickHouse and processing
+the same data.  Previously, if processing the data stream fell 30 seconds behind the ClickHouse HTTP writes to the stream,
+the ClickHouse server would close the connection, aborting the query and stream processing.  This will now be mitigated by
+storing the data stream in the new intermediate buffer.  By default, this buffer is set to 10 megabytes, but for slow
+processing of large queries where memory is not an issue, the buffer size can be increasing using the new `common` setting
+`http_buffer_size`.  This is a fix in some cases of https://github.com/ClickHouse/clickhouse-connect/issues/399, but note that
+slow processing of large queries will still cause connection and processing failures if the data cannot be buffered.
+
 
 ## 0.7.19, 2024-08-23
 ### Bug Fix
