@@ -9,7 +9,7 @@ from tests.integration_tests.conftest import TestConfig
 def test_csv_upload(test_client: Client, table_context: Callable):
     data_file = f'{Path(__file__).parent}/movies.csv.gz'
     with table_context('test_csv_upload', ['movie String', 'year UInt16', 'rating Decimal32(3)']):
-        insert_result = insert_file(test_client, 'test_csv_upload', data_file,
+        insert_file(test_client, 'test_csv_upload', data_file,
                                     settings={'input_format_allow_errors_ratio': .2,
                                               'input_format_allow_errors_num': 5})
         res = test_client.query(
@@ -22,7 +22,7 @@ def test_parquet_upload(test_config: TestConfig, test_client: Client, table_cont
     data_file = f'{Path(__file__).parent}/movies.parquet'
     full_table = f'{test_config.test_database}.test_parquet_upload'
     with table_context(full_table, ['movie String', 'year UInt16', 'rating Float64']):
-        insert_result = insert_file(test_client, full_table, data_file, 'Parquet',
+        insert_file(test_client, full_table, data_file, 'Parquet',
                                     settings={'output_format_parquet_string_as_string': 1})
         res = test_client.query(
             f'SELECT count() as count, sum(rating) as rating, max(year) as year FROM {full_table}').first_item

@@ -1,10 +1,10 @@
 import uuid
 
-import pytest
-
 from typing import Callable
 
-from clickhouse_connect.driver import create_async_client, create_client
+import pytest
+
+from clickhouse_connect.driver import create_async_client
 from tests.integration_tests.conftest import TestConfig
 
 SESSION_KEY = 'session_id'
