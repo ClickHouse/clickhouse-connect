@@ -71,7 +71,8 @@ class HttpClient(Client):
                  server_host_name: Optional[str] = None,
                  apply_server_timezone: Optional[Union[str, bool]] = None,
                  show_clickhouse_errors: Optional[bool] = None,
-                 autogenerate_session_id: Optional[bool] = None):
+                 autogenerate_session_id: Optional[bool] = None,
+                 tls_mode: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -81,20 +82,20 @@ class HttpClient(Client):
         ch_settings = dict_copy(settings, self.params)
         self.http = pool_mgr
         if interface == 'https':
+            if isinstance(verify, str) and verify.lower() == 'proxy':
+                verify = True
+                tls_mode = tls_mode or 'proxy'
             if not https_proxy:
                 https_proxy = check_env_proxy('https', host, port)
-            if https_proxy and isinstance(verify, str) and verify.lower() == 'proxy':
-                verify = 'proxy'
-            else:
-                verify = coerce_bool(verify)
-            if client_cert and verify != 'proxy':
+            verify = coerce_bool(verify)
+            if client_cert and (tls_mode is None or tls_mode == 'mutual'):
                 if not username:
                     raise ProgrammingError('username parameter is required for Mutual TLS authentication')
                 self.headers['X-ClickHouse-User'] = username
                 self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
             # pylint: disable=too-many-boolean-expressions
             if not self.http and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
-                options = {'verify': verify is not False}
+                options = {'verify': verify}
                 dict_add(options, 'ca_cert', ca_cert)
                 dict_add(options, 'client_cert', client_cert)
                 dict_add(options, 'client_cert_key', client_cert_key)
@@ -112,7 +113,7 @@ class HttpClient(Client):
             else:
                 self.http = default_pool_manager()
 
-        if (not client_cert or verify == 'proxy') and username:
+        if (not client_cert or tls_mode in ('strict', 'proxy')) and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'

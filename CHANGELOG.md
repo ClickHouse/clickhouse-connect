@@ -7,11 +7,39 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
-## 0.8.0,
+## 0.8.0, 2024-09-26
+### Experimental Feature - "New" JSON/Dynamic/Variant DataTypes
+#### Usage Notes
+- JSON data can be inserted as either a Python dictionary or a JSON string containing a JSON object `{}`.  Other
+forms of JSON data are not supported
+- Valid formats for the JSON type are 'native', which returns a Python dictionary, or 'string', which returns a JSON string
+- Any value can be inserted into a Variant column, and ClickHouse will try to correctly determine the correct Variant
+Type for the value, based on its String representation.
+- More complete documentation for the new types will be provided in the future.
+
+#### Known limitations:
+- Each of these types must be enabled in the ClickHouse settings before using.  The "new" JSON type is available started
+with the 24.8 release
+- Returned JSON objects will only return the `max_dynamic_paths` number of elements (which defaults to 1024).  This
+will be fixed in a future release.
+- Inserts into `Dynamic` columns will always be the String representation of the Python value.  This will be fixed
+in a future release.
+- The implementation for the new types has not been optimized in C code, so performance may be somewhat slower than for
+simpler, established data types.
+
+This is the first time that a new `clickhouse_connect` features has been labeled "experimental", but these new
+datatypes are complex and still experimental in ClickHouse server.  Current test coverage for these types is also
+quite limited.  Please don't hesitate to report issues with the new types.
+
 ### Bug Fixes
+- When operating ClickHouse Server in `strict` TLS mode, HTTPS connections [require](https://github.com/ClickHouse/poco/blob/master/NetSSL_OpenSSL/include/Poco/Net/Context.h#L84-L89) a client certificate even if that
+certificate is not used for authentication.  A new client parameter `tls_mode='strict'` can be used in this situation where
+username/password authentication is being used with client certificates.  Other valid values for the new `tls_mode` setting
+are `'proxy'` when TLS termination occurs at a proxy, and `'mutual'` to specify mutual TLS authentication is used by
+the ClickHouse server.  If `tls_mode` is not set, and a client certificate and key are provided, `mutual` is assumed.
 - The server timezone was not being used for parameter binding if parameters were sent as a list instead of a dictionary.
 This should fully fix the reopened https://github.com/ClickHouse/clickhouse-connect/issues/377.
-- String port numbers (such as from environmental variables) are correctly interpreted to determine the correct interface/protocol.
+- String port numbers (such as from environmental variables) are now correctly interpreted to determine the correct interface/protocol.
 Fixes https://github.com/ClickHouse/clickhouse-connect/issues/395
 - Insert commands with a `SELECT FROM ... LIMIT 0` will no longer raise an exception.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/389.
 
@@ -42,6 +70,8 @@ slow processing of large queries will still cause connection and processing fail
     parameters={'p1_64': dt_value, 'a1_64': [dt_value1, dt_value2]}
   ```
   This closes https://github.com/ClickHouse/clickhouse-connect/issues/396, see also the similar issue https://github.com/ClickHouse/clickhouse-connect/issues/212
+
+
 ## 0.7.19, 2024-08-23
 ### Bug Fix
 - Insertion of large strings was triggering an exception. This has been fixed.
