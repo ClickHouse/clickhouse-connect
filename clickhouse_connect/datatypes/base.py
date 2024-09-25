@@ -113,7 +113,7 @@ class ClickHouseType(ABC):
             return self.byte_size
         total = 0
         for x in sample:
-            total += str(x)
+            total += len(str(x))
         return total / len(sample) + 1
 
     def write_column_prefix(self, dest: bytearray):

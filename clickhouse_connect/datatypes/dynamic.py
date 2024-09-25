@@ -35,7 +35,7 @@ class Variant(ClickHouseType):
         return read_variant_column(self.element_types, source, num_rows, ctx)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        write_json(self, column, dest, ctx)
+        write_str_values(self, column, dest, ctx)
 
 
 def read_variant_column(variant_types: List[ClickHouseType], source: ByteSource, num_rows:int, ctx: QueryContext) -> Sequence:
@@ -68,6 +68,10 @@ def read_variant_column(variant_types: List[ClickHouseType], source: ByteSource,
 class Dynamic(ClickHouseType):
     python_type = object
 
+    @property
+    def insert_name(self):
+        return 'String'
+
     def __init__(self, type_def:TypeDef):
         super().__init__(type_def)
         if type_def.keys and type_def.keys[0] == 'max_types':
@@ -76,6 +80,9 @@ class Dynamic(ClickHouseType):
     def read_column(self, source: ByteSource, num_rows:int, ctx:QueryContext):
         variant_types = read_dynamic_prefix(source)
         return read_variant_column(variant_types, source, num_rows, ctx)
+
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        write_str_values(self, column, dest, ctx)
 
 
 def read_dynamic_prefix(source: ByteSource) -> List[ClickHouseType]:
@@ -111,6 +118,17 @@ def write_json(ch_type:ClickHouseType, column: Sequence, dest: bytearray, ctx: I
         write_col = [to_json(v) for v in column]
         encoding = None
     handle_error(data_conv.write_str_col(write_col, ch_type.nullable, encoding, dest), ctx)
+
+
+def write_str_values(ch_type:ClickHouseType, column: Sequence, dest: bytearray, ctx: InsertContext):
+    encoding = ctx.encoding or ch_type.encoding
+    col = [''] * len(column)
+    for ix, v in enumerate(column):
+        if v is None:
+            col[ix] = 'NULL'
+        else:
+            col[ix] = str(v)
+    handle_error(data_conv.write_str_col(col, False, encoding, dest), ctx)
 
 
 class JSON(ClickHouseType):
