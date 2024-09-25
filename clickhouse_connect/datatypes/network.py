@@ -39,7 +39,7 @@ class IPv4(ClickHouseType):
                 column = [x._ip if x else 0 for x in column]
             else:
                 column = [x._ip for x in column]
-        write_array(self._array_type, column, dest, ctx)
+        write_array(self._array_type, column, dest, ctx.column_name)
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)

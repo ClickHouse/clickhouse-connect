@@ -45,7 +45,7 @@ class Date(ClickHouseType):
                 column = [0 if x is None else (x - esd).days for x in column]
             else:
                 column = [(x - esd).days for x in column]
-        write_array(self._array_type, column, dest, ctx)
+        write_array(self._array_type, column, dest, ctx.column_name)
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
@@ -136,7 +136,7 @@ class DateTime(DateTimeBase):
                 column = [int(x.timestamp()) if x else 0 for x in column]
             else:
                 column = [int(x.timestamp()) for x in column]
-        write_array(self._array_type, column, dest, ctx)
+        write_array(self._array_type, column, dest, ctx.column_name)
 
 
 class DateTime64(DateTimeBase):
@@ -213,4 +213,4 @@ class DateTime64(DateTimeBase):
                           for x in column]
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
-        write_array('q', column, dest, ctx)
+        write_array('q', column, dest, ctx.column_name)

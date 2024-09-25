@@ -2,13 +2,11 @@ import array
 import struct
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator, TYPE_CHECKING
+from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
-from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
+from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
 from clickhouse_connect.driver.types import Closable
 
-if TYPE_CHECKING:
-    from clickhouse_connect.driver.insert import InsertContext
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
@@ -41,13 +39,13 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def write_array(code: str, column: Sequence, dest: MutableSequence, ctx: 'InsertContext'):
+def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: Optional[str]=None):
     """
     Write a column of native Python data matching the array.array code
     :param code: Python array.array code matching the column data type
     :param column: Column of native Python values
     :param dest: Destination byte buffer
-    :param ctx: The InsertContext
+    :param col_name: Optional column name for error tracking
     """
     if len(column) and not isinstance(column[0], (int, float)):
         if code in ('f', 'F', 'd', 'D'):
@@ -58,7 +56,10 @@ def write_array(code: str, column: Sequence, dest: MutableSequence, ctx: 'Insert
         buff = struct.Struct(f'<{len(column)}{code}')
         dest += buff.pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        raise ctx.make_data_error('Unable to create Python array.  This is usually caused by trying to insert None ' +
+        col_msg = ''
+        if col_name:
+            col_msg = f' for source column `{col_name}`'
+        raise DataError(f'Unable to create Python array{col_msg}.  This is usually caused by trying to insert None ' +
                                   'values into a ClickHouse column that is not Nullable') from ex
 
 

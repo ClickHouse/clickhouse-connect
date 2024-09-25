@@ -2,6 +2,7 @@ from datetime import datetime, date
 from typing import Callable
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.binding import DT64Param
 
 
 def test_params(test_client: Client, table_context: Callable):
@@ -61,3 +62,27 @@ def test_params(test_client: Client, table_context: Callable):
     result = test_client.query(
         'SELECT count() FROM system.tables WHERE total_rows > %(p_0)d and total_rows < %(p_1)f', parameters=num_params)
     assert result.first_row[0] > 0
+
+
+def test_datetime_64_params(test_client: Client):
+    dt_values = [datetime(2023, 6, 1, 7, 40, 2, 250306), datetime(2023, 8, 17, 20, 0, 10, 777722)]
+    dt_params = {f'd{ix}': DT64Param(v) for ix, v in enumerate(dt_values)}
+    result = test_client.query('SELECT {d0:DateTime64(3)}, {d1:Datetime64(9)}', parameters=dt_params).first_row
+    assert result[0] == dt_values[0].replace(microsecond=250000)
+    assert result[1] == dt_values[1]
+
+    result = test_client.query('SELECT {a1:Array(DateTime64(6))}', parameters={'a1': [dt_params['d0'], dt_params['d1']]}).first_row
+    assert result[0] == dt_values
+
+    dt_params = {f'd{ix}_64': v for ix, v in enumerate(dt_values)}
+    result = test_client.query('SELECT {d0:DateTime64(3)}, {d1:Datetime64(9)}', parameters=dt_params).first_row
+    assert result[0] == dt_values[0].replace(microsecond=250000)
+    assert result[1] == dt_values[1]
+
+    result = test_client.query('SELECT {a1:Array(DateTime64(6))}',
+                               parameters={'a1_64': dt_values}).first_row
+    assert result[0] == dt_values
+
+    dt_params = [DT64Param(v) for v in dt_values]
+    result = test_client.query("SELECT %s as string, toDateTime64(%s,6) as dateTime", parameters = dt_params).first_row
+    assert result == ('2023-06-01 07:40:02.250306', dt_values[1])

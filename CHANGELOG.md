@@ -26,8 +26,22 @@ storing the data stream in the new intermediate buffer.  By default, this buffer
 processing of large queries where memory is not an issue, the buffer size can be increasing using the new `common` setting
 `http_buffer_size`.  This is a fix in some cases of https://github.com/ClickHouse/clickhouse-connect/issues/399, but note that
 slow processing of large queries will still cause connection and processing failures if the data cannot be buffered.
-
-
+- It is now possible to correctly bind `DateTime64` type parameters when calling Client `query` methods through one of two approaches:
+  - Wrap the Python `datetime.datetime` value in the new DT64Param class, e.g.
+  ```python
+    query = 'SELECT {p1:DateTime64(3)}'  # Server side binding with dictionary
+    parameters={'p1': DT64Param(dt_value)}
+  
+    query = 'SELECT %s as string, toDateTime64(%s,6) as dateTime' # Client side binding with list 
+    parameters=['a string', DT64Param(datetime.now())]
+  ```
+  - If using a dictionary of parameter values, append the string `_64` to the parameter name
+  ```python
+    query = 'SELECT {p1:DateTime64(3)}, {a1:Array(DateTime(3))}'  # Server side binding with dictionary
+  
+    parameters={'p1_64': dt_value, 'a1_64': [dt_value1, dt_value2]}
+  ```
+  This closes https://github.com/ClickHouse/clickhouse-connect/issues/396, see also the similar issue https://github.com/ClickHouse/clickhouse-connect/issues/212
 ## 0.7.19, 2024-08-23
 ### Bug Fix
 - Insertion of large strings was triggering an exception. This has been fixed.

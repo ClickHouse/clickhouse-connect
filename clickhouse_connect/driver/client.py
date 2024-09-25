@@ -20,8 +20,8 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
-from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer, \
-    quote_identifier
+from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer
+from clickhouse_connect.driver.binding import quote_identifier
 
 io.DEFAULT_BUFFER_SIZE = 1024 * 256
 logger = logging.getLogger(__name__)

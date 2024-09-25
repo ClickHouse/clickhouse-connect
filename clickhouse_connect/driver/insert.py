@@ -2,7 +2,7 @@ import logging
 from math import log
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
-from clickhouse_connect.driver.query import quote_identifier
+from clickhouse_connect.driver.binding import quote_identifier
 
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.context import BaseQueryContext
@@ -199,5 +199,5 @@ class InsertContext(BaseQueryContext):
         self.column_oriented = True
         return data
 
-    def make_data_error(self, error_message: str) -> DataError:
+    def data_error(self, error_message: str) -> DataError:
         return DataError(f"Failed to write column '{self.column_name}': {error_message}")

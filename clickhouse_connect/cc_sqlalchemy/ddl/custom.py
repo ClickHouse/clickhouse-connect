@@ -1,7 +1,7 @@
 from sqlalchemy.sql.ddl import DDL
 from sqlalchemy.exc import ArgumentError
 
-from clickhouse_connect.driver.query import quote_identifier
+from clickhouse_connect.driver.binding import quote_identifier
 
 
 #  pylint: disable=too-many-ancestors,abstract-method

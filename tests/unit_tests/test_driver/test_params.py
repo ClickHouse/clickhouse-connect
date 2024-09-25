@@ -2,7 +2,7 @@ from datetime import datetime, date
 
 import pytest
 
-from clickhouse_connect.driver.query import finalize_query, format_bind_value
+from clickhouse_connect.driver.binding import finalize_query, format_bind_value
 
 
 def test_finalize():

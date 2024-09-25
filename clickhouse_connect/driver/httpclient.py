@@ -24,7 +24,8 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_expiration
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryResult, QueryContext, quote_identifier, bind_query
+from clickhouse_connect.driver.query import QueryResult, QueryContext
+from clickhouse_connect.driver.binding import quote_identifier, bind_query
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform
 

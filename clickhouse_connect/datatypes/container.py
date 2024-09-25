@@ -3,7 +3,8 @@ import logging
 from typing import Sequence, Collection
 
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryContext, quote_identifier
+from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.json_impl import any_to_json
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
