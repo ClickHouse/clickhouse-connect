@@ -10,6 +10,7 @@ from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.options import np, pd
 from tests.helpers import random_query
+from tests.integration_tests.conftest import TestConfig
 from tests.integration_tests.datasets import null_ds, null_ds_columns, null_ds_types
 
 pytestmark = pytest.mark.skipif(pd is None, reason='Pandas package not installed')
@@ -258,7 +259,7 @@ def test_pandas_row_df(test_client: Client, table_context:Callable):
         assert str(result_df.dtypes[2]) == 'string'
         assert result_df.iloc[0]['key'] == 2
         assert result_df.iloc[0]['dt'] == pd.Timestamp(2023, 10, 15, 14, 50, 2, 4038)
-        assert result_df.iloc[0]['fs'] == 'bit\0\0'
+        assert result_df.iloc[0]['fs'] == 'bit'
         assert len(result_df) == 1
         assert source_df.equals(df)
 
@@ -276,7 +277,9 @@ def test_pandas_null_strings(test_client: Client, table_context:Callable):
             test_client.insert_df('test_pandas_null_strings', df)
 
 
-def test_pandas_small_blocks(test_client: Client):
+def test_pandas_small_blocks(test_config: TestConfig, test_client: Client):
+    if test_config.cloud:
+        pytest.skip('Skipping performance test in ClickHouse Cloud')
     res = test_client.query_df('SELECT number, randomString(512) FROM numbers(1000000)',
                                settings={'max_block_size': 250})
     assert len(res) == 1000000

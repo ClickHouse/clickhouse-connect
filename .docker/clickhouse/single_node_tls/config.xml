@@ -43,4 +43,6 @@
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>1000</flush_interval_milliseconds>
     </query_log>
+
+    <custom_settings_prefixes>SQL_</custom_settings_prefixes>
 </clickhouse>

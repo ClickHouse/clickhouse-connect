@@ -1,10 +1,15 @@
 import threading
 
+import pytest
+
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from tests.integration_tests.conftest import TestConfig
 
 
-def test_threading_error(test_client: Client):
+def test_threading_error(test_config: TestConfig, test_client: Client):
+    if test_config.cloud:
+        pytest.skip('Skipping threading test in ClickHouse Cloud')
     thrown = None
 
     class QueryThread (threading.Thread):

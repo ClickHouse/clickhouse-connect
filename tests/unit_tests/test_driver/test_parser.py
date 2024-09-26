@@ -22,6 +22,26 @@ def test_map_type():
     assert ch_type.name == 'Map(String, Decimal(5, 5))'
 
 
+def test_variant_type():
+    ch_type = get_from_name('Variant(UInt64, String, Array(UInt64))')
+    assert ch_type.name == 'Variant(UInt64, String, Array(UInt64))'
+
+
+def test_json_type():
+    names = ['JSON',
+             'JSON(max_dynamic_paths=100, a.b UInt32, SKIP `a.e`)',
+             "JSON(max_dynamic_types = 55, SKIP REGEXP 'a[efg]')",
+             'JSON(max_dynamic_types = 33, `a.b` UInt64, b.c String)']
+    parsed = ['JSON',
+               'JSON(max_dynamic_paths = 100, `a.b` UInt32, SKIP `a.e`)',
+               "JSON(max_dynamic_types = 55, SKIP REGEXP 'a[efg]')",
+               'JSON(max_dynamic_types = 33, `a.b` UInt64, `b.c` String)'
+               ]
+    for name, x in zip(names, parsed):
+        ch_type = get_from_name(name)
+        assert x == ch_type.name
+
+
 def test_remove_comments():
     sql = """SELECT -- 6dcd92a04feb50f14bbcf07c661680ba
 * FROM benchmark_results /*With an inline comment */ WHERE result = 'True'

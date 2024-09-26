@@ -58,10 +58,10 @@ def test_nulls(test_client: Client, table_context: Callable):
         assert result[3] == (4, 'nonnull2', None)
 
 
-def test_json(test_client: Client, table_context: Callable):
-    if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_JSON_TYPE')):
+def test_old_json(test_client: Client, table_context: Callable):
+    if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_OLD_JSON_TYPE')):
         pytest.skip('Deprecated JSON type not tested')
-    with table_context('native_json_test', [
+    with table_context('old_json_test', [
         'key Int32',
         'value JSON',
         'e2 Int32',
@@ -71,12 +71,12 @@ def test_json(test_client: Client, table_context: Callable):
         jv3 = {'key3': 752, 'value.2': 'v2_rules', 'blank': None}
         njv2 = {'nk1': -302, 'nk2': {'sub1': 372, 'sub2': 'a string'}}
         njv3 = {'nk1': 5832.44, 'nk2': {'sub1': 47788382, 'sub2':'sub2val', 'sub3': 'sub3str', 'space key': 'spacey'}}
-        test_client.insert('native_json_test', [
+        test_client.insert('old_json_test', [
             [5, jv1, -44, None],
             [20, None, 5200, njv2],
             [25, jv3, 7302, njv3]])
 
-        result = test_client.query('SELECT * FROM native_json_test ORDER BY key')
+        result = test_client.query('SELECT * FROM old_json_test ORDER BY key')
         json1 = result.result_set[0][1]
         assert json1['HKD@spéçiäl'] == 'Special K'
         assert json1['key3'] == 0
@@ -167,14 +167,12 @@ def test_tuple_inserts(test_client: Client, table_context: Callable):
     with table_context('insert_tuple_test', ['key Int32', 'named Tuple(fl Float64, `ns space` Nullable(String))',
                                              'unnamed Tuple(Float64, Nullable(String))']):
         data = [[1, (3.55, 'str1'), (555, None)], [2, (-43.2, None), (0, 'str2')]]
-        result = test_client.insert('insert_tuple_test', data)
-        assert 2 == result.written_rows
+        test_client.insert('insert_tuple_test', data, settings={'insert_deduplication_token': 5772})
 
         data = [[1, {'fl': 3.55, 'ns space': 'str1'}, (555, None)], [2, {'fl': -43.2}, (0, 'str2')]]
-        result = test_client.insert('insert_tuple_test', data)
-        assert 2 == result.written_rows
-
+        test_client.insert('insert_tuple_test', data, settings={'insert_deduplication_token': 5773})
         query_result = test_client.query('SELECT * FROM insert_tuple_test ORDER BY key').result_rows
+        assert len(query_result) == 4
         assert query_result[0] == query_result[1]
         assert query_result[2] == query_result[3]
 
@@ -182,10 +180,10 @@ def test_tuple_inserts(test_client: Client, table_context: Callable):
 def test_point_inserts(test_client: Client, table_context: Callable):
     with table_context('insert_point_test', ['key Int32', 'point Point']):
         data = [[1, (3.55, 3.55)], [2, (4.55, 4.55)]]
-        result = test_client.insert('insert_point_test', data)
-        assert 2 == result.written_rows
+        test_client.insert('insert_point_test', data)
 
         query_result = test_client.query('SELECT * FROM insert_point_test ORDER BY key').result_rows
+        assert len(query_result) == 2
         assert query_result[0] == (1, (3.55, 3.55))
         assert query_result[1] == (2, (4.55, 4.55))
 

@@ -103,6 +103,9 @@ def test_get_columns_only(test_client: Client):
     assert result.column_names == ('name', 'database')
     assert len(result.result_set) == 0
 
+    test_client.query('CREATE TABLE IF NOT EXISTS test_zero_insert (v Int8) ENGINE MergeTree() ORDER BY tuple()')
+    test_client.query('INSERT INTO test_zero_insert SELECT 1 LIMIT 0')
+
 
 def test_no_limit(test_client: Client):
     old_limit = test_client.query_limit

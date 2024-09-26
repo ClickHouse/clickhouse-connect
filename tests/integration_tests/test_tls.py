@@ -18,24 +18,24 @@ def test_basic_tls():
         pytest.skip('TLS tests not enabled')
     client = get_client(interface='https', host=host, port=10843, verify=False)
     assert client.command("SELECT 'insecure'") == 'insecure'
-    client.http.clear()
+    client.close_connections()
 
     client = get_client(interface='https', host=host, port=10843, ca_cert=f'{cert_dir}ca.crt')
     assert client.command("SELECT 'verify_server'") == 'verify_server'
-    client.http.clear()
+    client.close_connections()
 
     try:
         get_client(interface='https', host='localhost', port=10843, ca_cert=f'{cert_dir}ca.crt')
         pytest.fail('Expected TLS exception with a different hostname')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__.reason, SSLError)
-    client.http.clear()
+        assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
+    client.close_connections()
 
     try:
-        get_client(interface='https', host=host, port=10843)
+        get_client(interface='https', host='localhost', port=10843)
         pytest.fail('Expected TLS exception with a self-signed cert')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__.reason, SSLError)
+        assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
 
 
 def test_mutual_tls():

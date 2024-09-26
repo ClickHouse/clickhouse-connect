@@ -3,17 +3,16 @@ import os
 import random
 import time
 from subprocess import Popen, PIPE
-from typing import Iterator, NamedTuple, Sequence, Optional
+from typing import Iterator, NamedTuple, Sequence, Optional, Callable
 
 from pytest import fixture
 
-from clickhouse_connect import create_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver import AsyncClient, Client
+from clickhouse_connect.driver import AsyncClient, Client, create_client
 from tests.helpers import PROJECT_ROOT_DIR
 
 
@@ -42,11 +41,12 @@ def test_config_fixture() -> Iterator[TestConfig]:
     docker = host == 'localhost' and coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_DOCKER', 'False'))
     port = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_PORT', '0'))
     if not port:
-        port = 10723 if docker else 8123
-    cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'True'))
+        port = 8123
+    cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'False'))
     username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
     password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
-    test_database = f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}'
+    test_database = os.environ.get('CLICKHOUSE_CONNECT_TEST_DATABASE',
+                                   f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}')
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
     proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
@@ -59,6 +59,33 @@ def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
     yield test_config.test_database or 'default'
 
 
+@fixture(scope='session', name='test_create_client')
+def test_create_client_fixture(test_config: TestConfig) -> Callable:
+    def f(**kwargs):
+        client = create_client(host=test_config.host,
+                               port=test_config.port,
+                               user=test_config.username,
+                               password=test_config.password,
+                               compress=test_config.compress,
+                               settings={'allow_suspicious_low_cardinality_types': 1},
+                               client_name='int_tests/test',
+                               **kwargs)
+        if client.min_version('22.8'):
+            client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
+        if client.min_version('24.8') and not test_config.cloud:
+            client.set_client_setting('allow_experimental_json_type', 1)
+            client.set_client_setting('allow_experimental_dynamic_type', 1)
+            client.set_client_setting('allow_experimental_variant_type', 1)
+        if test_config.insert_quorum:
+            client.set_client_setting('insert_quorum', test_config.insert_quorum)
+        elif test_config.cloud:
+            client.set_client_setting('select_sequential_consistency', 1)
+        client.database = test_config.test_database
+        return client
+
+    return f
+
+
 @fixture(scope='session', name='test_table_engine')
 def test_table_engine_fixture() -> Iterator[str]:
     yield 'MergeTree'
@@ -66,7 +93,7 @@ def test_table_engine_fixture() -> Iterator[str]:
 
 # pylint: disable=too-many-branches
 @fixture(scope='session', autouse=True, name='test_client')
-def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Client]:
+def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -> Iterator[Client]:
     compose_file = f'{PROJECT_ROOT_DIR}/docker-compose.yml'
     if test_config.docker:
         run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
@@ -74,45 +101,27 @@ def test_client_fixture(test_config: TestConfig, test_db: str) -> Iterator[Clien
         pull_result = run_cmd(['docker', 'compose', '-f', compose_file, 'pull'])
         if pull_result[0]:
             raise TestException(f'Failed to pull latest docker image(s): {pull_result[2]}')
-        up_result = run_cmd(['docker', 'compose', '-f', compose_file, 'up', '-d', 'clickhouse'])
+        up_result = run_cmd(['docker', 'compose', '-f', compose_file, 'up', '-d'])
         if up_result[0]:
             raise TestException(f'Failed to start docker: {up_result[2]}')
         time.sleep(5)
     tries = 0
+    if test_config.docker:
+        HttpClient.params = {'SQL_test_setting': 'value'}
+        HttpClient.valid_transport_settings.add('SQL_test')
     while True:
         tries += 1
         try:
-            if test_config.docker:
-                HttpClient.params = {'SQL_test_setting': 'value'}
-                HttpClient.valid_transport_settings.add('SQL_test')
-            client = create_client(
-                host=test_config.host,
-                port=test_config.port,
-                username=test_config.username,
-                password=test_config.password,
-                query_limit=0,
-                compress=test_config.compress,
-                client_name='int_tests/test',
-                settings={'allow_suspicious_low_cardinality_types': True,
-                          'insert_deduplicate': False,
-                          'async_insert': 0}
-            )
+            client = test_create_client()
             break
         except OperationalError as ex:
             if tries > 10:
                 raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
-    if client.min_version('22.8'):
-        client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
-    if test_config.insert_quorum:
-        client.set_client_setting('insert_quorum', test_config.insert_quorum)
-    elif test_config.cloud:
-        client.set_client_setting('select_sequential_consistency', 1)
-    client.command(f'CREATE DATABASE IF NOT EXISTS {test_db}', use_database=False)
-    client.database = test_db
+    client.command(f'CREATE DATABASE IF NOT EXISTS {test_config.test_database}', use_database=False)
     yield client
 
-    client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
+    # client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
     if test_config.docker:
         down_result = run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:

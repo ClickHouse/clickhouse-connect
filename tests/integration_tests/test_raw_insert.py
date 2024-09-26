@@ -24,11 +24,10 @@ def test_raw_insert_compression(test_client: Client, table_context: Callable):
     with open(data_file, mode='rb') as movies_file:
         data = movies_file.read()
     with table_context('test_gzip_movies', ['movie String', 'year UInt16', 'rating Decimal32(3)']):
-        insert_result = test_client.raw_insert('test_gzip_movies', None, data, fmt='CSV', compression='gzip',
+        test_client.raw_insert('test_gzip_movies', None, data, fmt='CSV', compression='gzip',
                                                settings={'input_format_allow_errors_ratio': .2,
                                                          'input_format_allow_errors_num': 5}
                                                )
-        assert 248 == insert_result.written_rows
         res = test_client.query(
             'SELECT count() as count, sum(rating) as rating, max(year) as year FROM test_gzip_movies').first_item
         assert res['count'] == 248

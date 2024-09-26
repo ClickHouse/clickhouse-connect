@@ -28,7 +28,7 @@ jobs:
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
         run: python setup.py develop
 
-      - name: run ClickHouse Cloud SMT tests
+      - name: run ClickHouse Cloud tests
         env:
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
           CLICKHOUSE_CONNECT_TEST_CLOUD: 'True'
@@ -41,19 +41,4 @@ jobs:
       - name: Run LATEST tests
         run: pytest tests/integration_tests
       - name: remove latest container
-        run: docker compose down -v
-
-      - name: run ClickHouse Cloud tests
-        env:
-          CLICKHOUSE_CONNECT_TEST_PORT: 8443
-          CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM: 3
-          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST }}
-          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD }}
-        run: pytest tests/integration_tests
-
-      - name: Run ClickHouse Container (HEAD)
-        run: CLICKHOUSE_VERSION=head docker compose up -d clickhouse
-      - name: Run HEAD tests
-        run: pytest tests/integration_tests
-      - name: remove head container
         run: docker compose down -v

@@ -58,17 +58,15 @@ jobs:
     strategy:
       matrix:
         python-version:
-          - '3.8'
           - '3.9'
           - '3.10'
           - '3.11'
           - '3.12'
         clickhouse-version:
-          - '23.8'
-          - '23.12'
-          - '24.1'
-          - '24.2'
           - '24.3'
+          - '24.6'
+          - '24.7'
+          - '24.8'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
@@ -99,14 +97,11 @@ jobs:
           sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
       - name: Run tests
         env:
+          CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest tests
-      - name: Run TLS tests
-        env:
-          CLICKHOUSE_CONNECT_TEST_TLS: 1
-        run: pytest tests/tls
 
   check-secret:
     runs-on: ubuntu-latest
