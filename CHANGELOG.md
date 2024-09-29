@@ -7,6 +7,10 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.8.1, 2024-09-29
+### Bug Fix
+- Fixed an edge case where the HTTP buffer could theoretically return empty blocks.  
+
 ## 0.8.0, 2024-09-26
 ### Experimental Feature - "New" JSON/Dynamic/Variant DataTypes
 #### Usage Notes
