@@ -7,6 +7,13 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.8.2, 2024-10-04
+### Bug Fix
+- Ensure lz4 compression does not exit on an empty block.  May fix https://github.com/ClickHouse/clickhouse-connect/issues/403.
+
+### Improvement
+- Compress Arrow inserts (using pyarrow compression) if compression is set to `lz4` or `zstd`.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/267.
+
 ## 0.8.1, 2024-09-29
 ### Bug Fix
 - Fixed an edge case where the HTTP buffer could theoretically return empty blocks.  

@@ -14,8 +14,8 @@ def test_arrow(test_client: Client, table_context: Callable):
     if not test_client.min_version('21'):
         pytest.skip(f'PyArrow is not supported in this server version {test_client.server_version}')
     with table_context('test_arrow_insert', ['animal String', 'legs Int64']):
-        n_legs = arrow.array([2, 4, 5, 100])
-        animals = arrow.array(['Flamingo', 'Horse', 'Brittle stars', 'Centipede'])
+        n_legs = arrow.array([2, 4, 5, 100] * 50)
+        animals = arrow.array(['Flamingo', 'Horse', 'Brittle stars', 'Centipede'] * 50)
         names = ['legs', 'animal']
         insert_table = arrow.Table.from_arrays([n_legs, animals], names=names)
         test_client.insert_arrow('test_arrow_insert', insert_table)
@@ -26,7 +26,7 @@ def test_arrow(test_client: Client, table_context: Callable):
         assert arrow_schema.field(1).name == 'legs'
         assert arrow_schema.field(1).type == arrow.int64()
         # pylint: disable=no-member
-        assert arrow.compute.sum(result_table['legs']).as_py() == 111
+        assert arrow.compute.sum(result_table['legs']).as_py() == 5550
         assert len(result_table.columns) == 2
 
     arrow_table = test_client.query_arrow('SELECT number from system.numbers LIMIT 500',
