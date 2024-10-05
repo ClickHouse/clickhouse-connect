@@ -37,7 +37,7 @@ jobs:
         run: pytest tests/integration_tests
 
       - name: Run ClickHouse Container (LATEST)
-        run: CLICKHOUSE_VERSION=latest docker compose up -d clickhouse
+        run: CLICKHOUSE_CONNECT_TEST_CH_VERSION=latest docker compose up -d clickhouse
       - name: Run LATEST tests
         run: pytest tests/integration_tests
       - name: remove latest container
