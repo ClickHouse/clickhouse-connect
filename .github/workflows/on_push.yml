@@ -64,9 +64,9 @@ jobs:
           - '3.12'
         clickhouse-version:
           - '24.3'
-          - '24.6'
           - '24.7'
           - '24.8'
+          - '24.9'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
@@ -76,7 +76,7 @@ jobs:
       - name: Start ClickHouse (version - ${{ matrix.clickhouse-version }}) in Docker
         uses: hoverkraft-tech/compose-action@v2.0.0
         env:
-          CLICKHOUSE_VERSION: ${{ matrix.clickhouse-version }}
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ matrix.clickhouse-version }}
         with:
           compose-file: 'docker-compose.yml'
           down-flags: '--volumes'

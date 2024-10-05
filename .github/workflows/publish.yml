@@ -102,7 +102,7 @@ jobs:
 
   build_macos_wheels:
     name: Build wheels on macos
-    runs-on: macos-12
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
