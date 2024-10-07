@@ -7,6 +7,12 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.8.3, 2024-10-07
+### Improvement
+- Add an optional `executor_threads` argument to the `get_async_client` method.  This controls the number of concurrent
+threads that each AsyncClient has available for queries.  Defaults to "number of CPU cores plus four".  Closes
+https://github.com/ClickHouse/clickhouse-connect/issues/407
+
 ## 0.8.2, 2024-10-04
 ### Bug Fix
 - Ensure lz4 compression does not exit on an empty block.  May fix https://github.com/ClickHouse/clickhouse-connect/issues/403.
