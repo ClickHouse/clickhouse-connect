@@ -2,7 +2,8 @@ from datetime import datetime, date
 
 null_ds = [('key1', 1000, 77.3, 'value1', datetime(2022, 10, 15, 10, 3, 2), None),
            ('key2', 2000, 882.00, None, None, date(1976, 5, 5)),
-           ('key3', None, float('nan'), 'value3', datetime(2022, 7, 4), date(1999, 12, 31))]
+           ('key3', None, float('nan'), 'value3', datetime(2022, 7, 4), date(1999, 12, 31)),
+           ('key4', 3000, None, 'value4', None, None)]
 null_ds_columns = ['key', 'num', 'flt', 'str', 'dt', 'd']
 null_ds_types = ['String', 'Nullable(Int32)', 'Nullable(Float64)', 'Nullable(String)', 'Nullable(DateTime)',
                  'Nullable(Date)']

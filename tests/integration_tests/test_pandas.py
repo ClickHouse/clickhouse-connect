@@ -55,6 +55,7 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
         assert pd.isna(result_df.iloc[1]['dt'])
         assert pd.isna(result_df.iloc[2]['flt'])
         assert pd.isna(result_df.iloc[2]['num'])
+        assert pd.isnull(result_df.iloc[3]['flt'])
         assert result_df['num'].dtype.name == 'Int32'
         if test_client.protocol_version:
             assert isinstance(result_df['dt'].dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
@@ -94,12 +95,12 @@ def test_pandas_context_inserts(test_client: Client, table_context: Callable):
         insert_context = test_client.create_insert_context('test_pandas_multiple', df.columns)
         insert_context.data = df
         test_client.data_insert(insert_context)
-        assert test_client.command('SELECT count() FROM test_pandas_multiple') == 3
+        assert test_client.command('SELECT count() FROM test_pandas_multiple') == 4
         next_df = pd.DataFrame(
             [['key4', -415, None, 'value4', datetime(2022, 7, 4, 15, 33, 4, 5233), date(1999, 12, 31)]],
             columns=null_ds_columns)
         test_client.insert_df(df=next_df, context=insert_context)
-        assert test_client.command('SELECT count() FROM test_pandas_multiple') == 4
+        assert test_client.command('SELECT count() FROM test_pandas_multiple') == 5
         assert df.equals(source_df)
 
 

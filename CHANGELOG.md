@@ -7,6 +7,14 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.8.4, 2024-10-23
+### Bug fixes
+- ClickHouse errors are now detected and throw an exception even if the HTTP status code returned by ClickHouse is a 200.
+This can happen when there is a long-running query (such as a large `INSERT INTO ... SELECT FROM ...`) and `send_progress_in_http_headers`
+is enabled to keep the HTTP connection open.
+- Pandas NA (which is equivalent to Float NaN for Float values) is now inserted as NULL into Nullable(Float*) columns.  Closes
+https://github.com/ClickHouse/clickhouse-connect/issues/412
+
 ## 0.8.3, 2024-10-07
 ### Improvement
 - Add an optional `executor_threads` argument to the `get_async_client` method.  This controls the number of concurrent
