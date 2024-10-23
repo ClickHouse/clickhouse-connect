@@ -13,7 +13,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## 0.8.4, 2024-10-23
 ### Improvement
-- Python 3.13 is now included in CI tests and 3.13 wheels are built for distribution
+- Python 3.13 is now included in CI tests and 3.13 wheels are built for distribution.  Note that PyArrow is not yet
+available for Python 3.13.
 
 ### Bug fixes
 - ClickHouse errors are now detected and throw an exception even if the HTTP status code returned by ClickHouse is a 200.

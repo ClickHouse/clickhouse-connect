@@ -6,8 +6,9 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pytest
+
+from clickhouse_connect.driver.options import arrow
 
 from clickhouse_connect.driver import AsyncClient
 
@@ -141,13 +142,17 @@ async def test_create_query_context(test_async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_query_arrow(test_async_client: AsyncClient):
+    if not arrow:
+        pytest.skip('PyArrow package not available')
     result = await test_async_client.query_arrow('SELECT number FROM numbers(5)')
-    assert isinstance(result, pa.Table)
+    assert isinstance(result, arrow.Table)
     assert list(result[0].to_pylist()) == [0, 1, 2, 3, 4]
 
 
 @pytest.mark.asyncio
 async def test_query_arrow_stream(test_async_client: AsyncClient):
+    if not arrow:
+        pytest.skip('PyArrow package not available')
     stream = await test_async_client.query_arrow_stream('SELECT number FROM numbers(5)')
     result = []
     with stream:
@@ -186,8 +191,10 @@ async def test_insert_df(test_async_client: AsyncClient, table_context: Callable
 
 @pytest.mark.asyncio
 async def test_insert_arrow(test_async_client: AsyncClient, table_context: Callable):
+    if not arrow:
+        pytest.skip('PyArrow package not available')
     with table_context('test_async_client_insert_arrow', ['key UInt32', 'value String']) as ctx:
-        data = pa.Table.from_arrays([pa.array([42, 144]), pa.array(['str_0', 'str_1'])], names=['key', 'value'])
+        data = arrow.Table.from_arrays([arrow.array([42, 144]), arrow.array(['str_0', 'str_1'])], names=['key', 'value'])
         await test_async_client.insert_arrow(ctx.table, data)
         result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
         assert result_set == [[42, 144], ['str_0', 'str_1']]
