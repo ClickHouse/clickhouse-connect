@@ -1,5 +1,9 @@
 # ClickHouse Connect ChangeLog
 
+### WARNING -- Python 3.8 EOL
+Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
+3.8 wheel distributions.
+
 ### WARNING -- Impending Breaking Change - Server Settings in DSN
 When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
 converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
@@ -8,6 +12,9 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
 ## 0.8.4, 2024-10-23
+### Improvement
+- Python 3.13 is now included in CI tests and 3.13 wheels are built for distribution
+
 ### Bug fixes
 - ClickHouse errors are now detected and throw an exception even if the HTTP status code returned by ClickHouse is a 200.
 This can happen when there is a long-running query (such as a large `INSERT INTO ... SELECT FROM ...`) and `send_progress_in_http_headers`
