@@ -11,6 +11,13 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
 
+## 0.8.5, 2024-10-24
+### Bug fix
+- Inserts into a Nullable integer/float column could throw an exception if the first value was `None` and the column
+required conversion to the numeric type (such as Python str to float).  This has been fixed.  Note that "mixed" Python
+types in an insert data set will still throw an exception (i.e., Python strings and ints should not be combined into
+the same column for insert.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/414
+
 ## 0.8.4, 2024-10-23
 ### Improvement
 - Python 3.13 is now included in CI tests and 3.13 wheels are built for distribution.  Note that PyArrow is not yet

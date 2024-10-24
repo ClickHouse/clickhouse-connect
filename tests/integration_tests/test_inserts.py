@@ -25,12 +25,14 @@ def test_decimal_conv(test_client: Client, table_context: Callable):
         result = test_client.query('SELECT * FROM test_num_conv').result_set
         assert result == [(5, -182, 55.2), (57238478234, 77, -29.5773)]
 
+
 def test_float_decimal_conv(test_client: Client, table_context: Callable):
     with table_context('test_float_to_dec_conv', ['col1 Decimal32(6)','col2 Decimal32(6)', 'col3 Decimal128(6)', 'col4 Decimal128(6)']):
         data = [[0.492917, 0.49291700, 0.492917, 0.49291700]]
         test_client.insert('test_float_to_dec_conv', data)
         result = test_client.query('SELECT * FROM test_float_to_dec_conv').result_set
         assert result == [(Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"))]
+
 
 def test_bad_data_insert(test_client: Client, table_context: Callable):
     with table_context('test_bad_insert', ['key Int32', 'float_col Float64']):
@@ -70,3 +72,22 @@ def test_column_names_spaces(test_client: Client, table_context: Callable):
         result = test_client.query('SELECT * FROM test_column_spaces').result_rows
         assert result[0][0] == 1
         assert result[1][1] == 'str 2'
+
+
+def test_numeric_conversion(test_client: Client, table_context: Callable):
+    with table_context('test_numeric_convert',
+                       columns=['key Int32', 'n_int Nullable(UInt64)', 'n_flt Nullable(Float64)']):
+        data = [[1, None, None], [2, '2', '5.32']]
+        test_client.insert('test_numeric_convert', data)
+        result = test_client.query('SELECT * FROM test_numeric_convert').result_rows
+        assert result[1][1] == 2
+        assert result[1][2] == float('5.32')
+        test_client.command('TRUNCATE TABLE test_numeric_convert')
+        data = [[0, '55', '532.48'], [1, None, None], [2, '2', '5.32']]
+        test_client.insert('test_numeric_convert', data)
+        result = test_client.query('SELECT * FROM test_numeric_convert').result_rows
+        assert result[0][1] == 55
+        assert result[0][2] == 532.48
+        assert result[1][1] is None
+        assert result[2][1] == 2
+        assert result[2][2] == 5.32
