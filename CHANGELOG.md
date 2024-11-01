@@ -9,7 +9,12 @@ When creating a DBAPI Connection method using the Connection constructor or a SQ
 converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
 release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
-The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.  
+The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
+
+## 0.8.6, 2024-11-01
+### Bug Fixes
+- Correctly stream unchunked HTTP responses.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/417.
+- Don't use `wait_end_of_query` for any streaming requests.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/416
 
 ## 0.8.5, 2024-10-24
 ### Bug fix
