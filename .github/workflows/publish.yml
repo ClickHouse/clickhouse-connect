@@ -137,13 +137,13 @@ jobs:
 
   publish:
     needs:
-      - build_macos_wheels
-      - build_windows_wheels
-      - build_x86_musllinux_wheels
-      - build_x86_manylinux_wheels
-      - build_aarch64_musllinux_wheels
-      - build_aarch64_manylinux_wheels
-      - build_aarch64_pypy_wheels
+   #   - build_macos_wheels
+   #   - build_windows_wheels
+   #   - build_x86_musllinux_wheels
+   #   - build_x86_manylinux_wheels
+   #   - build_aarch64_musllinux_wheels
+   #   - build_aarch64_manylinux_wheels
+   #   - build_aarch64_pypy_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
     if: ${{ inputs.publish_type != 'build' }}
