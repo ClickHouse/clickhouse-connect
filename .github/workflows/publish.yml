@@ -136,7 +136,7 @@ jobs:
           path: ./wheelhouse/*.whl
 
   publish:
-    needs:
+   # needs:
    #   - build_macos_wheels
    #   - build_windows_wheels
    #   - build_x86_musllinux_wheels
