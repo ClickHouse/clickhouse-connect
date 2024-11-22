@@ -161,16 +161,16 @@ jobs:
         run: |
           rm -rf dist 
           python setup.py sdist
-      - name: Retrieve wheels
-        uses: actions/download-artifact@v4
-        with:
-          pattern: build-*
-          merge-multiple: true
-          path: wheelhouse
-      - name: move and list artifacts
-        run: |
-          cp -R wheelhouse/*.whl dist
-          ls -R dist
+      #- name: Retrieve wheels
+      #  uses: actions/download-artifact@v4
+      #  with:
+      #    pattern: build-*
+      #    merge-multiple: true
+      #    path: wheelhouse
+      #- name: move and list artifacts
+      #  run: |
+      #    cp -R wheelhouse/*.whl dist
+      #    ls -R dist
 
       - name: Publish (Release)
         if: ${{ inputs.publish_type == 'release' }}
