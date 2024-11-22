@@ -18,6 +18,7 @@ jobs:
   build_x86_manylinux_wheels:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
+    if: false
     env:
       CIBW_SKIP: 'cp36-* cp37-* pp37-* *-musllinux*'
     steps:
@@ -32,6 +33,7 @@ jobs:
   build_x86_musllinux_wheels:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
+    if: false
     env:
       CIBW_SKIP: 'cp36-* cp37-* pp37-* *-manylinux*'
     steps:
@@ -46,6 +48,7 @@ jobs:
   build_aarch64_manylinux_wheels:
     name: Build aarch64 manylinux wheels
     runs-on: ubuntu-latest
+    if: false
     env:
       CIBW_ARCHS_LINUX: aarch64
       CIBW_SKIP: 'cp36-* cp37-* pp* *-musllinux*'
@@ -65,6 +68,7 @@ jobs:
   build_aarch64_musllinux_wheels:
     name: Build aarch64 musllinux wheels
     runs-on: ubuntu-latest
+    if: false
     env:
       CIBW_ARCHS_LINUX: aarch64
       CIBW_SKIP: 'cp36-* cp37-* pp* *-manylinux*'
@@ -84,6 +88,7 @@ jobs:
   build_aarch64_pypy_wheels:
     name: Build aarch64 PyPy wheels
     runs-on: ubuntu-latest
+    if: false
     env:
       CIBW_ARCHS_LINUX: aarch64
       CIBW_BUILD: 'pp*'
@@ -103,6 +108,7 @@ jobs:
   build_macos_wheels:
     name: Build wheels on macos
     runs-on: macos-14
+    if: false
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -117,6 +123,7 @@ jobs:
   build_windows_wheels:
     name: Build wheels on Windows
     runs-on: windows-latest
+    if: false
     env:
       CIBW_BUILD_VERBOSITY: 2
     steps:
@@ -142,6 +149,14 @@ jobs:
     if: ${{ inputs.publish_type != 'build' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Python (3.12)
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Install Dependencies
+        run: !
+          pip install twine
+          pip install -U setuptools
       - name: Build source distribution
         run: |
           rm -rf dist 
@@ -156,8 +171,7 @@ jobs:
         run: |
           cp -R wheelhouse/*.whl dist
           ls -R dist
-      - name: Install Twine
-        run:  pip install twine
+
       - name: Publish (Release)
         if: ${{ inputs.publish_type == 'release' }}
         env:
