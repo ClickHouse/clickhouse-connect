@@ -14,11 +14,11 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## 0.8.7, 2024-11-21
 ### Improvement
 - Added basic support for ClickHouse geometric types Ring, Polygon, MultiPolygon, LineString, and MultiLineString.
-Closed 
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/427
 - 
 ### Bug Fix
 - Settings/parameters from one Client will no longer leak into later client instantiations.  Fixes
-https://github.com/ClickHouse/clickhouse-connect/issues/427
+https://github.com/ClickHouse/clickhouse-connect/issues/426
 
 ## 0.8.6, 2024-11-01
 ### Bug Fixes
