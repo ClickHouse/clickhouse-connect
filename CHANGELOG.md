@@ -11,6 +11,15 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 0.8.7, 2024-11-21
+### Improvement
+- Added basic support for ClickHouse geometric types Ring, Polygon, MultiPolygon, LineString, and MultiLineString.
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/427
+- 
+### Bug Fix
+- Settings/parameters from one Client will no longer leak into later client instantiations.  Fixes
+https://github.com/ClickHouse/clickhouse-connect/issues/426
+
 ## 0.8.6, 2024-11-01
 ### Bug Fixes
 - Correctly stream unchunked HTTP responses.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/417.
