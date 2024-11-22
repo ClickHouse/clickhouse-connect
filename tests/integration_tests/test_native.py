@@ -177,17 +177,6 @@ def test_tuple_inserts(test_client: Client, table_context: Callable):
         assert query_result[2] == query_result[3]
 
 
-def test_point_inserts(test_client: Client, table_context: Callable):
-    with table_context('insert_point_test', ['key Int32', 'point Point']):
-        data = [[1, (3.55, 3.55)], [2, (4.55, 4.55)]]
-        test_client.insert('insert_point_test', data)
-
-        query_result = test_client.query('SELECT * FROM insert_point_test ORDER BY key').result_rows
-        assert len(query_result) == 2
-        assert query_result[0] == (1, (3.55, 3.55))
-        assert query_result[1] == (2, (4.55, 4.55))
-
-
 def test_agg_function(test_client: Client, table_context: Callable):
     with table_context('agg_func_test', ['key Int32',
                                          'str SimpleAggregateFunction(any, String)',

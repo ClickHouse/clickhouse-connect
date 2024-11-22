@@ -12,9 +12,13 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## 0.8.7, 2024-11-21
+### Improvement
+- Added basic support for ClickHouse geometric types Ring, Polygon, MultiPolygon, LineString, and MultiLineString.
+Closed 
+- 
 ### Bug Fix
 - Settings/parameters from one Client will no longer leak into later client instantiations.  Fixes
-https://github.com/ClickHouse/clickhouse-connect/issues/426
+https://github.com/ClickHouse/clickhouse-connect/issues/427
 
 ## 0.8.6, 2024-11-01
 ### Bug Fixes
