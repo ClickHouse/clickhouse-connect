@@ -154,7 +154,7 @@ jobs:
         with:
           python-version: 3.12
       - name: Install Dependencies
-        run: !
+        run: |
           pip install twine
           pip install -U setuptools
       - name: Build source distribution
