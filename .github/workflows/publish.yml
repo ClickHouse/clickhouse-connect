@@ -142,6 +142,14 @@ jobs:
     if: ${{ inputs.publish_type != 'build' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Python (3.12)
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Install Dependencies
+        run: |
+          pip install twine
+          pip install -U setuptools
       - name: Build source distribution
         run: |
           rm -rf dist 
@@ -156,8 +164,6 @@ jobs:
         run: |
           cp -R wheelhouse/*.whl dist
           ls -R dist
-      - name: Install Twine
-        run:  pip install twine
       - name: Publish (Release)
         if: ${{ inputs.publish_type == 'release' }}
         env:
