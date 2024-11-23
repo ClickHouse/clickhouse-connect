@@ -164,8 +164,6 @@ jobs:
         run: |
           cp -R wheelhouse/*.whl dist
           ls -R dist
-      - name: Install Twine
-        run:  pip install twine
       - name: Publish (Release)
         if: ${{ inputs.publish_type == 'release' }}
         env:
