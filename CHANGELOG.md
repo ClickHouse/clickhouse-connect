@@ -11,6 +11,13 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 0.8.9, 2024-12-02
+### Bug Fix
+- Roll back some timezone changes that caused incorrect usage of "local time" objects for some ClickHouse queries.  Note that
+has deprecated "naive" timestamps; however converting everything to timezone aware objects (with the UTC timezone as appropriate)
+causes some numpy and possibly Pandas side effects.  Eventually naive datetime object support will be deprecated/eliminated,
+but it will take some time to ensure no breaking changes.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/433
+
 ## 0.8.8, 2024-11-27
 ### Improvement
 - Handle low level HTTP errors as "Stream Complete".  This provides better compatibility with the most recent
