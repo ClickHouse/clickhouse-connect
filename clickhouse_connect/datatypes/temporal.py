@@ -79,6 +79,7 @@ class Date32(Date):
         return data_conv.read_date32_col(source, num_rows)
 
 
+from_ts_naive = datetime.utcfromtimestamp
 from_ts_tz = datetime.fromtimestamp
 
 
@@ -192,7 +193,7 @@ class DateTime64(DateTimeBase):
     def _read_binary_naive(self, column: Sequence):
         new_col = []
         app = new_col.append
-        dt_from = datetime.fromtimestamp
+        dt_from = datetime.utcfromtimestamp
         prec = self.prec
         for ticks in column:
             seconds = ticks // prec
