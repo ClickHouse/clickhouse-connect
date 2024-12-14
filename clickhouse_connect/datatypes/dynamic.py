@@ -70,7 +70,7 @@ class Dynamic(ClickHouseType):
 
     @property
     def insert_name(self):
-       return 'String'
+        return 'String'
 
     def __init__(self, type_def:TypeDef):
         super().__init__(type_def)
@@ -188,14 +188,10 @@ class JSON(ClickHouseType):
         if parts:
             self._name_suffix = f'({", ".join(parts)})'
 
-    #@property
-    #def insert_name(self):
-    #    return 'String'
-
     def write_column_prefix(self, dest: bytearray):
         write_uint64(0x1, dest)
 
-    def read_column_prefix(self, source: ByteSource, _ctx: QueryContext):
+    def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         serialize_version = source.read_uint64()
         if serialize_version == 0:
             source.read_leb128()  # max dynamic types, we ignore this value
