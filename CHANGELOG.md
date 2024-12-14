@@ -4,12 +4,27 @@
 Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
 3.8 wheel distributions.
 
+### WARNING -- JSON Incompatibility between versions 22.8 and 22.10
+The internal serialization format for experimental JSON was updated in ClickHouse version 24.10.  `clickhouse-connect`
+will set the compatibility level on a global basis based on the last client created, so multiple clients using the
+library with mixed versions 22.8/22.9 and 22.10 and later versions will break.  If you need JSON support for mixed
+versions you must use different Python interpreters for each version.
+
 ### WARNING -- Impending Breaking Change - Server Settings in DSN
 When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
 converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
 release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
+
+## 0.8.10, 2024-12-14
+### Bug Fixes
+- The experimental JSON type would break in some circumstances with ClickHouse server version 24.10 and later.  This has
+been fixed.  The fix is incompatible with ClickHouse version 24.8 and 24.9 however, so see the above WARNING about
+mixing JSON types
+- Experimental JSON types within a Tuple was broken.  This has been fixed; however, the fix fails on ClickHouse server
+versions 24.8 and 24.9.  If you need Tuple(JSON) support, you must use ClickHouse server version 24.10 or later.
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/436.
 
 ## 0.8.9, 2024-12-02
 ### Bug Fix

@@ -105,6 +105,8 @@ def test_typed_json(test_client: Client, table_context: Callable):
 
 def test_complex_json(test_client: Client, table_context: Callable):
     type_available(test_client, 'json')
+    if not test_client.min_version('24.10'):
+        pytest.skip('Complex JSON broken before 24.10')
     with table_context('new_json_complex', [
         'key Int32',
         'value Tuple(t JSON)'

@@ -14,6 +14,8 @@ from clickhouse_connect.json_impl import any_to_json
 SHARED_DATA_TYPE: ClickHouseType
 STRING_DATA_TYPE: ClickHouseType
 
+json_serialization_format = 0x1
+
 class Variant(ClickHouseType):
     _slots = 'element_types'
     python_type = object
@@ -188,8 +190,15 @@ class JSON(ClickHouseType):
         if parts:
             self._name_suffix = f'({", ".join(parts)})'
 
+    @property
+    def insert_name(self):
+        if json_serialization_format == 0:
+            return 'String'
+        return super().insert_name
+
     def write_column_prefix(self, dest: bytearray):
-        write_uint64(0x1, dest)
+        if json_serialization_format > 0:
+            write_uint64(json_serialization_format, dest)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         serialize_version = source.read_uint64()
