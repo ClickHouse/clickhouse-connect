@@ -9,9 +9,13 @@ from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
 
 
+def type_available(test_client: Client, data_type: str):
+    if not test_client.get_client_setting(f'allow_experimental_{data_type}_type'):
+        pytest.skip(f'New {data_type.upper()} type not available in this version: {test_client.server_version}')
+
+
 def test_variant(test_client: Client, table_context: Callable):
-    if not test_client.get_client_setting('allow_experimental_variant_type'):
-        pytest.skip(f'New Variant type not available in this version: {test_client.server_version}')
+    type_available(test_client, 'variant')
     with table_context('basic_variants', [
         'key Int32',
         'v1 Variant(UInt64, String, Array(UInt64), UUID)',
@@ -30,8 +34,7 @@ def test_variant(test_client: Client, table_context: Callable):
 
 
 def test_dynamic(test_client: Client, table_context: Callable):
-    if not test_client.get_client_setting('allow_experimental_dynamic_type'):
-        pytest.skip(f'New Dynamic type not available in this version: {test_client.server_version}')
+    type_available(test_client, 'dynamic')
     with table_context('basic_dynamic', [
         'key UInt64',
         'v1 Dynamic',
@@ -49,8 +52,7 @@ def test_dynamic(test_client: Client, table_context: Callable):
 
 
 def test_basic_json(test_client: Client, table_context: Callable):
-    if not test_client.get_client_setting('allow_experimental_json_type'):
-        pytest.skip(f'New JSON type not available in this version: {test_client.server_version}')
+    type_available(test_client, 'json')
     with table_context('new_json_basic', [
         'key Int32',
         'value JSON',
@@ -89,8 +91,7 @@ def test_basic_json(test_client: Client, table_context: Callable):
 
 
 def test_typed_json(test_client: Client, table_context: Callable):
-    if not test_client.get_client_setting('allow_experimental_json_type'):
-        pytest.skip(f'New JSON type not available in this version: {test_client.server_version}')
+    type_available(test_client, 'json')
     with table_context('new_json_typed', [
         'key Int32',
         'value JSON(max_dynamic_paths=150, `a.b` DateTime64(3), SKIP a.c)'
@@ -100,3 +101,16 @@ def test_typed_json(test_client: Client, table_context: Callable):
         result = test_client.query('SELECT * FROM new_json_typed ORDER BY key')
         json1 = result.result_set[0][1]
         assert json1['a']['b'] == datetime.datetime(2020, 10, 15, 10, 15, 44, 877000)
+
+
+def test_complex_json(test_client: Client, table_context: Callable):
+    type_available(test_client, 'json')
+    with table_context('new_json_complex', [
+        'key Int32',
+        'value Tuple(t JSON)'
+        ]):
+        data = [[100, ({'a': 'qwe123', 'b': 'main', 'c': None},)]]
+        test_client.insert('new_json_complex', data)
+        result = test_client.query('SELECT * FROM new_json_complex ORDER BY key')
+        json1 = result.result_set[0][1]
+        assert json1['t']['a'] == 'qwe123'

@@ -58,10 +58,14 @@ class NativeTransform:
                         message = source.last_message
                         if len(message) > 1024:
                             message = message[-1024:]
-                        error_start = message.find('Code: ')
+                        error_start = message.find('Code: '.encode())
                         if error_start != -1:
                             message = message[error_start:]
-                        raise StreamFailureError(message) from None
+                        try:
+                            message_str = message.decode()
+                        except UnicodeError:
+                            message_str = f'unrecognized data found in stream: `{message.hex()[128:]}`'
+                        raise StreamFailureError(message_str) from None
                 raise
             block_num += 1
             return result_block
