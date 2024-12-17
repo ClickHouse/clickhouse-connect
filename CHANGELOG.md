@@ -17,6 +17,10 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 0.8.11, 2024-12-17
+### Improvement
+- Support of ISO8601 strings for inserting values to columns with DateTime64 type was added.
+
 ## 0.8.10, 2024-12-14
 ### Bug Fixes
 - The experimental JSON type would break in some circumstances with ClickHouse server version 24.10 and later.  This has
