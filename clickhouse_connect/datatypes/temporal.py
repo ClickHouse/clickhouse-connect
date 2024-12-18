@@ -202,7 +202,7 @@ class DateTime64(DateTimeBase):
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
                 column = [x if x else 0 for x in column]
-        elif isinstance(first, str) or self.write_format(ctx) == 'str':
+        elif isinstance(first, str):
             original_column = column
             column = []
 
@@ -212,7 +212,7 @@ class DateTime64(DateTimeBase):
                 else:
                     dt = datetime.fromisoformat(x)
                     v = ((int(dt.timestamp()) * 1000000 + dt.microsecond) * self.prec) // 1000000
-                
+
                 column.append(v)
         else:
             prec = self.prec
