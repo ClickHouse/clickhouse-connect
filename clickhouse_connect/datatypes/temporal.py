@@ -202,6 +202,18 @@ class DateTime64(DateTimeBase):
         if isinstance(first, int) or self.write_format(ctx) == 'int':
             if self.nullable:
                 column = [x if x else 0 for x in column]
+        elif isinstance(first, str):
+            original_column = column
+            column = []
+
+            for x in original_column:
+                if not x and self.nullable:
+                    v = 0
+                else:
+                    dt = datetime.fromisoformat(x)
+                    v = ((int(dt.timestamp()) * 1000000 + dt.microsecond) * self.prec) // 1000000
+
+                column.append(v)
         else:
             prec = self.prec
             if self.nullable:
