@@ -17,6 +17,12 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## Unreleased
+### Improvement
+- Added support for JWT authentication (ClickHouse Cloud feature). 
+It can be set via the `access_token` client configuration option for both sync and async clients.
+NB: do not mix access token and username/password credentials in the configuration; the client will throw an error if both are set.
+
 ## 0.8.11, 2024-12-17
 ### Improvement
 - Support of ISO8601 strings for inserting values to columns with DateTime64 type was added.

@@ -107,7 +107,6 @@ class Client(ABC):
         if self.min_version('24.8') and not self.min_version('24.10'):
             dynamic_module.json_serialization_format = 0
 
-
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """
         This strips any ClickHouse settings that are not recognized or are read only.

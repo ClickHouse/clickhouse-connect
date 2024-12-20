@@ -94,8 +94,8 @@ def test_table_engine_fixture() -> Iterator[str]:
 # pylint: disable=too-many-branches
 @fixture(scope='session', autouse=True, name='test_client')
 def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -> Iterator[Client]:
-    compose_file = f'{PROJECT_ROOT_DIR}/docker-compose.yml'
     if test_config.docker:
+        compose_file = f'{PROJECT_ROOT_DIR}/docker-compose.yml'
         run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
         sys.stderr.write('Starting docker compose')
         pull_result = run_cmd(['docker', 'compose', '-f', compose_file, 'pull'])
@@ -121,7 +121,6 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_config.test_database}', use_database=False)
     yield client
 
-    # client.command(f'DROP database IF EXISTS {test_db}', use_database=False)
     if test_config.docker:
         down_result = run_cmd(['docker', 'compose', '-f', compose_file, 'down', '-v'])
         if down_result[0]:

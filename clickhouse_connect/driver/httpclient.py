@@ -54,6 +54,7 @@ class HttpClient(Client):
                  username: str,
                  password: str,
                  database: str,
+                 access_token: Optional[str],
                  compress: Union[bool, str] = True,
                  query_limit: int = 0,
                  query_retries: int = 2,
@@ -115,8 +116,11 @@ class HttpClient(Client):
             else:
                 self.http = default_pool_manager()
 
-        if (not client_cert or tls_mode in ('strict', 'proxy')) and username:
+        if access_token:
+            self.headers['Authorization'] = f'Bearer {access_token}'
+        elif (not client_cert or tls_mode in ('strict', 'proxy')) and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
+
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
