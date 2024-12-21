@@ -104,13 +104,12 @@ class Tuple(ClickHouseType):
         self.element_names = type_def.keys
         self.element_types = [get_from_name(name) for name in type_def.values]
         if self.element_names:
-            self._name_suffix = f"({', '.join(quote_identifier(k) + ' ' + str(v) for
-                                              k, v in zip(type_def.keys, type_def.values))})"
+            self._name_suffix = f"({', '.join(quote_identifier(k) + ' ' + str(v) for k, v in zip(type_def.keys, type_def.values))})"
         else:
             self._name_suffix = type_def.arg_str
         if self.element_names:
-            self._insert_name = f"Tuple({', '.join(quote_identifier(k) + ' ' + v.insert_name
-                                                   for k, v in zip(type_def.keys, self.element_types))})"
+            self._insert_name = \
+                f"Tuple({', '.join(quote_identifier(k) + ' ' + v.insert_name for k, v in zip(type_def.keys, self.element_types))})"
         else:
             self._insert_name = f"Tuple({', '.join(v.insert_name for v in self.element_types)})"
 
