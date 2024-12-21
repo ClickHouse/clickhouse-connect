@@ -2,7 +2,7 @@ from ipaddress import IPv4Address
 from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver.context import BaseQueryContext
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source
@@ -92,8 +92,8 @@ def test_ip():
     ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
     ipv4_type = registry.get_from_name('IPv4')
     dest = bytearray()
-    ipv4_type.write_column(ips, dest, BaseQueryContext())
-    python = ipv4_type.read_column(bytes_source(bytes(dest)), 3, QueryContext())
+    ipv4_type.write_column(ips, dest, InsertContext('', [], []))
+    python = ipv4_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), None)
     assert tuple(python) == tuple(IPv4Address(ip) for ip in ips)
 
 
@@ -101,8 +101,8 @@ def test_point():
     points = ((3.22, 3.22),(5.22, 5.22),(4.22, 4.22))
     point_type = registry.get_from_name('Point')
     dest = bytearray()
-    point_type.write_column(points, dest, BaseQueryContext())
-    python = point_type.read_column(bytes_source(bytes(dest)), 3, QueryContext())
+    point_type.write_column(points, dest, InsertContext('', [], []))
+    python = point_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), [None, None])
     assert tuple(python) == tuple(point for point in points)
 
 
