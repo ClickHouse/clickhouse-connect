@@ -33,6 +33,45 @@ def test_variant(test_client: Client, table_context: Callable):
         assert result[3][2] == IPv4Address('243.12.55.44')
 
 
+def test_nested_variant(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('nested_variants', [
+        'key Int32',
+        'm1 Map(String, Variant(String, UInt128, Bool))',
+        't1 Tuple(Int64, Variant(Bool, String, Int32))',
+        'a1 Array(Array(Variant(String, DateTime, Float64)))',
+    ]):
+        data = [[1,
+                 {'k1': 'string1', 'k2': 34782477743, 'k3':True},
+                 (-40, True),
+                 (('str3', 53.732),),
+                 ],
+                [2,
+                 {'k1': False, 'k2': 's3872', 'k3': 100},
+                 (340283, 'str'),
+                 (),
+                 ]
+                ]
+        test_client.insert('nested_variants', data)
+        result = test_client.query('SELECT * FROM nested_variants ORDER BY key').result_set
+        assert result[0][1]['k1'] == 'string1'
+        assert result[0][1]['k2'] == 34782477743
+        assert result[0][2] == (-40, True)
+        assert result[0][3][0][1] == 53.732
+        assert result[1][1]['k3'] == 100
+
+
+def test_dynamic_nested(test_client: Client, table_context: Callable):
+    type_available(test_client, 'dynamic')
+    with table_context('nested_dynamics', [
+        'm2 Map(String, Dynamic)'
+        ], order_by='()'):
+        data = [({'k4': 'string8', 'k5': 5000},)]
+        test_client.insert('nested_dynamics', data)
+        result = test_client.query('SELECT * FROM nested_dynamics').result_set
+        assert result[0][0]['k5'] == '5000'
+
+
 def test_dynamic(test_client: Client, table_context: Callable):
     type_available(test_client, 'dynamic')
     with table_context('basic_dynamic', [

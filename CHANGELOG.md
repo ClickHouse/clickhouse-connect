@@ -23,9 +23,15 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 It can be set via the `access_token` client configuration option for both sync and async clients.
 NB: do not mix access token and username/password credentials in the configuration; the client will throw an error if both are set.
 
-## 0.8.11, 2024-12-17
+## 0.8.11, 2024-12-21
 ### Improvement
-- Support of ISO8601 strings for inserting values to columns with DateTime64 type was added.
+- Support of ISO8601 strings for inserting values to columns with DateTime64 type was added.  If the driver detects
+that the inserted data for a DateTime64 is a string, it will attempt to parse an ISO-8601 datetime from that string.
+Other string formats are not currently supported.  Thanks to [Nikita Reznikov](https://github.com/rnv812) for the PR!
+
+### Bug Fix
+- Correctly handled native format column prefixes and insert names for Variant/Dynamic/JSON.
+Fixes https://github.com/ClickHouse/clickhouse-connect/issues/441 and likely some other issues with experimental types Variant,Dynamic, and JSON.
 
 ## 0.8.10, 2024-12-14
 ### Bug Fixes
