@@ -30,7 +30,6 @@ class AsyncClient:
             executor_threads = min(32, (os.cpu_count() or 1) + 4)  # Mimic the default behavior
         self.executor = ThreadPoolExecutor(max_workers=executor_threads)
 
-
     def set_client_setting(self, key, value):
         """
         Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
@@ -47,6 +46,13 @@ class AsyncClient:
         :return: The string value of the setting, if it exists, or None
         """
         return self.client.get_client_setting(key=key)
+
+    def set_access_token(self, access_token: str):
+        """
+        Set the ClickHouse access token for the client
+        :param access_token: Access token string
+        """
+        self.client.set_access_token(access_token)
 
     def min_version(self, version_str: str) -> bool:
         """
