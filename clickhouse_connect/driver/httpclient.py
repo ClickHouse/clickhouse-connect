@@ -184,6 +184,12 @@ class HttpClient(Client):
     def get_client_setting(self, key) -> Optional[str]:
         return self.params.get(key)
 
+    def set_access_token(self, access_token: str):
+        auth_header = self.headers.get('Authorization')
+        if auth_header and not auth_header.startswith('Bearer'):
+            raise ProgrammingError('Cannot set access token when a different auth type is used')
+        self.headers['Authorization'] = f'Bearer {access_token}'
+
     def _prep_query(self, context: QueryContext):
         final_query = super()._prep_query(context)
         if context.is_insert:

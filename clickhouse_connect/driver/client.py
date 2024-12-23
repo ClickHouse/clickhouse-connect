@@ -183,6 +183,13 @@ class Client(ABC):
         :return: The string value of the setting, if it exists, or None
         """
 
+    @abstractmethod
+    def set_access_token(self, access_token: str):
+        """
+        Set the ClickHouse access token for the client
+        :param access_token: Access token string
+        """
+
     # pylint: disable=unused-argument,too-many-locals
     def query(self,
               query: Optional[str] = None,

@@ -20,8 +20,10 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## Unreleased
 ### Improvement
 - Added support for JWT authentication (ClickHouse Cloud feature). 
-It can be set via the `access_token` client configuration option for both sync and async clients.
-NB: do not mix access token and username/password credentials in the configuration; the client will throw an error if both are set.
+It can be set via the `access_token` client configuration option for both sync and async clients. 
+The token can also be updated via the `set_access_token` method in the existing client instance.
+NB: do not mix access token and username/password credentials in the configuration; 
+the client will throw an error if both are set.
 
 ## 0.8.11, 2024-12-21
 ### Improvement
