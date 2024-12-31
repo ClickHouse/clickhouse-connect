@@ -15,6 +15,7 @@ import urllib3
 import zstandard
 from urllib3.poolmanager import PoolManager, ProxyManager
 from urllib3.response import HTTPResponse
+from urllib3.util import create_urllib3_context
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect import common
@@ -59,6 +60,7 @@ def get_pool_manager_options(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                              verify: bool = True,
                              client_cert: str = None,
                              client_cert_key: str = None,
+                             cipher: str = None,
                              **options) -> Dict[str, Any]:
     socket_options = core_socket_options.copy()
     if getattr(socket, 'TCP_KEEPINTVL', None) is not None:
@@ -94,6 +96,7 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                      client_cert_key: str = None,
                      http_proxy: str = None,
                      https_proxy: str = None,
+                     cipher: str = None,
                      **options):
     options = get_pool_manager_options(keep_interval,
                                        keep_count,
@@ -102,6 +105,7 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
                                        verify,
                                        client_cert,
                                        client_cert_key,
+                                       cipher,
                                        **options)
     if http_proxy:
         if https_proxy:
@@ -114,7 +118,13 @@ def get_pool_manager(keep_interval: int = DEFAULT_KEEP_INTERVAL,
             https_proxy = f'https://{https_proxy}'
         manager = ProxyManager(https_proxy, **options)
     else:
-        manager = PoolManager(**options)
+        if cipher is not None:
+            ctx = create_urllib3_context()
+            ctx.load_default_certs()
+            ctx.set_ciphers(cipher)
+            manager = PoolManager(ssl_context=ctx, **options)
+        else:
+            manager = PoolManager(**options)
     all_managers[manager] = int(time.time())
     return manager
 

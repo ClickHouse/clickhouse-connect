@@ -73,7 +73,8 @@ class HttpClient(Client):
                  apply_server_timezone: Optional[Union[str, bool]] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
-                 tls_mode: Optional[str] = None):
+                 tls_mode: Optional[str] = None,
+                 cipher: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -105,6 +106,8 @@ class HttpClient(Client):
                     if options['verify']:
                         options['assert_hostname'] = server_host_name
                     options['server_hostname'] = server_host_name
+                if cipher:
+                    options['cipher'] = cipher
                 self.http = get_pool_manager(https_proxy=https_proxy, **options)
                 self._owns_pool_manager = True
         if not self.http:
