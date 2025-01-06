@@ -16,3 +16,4 @@ numpy~=2.1.0; python_version >= '3.13'
 pandas
 zstandard
 lz4
+pyjwt[crypto]==2.10.1

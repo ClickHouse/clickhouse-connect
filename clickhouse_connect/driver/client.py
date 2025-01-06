@@ -107,7 +107,6 @@ class Client(ABC):
         if self.min_version('24.8') and not self.min_version('24.10'):
             dynamic_module.json_serialization_format = 0
 
-
     def _validate_settings(self, settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """
         This strips any ClickHouse settings that are not recognized or are read only.
@@ -182,6 +181,13 @@ class Client(ABC):
         """
         :param key: The setting key
         :return: The string value of the setting, if it exists, or None
+        """
+
+    @abstractmethod
+    def set_access_token(self, access_token: str):
+        """
+        Set the ClickHouse access token for the client
+        :param access_token: Access token string
         """
 
     # pylint: disable=unused-argument,too-many-locals
