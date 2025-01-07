@@ -54,7 +54,7 @@ class HttpClient(Client):
                  username: str,
                  password: str,
                  database: str,
-                 access_token: Optional[str],
+                 access_token: Optional[str] = None,
                  compress: Union[bool, str] = True,
                  query_limit: int = 0,
                  query_retries: int = 2,
