@@ -131,13 +131,14 @@ def test_pandas_low_card(test_client: Client, table_context: Callable):
 
 
 def test_pandas_large_types(test_client: Client, table_context: Callable):
-    columns = ['key String', 'value Int256']
+    columns = ['key String', 'value Int256', 'u_value UInt256'
+               ]
     key2_value = 30000000000000000000000000000000000
     if not test_client.min_version('21'):
         columns = ['key String', 'value Int64']
         key2_value = 3000000000000000000
     with table_context('test_pandas_big_int', columns):
-        df = pd.DataFrame([['key1', 2000], ['key2', key2_value]], columns=['key', 'value'])
+        df = pd.DataFrame([['key1', 2000, 50], ['key2', key2_value, 70], ['key3', -2350, 70]], columns=['key', 'value', 'u_value'])
         source_df = df.copy()
         test_client.insert_df('test_pandas_big_int', df)
         result_df = test_client.query_df('SELECT * FROM test_pandas_big_int')

@@ -2,6 +2,8 @@ import logging
 from math import log
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
+from pandas.core.dtypes.common import is_object_dtype
+
 from clickhouse_connect.driver.binding import quote_identifier
 
 from clickhouse_connect.driver.ctypes import data_conv
@@ -152,8 +154,9 @@ class InsertContext(BaseQueryContext):
             if ch_type.python_type == int:
                 if 'float' in d_type:
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
-                else:
-                    df_col = df_col.astype(ch_type.base_type, copy=False)
+                elif not is_object_dtype(d_type):
+                    data.append([int(x) for x in df_col])
+                    continue
             elif 'datetime' in ch_type.np_type and (pd_time_test(df_col) or 'datetime64[ns' in d_type):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])

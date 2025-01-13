@@ -98,6 +98,7 @@ class UInt64(IntBase):
 class BigInt(ClickHouseType, registered=False):
     _signed = True
     valid_formats = 'string', 'native'
+    python_type = int
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         signed = self._signed

@@ -17,6 +17,11 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 0.8.14, 2025-01-13
+### Bug Fix
+- Fix an edge case where a Pandas dataframe that contains _only_ Int64 (or smaller) values would cause an exception when
+inserting into a ClickHouse "big int" table of U/Int128/256.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/452
+
 ## 0.8.13, 2025-01-07
 ### Bug Fix
 - Fix missing default for new access_token parameter.  Thanks to [Lukas Thaler](https://github.com/lukasthalerINNIO) for the PR.
