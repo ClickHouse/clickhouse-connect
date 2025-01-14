@@ -57,7 +57,7 @@ python setup.py develop
 
 Required for TLS tests.
 The generated certificates assume TLS requests use `server1.clickhouse.test` as the hostname.
-See [test_tls.py](tests/tls/test_tls.py) for more details.
+See [test_tls.py](tests/integration_tests/test_tls.py) for more details.
 
 ```bash
 sudo -- sh -c "echo 127.0.0.1 server1.clickhouse.test >> /etc/hosts"
