@@ -2,8 +2,6 @@ import logging
 from math import log
 from typing import Iterable, Sequence, Optional, Any, Dict, NamedTuple, Generator, Union, TYPE_CHECKING
 
-from pandas.core.dtypes.common import is_object_dtype
-
 from clickhouse_connect.driver.binding import quote_identifier
 
 from clickhouse_connect.driver.ctypes import data_conv
@@ -150,20 +148,20 @@ class InsertContext(BaseQueryContext):
         data = []
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
             df_col = df[df_col_name]
-            d_type = str(df_col.dtype)
+            d_type_kind = df_col.dtype.kind
             if ch_type.python_type == int:
-                if 'float' in d_type:
+                if d_type_kind == 'f':
                     df_col = df_col.round().astype(ch_type.base_type, copy=False)
-                elif not is_object_dtype(d_type):
-                    data.append([int(x) for x in df_col])
+                elif d_type_kind in ('i', 'u') and not df_col.hasnans:
+                    data.append(df_col.to_list())
                     continue
-            elif 'datetime' in ch_type.np_type and (pd_time_test(df_col) or 'datetime64[ns' in d_type):
+            elif 'datetime' in ch_type.np_type and (pd_time_test(df_col) or 'datetime64[ns' in str(df_col.dtype)):
                 div = ch_type.nano_divisor
                 data.append([None if pd.isnull(x) else x.value // div for x in df_col])
                 self.column_formats[col_name] = 'int'
                 continue
             if ch_type.nullable:
-                if d_type == 'object':
+                if d_type_kind == 'O':
                     #  This is ugly, but the multiple replaces seem required as a result of this bug:
                     #  https://github.com/pandas-dev/pandas/issues/29024
                     df_col = df_col.replace({pd.NaT: None}).replace({np.nan: None})
