@@ -1,7 +1,5 @@
-from datetime import datetime, timezone, timedelta
 from os import environ
 
-import jwt
 import pytest
 
 from clickhouse_connect.driver import create_client, ProgrammingError, create_async_client
