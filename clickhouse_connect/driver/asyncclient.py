@@ -64,12 +64,12 @@ class AsyncClient:
         """
         return self.client.min_version(version_str)
 
-    def close(self):
+    async def close(self):
         """
         Subclass implementation to close the connection to the server/deallocate the client
         """
         self.client.close()
-        self.executor.shutdown(wait=False)
+        await asyncio.to_thread(self.executor.shutdown, True)
 
     async def query(self,
                     query: Optional[str] = None,
@@ -677,3 +677,9 @@ class AsyncClient:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(self.executor, _raw_insert)
         return result
+
+    async def __aenter__(self) -> "AsyncClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()

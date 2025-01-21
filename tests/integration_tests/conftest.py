@@ -131,7 +131,8 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
 
 @fixture(scope='session', autouse=True, name='test_async_client')
 def test_async_client_fixture(test_client: Client) -> Iterator[AsyncClient]:
-    yield AsyncClient(client=test_client)
+    async with AsyncClient(client=test_client):
+        yield
 
 
 @fixture(scope='session', name='table_context')

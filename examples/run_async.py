@@ -41,7 +41,7 @@ async def concurrent_queries():
 
     semaphore = asyncio.Semaphore(SEMAPHORE)
     await asyncio.gather(*[semaphore_wrapper(semaphore, num) for num in range(QUERIES)])
-    client.close()
+    await client.close()
 
 
 async def main():
