@@ -408,16 +408,18 @@ class HttpClient(Client):
             data = data.encode()
         headers = dict_copy(self.headers, headers)
         attempts = 0
+        final_params = {}
         if server_wait:
-            params['wait_end_of_query'] = '1'
+            final_params['wait_end_of_query'] = '1'
         # We can't actually read the progress headers, but we enable them so ClickHouse sends something
         # to keep the connection alive when waiting for long-running queries and (2) to get summary information
         # if not streaming
         if self._send_progress:
-            params['send_progress_in_http_headers'] = '1'
+            final_params['send_progress_in_http_headers'] = '1'
         if self._progress_interval:
-            params['http_headers_progress_interval_ms'] = self._progress_interval
-        final_params = dict_copy(self.params, params)
+            final_params['http_headers_progress_interval_ms'] = self._progress_interval
+        final_params = dict_copy(self.params, final_params)
+        final_params = dict_copy(final_params, params)
         url = f'{self.url}?{urlencode(final_params)}'
         kwargs = {
             'headers': headers,
