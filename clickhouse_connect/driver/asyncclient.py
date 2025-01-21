@@ -69,6 +69,7 @@ class AsyncClient:
         Subclass implementation to close the connection to the server/deallocate the client
         """
         self.client.close()
+        self.executor.shutdown(wait=False)
 
     async def query(self,
                     query: Optional[str] = None,
