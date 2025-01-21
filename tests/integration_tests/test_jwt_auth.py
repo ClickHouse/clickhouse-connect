@@ -157,12 +157,4 @@ def make_access_token():
     secret = environ.get(JWT_SECRET_ENV_KEY)
     if not secret:
         raise ValueError(f'{JWT_SECRET_ENV_KEY} environment variable is not set')
-    payload = {
-        'iss': 'ClickHouse',
-        'sub': 'CI_Test',
-        'aud': '1f7f78b8-da67-480b-8913-726fdd31d2fc',
-        'clickhouse:roles': ['default'],
-        'clickhouse:grants': [],
-        'exp': datetime.now(tz=timezone.utc) + timedelta(minutes=15)
-    }
-    return jwt.encode(payload, secret, algorithm='RS256')
+    return secret
