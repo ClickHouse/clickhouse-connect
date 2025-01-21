@@ -5,6 +5,7 @@ import time
 from subprocess import Popen, PIPE
 from typing import Iterator, NamedTuple, Sequence, Optional, Callable, AsyncContextManager
 
+import pytest_asyncio
 from pytest import fixture
 
 from clickhouse_connect import common
@@ -129,7 +130,7 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
             sys.stderr.write('Successfully stopped docker compose')
 
 
-@fixture(scope='session', autouse=True, name='test_async_client')
+@pytest_asyncio.fixture(scope='session', autouse=True, name='test_async_client')
 async def test_async_client_fixture(test_client: Client) -> AsyncContextManager[AsyncClient]:
     async with AsyncClient(client=test_client) as client:
         yield client
