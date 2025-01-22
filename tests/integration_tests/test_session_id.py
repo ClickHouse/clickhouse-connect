@@ -46,7 +46,7 @@ async def test_async_client_default_session_id(test_config: TestConfig):
                                              user=test_config.username,
                                              password=test_config.password)
     assert async_client.get_client_setting(SESSION_KEY) is None
-    async_client.close()
+    await async_client.close()
 
 
 @pytest.mark.asyncio
@@ -62,7 +62,7 @@ async def test_async_client_autogenerate_session_id(test_config: TestConfig):
         uuid.UUID(session_id)
     except ValueError:
         pytest.fail(f"Invalid session_id: {session_id}")
-    async_client.close()
+    await async_client.close()
 
 
 @pytest.mark.asyncio
@@ -75,4 +75,4 @@ async def test_async_client_custom_session_id(test_config: TestConfig):
                                              password=test_config.password,
                                              session_id=session_id)
     assert async_client.get_client_setting(SESSION_KEY) == session_id
-    async_client.close()
+    await async_client.close()
