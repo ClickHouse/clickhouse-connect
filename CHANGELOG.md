@@ -1,5 +1,8 @@
 # ClickHouse Connect ChangeLog
 
+### WARNING -- Breaking change for AsyncClient close()
+The AsyncClient close() method is now async and should be called as an async function.
+
 ### WARNING -- Python 3.8 EOL
 Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
 3.8 wheel distributions.
@@ -16,6 +19,14 @@ converts any unrecognized keyword argument/query parameter to a ClickHouse serve
 release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
+
+## 0.8.15, 2025-01-25
+### Bug Fix
+- The async client was not shutting down its associated executor thread pool, result in a memory leak if multiple
+async clients were created.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/424.  Note that the `close`
+function for the async client is now async to cleanly close down the pool.  The recommended way to use an async client
+is now within an AsyncContext.  See the associated [PR](https://github.com/ClickHouse/clickhouse-connect/pull/457) for details.
+Thanks to ClickHouse core developer @pufit for the fix!  
 
 ## 0.8.14, 2025-01-13
 ### Bug Fix
