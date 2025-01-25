@@ -5,7 +5,8 @@ The AsyncClient close() method is now async and should be called as an async fun
 
 ### WARNING -- Python 3.8 EOL
 Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
-3.8 wheel distributions.
+3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
+missing dependencies in the build chain.
 
 ### WARNING -- JSON Incompatibility between versions 22.8 and 22.10
 The internal serialization format for experimental JSON was updated in ClickHouse version 24.10.  `clickhouse-connect`
