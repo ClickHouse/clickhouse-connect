@@ -155,3 +155,8 @@ def test_complex_json(test_client: Client, table_context: Callable):
         result = test_client.query('SELECT * FROM new_json_complex ORDER BY key')
         json1 = result.result_set[0][1]
         assert json1['t']['a'] == 'qwe123'
+
+
+def test_json_str_time(test_client: Client):
+    result = test_client.query("SELECT '{\"timerange\": \"2025-01-01T00:00:00+0000\"}'::JSON").result_set
+    assert result[0][0]['timerange'] == datetime.datetime(2025, 1, 1)

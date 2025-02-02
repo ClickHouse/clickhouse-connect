@@ -173,8 +173,10 @@ def test_error_decode(test_client: Client):
 
 
 def test_command_as_query(test_client: Client):
+    # Test that non-SELECT and non-INSERT statements are treated as commands and
+    # just return the QueryResult metadata
     result = test_client.query("SET count_distinct_implementation = 'uniq'")
-    assert result.first_item['written_rows'] == 0
+    assert 'query_id' in result.first_item
 
 
 def test_show_create(test_client: Client):
