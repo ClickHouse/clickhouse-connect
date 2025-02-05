@@ -17,7 +17,7 @@
     <keep_alive_timeout>3</keep_alive_timeout>
 
     <logger>
-        <level>debug</level>
+        <level>warning</level>
         <log>/var/log/clickhouse-server/clickhouse-server.log</log>
         <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
         <size>1000M</size>
