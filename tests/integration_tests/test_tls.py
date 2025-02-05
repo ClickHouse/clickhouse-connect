@@ -16,23 +16,44 @@ host = 'server1.clickhouse.test'
 def test_basic_tls():
     if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_TLS', 'False')):
         pytest.skip('TLS tests not enabled')
-    client = get_client(interface='https', host=host, port=10843, verify=False)
+    test_user = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'ci_testing')
+    test_pw = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', 'ci')
+    client = get_client(interface='https',
+                        host=host,
+                        port=10843,
+                        user=test_user,
+                        password=test_pw,
+                        verify=False)
     assert client.command("SELECT 'insecure'") == 'insecure'
     client.close_connections()
 
-    client = get_client(interface='https', host=host, port=10843, ca_cert=f'{cert_dir}ca.crt')
+    client = get_client(interface='https',
+                        host=host,
+                        port=10843,
+                        user=test_user,
+                        password=test_pw,
+                        ca_cert=f'{cert_dir}ca.crt')
     assert client.command("SELECT 'verify_server'") == 'verify_server'
     client.close_connections()
 
     try:
-        get_client(interface='https', host='localhost', port=10843, ca_cert=f'{cert_dir}ca.crt')
+        get_client(interface='https',
+                   host='localhost',
+                   port=10843,
+                   user=test_user,
+                   password=test_pw,
+                   ca_cert=f'{cert_dir}ca.crt')
         pytest.fail('Expected TLS exception with a different hostname')
     except OperationalError as ex:
         assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
     client.close_connections()
 
     try:
-        get_client(interface='https', host='localhost', port=10843)
+        get_client(interface='https',
+                   host='localhost',
+                   user=test_user,
+                   password=test_pw,
+                   port=10843)
         pytest.fail('Expected TLS exception with a self-signed cert')
     except OperationalError as ex:
         assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
