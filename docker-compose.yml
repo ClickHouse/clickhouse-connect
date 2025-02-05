@@ -2,6 +2,8 @@ services:
   clickhouse:
     image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-24.8-alpine}'
     container_name: 'clickhouse-connect-clickhouse-server'
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: 1
     ports:
       - '8123:8123'
       - '9000:9000'
@@ -18,6 +20,8 @@ services:
       context: ./
       dockerfile: .docker/clickhouse/single_node_tls/Dockerfile
     container_name: 'clickhouse-connect-clickhouse-server-tls'
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: 1
     ports:
       - '10843:8443'
       - '10840:9440'
