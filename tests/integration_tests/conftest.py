@@ -44,8 +44,8 @@ def test_config_fixture() -> Iterator[TestConfig]:
     if not port:
         port = 8123
     cloud = coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_CLOUD', 'False'))
-    username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'default')
-    password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', '')
+    username = os.environ.get('CLICKHOUSE_CONNECT_TEST_USER', 'ci_testing')
+    password = os.environ.get('CLICKHOUSE_CONNECT_TEST_PASSWORD', 'ci')
     test_database = os.environ.get('CLICKHOUSE_CONNECT_TEST_DATABASE',
                                    f'ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}')
     compress = os.environ.get('CLICKHOUSE_CONNECT_TEST_COMPRESS', 'True')
