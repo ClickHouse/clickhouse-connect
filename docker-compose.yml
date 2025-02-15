@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-24.8-alpine}'
+    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.1-alpine}'
     container_name: 'clickhouse-connect-clickhouse-server'
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: 1
@@ -14,6 +14,7 @@ services:
     volumes:
       - './.docker/clickhouse/single_node/config.xml:/etc/clickhouse-server/config.xml'
       - './.docker/clickhouse/users.xml:/etc/clickhouse-server/users.xml'
+      - './.docker/clickhouse/single_node/docker_related_config.xml:/etc/clickhouse-server/config.d/docker_related_config.xml'
 
   clickhouse_tls:
     build:
@@ -32,3 +33,4 @@ services:
     volumes:
       - './.docker/clickhouse/single_node_tls/config.xml:/etc/clickhouse-server/config.xml'
       - './.docker/clickhouse/single_node_tls/users.xml:/etc/clickhouse-server/users.xml'
+      - './.docker/clickhouse/single_node_tls/docker_related_config.xml:/etc/clickhouse-server/config.d/docker_related_config.xml'

@@ -122,9 +122,14 @@ class Client(ABC):
         return validated
 
     def _validate_setting(self, key: str, value: Any, invalid_action: str) -> Optional[str]:
+        new_value = str(value)
+        if value is True:
+            new_value = '1'
+        elif value is False:
+            new_value = '0'
         if key not in self.valid_transport_settings:
             setting_def = self.server_settings.get(key)
-            if setting_def is None or setting_def.readonly:
+            if setting_def is None or (setting_def.readonly and setting_def.value != new_value):
                 if key in self.optional_transport_settings:
                     return None
                 if invalid_action == 'send':
@@ -134,9 +139,7 @@ class Client(ABC):
                     return None
                 else:
                     raise ProgrammingError(f'Setting {key} is unknown or readonly') from None
-        if isinstance(value, bool):
-            return '1' if value else '0'
-        return str(value)
+        return new_value
 
     def _setting_status(self, key: str) -> SettingStatus:
         comp_setting = self.server_settings.get(key)

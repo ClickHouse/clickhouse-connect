@@ -162,3 +162,7 @@ def test_json_str_time(test_client: Client):
         pytest.skip('JSON string/numbers bug before 25.1, skipping')
     result = test_client.query("SELECT '{\"timerange\": \"2025-01-01T00:00:00+0000\"}'::JSON").result_set
     assert result[0][0]['timerange'] == datetime.datetime(2025, 1, 1)
+
+    # The following query is broken -- looks like something to do with Nullable(String) in the Tuple
+    # result = test_client.query("SELECT'{\"k\": [123, \"xyz\"]}'::JSON",
+    #                           settings={'input_format_json_read_numbers_as_strings': 0}).result_set
