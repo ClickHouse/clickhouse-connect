@@ -1,11 +1,6 @@
 <?xml version="1.0"?>
 <clickhouse>
 
-    <https_port>8443</https_port>
-    <tcp_port_secure>9440</tcp_port_secure>
-    <listen_host>0.0.0.0</listen_host>
-
-    <users_config>users.xml</users_config>
     <default_profile>default</default_profile>
     <default_database>default</default_database>
 
@@ -15,6 +10,7 @@
     <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
     <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
     <access_control_path>/var/lib/clickhouse/access/</access_control_path>
+    <format_schema_path>/var/lib/clickhouse/format_schemas/</format_schema_path>
 
     <logger>
         <level>warning</level>
@@ -45,4 +41,10 @@
     </query_log>
 
     <custom_settings_prefixes>SQL_</custom_settings_prefixes>
+
+    <user_directories>
+        <users_xml>
+            <path>users.xml</path>
+        </users_xml>
+    </user_directories>
 </clickhouse>
