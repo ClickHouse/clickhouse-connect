@@ -124,7 +124,7 @@ class Client(ABC):
     def _validate_setting(self, key: str, value: Any, invalid_action: str) -> Optional[str]:
         new_value = str(value)
         if value is True:
-            new_value = '0'
+            new_value = '1'
         elif value is False:
             new_value = '0'
         if key not in self.valid_transport_settings:
