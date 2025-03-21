@@ -13,8 +13,8 @@ from clickhouse_connect.driver.asyncclient import AsyncClient
 
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
 def create_client(*,
-                  host: str = None,
-                  username: str = None,
+                  host: Optional[str] = None,
+                  username: Optional[str] = None,
                   password: str = '',
                   access_token: Optional[str] = None,
                   database: str = '__default__',
