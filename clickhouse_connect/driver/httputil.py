@@ -232,10 +232,9 @@ class ResponseSource:
                     try:
                         chunk = next(read_gen, None) # Always try to read at least one chunk if there are any left
                     except Exception: # pylint: disable=broad-except
-                        logger.warning('unexpected failure to read next chunk', exc_info=True)
                         # By swallowing an unexpected exception reading the stream, we will let consumers decide how to
                         # handle the unexpected end of stream
-                        pass
+                        logger.warning('unexpected failure to read next chunk', exc_info=True)
                     if not chunk:
                         done = True
                         break
