@@ -21,6 +21,23 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 0.8.16, 2025-03-28
+### Bug Fixes
+- Don't send a setting value if the setting is already correct according to the `system.settings` table. 
+Closes https://github.com/ClickHouse/clickhouse-connect/issues/469
+- Ensure that the http `user_agent` header is in ascii.  Note this could lead to an incorrectly encoded `os_user` if the
+os_user is not an Ascii string.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/484
+- Fix "cannot access local variable" exception where the http client encounters an unexpected streaming error.  Also
+log that unexpected streaming error to assist debugging.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/483
+- Check that arrow/pandas is installed when calling `query_df` and `query_arrow` and raise a more meaningful exception
+if the required library is absent.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/477
+
+### Improvements
+- Some typing hints have been corrected.  Thanks to [Avery Fischer](https://github.com/biggerfisch) for the PR!
+- The docker based tests have been fixed to work with security improvements in recent ClickHouse releases
+- Query string cleanup is now (in theory) microseconds faster.  Thanks to [Sviatoslav Bobryshev](https://github.com/sbobryshev)
+for the optimization
+
 ## 0.8.15, 2025-01-25
 ### Bug Fix
 - The async client was not shutting down its associated executor thread pool, result in a memory leak if multiple
