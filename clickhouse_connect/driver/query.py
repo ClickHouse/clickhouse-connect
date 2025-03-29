@@ -382,4 +382,4 @@ def arrow_buffer(table, compression: Optional[str] = None) -> Tuple[Sequence[str
     sink = pyarrow.BufferOutputStream()
     with pyarrow.RecordBatchFileWriter(sink, table.schema, options=options) as writer:
         writer.write(table)
-    return table.schema.names, sink.getvalue()
+    return table.schema.names, sink.getvalue().to_pybytes()
