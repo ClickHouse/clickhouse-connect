@@ -63,13 +63,12 @@ jobs:
           - '3.10'
           - '3.11'
           - '3.12'
-          - '3.13'
+          - '3.13.1'
         clickhouse-version:
-          - '24.3'
           - '24.8'
-          - '24.11'
-          - '24.12'
           - '25.1'
+          - '25.2'
+          - '25.3'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
