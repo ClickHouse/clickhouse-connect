@@ -74,12 +74,16 @@ class HttpClient(Client):
                  apply_server_timezone: Optional[Union[str, bool]] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
-                 tls_mode: Optional[str] = None):
+                 tls_mode: Optional[str] = None,
+                 proxy_path: str = ''):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
         """
-        self.url = f'{interface}://{host}:{port}'
+        proxy_path = proxy_path.lstrip('/')
+        if proxy_path:
+            proxy_path = '/' + proxy_path
+        self.url = f'{interface}://{host}:{port}{proxy_path}'
         self.headers = {}
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)

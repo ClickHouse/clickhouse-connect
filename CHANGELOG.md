@@ -21,6 +21,17 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 0.8.17, 2025-04-10
+### Bug Fix
+- Version 0.8.16 introduced a bug where changing a Client setting value and then changing that setting value back to the
+original server value would fail to restore the original setting.  This has been fixed.  Closes
+https://github.com/ClickHouse/clickhouse-connect/issues/487
+
+### Improvement
+- There was previously no way to add a path to the ClickHouse server host in cases where the ClickHouse server was
+behind a proxy that used path based routing (such as `https://big_proxy:8080/clickhouse).  The new `proxy_path`
+`get_client` argument can now be used to set that path.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/486
+
 ## 0.8.16, 2025-03-28
 ### Bug Fixes
 - Don't send a setting value if the setting is already correct according to the `system.settings` table. 
