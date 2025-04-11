@@ -200,7 +200,7 @@ class HttpClient(Client):
         return final_query + fmt
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
-        headers = {**context.extra_http_headers}
+        headers = dict_copy(context.extra_http_headers)
         params = {}
         if self.database:
             params['database'] = self.database
