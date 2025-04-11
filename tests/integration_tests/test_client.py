@@ -40,6 +40,13 @@ def test_client_name(test_client: Client):
     assert 'py/' in user_agent
 
 
+def test_extra_http_headers(test_client: Client):
+    result = test_client.query('SELECT name,database FROM system.tables',
+                               extra_http_headers={'X-Workload': 'ONLINE'})
+    assert result.column_names == ('name', 'database')
+    assert len(result.result_set) > 0
+
+
 def test_none_database(test_client: Client):
     old_db = test_client.database
     test_db = test_client.command('select currentDatabase()')
