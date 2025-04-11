@@ -200,7 +200,7 @@ class HttpClient(Client):
         return final_query + fmt
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
-        headers = {}
+        headers = {**context.extra_http_headers}
         params = {}
         if self.database:
             params['database'] = self.database
@@ -328,7 +328,8 @@ class HttpClient(Client):
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
                 use_database: int = True,
-                external_data: Optional[ExternalData] = None) -> Union[str, int, Sequence[str], QuerySummary]:
+                external_data: Optional[ExternalData] = None,
+                extra_http_headers: Optional[Dict[str, str]] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
         See BaseClient doc_string for this method
         """
@@ -478,24 +479,27 @@ class HttpClient(Client):
                   settings: Optional[Dict[str, Any]] = None,
                   fmt: str = None,
                   use_database: bool = True,
-                  external_data: Optional[ExternalData] = None) -> bytes:
+                  external_data: Optional[ExternalData] = None,
+                  extra_http_headers: Optional[Dict[str, str]] = None) -> bytes:
         """
         See BaseClient doc_string for this method
         """
         body, params, fields = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        return self._raw_request(body, params, fields=fields).data
+        return self._raw_request(body, params, fields=fields, headers=extra_http_headers).data
 
     def raw_stream(self, query: str,
                    parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                    settings: Optional[Dict[str, Any]] = None,
                    fmt: str = None,
                    use_database: bool = True,
-                   external_data: Optional[ExternalData] = None) -> io.IOBase:
+                   external_data: Optional[ExternalData] = None,
+                   extra_http_headers: Optional[Dict[str, str]] = None) -> io.IOBase:
         """
         See BaseClient doc_string for this method
         """
         body, params, fields = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        return self._raw_request(body, params, fields=fields, stream=True, server_wait=False)
+        return self._raw_request(body, params, fields=fields, stream=True, server_wait=False,
+                                 headers=extra_http_headers)
 
     def _prep_raw_query(self, query: str,
                         parameters: Optional[Union[Sequence, Dict[str, Any]]],
