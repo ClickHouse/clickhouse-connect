@@ -3,7 +3,7 @@ import re
 import pytz
 
 from io import IOBase
-from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator
+from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, BinaryIO
 from datetime import tzinfo
 
 from pytz.exceptions import UnknownTimeZoneError
@@ -378,7 +378,7 @@ def to_arrow_batches(buffer: IOBase) -> StreamContext:
     return StreamContext(buffer, reader)
 
 
-def arrow_buffer(table, compression: Optional[str] = None) -> Tuple[Sequence[str], bytes]:
+def arrow_buffer(table, compression: Optional[str] = None) -> Tuple[Sequence[str], Union[bytes, BinaryIO]]:
     pyarrow = check_arrow()
     options = None
     if compression in ('zstd', 'lz4'):
