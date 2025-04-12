@@ -53,7 +53,7 @@ class QueryContext(BaseQueryContext):
                  streaming: bool = False,
                  apply_server_tz: bool = False,
                  external_data: Optional[ExternalData] = None,
-                 extra_http_headers: Optional[Dict[str, str]] = None):
+                 transport_settings: Optional[Dict[str, str]] = None):
         """
         Initializes various configuration settings for the query context
 
@@ -86,7 +86,8 @@ class QueryContext(BaseQueryContext):
                          column_formats,
                          encoding,
                          use_extended_dtypes if use_extended_dtypes is not None else False,
-                         use_numpy if use_numpy is not None else False)
+                         use_numpy if use_numpy is not None else False,
+                         transport_settings=transport_settings)
         self.query = query
         self.parameters = parameters or {}
         self.use_none = True if use_none is None else use_none
@@ -117,7 +118,6 @@ class QueryContext(BaseQueryContext):
         self.as_pandas = as_pandas
         self.use_pandas_na = as_pandas and pd_extended_dtypes
         self.streaming = streaming
-        self.extra_http_headers = extra_http_headers
         self._update_query()
 
     @property
@@ -192,7 +192,7 @@ class QueryContext(BaseQueryContext):
                      as_pandas: bool = False,
                      streaming: bool = False,
                      external_data: Optional[ExternalData] = None,
-                     extra_http_headers: Optional[Dict[str, str]] = None) -> 'QueryContext':
+                     transport_settings: Optional[Dict[str, str]] = None) -> 'QueryContext':
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
@@ -214,7 +214,7 @@ class QueryContext(BaseQueryContext):
                             streaming,
                             self.apply_server_tz,
                             self.external_data if external_data is None else external_data,
-                            self.extra_http_headers if extra_http_headers is None else extra_http_headers)
+                            self.transport_settings if transport_settings is None else transport_settings)
 
     def _update_query(self):
         self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)

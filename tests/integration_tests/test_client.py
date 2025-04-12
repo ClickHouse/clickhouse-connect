@@ -40,9 +40,9 @@ def test_client_name(test_client: Client):
     assert 'py/' in user_agent
 
 
-def test_extra_http_headers(test_client: Client):
+def test_transport_settings(test_client: Client):
     result = test_client.query('SELECT name,database FROM system.tables',
-                               extra_http_headers={'X-Workload': 'ONLINE'})
+                               transport_settings={'X-Workload': 'ONLINE'})
     assert result.column_names == ('name', 'database')
     assert len(result.result_set) > 0
 

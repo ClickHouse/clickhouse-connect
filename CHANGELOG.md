@@ -22,15 +22,20 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## 0.8.17, 2025-04-10
-### Bug Fix
-- Version 0.8.16 introduced a bug where changing a Client setting value and then changing that setting value back to the
-original server value would fail to restore the original setting.  This has been fixed.  Closes
-https://github.com/ClickHouse/clickhouse-connect/issues/487
 
-### Improvement
+### Improvements
+- The parameter `transport_settings` has been added to the Client query and insert methods.  For the HTTP client (currently
+the only  option), this dictionary of string is directly translated into additional HTTP headers at a query level.  This can
+be used to provide additional proxy directives or other extra 'non-ClickHouse' information that is passed via headers.
+Thanks to [Paweł Szczur](https://github.com/orian) of PostHog for the original PR!
 - There was previously no way to add a path to the ClickHouse server host in cases where the ClickHouse server was
 behind a proxy that used path based routing (such as `https://big_proxy:8080/clickhouse).  The new `proxy_path`
 `get_client` argument can now be used to set that path.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/486
+
+### Bug Fix
+- Version 0.8.16 introduced a bug where changing a Client setting value and then changing that setting value back to the
+  original server value would fail to restore the original setting.  This has been fixed.  Closes
+  https://github.com/ClickHouse/clickhouse-connect/issues/487
 
 ## 0.8.16, 2025-03-28
 ### Bug Fixes
