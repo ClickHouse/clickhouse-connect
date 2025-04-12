@@ -42,8 +42,9 @@ class InsertContext(BaseQueryContext):
                  compression: Optional[Union[str, bool]] = None,
                  query_formats: Optional[Dict[str, str]] = None,
                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-                 block_size: Optional[int] = None):
-        super().__init__(settings, query_formats, column_formats)
+                 block_size: Optional[int] = None,
+                 transport_settings: Optional[Dict[str, str]] = None):
+        super().__init__(settings, query_formats, column_formats, transport_settings=transport_settings)
         self.table = table
         self.column_names = column_names
         self.column_types = column_types
