@@ -73,7 +73,7 @@ def test_create_client_fixture(test_config: TestConfig) -> Callable:
                                **kwargs)
         if client.min_version('22.8'):
             client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
-        if client.min_version('24.8') and not test_config.cloud:
+        if client.min_version('24.8') and (client.min_version('24.12') or not test_config.cloud):
             client.set_client_setting('allow_experimental_json_type', 1)
             client.set_client_setting('allow_experimental_dynamic_type', 1)
             client.set_client_setting('allow_experimental_variant_type', 1)

@@ -67,8 +67,9 @@ jobs:
         clickhouse-version:
           - '24.8'
           - '25.1'
-          - '25.2'
           - '25.3'
+          - '25.4'
+          - '25.5'
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
@@ -126,8 +127,8 @@ jobs:
     strategy:
       matrix:
         python-version:
-          - '3.10'
           - '3.11'
+          - '3.12'
 
     steps:
       - name: Checkout

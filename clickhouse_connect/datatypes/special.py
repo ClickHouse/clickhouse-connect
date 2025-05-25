@@ -89,6 +89,9 @@ class SimpleAggregateFunction(ClickHouseType):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
         self._name_suffix = type_def.arg_str
         self.byte_size = self.element_type.byte_size
+        self.np_type = self.element_type.np_type
+        self.python_type = self.element_type.python_type
+        self.nano_divisor = self.element_type.nano_divisor
 
     def _data_size(self, sample: Sequence) -> int:
         return self.element_type.data_size(sample)
