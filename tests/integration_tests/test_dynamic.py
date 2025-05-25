@@ -12,7 +12,7 @@ from clickhouse_connect.driver import Client
 def type_available(test_client: Client, data_type: str):
     if test_client.get_client_setting(f'allow_experimental_{data_type}_type') is None:
         return
-    setting_def = test_client.server_settings(f'allow_experimental_{data_type}_value', None)
+    setting_def = test_client.server_settings.get(f'allow_experimental_{data_type}_value', None)
     if setting_def is not None and setting_def.value == '1':
         return
     pytest.skip(f'New {data_type.upper()} type not available in this version: {test_client.server_version}')
