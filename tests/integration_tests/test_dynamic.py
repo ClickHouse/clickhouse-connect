@@ -4,7 +4,6 @@ from typing import Callable
 from uuid import UUID
 
 import pytest
-from django.conf import Settings
 
 from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
