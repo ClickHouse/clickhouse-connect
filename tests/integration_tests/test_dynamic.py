@@ -4,9 +4,11 @@ from typing import Callable
 from uuid import UUID
 
 import pytest
+from django.conf import Settings
 
 from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
+from tests.integration_tests.conftest import TestConfig
 
 
 def type_available(test_client: Client, data_type: str):
@@ -164,8 +166,9 @@ def test_complex_json(test_client: Client, table_context: Callable):
         assert json1['t']['a'] == 'qwe123'
 
 
-def test_json_str_time(test_client: Client):
-    if not test_client.min_version('25.1'):
+def test_json_str_time(test_client: Client, test_config: TestConfig):
+
+    if not test_client.min_version('25.1') or test_config.cloud:
         pytest.skip('JSON string/numbers bug before 25.1, skipping')
     result = test_client.query("SELECT '{\"timerange\": \"2025-01-01T00:00:00+0000\"}'::JSON").result_set
     assert result[0][0]['timerange'] == datetime.datetime(2025, 1, 1)
