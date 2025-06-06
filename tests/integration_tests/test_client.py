@@ -106,8 +106,9 @@ def test_dsn_config(test_config: TestConfig):
 
 
 def test_get_columns_only(test_client: Client):
-    result = test_client.query('SELECT name, database FROM system.tables LIMIT 0')
-    assert result.column_names == ('name', 'database')
+    result = test_client.query('SELECT name, database, NOW() as dt FROM system.tables LIMIT 0')
+    assert result.column_names == ('name', 'database', 'dt')
+    assert result.column_types == ('String', 'String', 'DateTime')
     assert len(result.result_set) == 0
 
     test_client.query('CREATE TABLE IF NOT EXISTS test_zero_insert (v Int8) ENGINE MergeTree() ORDER BY tuple()')
