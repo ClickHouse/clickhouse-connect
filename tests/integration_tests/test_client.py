@@ -5,6 +5,7 @@ from typing import Callable
 import pytest
 
 from clickhouse_connect import create_client
+from clickhouse_connect import datatypes
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
@@ -108,7 +109,10 @@ def test_dsn_config(test_config: TestConfig):
 def test_get_columns_only(test_client: Client):
     result = test_client.query('SELECT name, database, NOW() as dt FROM system.tables LIMIT 0')
     assert result.column_names == ('name', 'database', 'dt')
-    assert result.column_types == ('String', 'String', 'DateTime')
+    assert len(result.column_types) == 3
+    assert isinstance(result.column_types[0], datatypes.string.String)
+    assert isinstance(result.column_types[1], datatypes.string.String)
+    assert isinstance(result.column_types[2], datatypes.temporal.DateTime)
     assert len(result.result_set) == 0
 
     test_client.query('CREATE TABLE IF NOT EXISTS test_zero_insert (v Int8) ENGINE MergeTree() ORDER BY tuple()')
@@ -125,29 +129,29 @@ def test_no_limit(test_client: Client):
 
 def test_multiline_query(test_client: Client):
     result = test_client.query("""
-    SELECT *
-    FROM system.tables
-    """)
+                               SELECT *
+                               FROM system.tables
+                               """)
     assert len(result.result_set) > 0
 
 
 def test_query_with_inline_comment(test_client: Client):
     result = test_client.query("""
-    SELECT *
-    -- This is just a comment
-    FROM system.tables LIMIT 77
-    -- A second comment
-    """)
+                               SELECT *
+                               -- This is just a comment
+                               FROM system.tables LIMIT 77
+                               -- A second comment
+                               """)
     assert len(result.result_set) > 0
 
 
 def test_query_with_comment(test_client: Client):
     result = test_client.query("""
-    SELECT *
-    /* This is:
-    a multiline comment */
-    FROM system.tables
-    """)
+                               SELECT *
+                               /* This is:
+                               a multiline comment */
+                               FROM system.tables
+                               """)
     assert len(result.result_set) > 0
 
 
@@ -201,13 +205,14 @@ def test_empty_result(test_client: Client):
 
 def test_temporary_tables(test_client: Client):
     test_client.command("""
-    CREATE TEMPORARY TABLE temp_test_table
+                        CREATE
+                        TEMPORARY TABLE temp_test_table
             (
                 field1 String,
                 field2 String
             )""")
 
-    test_client.command ("INSERT INTO temp_test_table (field1, field2) VALUES ('test1', 'test2'), ('test3', 'test4')")
+    test_client.command("INSERT INTO temp_test_table (field1, field2) VALUES ('test1', 'test2'), ('test3', 'test4')")
     df = test_client.query_df('SELECT * FROM temp_test_table')
     test_client.insert_df('temp_test_table', df)
     df = test_client.query_df('SELECT * FROM temp_test_table')
