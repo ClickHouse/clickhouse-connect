@@ -106,6 +106,18 @@ def test_dsn_config(test_config: TestConfig):
     client.close()
 
 
+def test_no_columns_and_types_when_no_results(test_client: Client):
+    """ In case of no results, the column names and types are not returned when FORMAT Native is set.
+    This may cause a lot of confusion.
+
+    Read more: https://github.com/ClickHouse/clickhouse-connect/issues/257
+    """
+    result = test_client.query('SELECT name, database, NOW() as dt FROM system.tables WHERE FALSE')
+    assert result.column_names == ()
+    assert result.column_types == ()
+    assert result.result_set == []
+
+
 def test_get_columns_only(test_client: Client):
     result = test_client.query('SELECT name, database, NOW() as dt FROM system.tables LIMIT 0')
     assert result.column_names == ('name', 'database', 'dt')
