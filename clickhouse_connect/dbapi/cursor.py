@@ -108,7 +108,7 @@ class Cursor:
 
     def fetchall(self):
         self.check_valid()
-        ret = self.data
+        ret = self.data[self._ix :]
         self._ix = self._rowcount
         return ret
 
@@ -122,8 +122,10 @@ class Cursor:
 
     def fetchmany(self, size: int = -1):
         self.check_valid()
-        end = self._ix + max(size, self._rowcount - self._ix)
-        ret = self.data[self._ix: end]
+        if size == -1:
+            size = self._rowcount
+        end = min(self._rowcount, self._ix + size)
+        ret = self.data[self._ix : end]
         self._ix = end
         return ret
 
