@@ -1,10 +1,11 @@
-import pytest
 from unittest.mock import Mock
+import pytest
 
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
+# pylint: disable=protected-access
 def create_mock_client(result_data):
     """Helper to create a mock client with query result"""
     client = Mock()
