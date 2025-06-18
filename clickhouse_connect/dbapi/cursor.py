@@ -115,7 +115,7 @@ class Cursor:
 
     def fetchall(self):
         self.check_valid()
-        ret = self.data
+        ret = self.data[self._ix:]
         self._ix = self._rowcount
         return ret
 
