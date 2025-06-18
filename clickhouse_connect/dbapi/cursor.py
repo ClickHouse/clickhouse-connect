@@ -129,7 +129,15 @@ class Cursor:
 
     def fetchmany(self, size: int = -1):
         self.check_valid()
-        end = self._ix + max(size, self._rowcount - self._ix)
+
+        if size < 0:
+            # Fetch all remaining rows
+            size = self._rowcount - self._ix
+        elif size == 0:
+            # Return empty list for size=0
+            return []
+        
+        end = min(self._ix + size, self._rowcount)
         ret = self.data[self._ix: end]
         self._ix = end
         return ret
