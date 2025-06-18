@@ -1,5 +1,15 @@
 # ClickHouse Connect ChangeLog
 
+## UNRELEASED
+
+## Improvements
+- Added a standalone test file (`tests/unit_tests/test_driver/test_cursor.py`) for testing cursor behavior
+
+## Bug Fixes
+- Reset cursor location after performing an execute.
+- Fix behavior of `fetchall` to only return rows from the current cursor location.
+- Fixes logic of `fetchmany` to respect size parameter.
+
 ### WARNING -- Breaking change for AsyncClient close()
 The AsyncClient close() method is now async and should be called as an async function.
 
