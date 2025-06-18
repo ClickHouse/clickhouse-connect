@@ -57,7 +57,7 @@ class Cursor:
         self.data = query_result.result_set
         self._rowcount = len(self.data)
         self._summary.append(query_result.summary)
-        
+
         # Need to reset cursor _ix after performing an execute
         self._ix = 0
 
@@ -109,7 +109,7 @@ class Cursor:
         except TypeError as ex:
             raise ProgrammingError(f'Invalid parameters {parameters} passed to cursor executemany') from ex
         self._rowcount = len(self.data)
-        
+
         # Need to reset cursor _ix after performing an execute
         self._ix = 0
 
@@ -136,7 +136,7 @@ class Cursor:
         elif size == 0:
             # Return empty list for size=0
             return []
-        
+
         end = min(self._ix + size, self._rowcount)
         ret = self.data[self._ix: end]
         self._ix = end
