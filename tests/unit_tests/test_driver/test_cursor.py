@@ -94,19 +94,45 @@ def test_fetchmany_respects_size_parameter():
     assert cursor._ix == 10
 
 
-def test_fetchmany_negative_size():
-    """Test fetchmany with negative size parameter"""
+def test_fetchmany_negative_values():
+    """Test fetchmany with various negative values"""
     test_data = [("row1",), ("row2",), ("row3",), ("row4",), ("row5",)]
 
     client = create_mock_client(test_data)
     cursor = Cursor(client)
     cursor.execute("SELECT * FROM test_table")
 
-    # Negative size should fetch all remaining rows
-    batch = cursor.fetchmany(size=-1)
-    assert len(batch) == 5
+    # Advance cursor partway
+    cursor.fetchone()  # Now at index 1
+
+    # Any negative value should fetch all remaining
+    remaining = cursor.fetchmany(-999)
+    assert len(remaining) == 4
+    assert remaining == test_data[1:]
+
+
+def test_fetchmany_w_no_size_parameter_fetches_all_remaining():
+    """Test default behavior or fetchmany"""
+    test_data = [("A", 1), ("B", 2), ("C", 3), ("D", 4), ("E", 5), ("F", 6)]
+
+    client = create_mock_client(test_data)
+    cursor = Cursor(client)
+    cursor.execute("SELECT * FROM test_table")
+
+    # Fetch many (no size parameter)
+    batch = cursor.fetchmany()
     assert batch == test_data
-    assert cursor._ix == 5
+
+    # Reset cursor
+    cursor.execute("SELECT * FROM test_table")
+
+    # Fetch one
+    row1 = cursor.fetchone()
+    assert row1 == test_data[0]
+
+    # Fetch remaining (fetchmany with no size parameter)
+    batch = cursor.fetchmany()
+    assert batch == test_data[1:]
 
 
 def test_mixed_fetch_operations():
@@ -131,6 +157,7 @@ def test_mixed_fetch_operations():
 
     # All subsequent fetches should return empty/None
     assert cursor.fetchone() is None
+    assert cursor.fetchone() is None  # Should continue returning None
     assert cursor.fetchmany(10) == []
     assert cursor.fetchall() == []
 
