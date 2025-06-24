@@ -1,15 +1,5 @@
 # ClickHouse Connect ChangeLog
 
-## UNRELEASED
-
-## Improvements
-- Added a standalone test file (`tests/unit_tests/test_driver/test_cursor.py`) for testing cursor behavior
-
-## Bug Fixes
-- Reset cursor location after performing an execute.
-- Fix behavior of `fetchall` to only return rows from the current cursor location.
-- Fixes logic of `fetchmany` to respect size parameter.
-
 ### WARNING -- Breaking change for AsyncClient close()
 The AsyncClient close() method is now async and should be called as an async function.
 
@@ -30,6 +20,21 @@ converts any unrecognized keyword argument/query parameter to a ClickHouse serve
 release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
+
+## 0.8.18, 2025-06-24
+
+### Improvements
+- Added a standalone test file (`tests/unit_tests/test_driver/test_cursor.py`) for testing cursor behavior
+
+### Bug Fixes
+- Fix SQLAlchemy execution error by using text() function by @lakako in https://github.com/ClickHouse/clickhouse-connect/pull/491
+- Test fixes for main by @genzgd in https://github.com/ClickHouse/clickhouse-connect/pull/497
+- Ensure types are returned even if there are no rows by @orian in https://github.com/ClickHouse/clickhouse-connect/pull/500
+- Added a standalone test file (`tests/unit_tests/test_driver/test_cursor.py`) for testing cursor behavior
+- Fix some issues with cursor behavior by @joe-clickhouse in https://github.com/ClickHouse/clickhouse-connect/pull/506
+    - Reset cursor location after performing an execute.
+    - Fix behavior of `fetchall` to only return rows from the current cursor location.
+    - Fixes logic of `fetchmany` to respect size parameter.
 
 ## 0.8.17, 2025-04-10
 
