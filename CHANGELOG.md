@@ -1,7 +1,5 @@
 # ClickHouse Connect ChangeLog
 
-## UNRELEASED
-
 ### WARNING -- Breaking change for AsyncClient close()
 The AsyncClient close() method is now async and should be called as an async function.
 
