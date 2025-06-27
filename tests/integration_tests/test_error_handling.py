@@ -20,6 +20,8 @@ class TestErrorHandling:
         Test that connecting to the wrong port properly propagates
         the error message from ClickHouse.
         """
+        if self.config.cloud:
+            pytest.skip("Skipping wrong port test in cloud environ.")
         wrong_port = 9000
 
         with pytest.raises((DatabaseError, OperationalError)) as excinfo:
@@ -41,6 +43,8 @@ class TestErrorHandling:
         Test that connecting to a port where nothing is listening
         produces a clear error message.
         """
+        if self.config.cloud:
+            pytest.skip("Skipping connection refused test in cloud environ.")
         # Suppress urllib3 connection pool warnings
         urllib3_logger = logging.getLogger("urllib3.connectionpool")
         original_level = urllib3_logger.level
