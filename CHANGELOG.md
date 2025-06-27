@@ -21,6 +21,9 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## UNRELEASED
+- Added more robust error handling and tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/508
+
 ## 0.8.18, 2025-06-24
 
 ### Improvements
