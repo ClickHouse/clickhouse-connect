@@ -101,27 +101,31 @@ class IPv6(ClickHouseType):
                 app(tov6(af6, x))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
-        v = V6_NULL
-        first = first_value(column, self.nullable)
-        v4mask = IPV4_V6_MASK
-        af6 = socket.AF_INET6
-        tov6 = socket.inet_pton
-        if isinstance(first, str):
-            for x in column:
-                if x is None:
-                    dest += v
-                elif '.' in x:
-                    dest += v4mask + bytes(int(b) for b in x.split('.'))
-                else:
-                    dest += tov6(af6, x)
-        else:
-            for x in column:
-                if x is None:
-                    dest += v
-                else:
-                    b = x.packed
-                    dest += b if len(b) == 16 else (v4mask + b)
+    def _write_column_binary(
+        self,
+        column: Union[Sequence, MutableSequence],
+        dest: bytearray,
+        ctx: InsertContext,
+    ):
+        """Write IPv6 addresses, promoting IPv4 addresses to IPv4-mapped IPv6 addresses."""
+        for value in column:
+            if value is None:
+                dest += V6_NULL
+                continue
+
+            try:
+                addr = ip_address(value)
+            except ValueError as e:
+                raise ValueError(
+                    f"Failed to parse '{value}' as a valid IP address for column '{ctx.column_name}'"
+                ) from e
+
+            # Now handle parsed object
+            if isinstance(addr, IPv6Address):
+                dest += addr.packed
+            elif isinstance(addr, IPv4Address):
+                # We have an IPv4, but the column is IPv6 so convert to IPv4-mapped.
+                dest += IPV4_V6_MASK + addr.packed
 
     def _active_null(self, ctx):
         if ctx.use_none:
