@@ -501,7 +501,7 @@ class AsyncClient:
                       cmd: str,
                       parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                       data: Union[str, bytes] = None,
-                      settings: Dict[str, Any] = None,
+                      settings: Optional[Dict[str, Any]] = None,
                       use_database: bool = True,
                       external_data: Optional[ExternalData] = None,
                       transport_settings: Optional[Dict[str, str]] = None) -> Union[str, int, Sequence[str], QuerySummary]:
