@@ -1,5 +1,5 @@
 import socket
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import ip_address, IPv4Address, IPv6Address
 from typing import Union, MutableSequence, Sequence, Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -64,41 +64,33 @@ class IPv6(ClickHouseType):
         return self._read_binary_ip(source, num_rows)
 
     @staticmethod
-    def _read_binary_ip(source: ByteSource, num_rows: int):
+    def _read_binary_ip(source: ByteSource, num_rows: int) -> list[IPv6Address]:
+        """Read IPv6 addresses in native format, always returning IPv6Address objects."""
         fast_ip_v6 = IPv6Address.__new__
-        fast_ip_v4 = IPv4Address.__new__
         with_scope_id = '_scope_id' in IPv6Address.__slots__
         new_col = []
         app = new_col.append
         ifb = int.from_bytes
         for _ in range(num_rows):
             int_value = ifb(source.read_bytes(16), 'big')
-            if int_value >> 32 == 0xFFFF:
-                ipv4 = fast_ip_v4(IPv4Address)
-                ipv4._ip = int_value & 0xFFFFFFFF
-                app(ipv4)
-            else:
-                ipv6 = fast_ip_v6(IPv6Address)
-                ipv6._ip = int_value
-                if with_scope_id:
-                    ipv6._scope_id = None
-                app(ipv6)
+            ipv6 = fast_ip_v6(IPv6Address)
+            ipv6._ip = int_value
+            if with_scope_id:
+                ipv6._scope_id = None
+            app(ipv6)
         return new_col
 
     @staticmethod
-    def _read_binary_str(source: ByteSource, num_rows: int):
+    def _read_binary_str(source: ByteSource, num_rows: int) -> list[str]:
+        """Read IPv6 addresses in string format, always returning IPv6Address strings."""
         new_col = []
         app = new_col.append
-        v4mask = IPV4_V6_MASK
-        tov4 = socket.inet_ntoa
         tov6 = socket.inet_ntop
         af6 = socket.AF_INET6
         for _ in range(num_rows):
             x = source.read_bytes(16)
-            if x[:12] == v4mask:
-                app(tov4(x[12:]))
-            else:
-                app(tov6(af6, x))
+            # Always use IPv6 string representation, even for IPv4-mapped addresses
+            app(tov6(af6, x))
         return new_col
 
     def _write_column_binary(
