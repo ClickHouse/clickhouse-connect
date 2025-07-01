@@ -22,6 +22,7 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Changed `AsyncClient.settings` typing to `Optional[Dict[str, Any]]` to accept None inputs.
 - Added more robust error handling and tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/508
 
 ## 0.8.18, 2025-06-24
