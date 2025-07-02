@@ -181,7 +181,9 @@ def random_ipv6():
         ip_int = (int(random() * 4294967296) << 96) | (int(random() * 4294967296)) | (
                     int(random() * 4294967296) << 32) | ( int(random() * 4294967296) << 64)
         return IPv6Address(ip_int)
-    return IPv4Address(int(random() * 2 ** 32))
+    # Return mapped IPv4 as IPv6
+    ipv4_int = int(random() * 2 ** 32)
+    return IPv6Address(f"::ffff:{IPv4Address(ipv4_int)}")
 
 
 def random_nested(keys: Sequence[str], types: Sequence[ClickHouseType], col_def: RandomValueDef):
