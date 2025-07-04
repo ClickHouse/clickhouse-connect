@@ -75,7 +75,8 @@ class HttpClient(Client):
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
-                 proxy_path: str = ''):
+                 proxy_path: str = '',
+                 ssl_certificate_auth: Union[bool, str] = False):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -99,7 +100,10 @@ class HttpClient(Client):
                 if not username:
                     raise ProgrammingError('username parameter is required for Mutual TLS authentication')
                 self.headers['X-ClickHouse-User'] = username
-                self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
+                if ssl_certificate_auth == 'off' or ssl_certificate_auth is False:
+                    self.headers['X-ClickHouse-Key'] = password
+                else:
+                    self.headers['X-ClickHouse-SSL-Certificate-Auth'] = 'on'
             # pylint: disable=too-many-boolean-expressions
             if not self.http and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
                 options = {'verify': verify}
