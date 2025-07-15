@@ -2,7 +2,7 @@ import pytz
 
 import array
 from datetime import date, datetime, tzinfo, timedelta
-from typing import Union, Sequence, MutableSequence, Any, NamedTuple
+from typing import Union, Sequence, MutableSequence, Any, NamedTuple, Optional
 from abc import abstractmethod
 import re
 
@@ -240,7 +240,7 @@ class _HMSParts(NamedTuple):
     hours: int
     minutes: int
     seconds: int
-    frac: str | None
+    frac: Optional[str]
     is_negative: bool
 
 
