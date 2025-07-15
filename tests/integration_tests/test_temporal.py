@@ -3,12 +3,26 @@ from typing import List, Any
 import pytest
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.exceptions import DatabaseError
+from tests.integration_tests.conftest import TestConfig
+
 # pylint: disable=no-self-use
 
 
 @pytest.fixture(autouse=True, scope="module")
-def skip_if_too_old_version(test_client):
+def module_setup_and_checks(test_client, test_config: TestConfig):
+    """
+    Performs all module-level setup:
+    - Skips if in a cloud environment where settings are locked.
+    - Skips if the server version is too old for Time/Time64 types.
+    """
+    # First, check the cloud environment
+    if test_config.cloud:
+        pytest.skip(
+            "Time/Time64 types require settings change, but settings are locked in cloud, skipping tests.",
+            allow_module_level=True,
+        )
+
+    # Next, check the server version
     version_str = test_client.query("SELECT version()").result_rows[0][0]
     major, minor, *_ = map(int, version_str.split("."))
     if (major, minor) < (25, 6):
@@ -99,17 +113,8 @@ def setup_time_table(test_client: Client):
     """Setup and teardown test table with Time and Time64 columns."""
     client = test_client
 
-    try:
-        # Attempt to enable the experimental feature for older versions
-        client.command("SET enable_time_time64_type = 1")
-    except DatabaseError as ex:
-        # On some managed services this setting is locked.
-        # If we get this specific error, it means the types are (presumably) already enabled by default.
-        if "SETTING_CONSTRAINT_VIOLATION" in str(ex):
-            pass
-        else:
-            # If it's a different database error, something else is wrong, so re-raise it.
-            raise
+    # Enable native Time & Time64 support
+    client.command("SET enable_time_time64_type = 1")
 
     # Create table
     client.command(f"DROP TABLE IF EXISTS {TABLE_NAME}")
