@@ -11,7 +11,7 @@ from pytz.exceptions import UnknownTimeZoneError
 from clickhouse_connect import common
 from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.base import ClickHouseType, activate_versioned_types
 from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int, coerce_bool
@@ -73,6 +73,11 @@ class Client(ABC):
         self.server_tz, dst_safe = pytz.UTC, True
         self.server_version, server_tz = \
             tuple(self.command('SELECT version(), timezone()', use_database=False))
+
+        # Now that we know the server version, we can activate types that were
+        # originally deferred due to min server version requirements
+        activate_versioned_types(self)
+
         try:
             server_tz = pytz.timezone(server_tz)
             server_tz, dst_safe = tzutil.normalize_timezone(server_tz)

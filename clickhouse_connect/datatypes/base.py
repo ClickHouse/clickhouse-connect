@@ -3,7 +3,7 @@ import logging
 
 from abc import ABC
 from math import log
-from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Union, Collection
+from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Union, Collection, List, Optional, TYPE_CHECKING
 
 from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
@@ -14,10 +14,16 @@ from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.options import np, pd
 
+if TYPE_CHECKING:
+    from clickhouse_connect.driver.client import Client
+
 logger = logging.getLogger(__name__)
 ch_read_formats = {}
 ch_write_formats = {}
 
+# This collection will hold data types that require a minimum
+# version of ClickHouse server for deferred registration
+_VERSIONED_REGISTRY: List[Type["ClickHouseType"]] = []
 
 class TypeDef(NamedTuple):
     """
@@ -44,13 +50,30 @@ class ClickHouseType(ABC):
     byte_size = 0
     valid_formats = 'native'
 
+    # Optional base class attribute for min server version
+    min_server_version: Optional[str] = None
+
     python_type = None
     base_type = None
 
     def __init_subclass__(cls, registered: bool = True):
         if registered:
-            cls.base_type = cls.__name__
-            type_map[cls.base_type] = cls
+            # Check if this type requires a specific server version
+            if (
+                hasattr(cls, "min_server_version")
+                and cls.min_server_version is not None
+            ):
+                # Add to versioned registry for later activation
+                _VERSIONED_REGISTRY.append(cls)
+                logger.debug(
+                    'Type "%s" requires server version >= %s, deferring registration',
+                    cls.__name__,
+                    cls.min_server_version,
+                )
+            else:
+                # Register immediately for types without version requirements
+                cls.base_type = cls.__name__
+                type_map[cls.base_type] = cls
 
     @classmethod
     def build(cls: Type['ClickHouseType'], type_def: TypeDef):
@@ -367,3 +390,29 @@ class UnsupportedType(ClickHouseType, ABC, registered=False):
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
         raise NotSupportedError(f'{self.name} serialization  not supported')
+
+
+def activate_versioned_types(client: "Client"):
+    """
+    Called by the Client after connecting to register types that meet
+    the server version requirement.
+
+    :param client: Connected ClickHouse client instance
+    """
+
+    for type_cls in _VERSIONED_REGISTRY:
+        base_name = type_cls.__name__
+        min_version = type_cls.min_server_version
+
+        if client.min_version(min_version):
+            if base_name not in type_map:
+                type_cls.base_type = base_name
+                type_map[base_name] = type_cls
+        else:
+            logger.debug(
+                "Skipping registration of type %s due to version requirements: "
+                "(requires server version >= %s, currently at %s)",
+                base_name,
+                min_version,
+                client.server_version,
+            )
