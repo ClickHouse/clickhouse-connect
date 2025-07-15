@@ -51,7 +51,6 @@ def parse_name(name: str) -> Tuple[str, str, TypeDef]:
     return base, name, TypeDef(tuple(wrappers), keys, values)
 
 
-# pylint: disable=import-outside-toplevel
 def get_from_name(name: str) -> ClickHouseType:
     """
     Returns the ClickHouseType instance parsed from the ClickHouse type name.  Instances are cached
@@ -64,17 +63,7 @@ def get_from_name(name: str) -> ClickHouseType:
         try:
             ch_type = type_map[base].build(type_def)
         except KeyError:
-            # Check if this might be a version-restricted type
             err_str = f'Unrecognized ClickHouse type base: {base} name: {name}'
-
-            # Look through versioned registry to provide a more helpful error message
-            from clickhouse_connect.datatypes.base import _VERSIONED_REGISTRY
-
-            for type_cls in _VERSIONED_REGISTRY:
-                if type_cls.__name__ == base:
-                    err_str += f". Note: This type requires ClickHouse version {type_cls.min_server_version} or higher."
-                    break
-
             logger.error(err_str)
             raise InternalError(err_str) from None
         type_cache[name] = ch_type
