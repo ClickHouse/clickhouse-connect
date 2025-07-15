@@ -3,7 +3,7 @@ from typing import List, Any
 import pytest
 
 from clickhouse_connect.driver import Client
-
+from clickhouse_connect.driver.exceptions import DatabaseError
 # pylint: disable=no-self-use
 
 
@@ -99,8 +99,17 @@ def setup_time_table(test_client: Client):
     """Setup and teardown test table with Time and Time64 columns."""
     client = test_client
 
-    # Enable native Time & Time64 support
-    client.command("SET enable_time_time64_type = 1")
+    try:
+        # Attempt to enable the experimental feature for older versions
+        client.command("SET enable_time_time64_type = 1")
+    except DatabaseError as ex:
+        # On some managed services this setting is locked.
+        # If we get this specific error, it means the types are (presumably) already enabled by default.
+        if "SETTING_CONSTRAINT_VIOLATION" in str(ex):
+            pass
+        else:
+            # If it's a different database error, something else is wrong, so re-raise it.
+            raise
 
     # Create table
     client.command(f"DROP TABLE IF EXISTS {TABLE_NAME}")
