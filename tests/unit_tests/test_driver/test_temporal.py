@@ -199,7 +199,6 @@ class TestTime64DataType(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_valid_scale3_string_round_trip(self):
         t3 = self.make(3)
-        # parse and format max fractional precision
         s = "000:00:01.123"
         ticks = t3._string_to_ticks(s)
         self.assertEqual(ticks, 1_123)

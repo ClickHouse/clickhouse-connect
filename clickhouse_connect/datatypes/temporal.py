@@ -283,7 +283,6 @@ class TimeBase(ClickHouseType, registered=False):
         _read_state: Any,
     ) -> Sequence:
         """Read binary column data and convert to requested format."""
-        # Pull raw ticks
         ticks = source.read_array(self._array_type, num_rows)
         fmt = self.read_format(ctx)
 
@@ -296,7 +295,6 @@ class TimeBase(ClickHouseType, registered=False):
         if ctx.use_numpy:
             return np.array(ticks, dtype=self.np_type)
 
-        # Default to native Python type of timedelta
         return [self._ticks_to_timedelta(t) for t in ticks]
 
     def _write_column_binary(
@@ -310,11 +308,7 @@ class TimeBase(ClickHouseType, registered=False):
         write_array(self._array_type, ticks, dest, ctx.column_name)
 
     def _parse_core(self, time_str: str) -> _HMSParts:
-        """
-        Parse an hhh:mm:ss[.fff] time literal.
-
-        Returns an _HMSParts tuple; raises ValueError on ill-formed input.
-        """
+        """Parse an hhh:mm:ss[.fff] time literal."""
         match = self._HMS_RE.match(time_str)
         if not match:
             raise ValueError(f"Invalid time literal {time_str}")
@@ -349,13 +343,11 @@ class TimeBase(ClickHouseType, registered=False):
         first = first_value(column, self.nullable)
         expected_type = type(first) if first is not None else None
 
-        # Handle empty or all-None columns
         if expected_type is None:
             if self.nullable:
                 return [0] * len(column)
-            return []  # Empty non-nullable column
+            return []
 
-        # Map detected type to correct converter function
         converter_map = {
             timedelta: self._timedelta_to_ticks,
             int: self._int_to_ticks,
@@ -369,23 +361,13 @@ class TimeBase(ClickHouseType, registered=False):
                 "Expected 'int', 'str', or 'timedelta'."
             )
 
-        # Apply converter
         if self.nullable:
             return [converter(x) if x is not None else 0 for x in column]
 
         return [converter(x) for x in column]
 
     def _validate_range(self, ticks: int, original: Any) -> None:
-        """
-        Validate that ticks is within valid range.
-
-        Args:
-            ticks: The tick value to validate
-            original: Original value for error reporting
-
-        Raises:
-            ValueError: If ticks is out of range
-        """
+        """Validate that ticks is within valid range."""
         if not self.min_ticks <= ticks <= self.max_ticks:
             raise ValueError(f"{original} out of range for {self.__class__.__name__}")
 
@@ -477,11 +459,8 @@ class Time(TimeBase):
         return self.MIN_TIME_SECONDS
 
     def _string_to_ticks(self, time_str: str) -> int:
-        """Parse string format 'HHH:MM:SS[.fff]' to ticks (seconds)."""
+        """Parse string format 'HHH:MM:SS[.fff]' to ticks (seconds), flooring fractional seconds."""
         parts = self._parse_core(time_str)
-
-        # For consistency with timedelta inserts, we ignore
-        # any fractional part, effectively flooring to the whole second.
         ticks = parts.hours * 3600 + parts.minutes * 60 + parts.seconds
 
         if parts.is_negative:
@@ -501,8 +480,6 @@ class Time(TimeBase):
 
     def _timedelta_to_ticks(self, td: timedelta) -> int:
         """Convert timedelta to ticks (seconds), flooring fractional seconds."""
-        # Just call int on total seconds. Note this effectively floors any
-        # fractional parts of a second included in the timedelta object.
         total = int(td.total_seconds())
         self._validate_range(total, td)
 
