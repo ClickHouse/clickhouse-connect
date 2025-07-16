@@ -2,7 +2,7 @@ import array
 import struct
 import sys
 
-from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator, Type
+from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
 from clickhouse_connect.driver.types import Closable
@@ -140,45 +140,6 @@ def first_value(column: Sequence, nullable:bool = True):
     if len(column):
         return column[0]
     return None
-
-
-def get_homogeneous_column_type(column: Sequence) -> Optional[Type]:
-    """
-    Determines the type of the first non-None element in a sequence and validates
-    that all other non-None elements are of the same type in a single pass.
-
-    Args:
-        column: The sequence of data to analyze.
-
-    Returns:
-        The common type of the non-None elements if the column is homogeneous.
-        Returns None if the column is empty or contains only None values.
-
-    Raises:
-        TypeError: If the column contains a mix of types.
-    """
-    # Create an iterator to process the column only once
-    non_none_iterator = (x for x in column if x is not None)
-
-    # Get the first item to establish the expected type
-    try:
-        first_item = next(non_none_iterator)
-    except StopIteration:
-        # The column is empty or contains only Nones
-        return None
-
-    expected_type = type(first_item)
-
-    # Continue with the *rest* of the iterator to validate homogeneity
-    for item in non_none_iterator:
-        if not isinstance(item, expected_type):
-            raise TypeError(
-                f"Non-homogenous column detected. "
-                f"Expected all values to be of type '{expected_type.__name__}', "
-                f"but found type '{type(item).__name__}'."
-            )
-
-    return expected_type
 
 
 class SliceView(Sequence):

@@ -7,14 +7,7 @@ from abc import abstractmethod
 import re
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
-from clickhouse_connect.driver.common import (
-    write_array,
-    np_date_types,
-    int_size,
-    first_value,
-    get_homogeneous_column_type,
-
-)
+from clickhouse_connect.driver.common import write_array, np_date_types, int_size, first_value
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
@@ -353,7 +346,8 @@ class TimeBase(ClickHouseType, registered=False):
 
     def _to_ticks_array(self, column: Sequence) -> Sequence[int]:
         """Convert column data to internal tick representation."""
-        expected_type = get_homogeneous_column_type(column)
+        first = first_value(column, self.nullable)
+        expected_type = type(first) if first is not None else None
 
         # Handle empty or all-None columns
         if expected_type is None:
