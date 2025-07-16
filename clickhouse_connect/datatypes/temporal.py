@@ -272,8 +272,6 @@ class TimeBase(ClickHouseType, registered=False):
         re.VERBOSE,
     )
 
-    # Time types require server versions >= 25.6
-    min_server_version = "25.6"
     MAX_TIME_SECONDS = 999 * 3600 + 59 * 60 + 59  # 999:59:59
     MIN_TIME_SECONDS = -MAX_TIME_SECONDS  # -999:59:59
     _MICROS_PER_SECOND = 1_000_000
