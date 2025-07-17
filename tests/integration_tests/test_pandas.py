@@ -288,6 +288,8 @@ def test_pandas_small_blocks(test_config: TestConfig, test_client: Client):
 
 
 def test_pandas_string_to_df_insert(test_client: Client, table_context: Callable):
+    if not test_client.min_version('25.2'):
+        pytest.skip(f'Nullable(JSON) type not available in this version: {test_client.server_version}')
     with table_context(
         "test_pandas_string_to_df_insert",
         [

@@ -152,7 +152,8 @@ def test_typed_json(test_client: Client, table_context: Callable):
 
 
 def test_nullable_json(test_client: Client, table_context: Callable):
-    type_available(test_client, "json")
+    if not test_client.min_version('25.2'):
+        pytest.skip(f'Nullable(JSON) type not available in this version: {test_client.server_version}')
     with table_context("nullable_json", [
         "key Int32",
         "value_1 Nullable(JSON)",
