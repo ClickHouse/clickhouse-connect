@@ -2,6 +2,7 @@ import datetime
 from ipaddress import IPv4Address
 from typing import Callable
 from uuid import UUID
+import json
 
 import pytest
 
@@ -148,6 +149,26 @@ def test_typed_json(test_client: Client, table_context: Callable):
         result = test_client.query('SELECT * FROM new_json_typed ORDER BY key')
         json1 = result.result_set[0][1]
         assert json1['a']['b'] == datetime.datetime(2020, 10, 15, 10, 15, 44, 877000)
+
+
+def test_nullable_json(test_client: Client, table_context: Callable):
+    type_available(test_client, "json")
+    with table_context("nullable_json", [
+        "key Int32",
+        "value_1 Nullable(JSON)",
+        "value_2 Nullable(JSON)",
+        "value_3 Nullable(JSON)"
+    ]):
+        v1 = {"item_a": 5, "item_b": 10}
+
+        test_client.insert("nullable_json", [[1, v1, json.dumps(v1), None], [2, v1, None, None]])
+        result = test_client.query('SELECT * FROM nullable_json ORDER BY key')
+        assert result.result_set[0][1] == v1
+        assert result.result_set[1][1] == v1
+        assert result.result_set[0][2] == v1
+        assert result.result_set[1][2] is None
+        assert result.result_set[0][3] is None
+        assert result.result_set[1][3] is None
 
 
 def test_complex_json(test_client: Client, table_context: Callable):
