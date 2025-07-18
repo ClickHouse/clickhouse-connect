@@ -1,6 +1,6 @@
 import array
 import unittest
-from datetime import timedelta
+from datetime import timedelta, time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import numpy as np
@@ -9,6 +9,8 @@ import pandas as pd
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.datatypes.temporal import Time, Time64
 from clickhouse_connect.driver.exceptions import ProgrammingError
+
+# pylint: disable=too-many-public-methods
 
 
 # Helper function used only in these tests
@@ -142,16 +144,12 @@ class TestTimeDataType(unittest.TestCase):
     def test_to_ticks_array_all_none(self):
         self.time_type.nullable = True
         col = [None, None]
-        with patch(f"{Time.__module__}.first_value", lambda c, _: None), patch.object(
-            self.time_type, "write_format", return_value="native"
-        ):
+        with patch.object(self.time_type, "write_format", return_value="native"):
             ticks = self.time_type._to_ticks_array(col)
         self.assertEqual(ticks, [0, 0])
 
     def test_to_ticks_array_mixed_types_error(self):
-        with patch(f"{Time.__module__}.first_value", lambda c, _: 1), patch.object(
-            self.time_type, "write_format", return_value="native"
-        ):
+        with patch.object(self.time_type, "write_format", return_value="native"):
             with self.assertRaises(TypeError):
                 self.time_type._to_ticks_array([1, "000:00:01"])
 
@@ -177,6 +175,52 @@ class TestTimeDataType(unittest.TestCase):
         np.testing.assert_array_equal(
             arr, np.array([index[i] for i in keys], dtype="timedelta64[s]")
         )
+
+    # ------------------------------------------------------------------
+    # datetime.time conversions
+    # ------------------------------------------------------------------
+    def test_time_to_ticks(self):
+        """Test conversion of datetime.time object to ticks."""
+        self.assertEqual(self.time_type._time_to_ticks(time(10, 20, 30)), 37230)
+        self.assertEqual(self.time_type._time_to_ticks(time(0, 0, 0)), 0)
+        self.assertEqual(self.time_type._time_to_ticks(time(23, 59, 59)), 86399)
+
+    def test_ticks_to_time_round_trip(self):
+        """Test round-trip conversion from ticks to datetime.time."""
+        ticks = 37230
+        t = self.time_type._ticks_to_time(ticks)
+        self.assertEqual(t, time(10, 20, 30))
+        self.assertEqual(self.time_type._time_to_ticks(t), ticks)
+
+    def test_ticks_to_time_out_of_range_raises(self):
+        """Test that converting out-of-range ticks to datetime.time raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.time_type._ticks_to_time(-1)
+        with self.assertRaises(ValueError):
+            self.time_type._ticks_to_time(86400)
+
+    def test_read_time_format(self):
+        """Test reading data in the 'time' format."""
+        ticks = [37230, 0, 86399]
+        expected = [time(10, 20, 30), time(0, 0, 0), time(23, 59, 59)]
+        mock_source = MagicMock()
+        mock_source.read_array.return_value = ticks
+
+        with patch.object(self.time_type, "read_format", return_value="time"):
+            result = self.time_type._read_column_binary(
+                mock_source, len(ticks), self.base_read_ctx, None
+            )
+        self.assertEqual(result, expected)
+
+    def test_write_time_format(self):
+        """Test writing datetime.time objects to binary."""
+        column = [time(10, 20, 30)]
+        expected = [37230]
+        dest = bytearray()
+
+        with patch(f"{Time.__module__}.write_array", _dummy_write_array):
+            self.time_type._write_column_binary(column, dest, self.insert_ctx)
+        self.assertEqual(dest, array.array("i", expected).tobytes())
 
 
 class TestTime64DataType(unittest.TestCase):
@@ -258,7 +302,7 @@ class TestTime64DataType(unittest.TestCase):
         column = [timedelta(seconds=1, microseconds=1), None]
         expected_ticks = [1_000_001, 0]
         dest = bytearray()
-        with patch(f"{Time64.__module__}.first_value", lambda col, _: column[0]), patch(
+        with patch(
             f"{Time64.__module__}.write_array", _dummy_write_array
         ), patch.object(t6, "write_format", return_value="native"):
             t6._write_column_binary(column, dest, SimpleNamespace(column_name="c"))
@@ -289,7 +333,7 @@ class TestTime64DataType(unittest.TestCase):
         column = [2_000_000]
         expected = [2_000_000]
         dest = bytearray()
-        with patch(f"{Time64.__module__}.first_value", lambda col, _: column[0]), patch(
+        with patch(
             f"{Time64.__module__}.write_array", _dummy_write_array
         ), patch.object(t6, "write_format", return_value="int"):
             t6._write_column_binary(column, dest, SimpleNamespace(column_name="c"))
@@ -316,6 +360,54 @@ class TestTime64DataType(unittest.TestCase):
     def test_invalid_scale_raises(self):
         with self.assertRaises(ProgrammingError):
             Time64(TypeDef(values=(2,)))
+
+    # ------------------------------------------------------------------
+    # datetime.time conversions
+    # ------------------------------------------------------------------
+    def test_time_to_ticks_scale6(self):
+        """Test conversion of datetime.time to ticks for Time64(6)."""
+        t6 = self.make(6)
+        t = time(10, 20, 30, 123456)
+        self.assertEqual(t6._time_to_ticks(t), 37230123456)
+
+    def test_ticks_to_time_round_trip_scale6(self):
+        """Test round-trip conversion from ticks to datetime.time for Time64(6)."""
+        t6 = self.make(6)
+        ticks = 37230123456
+        t = t6._ticks_to_time(ticks)
+        self.assertEqual(t, time(10, 20, 30, 123456))
+        self.assertEqual(t6._time_to_ticks(t), ticks)
+
+    def test_ticks_to_time_out_of_range_raises_scale6(self):
+        """Test that out-of-range ticks raise ValueError for Time64(6)."""
+        t6 = self.make(6)
+        with self.assertRaises(ValueError):
+            t6._ticks_to_time(-1)
+        with self.assertRaises(ValueError):
+            t6._ticks_to_time(86400 * 10**6)
+
+    def test_read_time_format_scale6(self):
+        """Test reading Time64(6) data in the 'time' format."""
+        t6 = self.make(6)
+        ticks = [37230123456]
+        expected = [time(10, 20, 30, 123456)]
+        mock_source = MagicMock()
+        mock_source.read_array.return_value = ticks
+
+        with patch.object(t6, "read_format", return_value="time"):
+            result = t6._read_column_binary(mock_source, 1, self.base_read_ctx, None)
+        self.assertEqual(result, expected)
+
+    def test_write_time_format_scale6(self):
+        """Test writing datetime.time objects to Time64(6) binary."""
+        t6 = self.make(6)
+        column = [time(10, 20, 30, 123456)]
+        expected = [37230123456]
+        dest = bytearray()
+
+        with patch(f"{Time64.__module__}.write_array", _dummy_write_array):
+            t6._write_column_binary(column, dest, SimpleNamespace(column_name="c"))
+        self.assertEqual(dest, array.array("q", expected).tobytes())
 
 
 if __name__ == "__main__":

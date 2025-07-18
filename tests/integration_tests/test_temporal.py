@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, time
 from typing import List, Any
 import pytest
 
@@ -319,3 +319,89 @@ class TestMixedInputTypes:
         result = query_column(test_client, "t")
         expected = TimeTestData.TIME_DELTAS
         assert result == expected
+
+
+class ClockTimeData:
+    TIME_OBJS = [
+        time(0, 0, 5),
+        time(1, 2, 3),
+        time(23, 59, 59),
+        time(0, 0, 0),
+    ]
+
+    TIME_DELTAS = [
+        timedelta(seconds=5),
+        timedelta(hours=1, minutes=2, seconds=3),
+        timedelta(hours=23, minutes=59, seconds=59),
+        timedelta(0),
+    ]
+
+    TIME64_US_OBJS = [
+        time(1, 2, 3, 123456),
+        time(0, 0, 0, 1),
+        time(23, 59, 59, 999999),
+    ]
+
+    TIME64_NS_OBJS = [
+        time(1, 2, 3, 123456),  # 123 456 789 ns -> 123 456 us
+        time(0, 0, 0),  # 1 ns (floor)
+        time(23, 59, 59, 123000),  # 123 000 µs
+    ]
+
+
+class TestTimeDatetimeTimeRoundtrip:
+    """Ensure Time columns accept & return datetime.time when format='time'."""
+
+    def test_roundtrip_time_format(self, test_client: Client):
+        rows = [create_test_row(i, t) for i, t in enumerate(ClockTimeData.TIME_OBJS)]
+        insert_test_data(test_client, rows)
+        result = query_column(test_client, "t", Time="time")
+        assert result == ClockTimeData.TIME_OBJS
+
+    def test_default_read_from_time_objects(self, test_client: Client):
+        """Writing time objects + default read still yields timedelta."""
+        rows = [create_test_row(i, t) for i, t in enumerate(ClockTimeData.TIME_OBJS)]
+        insert_test_data(test_client, rows)
+
+        result = query_column(test_client, "t")
+        assert result == ClockTimeData.TIME_DELTAS
+
+
+class TestTime64DatetimeTimeRoundtrip:
+    """Validate Time64(6/9) ⇄ datetime.time conversions."""
+
+    @pytest.mark.parametrize(
+        "column,objects",
+        [
+            ("t64_us", ClockTimeData.TIME64_US_OBJS),
+            ("t64_ns", ClockTimeData.TIME64_NS_OBJS),
+        ],
+    )
+    def test_time64_time_format(
+        self, test_client: Client, column: str, objects: List[time]
+    ):
+        rows = [create_test_row(i, t) for i, t in enumerate(objects)]
+        insert_test_data(test_client, rows)
+
+        result = query_column(test_client, column, Time64="time")
+        assert result == objects
+
+
+class TestTimeFormatErrorHandling:
+    """Errors that only show up when requesting format='time'."""
+
+    def test_negative_value_cannot_be_coerced_to_time(self, test_client: Client):
+        """Database contains -2 s; asking for format='time' should fail."""
+        rows = [create_test_row(0, timedelta(seconds=-2))]
+        insert_test_data(test_client, rows)
+
+        with pytest.raises(ValueError, match="outside valid range"):
+            query_column(test_client, "t", Time="time")
+
+    def test_over_24h_value_cannot_be_coerced_to_time(self, test_client: Client):
+        """30 h is legal for ClickHouse but illegal for datetime.time."""
+        rows = [create_test_row(0, "030:00:00")]
+        insert_test_data(test_client, rows)
+
+        with pytest.raises(ValueError, match="outside valid range"):
+            query_column(test_client, "t", Time="time")

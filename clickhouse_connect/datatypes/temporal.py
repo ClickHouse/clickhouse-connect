@@ -1,7 +1,7 @@
 import pytz
 
 import array
-from datetime import date, datetime, tzinfo, timedelta
+from datetime import date, datetime, tzinfo, timedelta, time
 from typing import Union, Sequence, MutableSequence, Any, NamedTuple, Optional
 from abc import abstractmethod
 import re
@@ -268,11 +268,12 @@ class TimeBase(ClickHouseType, registered=False):
     MAX_TIME_SECONDS = 999 * 3600 + 59 * 60 + 59  # 999:59:59
     MIN_TIME_SECONDS = -MAX_TIME_SECONDS  # -999:59:59
     _MICROS_PER_SECOND = 1_000_000
+    _SECONDS_PER_DAY = 86_400
 
     _array_type: str
     byte_size: int
     np_type: str
-    valid_formats = ("native", "string", "int")
+    valid_formats = ("native", "string", "int", "time")
     python_type = timedelta
 
     def _read_column_binary(
@@ -291,6 +292,9 @@ class TimeBase(ClickHouseType, registered=False):
 
         if fmt == "string":
             return [self._ticks_to_string(t) for t in ticks]
+
+        if fmt == "time":
+            return [self._ticks_to_time(t) for t in ticks]
 
         if ctx.use_numpy:
             return np.array(ticks, dtype=self.np_type)
@@ -350,6 +354,7 @@ class TimeBase(ClickHouseType, registered=False):
 
         converter_map = {
             timedelta: self._timedelta_to_ticks,
+            time: self._time_to_ticks,
             int: self._int_to_ticks,
             str: self._string_to_ticks,
         }
@@ -358,7 +363,7 @@ class TimeBase(ClickHouseType, registered=False):
         if converter is None:
             raise TypeError(
                 f"Unsupported column type '{expected_type.__name__}' for {self.__class__.__name__}. "
-                "Expected 'int', 'str', or 'timedelta'."
+                "Expected 'int', 'str', 'time', or 'timedelta'."
             )
 
         if self.nullable:
@@ -366,14 +371,21 @@ class TimeBase(ClickHouseType, registered=False):
 
         return [converter(x) for x in column]
 
-    def _validate_range(self, ticks: int, original: Any) -> None:
-        """Validate that ticks is within valid range."""
+    def _validate_standard_range(self, ticks: int, original: Any) -> None:
+        """Validate that ticks is within valid ClickHouse range."""
         if not self.min_ticks <= ticks <= self.max_ticks:
             raise ValueError(f"{original} out of range for {self.__class__.__name__}")
 
+    def _validate_time_obj_range(self, ticks: int) -> None:
+        """Ensure ticks can form a valid datetime.time object."""
+        if not self.min_time_ticks <= ticks <= self.max_time_ticks:
+            raise ValueError(
+                f"Ticks value {ticks} is outside valid range for datetime.time object."
+            )
+
     def _int_to_ticks(self, value: int) -> int:
         """Convert integer value to ticks, with range validation."""
-        self._validate_range(value, value)
+        self._validate_standard_range(value, value)
         return value
 
     def _active_null(self, ctx: QueryContext):
@@ -421,6 +433,16 @@ class TimeBase(ClickHouseType, registered=False):
         raise NotImplementedError
 
     @abstractmethod
+    def _ticks_to_time(self, ticks: int) -> time:
+        """Convert integer ticks into a time."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _time_to_ticks(self, t: time) -> int:
+        """Convert a time into integer ticks."""
+        raise NotImplementedError
+
+    @abstractmethod
     def _ticks_to_timedelta(self, ticks: int) -> timedelta:
         """Convert integer ticks into a timedelta."""
         raise NotImplementedError
@@ -428,6 +450,17 @@ class TimeBase(ClickHouseType, registered=False):
     @abstractmethod
     def _ticks_to_string(self, ticks: int) -> str:
         """Format integer ticks as a string."""
+        raise NotImplementedError
+
+    @property
+    def min_time_ticks(self) -> int:
+        """Minimum tick value representable by datetime.time type."""
+        return 0
+
+    @property
+    @abstractmethod
+    def max_time_ticks(self) -> int:
+        """Maximum tick value representable by datetime.time type."""
         raise NotImplementedError
 
     @property
@@ -458,6 +491,10 @@ class Time(TimeBase):
     def min_ticks(self) -> int:
         return self.MIN_TIME_SECONDS
 
+    @property
+    def max_time_ticks(self) -> int:
+        return self._SECONDS_PER_DAY - 1
+
     def _string_to_ticks(self, time_str: str) -> int:
         """Parse string format 'HHH:MM:SS[.fff]' to ticks (seconds), flooring fractional seconds."""
         parts = self._parse_core(time_str)
@@ -465,7 +502,7 @@ class Time(TimeBase):
 
         if parts.is_negative:
             ticks = -ticks
-        self._validate_range(ticks, time_str)
+        self._validate_standard_range(ticks, time_str)
 
         return ticks
 
@@ -481,13 +518,25 @@ class Time(TimeBase):
     def _timedelta_to_ticks(self, td: timedelta) -> int:
         """Convert timedelta to ticks (seconds), flooring fractional seconds."""
         total = int(td.total_seconds())
-        self._validate_range(total, td)
+        self._validate_standard_range(total, td)
 
         return total
 
     def _ticks_to_timedelta(self, ticks: int) -> timedelta:
         """Convert ticks (seconds) to timedelta."""
         return timedelta(seconds=ticks)
+
+    def _time_to_ticks(self, t: time) -> int:
+        """Converts time to ticks (seconds), flooring fraction seconds."""
+        return t.hour * 3600 + t.minute * 60 + t.second
+
+    def _ticks_to_time(self, ticks: int) -> time:
+        """Converts ticks (seconds) to time."""
+        self._validate_time_obj_range(ticks)
+        h, rem = divmod(ticks, 3600)
+        m, s = divmod(rem, 60)
+
+        return time(hour=h, minute=m, second=s)
 
 
 class Time64(TimeBase):
@@ -510,6 +559,10 @@ class Time64(TimeBase):
         self.unit = np_date_types.get(self.scale)
 
     @property
+    def max_time_ticks(self) -> int:
+        return self._SECONDS_PER_DAY * self.precision - 1
+
+    @property
     def np_type(self) -> str:
         return f"timedelta64{self.unit}"
 
@@ -530,7 +583,7 @@ class Time64(TimeBase):
         ) * self.precision + frac_ticks
         if parts.is_negative:
             ticks = -ticks
-        self._validate_range(ticks, time_str)
+        self._validate_standard_range(ticks, time_str)
 
         return ticks
 
@@ -549,12 +602,12 @@ class Time64(TimeBase):
         """Convert timedelta to ticks with sub-second precision."""
         total_us = int(td.total_seconds()) * self._MICROS_PER_SECOND + td.microseconds
         ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
-        self._validate_range(ticks, td)
+        self._validate_standard_range(ticks, td)
 
         return ticks
 
     def _ticks_to_timedelta(self, ticks: int) -> timedelta:
-        """Convert ticks to timedelta with sub-second precision."""
+        """Convert ticks to timedelta with microsecond precision."""
         neg = ticks < 0
         t = abs(ticks)
         sec_part = t // self.precision
@@ -563,3 +616,23 @@ class Time64(TimeBase):
         td = timedelta(seconds=sec_part, microseconds=micros)
 
         return -td if neg else td
+
+    def _time_to_ticks(self, t: time) -> int:
+        """Convert time to ticks with sub-second precision."""
+        total_us = (
+            t.hour * 3600 + t.minute * 60 + t.second
+        ) * self._MICROS_PER_SECOND + t.microsecond
+        ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
+        self._validate_time_obj_range(ticks)
+
+        return ticks
+
+    def _ticks_to_time(self, ticks: int) -> time:
+        """Convert ticks to time with microsecond precision."""
+        self._validate_time_obj_range(ticks)
+        sec_part, frac_part = divmod(ticks, self.precision)
+        h, rem = divmod(sec_part, 3600)
+        m, s = divmod(rem, 60)
+        micros = (frac_part * self._MICROS_PER_SECOND) // self.precision
+
+        return time(hour=h, minute=m, second=s, microsecond=micros)
