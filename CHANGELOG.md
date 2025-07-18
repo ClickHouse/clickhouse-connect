@@ -31,6 +31,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Changed `AsyncClient.settings` typing to `Optional[Dict[str, Any]]` to accept None inputs.
 - Added more robust error handling and tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/508
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
+- Added support for Nullable(JSON) types
 
 ## 0.8.18, 2025-06-24
 
