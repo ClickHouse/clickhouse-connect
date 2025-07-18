@@ -285,3 +285,52 @@ def test_pandas_small_blocks(test_config: TestConfig, test_client: Client):
     res = test_client.query_df('SELECT number, randomString(512) FROM numbers(1000000)',
                                settings={'max_block_size': 250})
     assert len(res) == 1000000
+
+
+def test_pandas_string_to_df_insert(test_client: Client, table_context: Callable):
+    if not test_client.min_version('25.2'):
+        pytest.skip(f'Nullable(JSON) type not available in this version: {test_client.server_version}')
+    with table_context(
+        "test_pandas_string_to_df_insert",
+        [
+            "id UInt32",
+            "timestamp Nullable(DateTime)",
+            "json_data Nullable(JSON)",
+        ],
+    ):
+
+        df = pd.DataFrame(
+            [[1, "simple"], [2, "with spaces"], [3, "特殊字符"], [4, ""]],
+            columns=["id", "s"],
+        )
+
+        json_data_dict = {"vm": "", "App Name": "MKT"}
+        json_data_dict2 = {"Room": "Leo"}
+
+        data = [
+            {
+                "id": 1,
+                "timestamp": datetime(year=2025, month=7, day=5, hour=12),
+                "json_data": json_data_dict,
+            },
+            {
+                "id": 2,
+                "timestamp": datetime(year=2025, month=7, day=6, hour=12),
+                "json_data": json_data_dict2,
+            },
+            {
+                "id": 3,
+                "timestamp": datetime(year=2025, month=7, day=7, hour=12),
+                "json_data": None,
+            },
+        ]
+
+        df = pd.DataFrame(data)
+        test_client.insert_df("test_pandas_string_to_df_insert", df)
+        result_df = test_client.query_df(
+            "SELECT * FROM test_pandas_string_to_df_insert ORDER BY id"
+        )
+
+        assert result_df.iloc[0]["json_data"] == json_data_dict
+        assert result_df.iloc[1]["json_data"] == json_data_dict2
+        assert result_df.iloc[2]["json_data"] is None
