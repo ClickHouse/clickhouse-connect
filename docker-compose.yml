@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.1-alpine}'
+    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.6-alpine}'
     container_name: 'clickhouse-connect-clickhouse-server'
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: 1
