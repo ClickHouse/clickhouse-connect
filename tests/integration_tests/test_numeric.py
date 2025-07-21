@@ -4,6 +4,7 @@ from clickhouse_connect.driver import Client
 from tests.integration_tests.conftest import TestConfig
 
 
+# pylint: disable=duplicate-code
 # pylint: disable=attribute-defined-outside-init
 class TestBFloat16:
     """Integration tests for ClickHouse BFloat16 data type handling."""
