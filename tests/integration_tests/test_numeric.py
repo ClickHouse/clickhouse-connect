@@ -12,6 +12,15 @@ class TestBFloat16:
     client: Client
     table_name: str = "bf16_integration_test"
 
+    # pylint: disable=no-self-use
+    @pytest.fixture(scope="class", autouse=True)
+    def check_version(self, test_client: Client):
+        """Skips the entire class if the server version is too old."""
+        if not test_client.min_version("24.11"):
+            pytest.skip(
+                f"BFloat16 type not supported in ClickHouse version {test_client.server_version}"
+            )
+
     @pytest.fixture(autouse=True)
     def setup_teardown(self, test_config: TestConfig, test_client: Client):
         """Create the test table before each test and drop it after."""
