@@ -95,6 +95,7 @@ class ClickHouseDialect(DefaultDialect):
     def has_sequence(self, connection, sequence_name, schema=None, **_kw):
         return False
 
+    # pylint: disable=duplicate-code
     def do_begin_twophase(self, connection, xid):
         raise NotImplementedError
 
