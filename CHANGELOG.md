@@ -32,6 +32,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Added more robust error handling and tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/508
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
 - Added support for Nullable(JSON) types
+- Added support for BFloat16 types
 
 ## 0.8.18, 2025-06-24
 
