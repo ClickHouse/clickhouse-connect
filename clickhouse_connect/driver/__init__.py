@@ -131,8 +131,8 @@ def default_port(interface: str, secure: bool):
 
 
 async def create_async_client(*,
-                              host: str = None,
-                              username: str = None,
+                              host: Optional[str] = None,
+                              username: Optional[str] = None,
                               password: str = '',
                               database: str = '__default__',
                               interface: Optional[str] = None,
