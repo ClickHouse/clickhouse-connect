@@ -150,20 +150,22 @@ class TestTimeDataType(unittest.TestCase):
 
     def test_to_ticks_array_mixed_types_error(self):
         with patch.object(self.time_type, "write_format", return_value="native"):
-            with self.assertRaises(TypeError):
+            with self.assertRaises(ValueError):
                 self.time_type._to_ticks_array([1, "000:00:01"])
 
     # pylint: disable=c-extension-no-member
     def test_active_null_with_extended_dtypes(self):
         self.time_type.nullable = True
         ctx = SimpleNamespace(use_extended_dtypes=True, use_none=False)
-        null = self.time_type._active_null(ctx)
+        with patch.object(self.time_type, "read_format", return_value="native"):
+            null = self.time_type._active_null(ctx)
         self.assertTrue(isinstance(null, pd._libs.tslibs.nattype.NaTType))
 
     def test_active_null_with_use_none(self):
         self.time_type.nullable = True
         ctx = SimpleNamespace(use_extended_dtypes=False, use_none=True)
-        self.assertIsNone(self.time_type._active_null(ctx))
+        with patch.object(self.time_type, "read_format", return_value="native"):
+            self.assertIsNone(self.time_type._active_null(ctx))
 
     def test_build_lc_column_numpy(self):
         index = [timedelta(seconds=i) for i in range(5)]
@@ -346,13 +348,15 @@ class TestTime64DataType(unittest.TestCase):
     def test_active_null_with_extended_dtypes(self):
         t6 = self.make(6, nullable=True)
         ctx = SimpleNamespace(use_extended_dtypes=True, use_none=False)
-        null = t6._active_null(ctx)
+        with patch.object(t6, "read_format", return_value="native"):
+            null = t6._active_null(ctx)
         self.assertTrue(isinstance(null, pd._libs.tslibs.nattype.NaTType))
 
     def test_active_null_with_use_none(self):
         t6 = self.make(6, nullable=True)
         ctx = SimpleNamespace(use_extended_dtypes=False, use_none=True)
-        self.assertIsNone(t6._active_null(ctx))
+        with patch.object(t6, "read_format", return_value="native"):
+            self.assertIsNone(t6._active_null(ctx))
 
     # ------------------------------------------------------------------
     # Invalid constructor scale

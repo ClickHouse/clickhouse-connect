@@ -1,6 +1,6 @@
 import os
 import random
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, time
 from typing import Callable
 from io import StringIO
 
@@ -39,10 +39,9 @@ def test_pandas_nulls(test_client: Client, table_context: Callable):
     with table_context('test_pandas_nulls_bad', ['key String', 'num Int32', 'flt Float32',
                                                  'str String', 'dt DateTime', 'day_col Date']):
 
-        try:
+        with pytest.raises(DataError):
             test_client.insert_df('test_pandas_nulls_bad', df, column_names=insert_columns)
-        except DataError:
-            pass
+
     with table_context('test_pandas_nulls_good',
                        ['key String', 'num Nullable(Int32)', 'flt Nullable(Float32)',
                         'str Nullable(String)', "dt Nullable(DateTime('America/Denver'))", 'day_col Nullable(Date)']):
@@ -334,3 +333,119 @@ def test_pandas_string_to_df_insert(test_client: Client, table_context: Callable
         assert result_df.iloc[0]["json_data"] == json_data_dict
         assert result_df.iloc[1]["json_data"] == json_data_dict2
         assert result_df.iloc[2]["json_data"] is None
+
+
+def test_pandas_time(
+    test_config: TestConfig, test_client: Client, table_context: Callable
+):
+    """Round trip test for Time types"""
+    if not test_client.min_version("25.6"):
+        pytest.skip("Time and types require ClickHouse 25.6+")
+
+    if test_config.cloud:
+        pytest.skip(
+            "Time types require settings change, but settings are locked in cloud, skipping tests."
+        )
+
+    table_name = "time_tests"
+    test_client.command("SET enable_time_time64_type = 1")
+
+    with table_context(
+        table_name,
+        [
+            "t Time",
+            "nt Nullable(Time)",
+        ],
+    ):
+        test_data = {
+            "t": [timedelta(seconds=1), timedelta(seconds=2)],
+            "nt": ["00:01:00", None],
+        }
+
+        df = pd.DataFrame(test_data)
+        test_client.insert(table_name, df)
+
+        df_res = test_client.query_df(f"SELECT * FROM {table_name}")
+        print(df_res.to_string())
+        print(df_res.dtypes)
+        assert df_res["t"][0] == pd.Timedelta("0 days 00:00:01")
+        assert df_res["t"][1] == pd.Timedelta("0 days 00:00:02")
+        assert df_res["nt"][0] == pd.Timedelta("0 days 00:01:00")
+        assert pd.isna(df_res["nt"][1])
+
+
+def test_pandas_time64(
+    test_config: TestConfig, test_client: Client, table_context: Callable
+):
+    """Round trip test for Time64 types"""
+    if not test_client.min_version("25.6"):
+        pytest.skip("Time64 types require ClickHouse 25.6+")
+
+    if test_config.cloud:
+        pytest.skip(
+            "Time64 types require settings change, but settings are locked in cloud, skipping tests."
+        )
+
+    table_name = "time64_tests"
+    test_client.command("SET enable_time_time64_type = 1")
+
+    with table_context(
+        table_name,
+        [
+            "t64_3 Time64(3)",
+            "nt64_3 Nullable(Time64(3))",
+            "t64_6 Time64(6)",
+            "nt64_6 Nullable(Time64(6))",
+            "t64_9 Time64(9)",
+            "nt64_9 Nullable(Time64(9))",
+        ],
+    ):
+        test_data = {
+            "t64_3": [1, 2],
+            "nt64_3": [time(second=45), None],
+            "t64_6": ["00:00:10.5000000", "00:00:10"],
+            "nt64_6": [60, None],
+            "t64_9": ["00:00:01.1000000000", "00:10:00"],
+            "nt64_9": [time(second=30, microsecond=500), None],
+        }
+
+        df = pd.DataFrame(test_data)
+        test_client.insert(table_name, df)
+
+        # Make sure the df insert worked correctly
+        int_res = test_client.query(
+            f"SELECT * FROM {table_name}",
+            query_formats={"Time": "int", "Time64": "int"},
+        )
+        rows = int_res.result_rows
+        assert rows[0] == (1, 45000, 10500000, 60, 1100000000, 30000500000)
+        assert rows[1] == (2, None, 10000000, None, 600000000000, None)
+
+        df_res = test_client.query_df(f"SELECT * FROM {table_name}")
+        expected_row_0 = [
+            pd.Timedelta(t)
+            for t in [
+                "0 days 00:00:00.001000",
+                "0 days 00:00:45",
+                "0 days 00:00:10.500000",
+                "0 days 00:00:00.000060",
+                "0 days 00:00:01.100000",
+                "0 days 00:00:30.000500",
+            ]
+        ]
+
+        assert expected_row_0 == df_res.iloc[0].tolist()
+
+        expected_row_1 = [
+            pd.Timedelta(t)
+            for t in [
+                "0 days 00:00:00.002000",
+                "NaT",
+                "0 days 00:00:10",
+                "NaT",
+                "0 days 00:10:00",
+                "NaT",
+            ]
+        ]
+
+        assert expected_row_1 == df_res.iloc[1].tolist()
