@@ -5,6 +5,7 @@ import pytest
 import pandas as pd
 
 from clickhouse_connect.driver import Client
+from tests.integration_tests.conftest import TestConfig
 from clickhouse_connect.driver.options import pd
 
 PANDAS_VERSION = tuple(map(int, pd.__version__.split(".")[:2]))
@@ -133,7 +134,19 @@ def test_pandas_datetime64_compat(test_client: Client, table_context: Callable):
             assert f"[{EXPECTED_RES}" in str(dt)
 
 
-def test_pandas_time_compat(test_client: Client, table_context: Callable):
+def test_pandas_time_compat(
+    test_config: TestConfig,
+    test_client: Client,
+    table_context: Callable,
+):
+    if not test_client.min_version("25.6"):
+        pytest.skip("Time types require ClickHouse 25.6+")
+
+    if test_config.cloud:
+        pytest.skip(
+            "Time types require settings change, but settings are locked in cloud, skipping tests."
+        )
+
     test_client.command("SET enable_time_time64_type = 1")
     table_name = "test_time"
     with table_context(
@@ -157,7 +170,19 @@ def test_pandas_time_compat(test_client: Client, table_context: Callable):
             assert f"[{EXPECTED_RES}" in str(dt)
 
 
-def test_pandas_time64_compat(test_client: Client, table_context: Callable):
+def test_pandas_time64_compat(
+    test_config: TestConfig,
+    test_client: Client,
+    table_context: Callable,
+):
+    if not test_client.min_version("25.6"):
+        pytest.skip("Time64 types require ClickHouse 25.6+")
+
+    if test_config.cloud:
+        pytest.skip(
+            "Time types require settings change, but settings are locked in cloud, skipping tests."
+        )
+
     test_client.command("SET enable_time_time64_type = 1")
     table_name = "test_time64"
     with table_context(
