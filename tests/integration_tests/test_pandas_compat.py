@@ -5,8 +5,8 @@ import pytest
 import pandas as pd
 
 from clickhouse_connect.driver import Client
-from tests.integration_tests.conftest import TestConfig
 from clickhouse_connect.driver.options import pd
+from tests.integration_tests.conftest import TestConfig
 
 PANDAS_VERSION = tuple(map(int, pd.__version__.split(".")[:2]))
 IS_PANDAS_2 = PANDAS_VERSION >= (2, 0)
