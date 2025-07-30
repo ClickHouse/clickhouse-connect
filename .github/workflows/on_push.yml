@@ -142,7 +142,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest tests/test_pandas_compat.py tests/test_pandas.py
+        run: pytest tests/integration_tests/test_pandas_compat.py tests/integration_tests/test_pandas.py
 
   check-secret:
     runs-on: ubuntu-latest
