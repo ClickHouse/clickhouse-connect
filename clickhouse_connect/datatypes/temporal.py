@@ -27,6 +27,10 @@ class Date(ClickHouseType):
     python_type = date
     byte_size = 2
 
+    @property
+    def pandas_dtype(self):
+        return f"datetime64[{self.pd_datetime_res}]"
+
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state:Any):
         if self.read_format(ctx) == 'int':
             return source.read_array(self._array_type, num_rows)
@@ -59,14 +63,39 @@ class Date(ClickHouseType):
         if fmt == 'int':
             return 0
         if ctx.use_numpy:
-            return np.datetime64(0)
+            return np.datetime64(0, self.pd_datetime_res)
         return epoch_start_date
 
+    # pylint: disable=too-many-return-statements
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if self.read_format(ctx) == 'int':
             return column
+
         if ctx.use_numpy and self.nullable and not ctx.use_none:
             return np.array(column, dtype=self.np_type)
+
+        if ctx.use_extended_dtypes:
+            if isinstance(column, np.ndarray) and np.issubdtype(
+                column.dtype, np.datetime64
+            ):
+                return column.astype(self.pandas_dtype)
+
+            if isinstance(column, pd.DatetimeIndex):
+                if column.tz is None:
+                    return column.astype(self.pandas_dtype)
+
+                naive = column.tz_localize(None).astype(self.pandas_dtype)
+                return pd.DatetimeIndex(naive, tz=column.tz)
+
+            if self.nullable and isinstance(column, list):
+                return np.array([None if pd.isna(s) else s for s in column]).astype(
+                    self.pandas_dtype
+                )
+
+            return pd.to_datetime(column, errors="coerce").to_numpy(
+                dtype=self.pandas_dtype, copy=False
+            )
+
         return column
 
 
@@ -87,6 +116,11 @@ class DateTimeBase(ClickHouseType, registered=False):
     valid_formats = 'native', 'int'
     python_type = datetime
 
+    @property
+    def pandas_dtype(self):
+        """Sets dtype for pandas datetime objects"""
+        return f"datetime64[{self.pd_datetime_res}]"
+
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
@@ -96,8 +130,39 @@ class DateTimeBase(ClickHouseType, registered=False):
         if self.read_format(ctx) == 'int':
             return 0
         if ctx.use_numpy:
-            return np.datetime64(0)
+            return np.datetime64(0, self.pd_datetime_res)
         return epoch_start_datetime
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        """Ensure every datetime-like column is at nanosecond resolution, preserving any tz."""
+        if ctx.use_extended_dtypes:
+            if isinstance(column, np.ndarray) and np.issubdtype(
+                column.dtype, np.datetime64
+            ):
+                return column.astype(self.pandas_dtype)
+
+            if isinstance(column, pd.DatetimeIndex) or (
+                isinstance(column, list)
+                and hasattr(next((s for s in column if not pd.isna(s)), None), "tz")
+            ):
+                if isinstance(column, list):
+                    column = pd.DatetimeIndex(column)
+
+                if column.tz is None:
+                    result = column.astype(self.pandas_dtype)
+                    return pd.array(result) if self.nullable else result
+
+                naive_ns = column.tz_localize(None).astype(self.pandas_dtype)
+                tz_aware_result = pd.DatetimeIndex(naive_ns, tz=column.tz)
+                return (
+                    pd.array(tz_aware_result) if self.nullable else tz_aware_result
+                )
+
+            if self.nullable:
+                return pd.array(
+                    [None if pd.isna(s) else s for s in column], dtype=self.pandas_dtype
+                )
+        return column
 
 
 class DateTime(DateTimeBase):
@@ -268,6 +333,7 @@ class TimeBase(ClickHouseType, registered=False):
     MAX_TIME_SECONDS = 999 * 3600 + 59 * 60 + 59  # 999:59:59
     MIN_TIME_SECONDS = -MAX_TIME_SECONDS  # -999:59:59
     _MICROS_PER_SECOND = 1_000_000
+    _NANOS_PER_SECOND = 1_000_000_000
     _SECONDS_PER_DAY = 86_400
 
     _array_type: str
@@ -287,6 +353,11 @@ class TimeBase(ClickHouseType, registered=False):
         ticks = source.read_array(self._array_type, num_rows)
         fmt = self.read_format(ctx)
 
+        if ctx.use_numpy:
+            return np.array(
+                [self._ticks_to_np_timedelta(t) for t in ticks], dtype=self.np_type
+            )
+
         if fmt == "int":
             return ticks
 
@@ -295,9 +366,6 @@ class TimeBase(ClickHouseType, registered=False):
 
         if fmt == "time":
             return [self._ticks_to_time(t) for t in ticks]
-
-        if ctx.use_numpy:
-            return np.array(ticks, dtype=self.np_type)
 
         return [self._ticks_to_timedelta(t) for t in ticks]
 
@@ -353,9 +421,12 @@ class TimeBase(ClickHouseType, registered=False):
             return []
 
         converter_map = {
+            np.timedelta64: self._timedelta_to_ticks,
             timedelta: self._timedelta_to_ticks,
             time: self._time_to_ticks,
-            int: self._int_to_ticks,
+            np.int64: self._numerical_to_ticks,
+            float: self._numerical_to_ticks,
+            int: self._numerical_to_ticks,
             str: self._string_to_ticks,
         }
         converter = converter_map.get(expected_type, None)
@@ -383,36 +454,48 @@ class TimeBase(ClickHouseType, registered=False):
                 f"Ticks value {ticks} is outside valid range for datetime.time object."
             )
 
-    def _int_to_ticks(self, value: int) -> int:
-        """Convert integer value to ticks, with range validation."""
+    def _numerical_to_ticks(self, value: Union[int, float, np.int64]) -> int:
+        """Convert numerical value to ticks, with range validation."""
+        value = int(value)
         self._validate_standard_range(value, value)
         return value
 
     def _active_null(self, ctx: QueryContext):
         """Return appropriate null value based on context."""
+        fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
-            return pd.NaT
+            return pd.NA if fmt == "int" else pd.NaT
         if ctx.use_none:
             return None
-        if self.read_format(ctx) == "int":
+        if fmt == "int":
             return 0
+        if fmt == "string":
+            return "00:00:00"
         if ctx.use_numpy:
             return np.timedelta64("NaT")
 
         return timedelta(0)
 
+    @property
+    def pandas_dtype(self):
+        """Sets dtype for pandas datetime objects"""
+        return f"timedelta64[{self.pd_datetime_res}]"
+
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         """Finalize column data based on context requirements."""
-        if self.read_format(ctx) == "int":
-            return column
-        if ctx.use_extended_dtypes and self.nullable:
-            return pd.array(
-                [pd.Timedelta(seconds=s) if s is not None else pd.NaT for s in column],
-                dtype=pd.TimedeltaIndex,
-            )
-        if ctx.use_numpy and self.nullable and not ctx.use_none:
-            return np.array(column, dtype=self.np_type)
+        if ctx.use_extended_dtypes:
+            if isinstance(column, np.ndarray) and np.issubdtype(
+                column.dtype, np.timedelta64
+            ):
+                return column.astype(self.pandas_dtype)
 
+            if isinstance(column, pd.TimedeltaIndex):
+                return column.astype(self.pandas_dtype)
+
+            if self.nullable:
+                return np.array([None if pd.isna(s) else s for s in column]).astype(
+                    self.pandas_dtype
+                )
         return column
 
     def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
@@ -428,7 +511,7 @@ class TimeBase(ClickHouseType, registered=False):
         raise NotImplementedError
 
     @abstractmethod
-    def _timedelta_to_ticks(self, td: timedelta) -> int:
+    def _timedelta_to_ticks(self, td: Union[timedelta, np.timedelta64]) -> int:
         """Convert a timedelta into integer ticks."""
         raise NotImplementedError
 
@@ -445,6 +528,11 @@ class TimeBase(ClickHouseType, registered=False):
     @abstractmethod
     def _ticks_to_timedelta(self, ticks: int) -> timedelta:
         """Convert integer ticks into a timedelta."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _ticks_to_np_timedelta(self, ticks: int) -> timedelta:
+        """Convert integer ticks into an np.timedelta."""
         raise NotImplementedError
 
     @abstractmethod
@@ -515,9 +603,12 @@ class Time(TimeBase):
 
         return f"{sign}{h:03d}:{m:02d}:{s:02d}"
 
-    def _timedelta_to_ticks(self, td: timedelta) -> int:
+    def _timedelta_to_ticks(self, td: Union[timedelta, np.timedelta64]) -> int:
         """Convert timedelta to ticks (seconds), flooring fractional seconds."""
-        total = int(td.total_seconds())
+        if isinstance(td, timedelta):
+            total = int(td.total_seconds())
+        else:
+            total = td.astype("timedelta64[s]").astype(int)
         self._validate_standard_range(total, td)
 
         return total
@@ -525,6 +616,10 @@ class Time(TimeBase):
     def _ticks_to_timedelta(self, ticks: int) -> timedelta:
         """Convert ticks (seconds) to timedelta."""
         return timedelta(seconds=ticks)
+
+    def _ticks_to_np_timedelta(self, ticks: int) -> timedelta:
+        """Convert ticks (seconds) to np.timedelta."""
+        return np.timedelta64(ticks, "s")
 
     def _time_to_ticks(self, t: time) -> int:
         """Converts time to ticks (seconds), flooring fraction seconds."""
@@ -598,10 +693,15 @@ class Time64(TimeBase):
 
         return f"{sign}{h:03d}:{m:02d}:{s:02d}{frac_str}"
 
-    def _timedelta_to_ticks(self, td: timedelta) -> int:
+    def _timedelta_to_ticks(self, td: Union[timedelta, np.timedelta64]) -> int:
         """Convert timedelta to ticks with sub-second precision."""
-        total_us = int(td.total_seconds()) * self._MICROS_PER_SECOND + td.microseconds
-        ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
+        if isinstance(td, timedelta):
+            total_us = (
+                int(td.total_seconds()) * self._MICROS_PER_SECOND + td.microseconds
+            )
+            ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
+        else:
+            ticks = td.astype("timedelta64[s]").astype(int)
         self._validate_standard_range(ticks, td)
 
         return ticks
@@ -616,6 +716,12 @@ class Time64(TimeBase):
         td = timedelta(seconds=sec_part, microseconds=micros)
 
         return -td if neg else td
+
+    def _ticks_to_np_timedelta(self, ticks: int) -> np.timedelta64:
+        """Convert ticks to numpy timedelta64 with nanosecond precision."""
+        res_map = {3: "ms", 6: "us", 9: "ns"}
+
+        return np.timedelta64(ticks, res_map.get(self.scale))
 
     def _time_to_ticks(self, t: time) -> int:
         """Convert time to ticks with sub-second precision."""

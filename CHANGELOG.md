@@ -22,6 +22,12 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Begins effort toward Pandas 2.x support. Specifically:
+    - Plumbs up a mechanism allowing date-like objects to leverage the additional Pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us".
+    - Introduces pandas compatibility tests that can be expanded and support for more 2.x features become available.
+- Tightens up type consistency of date-like objects when using `query_df` 
+- Enforces consistent resolution of ns for dataframe queries of datetime64/timedelta64 types when using Pandas 2.x (See [here](https://pandas.pydata.org/docs/whatsnew/v2.0.0.html#construction-with-datetime64-or-timedelta64-dtype-with-unsupported-resolution) for more info). Closes https://github.com/ClickHouse/clickhouse-connect/issues/165
+- Fixes problem with df inserts of Time and Time64 types. Closes https://github.com/ClickHouse/clickhouse-connect/issues/524
 - Added Time and Time64 type support and relevant tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/509
 - **WARNING: BREAKING CHANGE** — Behavior for reading from IPv6 columns has changed:
   - With `read_format='native'`, the client will **always** return [`ipaddress.IPv6Address`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address) objects, even for IPv4-mapped addresses (e.g., `"::ffff:192.168.1.1"`). Previously, the client returned [`ipaddress.IPv4Address`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv4Address) objects for these cases. This change enforces type consistency and avoids surprising implicit conversions. If your application requires IPv4 objects, you can explicitly convert using the [`ipv4_mapped`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address.ipv4_mapped) attribute of `IPv6Address`.
