@@ -22,6 +22,7 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added pandas 1.x/2.x compatibility tests to CI
 - Begins effort toward Pandas 2.x support. Specifically:
     - Plumbs up a mechanism allowing date-like objects to leverage the additional Pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us".
     - Introduces pandas compatibility tests that can be expanded and support for more 2.x features become available.
