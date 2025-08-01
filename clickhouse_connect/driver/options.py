@@ -2,6 +2,7 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 
 pd_time_test = None
 pd_extended_dtypes = False
+PANDAS_VERSION = None
 
 try:
     import numpy as np
@@ -10,6 +11,7 @@ except ImportError:
 
 try:
     import pandas as pd
+    PANDAS_VERSION = tuple(map(int, pd.__version__.split(".")[:2]))
     pd_extended_dtypes = not pd.__version__.startswith('0')
     try:
         from pandas.core.dtypes.common import is_datetime64_dtype
