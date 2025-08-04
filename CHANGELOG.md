@@ -22,21 +22,19 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added new common setting option "preserve_pandas_datetime_resolution" (default is `False`) allowing pandas 2.x users to opt into (when set to `True`) using the additional pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us". If set to `False` or using  pandas 1.x, all datetime64/timedelta64 resolutions will be coerced to "ns". (See [here](https://pandas.pydata.org/docs/whatsnew/v2.0.0.html#construction-with-datetime64-or-timedelta64-dtype-with-unsupported-resolution) for more info). Closes [#165](https://github.com/ClickHouse/clickhouse-connect/issues/165) and [#531](https://github.com/ClickHouse/clickhouse-connect/issues/531)
+- Support for both pandas 1.x and 2.x
 - Added pandas 1.x/2.x compatibility tests to CI
-- Begins effort toward Pandas 2.x support. Specifically:
-    - Plumbs up a mechanism allowing date-like objects to leverage the additional Pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us".
-    - Introduces pandas compatibility tests that can be expanded and support for more 2.x features become available.
-- Tightens up type consistency of date-like objects when using `query_df` 
-- Enforces consistent resolution of ns for dataframe queries of datetime64/timedelta64 types when using Pandas 2.x (See [here](https://pandas.pydata.org/docs/whatsnew/v2.0.0.html#construction-with-datetime64-or-timedelta64-dtype-with-unsupported-resolution) for more info). Closes https://github.com/ClickHouse/clickhouse-connect/issues/165
-- Fixes problem with df inserts of Time and Time64 types. Closes https://github.com/ClickHouse/clickhouse-connect/issues/524
-- Added Time and Time64 type support and relevant tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/509
+- Tightens up type consistency of date-like objects when using `query_df`
+- Fixes problem with df inserts of Time and Time64 types. Closes [#524](https://github.com/ClickHouse/clickhouse-connect/issues/524)
+- Added Time and Time64 type support and relevant tests. Closes [#509](https://github.com/ClickHouse/clickhouse-connect/issues/509)
 - **WARNING: BREAKING CHANGE** — Behavior for reading from IPv6 columns has changed:
   - With `read_format='native'`, the client will **always** return [`ipaddress.IPv6Address`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address) objects, even for IPv4-mapped addresses (e.g., `"::ffff:192.168.1.1"`). Previously, the client returned [`ipaddress.IPv4Address`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv4Address) objects for these cases. This change enforces type consistency and avoids surprising implicit conversions. If your application requires IPv4 objects, you can explicitly convert using the [`ipv4_mapped`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address.ipv4_mapped) attribute of `IPv6Address`.
   - With `read_format='string'`, the client will **always** return IPv6 string representations, e.g., `"::ffff:192.168.1.1"` instead of `"192.168.1.1"`, for the same reasons as above. If you require only the IPv4 string, you can parse or truncate this in your application code.
-  - Closes https://github.com/ClickHouse/clickhouse-connect/issues/493
-- When writing to an IPv6 column type, the client will "promote" IPv4 addresses to IPv4-mapped IPv6 addresses to prevent write errors: Closes https://github.com/ClickHouse/clickhouse-connect/issues/498
+  - Closes [#493](https://github.com/ClickHouse/clickhouse-connect/issues/493)
+- When writing to an IPv6 column type, the client will "promote" IPv4 addresses to IPv4-mapped IPv6 addresses to prevent write errors: Closes [#498](https://github.com/ClickHouse/clickhouse-connect/issues/498)
 - Changed `AsyncClient.settings` typing to `Optional[Dict[str, Any]]` to accept None inputs.
-- Added more robust error handling and tests. Closes https://github.com/ClickHouse/clickhouse-connect/issues/508
+- Added more robust error handling and tests. Closes [#508](https://github.com/ClickHouse/clickhouse-connect/issues/508)
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
 - Added support for Nullable(JSON) types
 - Added support for BFloat16 types

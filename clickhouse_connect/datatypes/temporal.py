@@ -7,16 +7,18 @@ from abc import abstractmethod
 import re
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
+from clickhouse_connect.common import get_setting
 from clickhouse_connect.driver.common import write_array, np_date_types, int_size, first_value
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np, pd
+from clickhouse_connect.driver.options import np, pd, PANDAS_VERSION
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
+IS_PANDAS_2 = PANDAS_VERSION >= (2, 0)
 
 
 class Date(ClickHouseType):
@@ -29,6 +31,8 @@ class Date(ClickHouseType):
 
     @property
     def pandas_dtype(self):
+        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
+            return "datetime64[s]"
         return f"datetime64[{self.pd_datetime_res}]"
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state:Any):
@@ -119,6 +123,8 @@ class DateTimeBase(ClickHouseType, registered=False):
     @property
     def pandas_dtype(self):
         """Sets dtype for pandas datetime objects"""
+        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
+            return "datetime64[s]"
         return f"datetime64[{self.pd_datetime_res}]"
 
     def _active_null(self, ctx: QueryContext):
@@ -217,6 +223,13 @@ class DateTime64(DateTimeBase):
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
         else:
             self.tzinfo = None
+
+    @property
+    def pandas_dtype(self):
+        """Sets dtype for pandas datetime objects"""
+        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
+            return f"datetime64{self.unit}"
+        return f"datetime64[{self.pd_datetime_res}]"
 
     @property
     def np_type(self):
@@ -479,6 +492,8 @@ class TimeBase(ClickHouseType, registered=False):
     @property
     def pandas_dtype(self):
         """Sets dtype for pandas datetime objects"""
+        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
+            return "timedelta64[s]"
         return f"timedelta64[{self.pd_datetime_res}]"
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
@@ -652,6 +667,13 @@ class Time64(TimeBase):
             )
         self.precision = 10**self.scale
         self.unit = np_date_types.get(self.scale)
+
+    @property
+    def pandas_dtype(self):
+        """Sets dtype for pandas datetime objects"""
+        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
+            return f"timedelta64{self.unit}"
+        return f"timedelta64[{self.pd_datetime_res}]"
 
     @property
     def max_time_ticks(self) -> int:
