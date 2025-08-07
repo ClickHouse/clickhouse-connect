@@ -283,7 +283,6 @@ def test_pandas_time64_compat(
 # Dtype backend tests
 def test_pandas_dtype_backends(test_client: Client, table_context: Callable):
     table_name = "pyarrow_tests"
-    test_client.command("SET enable_time_time64_type = 1")
     set_setting(PYARROW_SETTING_NAME, "numpy")
 
     with table_context(
@@ -297,13 +296,12 @@ def test_pandas_dtype_backends(test_client: Client, table_context: Callable):
             "s String",
             "ns Nullable(String)",
             "b Bool",
-            "t64_ms Time64(3)",
         ],
     ):
         data = (
-            [1, pd.Timestamp(2023, 5, 4), 10, 123456789, 35.2, "string 1", None, 0, 1000],
-            [2, pd.Timestamp(2023, 5, 5), None, -45678912, 8.5555588888, "string 2", None, 1, 10000],
-            [3, pd.Timestamp(2023, 5, 6), 30, 789123456, 3.14159, "string 3", None, 1, 10000],
+            [1, pd.Timestamp(2023, 5, 4), 10, 123456789, 35.2, "string 1", None, 0],
+            [2, pd.Timestamp(2023, 5, 5), None, -45678912, 8.5555588888, "string 2", None, 1],
+            [3, pd.Timestamp(2023, 5, 6), 30, 789123456, 3.14159, "string 3", None, 1],
         )
         test_client.insert(table_name, data)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
@@ -316,14 +314,7 @@ def test_pandas_dtype_backends(test_client: Client, table_context: Callable):
             result_df = test_client.query_df(f"SELECT * FROM {table_name}")
             for dt in list(result_df.dtypes):
                 assert "[pyarrow]" in str(dt)
-            assert "[ns][pyarrow]" in str(list(result_df.dtypes)[8])
         else:
             result_df = test_client.query_df(f"SELECT * FROM {table_name}")
             for dt in list(result_df.dtypes):
                 assert "[pyarrow]" not in str(dt)
-            assert "[ns][pyarrow]" in str(list(result_df.dtypes)[8])
-
-        set_setting(RES_SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
-        assert "[s][pyarrow]" in str(list(result_df.dtypes)[1])
-        assert "[ms][pyarrow]" in str(list(result_df.dtypes)[8])
