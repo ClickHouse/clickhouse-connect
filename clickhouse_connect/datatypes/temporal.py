@@ -14,11 +14,10 @@ from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np, pd, PANDAS_VERSION
+from clickhouse_connect.driver.options import np, pd, IS_PANDAS_2
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
-IS_PANDAS_2 = PANDAS_VERSION >= (2, 0)
 
 
 class Date(ClickHouseType):

@@ -13,6 +13,7 @@ from clickhouse_connect.driver.options import np, pd
 
 class String(ClickHouseType):
     valid_formats = 'bytes', 'native'
+    _pyarrow_type = "utf8"
 
     def _active_encoding(self, ctx):
         if self.read_format(ctx) == 'bytes':
@@ -37,6 +38,8 @@ class String(ClickHouseType):
         return source.read_str_col(num_rows, self._active_encoding(ctx), True, self._active_null(ctx))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.use_pyarrow_backend and ctx.as_pandas:
+            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
         if ctx.use_extended_dtypes and self.read_format(ctx) == 'native':
             return pd.array(column, dtype=pd.StringDtype())
         if ctx.use_numpy and ctx.max_str_len:
@@ -59,6 +62,7 @@ class String(ClickHouseType):
 
 class FixedString(ClickHouseType):
     valid_formats = 'string', 'native'
+    _pyarrow_type = "utf8"
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -81,6 +85,8 @@ class FixedString(ClickHouseType):
         return source.read_bytes_col(self.byte_size, num_rows)
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.use_pyarrow_backend and ctx.as_pandas:
+            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
         if ctx.use_extended_dtypes and self.read_format(ctx) == 'string':
             return pd.array(column, dtype=pd.StringDtype())
         return column

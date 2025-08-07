@@ -6,6 +6,8 @@ from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
 from clickhouse_connect.driver.types import Closable
+from clickhouse_connect.driver.options import arrow, IS_PANDAS_2
+from clickhouse_connect.common import get_setting
 
 
 # pylint: disable=invalid-name
@@ -140,6 +142,16 @@ def first_value(column: Sequence, nullable:bool = True):
     if len(column):
         return column[0]
     return None
+
+
+def get_dtype_backend() -> str:
+    if get_setting("pandas_dtype_backend") == "numpy":
+        return "numpy"
+    if not IS_PANDAS_2:
+        return "numpy"
+    if arrow is None:
+        return "numpy"
+    return "pyarrow"
 
 
 class SliceView(Sequence):

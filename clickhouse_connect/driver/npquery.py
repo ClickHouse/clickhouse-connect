@@ -2,7 +2,7 @@ import logging
 import itertools
 from typing import Generator, Sequence, Tuple
 
-from clickhouse_connect.driver.common import empty_gen, StreamContext
+from clickhouse_connect.driver.common import empty_gen, StreamContext, get_dtype_backend
 from clickhouse_connect.driver.exceptions import StreamClosedError
 from clickhouse_connect.driver.types import Closable
 from clickhouse_connect.driver.options import np, pd
@@ -100,10 +100,18 @@ class NumpyResult(Closable):
         chain = itertools.chain
         chains = [chain(b) for b in zip(*bg)]
         new_df_series = []
-        for c in chains:
+        for i, c in enumerate(chains):
             series = [pd.Series(piece, copy=False) for piece in c if len(piece) > 0]
             if len(series) > 0:
-                new_df_series.append(pd.concat(series, copy=False, ignore_index=True))
+                concatenated = pd.concat(series, copy=False, ignore_index=True)
+                if get_dtype_backend() == "pyarrow" and "pyarrow" not in str(concatenated.dtype):
+                    logger.debug(
+                        "Column '%s' (%s) using pandas inference for pyarrow conversion (not optimized)",
+                        self.column_names[i],
+                        concatenated.dtype,
+                    )
+                    concatenated = concatenated.convert_dtypes(dtype_backend="pyarrow")
+                new_df_series.append(concatenated)
         self._df_result = pd.DataFrame(dict(zip(self.column_names, new_df_series)))
         self.close()
         return self
