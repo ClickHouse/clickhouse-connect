@@ -80,3 +80,17 @@ class TestBFloat16:
         assert result.row_count == len(input_data)
         for result_row, expected_row in zip(result.result_rows, expected):
             assert list(result_row) == expected_row
+
+
+class TestSpecialIntervalTypes:
+    """Integration tests for ClickHouse special interval type handling."""
+
+    client: Client
+
+    @pytest.fixture(autouse=True)
+    def setup_teardown(self, test_client: Client):
+        self.client = test_client
+
+    def test_interval_selects_work(self):
+        result = self.client.query("SELECT INTERVAL 30 DAY")
+        assert result.result_rows[0][0] == 30
