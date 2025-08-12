@@ -343,6 +343,43 @@ class AsyncClient:
         result = await loop.run_in_executor(self.executor, _query_df)
         return result
 
+    async def query_df_arrow(
+        self,
+        query: str,
+        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+        settings: Optional[Dict[str, Any]] = None,
+        use_strings: Optional[bool] = None,
+        external_data: Optional[ExternalData] = None,
+        transport_settings: Optional[Dict[str, str]] = None,
+    ):
+        """
+        Query method using the ClickHouse Arrow format to return a pandas DataFrame
+        with PyArrow dtype backend. This provides better performance and memory efficiency
+        compared to the standard query_df method, though fewer output formatting options.
+
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
+        :param external_data: ClickHouse "external data" to send with query
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+        :return: Pandas DataFrame with PyArrow dtype backend
+        """
+
+        def _query_df_arrow():
+            return self.client.query_df_arrow(
+                query=query,
+                parameters=parameters,
+                settings=settings,
+                use_strings=use_strings,
+                external_data=external_data,
+                transport_settings=transport_settings,
+            )
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(self.executor, _query_df_arrow)
+        return result
+
     async def query_df_stream(self,
                               query: Optional[str] = None,
                               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
@@ -376,6 +413,42 @@ class AsyncClient:
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(self.executor, _query_df_stream)
+        return result
+
+    async def query_df_arrow_stream(
+        self,
+        query: str,
+        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+        settings: Optional[Dict[str, Any]] = None,
+        use_strings: Optional[bool] = None,
+        external_data: Optional[ExternalData] = None,
+        transport_settings: Optional[Dict[str, str]] = None,
+    ):
+        """
+        Query method that returns the results as a stream of pandas DataFrames with PyArrow dtype backend.
+        Each DataFrame represents a block from the ClickHouse response.
+
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
+        :param external_data: ClickHouse "external data" to send with query
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+        :return: Generator that yields pandas DataFrames with PyArrow dtype backend
+        """
+
+        def _query_df_arrow_stream():
+            return self.client.query_df_arrow_stream(
+                query=query,
+                parameters=parameters,
+                settings=settings,
+                use_strings=use_strings,
+                external_data=external_data,
+                transport_settings=transport_settings,
+            )
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(self.executor, _query_df_arrow_stream)
         return result
 
     def create_query_context(self,
@@ -640,6 +713,43 @@ class AsyncClient:
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(self.executor, _insert_arrow)
+        return result
+
+    async def insert_df_arrow(
+        self,
+        table: str,
+        df: "pd.DataFrame",
+        database: Optional[str] = None,
+        settings: Optional[Dict] = None,
+        transport_settings: Optional[Dict[str, str]] = None,
+    ) -> QuerySummary:
+        """
+        Insert a pandas DataFrame with PyArrow backend into ClickHouse using Arrow format.
+        This method is optimized for DataFrames that already use PyArrow dtypes, providing
+        better performance than the standard insert_df method.
+
+        IMPORTANT: This method assumes the DataFrame already has PyArrow-backed columns.
+        For regular DataFrames, use insert_df() instead.
+
+        :param table: ClickHouse table name
+        :param df: Pandas DataFrame with PyArrow dtype backend (from query_df_arrow or pd.read_* with dtype_backend='pyarrow')
+        :param database: Optional ClickHouse database name
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+        :return: QuerySummary with summary information, throws exception if insert fails
+        """
+
+        def _insert_df_arrow():
+            return self.client.insert_df_arrow(
+                table=table,
+                df=df,
+                database=database,
+                settings=settings,
+                transport_settings=transport_settings,
+            )
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(self.executor, _insert_df_arrow)
         return result
 
     async def create_insert_context(self,

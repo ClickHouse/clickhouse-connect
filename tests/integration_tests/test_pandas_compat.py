@@ -2,14 +2,14 @@ import datetime
 from typing import Callable
 
 import pytest
-from clickhouse_connect.driver.options import pd, PANDAS_VERSION
+from clickhouse_connect.driver.options import pd, PANDAS_VERSION, arrow
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.common import set_setting
 from tests.integration_tests.conftest import TestConfig
 
 IS_PANDAS_2 = PANDAS_VERSION >= (2, 0)
 RES_SETTING_NAME = "preserve_pandas_datetime_resolution"
-PYARROW_SETTING_NAME = "pandas_dtype_backend"
 
 pytestmark = pytest.mark.skipif(pd is None, reason="Pandas package not installed")
 
@@ -280,10 +280,11 @@ def test_pandas_time64_compat(
                 assert res in str(dt)
 
 
-# Dtype backend tests
-def test_pandas_dtype_backends(test_client: Client, table_context: Callable):
-    table_name = "pyarrow_tests"
-    set_setting(PYARROW_SETTING_NAME, "numpy")
+def test_pandas_query_df_arrow(test_client: Client, table_context: Callable):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+
+    table_name = "df_pyarrow_query_test"
 
     with table_context(
         table_name,
@@ -304,17 +305,53 @@ def test_pandas_dtype_backends(test_client: Client, table_context: Callable):
             [3, pd.Timestamp(2023, 5, 6), 30, 789123456, 3.14159, "string 3", None, 1],
         )
         test_client.insert(table_name, data)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
-        for dt in list(result_df.dtypes):
-            assert "[pyarrow]" not in str(dt)
-
-        set_setting(PYARROW_SETTING_NAME, "pyarrow")
-
         if IS_PANDAS_2:
-            result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+            result_df = test_client.query_df_arrow(f"SELECT * FROM {table_name}")
             for dt in list(result_df.dtypes):
-                assert "[pyarrow]" in str(dt)
+                assert isinstance(dt, pd.ArrowDtype)
         else:
-            result_df = test_client.query_df(f"SELECT * FROM {table_name}")
-            for dt in list(result_df.dtypes):
-                assert "[pyarrow]" not in str(dt)
+            with pytest.raises(ProgrammingError):
+                result_df = test_client.query_df_arrow(f"SELECT * FROM {table_name}")
+
+
+def test_pandas_insert_df_arrow(test_client: Client, table_context: Callable):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+
+    table_name = "df_pyarrow_insert_test"
+    data = [[78, pd.NA, "a"], [51, 421, "b"]]
+    df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+
+    with table_context(
+        table_name,
+        [
+            "i64 Int64",
+            "ni64 Nullable(Int64)",
+            "str String",
+        ],
+    ):
+        if IS_PANDAS_2:
+            df = df.convert_dtypes(dtype_backend="pyarrow")
+            test_client.insert_df_arrow(table_name, df)
+            res_df = test_client.query(f"SELECT * from {table_name} ORDER BY i64")
+            assert res_df.result_rows == [(51, 421, "b"), (78, None, "a")]
+        else:
+            with pytest.raises(ProgrammingError, match="pandas 2.x"):
+                test_client.insert_df_arrow(table_name, df)
+
+    with table_context(
+        table_name,
+        [
+            "i64 Int64",
+            "ni64 Nullable(Int64)",
+            "str String",
+        ],
+    ):
+        if IS_PANDAS_2:
+            df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+            df["i64"] = df["i64"].astype(pd.ArrowDtype(arrow.int64()))
+            with pytest.raises(ProgrammingError, match="Non-Arrow columns found"):
+                test_client.insert_df_arrow(table_name, df)
+        else:
+            with pytest.raises(ProgrammingError, match="pandas 2.x"):
+                test_client.insert_df_arrow(table_name, df)

@@ -90,10 +90,3 @@ _init_common('http_buffer_size', (), 10 * 1024 * 1024)
 # dtype resolution (e.g., 's', 'ms', 'us', 'ns'). If False (or on
 # pandas <2.x), coerces to nanosecond ('ns') resolution for compatibility.
 _init_common('preserve_pandas_datetime_resolution', (True, False), False)
-
-# Pandas supports multiple dtype backends for storing and managing
-# data within DataFrames and Series. These backends determine how
-# the underlying data is represented in memory and can impact
-# performance and memory usage. Note that pyarrow is only available
-# when using pandas 2.x and that pyarrow must be installed.
-_init_common('pandas_dtype_backend', ("pyarrow", "numpy"), "numpy")

@@ -16,10 +16,10 @@ from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int, coerce_bool
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
-from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError
+from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError, DataError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.options import check_arrow, check_pandas, check_numpy
+from clickhouse_connect.driver.options import check_arrow, check_pandas, check_numpy, pd, arrow, IS_PANDAS_2
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer
@@ -581,6 +581,79 @@ class Client(ABC):
                                                 external_data=external_data,
                                                 transport_settings=transport_settings))
 
+    def query_df_arrow(self,
+                       query: str,
+                       parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                       settings: Optional[Dict[str, Any]] = None,
+                       use_strings: Optional[bool] = None,
+                       external_data: Optional[ExternalData] = None,
+                       transport_settings: Optional[Dict[str, str]] = None,
+                       ) -> pd.DataFrame:
+        """
+        Query method using the ClickHouse Arrow format to return a pandas DataFrame
+        with PyArrow dtype backend. This provides better performance and memory efficiency
+        compared to the standard query_df method, though fewer output formatting options.
+
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
+        :param external_data: ClickHouse "external data" to send with query
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+        :return: Pandas DataFrame with PyArrow dtype backend
+        """
+        check_pandas()
+        if not IS_PANDAS_2:
+            raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
+
+        arrow_table = self.query_arrow(
+            query=query,
+            parameters=parameters,
+            settings=settings,
+            use_strings=use_strings,
+            external_data=external_data,
+            transport_settings=transport_settings,
+        )
+        return arrow_table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
+
+    def query_df_arrow_stream(self,
+                             query: str,
+                             parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                             settings: Optional[Dict[str, Any]] = None,
+                             use_strings: Optional[bool] = None,
+                             external_data: Optional[ExternalData] = None,
+                             transport_settings: Optional[Dict[str, str]] = None):
+        """
+        Query method that returns the results as a stream of pandas DataFrames with PyArrow dtype backend.
+        Each DataFrame represents a block from the ClickHouse response.
+        
+        :param query: Query statement/format string
+        :param parameters: Optional dictionary used to format the query
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
+        :param external_data: ClickHouse "external data" to send with query
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+        :return: Generator that yields pandas DataFrames with PyArrow dtype backend
+        """
+        check_pandas()
+
+        stream_context = self.query_arrow_stream(
+            query=query,
+            parameters=parameters,
+            settings=settings,
+            use_strings=use_strings,
+            external_data=external_data,
+            transport_settings=transport_settings
+        )
+
+        with stream_context as ctx:
+            for arrow_table in ctx:
+                df = arrow_table.to_pandas(
+                        types_mapper=pd.ArrowDtype,
+                        safe=False
+                    )
+                yield df
+
     def _update_arrow_settings(self,
                                settings: Optional[Dict[str, Any]],
                                use_strings: Optional[bool]) -> Dict[str, Any]:
@@ -735,6 +808,50 @@ class Client(ABC):
         compression = self.write_compression if self.write_compression in ('zstd', 'lz4') else None
         column_names, insert_block = arrow_buffer(arrow_table, compression)
         return self.raw_insert(full_table, column_names, insert_block, settings, 'Arrow', transport_settings)
+
+    def insert_df_arrow(self,
+                        table: str,
+                        df: pd.DataFrame,
+                        database: Optional[str] = None,
+                        settings: Optional[Dict] = None,
+                        transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
+        """
+        Insert a pandas DataFrame with PyArrow backend into ClickHouse using Arrow format.
+        This method is optimized for DataFrames that already use PyArrow dtypes, providing
+        better performance than the standard insert_df method.
+        
+        IMPORTANT: This method requires the DataFrame to already have PyArrow-backed columns.
+        For regular DataFrames, use insert_df() instead.
+        
+        :param table: ClickHouse table name
+        :param df: Pandas DataFrame with PyArrow dtype backend (from query_df_arrow or pd.read_* with dtype_backend='pyarrow')
+        :param database: Optional ClickHouse database name
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+        :return: QuerySummary with summary information, throws exception if insert fails
+        """
+        check_pandas()
+        if not IS_PANDAS_2:
+            raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
+        check_arrow()
+
+        non_arrow_cols = [col for col, dtype in df.dtypes.items() if not isinstance(dtype, pd.ArrowDtype)]
+        if non_arrow_cols:
+            raise ProgrammingError(
+                f"insert_df_arrow requires all columns to use PyArrow dtypes. " f"Non-Arrow columns found: [{', '.join(non_arrow_cols)}]. "
+            )
+        try:
+            arrow_table = arrow.Table.from_pandas(df, preserve_index=False)
+        except Exception as e:
+            raise DataError(f"Failed to convert DataFrame to Arrow table: {e}") from e
+
+        return self.insert_arrow(
+            table=table,
+            arrow_table=arrow_table,
+            database=database,
+            settings=settings,
+            transport_settings=transport_settings,
+        )
 
     def create_insert_context(self,
                               table: str,
