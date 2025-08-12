@@ -5,7 +5,7 @@ from abc import ABC
 from math import log
 from typing import NamedTuple, Dict, Type, Any, Sequence, MutableSequence, Union, Collection
 
-from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version, get_dtype_backend
+from clickhouse_connect.driver.common import array_type, int_size, write_array, write_uint64, low_card_version
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.ctypes import numpy_conv, data_conv
 from clickhouse_connect.driver.exceptions import NotSupportedError
@@ -45,7 +45,6 @@ class ClickHouseType(ABC):
     byte_size = 0
     valid_formats = 'native'
 
-    _pyarrow_type = None
     python_type = None
     base_type = None
 
@@ -99,10 +98,6 @@ class ClickHouseType(ABC):
     @property
     def insert_name(self):
         return self.name
-
-    @property
-    def use_pyarrow_backend(self) -> bool:
-        return get_dtype_backend() == "pyarrow"
 
     def data_size(self, sample: Sequence) -> int:
         if self.low_card:
@@ -198,10 +193,6 @@ class ClickHouseType(ABC):
         return [], 0
 
     def _finalize_column(self, column: Sequence, _ctx: QueryContext) -> Sequence:
-        if self.use_pyarrow_backend and _ctx.as_pandas:
-            if self._pyarrow_type is None:
-                return column
-            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
         return column
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
@@ -341,14 +332,8 @@ class ArrayType(ClickHouseType, ABC, registered=False):
             return np.fromiter((index[key] for key in keys), dtype=index.dtype, count=len(index))
         return super()._build_lc_column(index, keys, ctx)
 
-    # pylint: disable=duplicate-code
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        fmt = self.read_format(ctx)
-        if self.use_pyarrow_backend and ctx.as_pandas:
-            if fmt == "string":
-                self._pyarrow_type = "utf8"
-            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
-        if fmt == 'string':
+        if self.read_format(ctx) == 'string':
             return [str(x) for x in column]
         if ctx.use_extended_dtypes and self.nullable:
             return pd.array(column, dtype=self.base_type)

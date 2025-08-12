@@ -34,50 +34,42 @@ class IntBase(ArrayType, registered=False):
 
 
 class Int8(IntBase):
-    _pyarrow_type = "int8"
     _array_type = 'b'
     np_type = 'b'
 
 
 class UInt8(IntBase):
-    _pyarrow_type = "uint8"
     _array_type = 'B'
     np_type = 'B'
 
 
 class Int16(IntBase):
-    _pyarrow_type = "int16"
     _array_type = 'h'
     np_type = '<i2'
 
 
 class UInt16(IntBase):
-    _pyarrow_type = "uint16"
     _array_type = 'H'
     np_type = '<u2'
 
 
 class Int32(IntBase):
-    _pyarrow_type = "int32"
     _array_type = 'i'
     np_type = '<i4'
 
 
 class UInt32(IntBase):
-    _pyarrow_type = "uint32"
     _array_type = 'I'
     np_type = '<u4'
 
 
 class Int64(IntBase):
-    _pyarrow_type = "int64"
     _array_type = 'q'
     np_type = '<i8'
 
 
 class UInt64(IntBase):
     valid_formats = 'signed', 'native'
-    _pyarrow_type = "uint64"
     _array_type = 'Q'
     np_type = '<u8'
     python_type = int
@@ -96,10 +88,6 @@ class UInt64(IntBase):
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         fmt = self.read_format(ctx)
-        if self.use_pyarrow_backend and ctx.as_pandas:
-            if fmt == "string":
-                self._pyarrow_type = "utf8"
-            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
         if fmt == 'string':
             return [str(x) for x in column]
         if ctx.use_extended_dtypes and self.nullable:
@@ -184,12 +172,7 @@ class Float(ArrayType, registered=False):
     python_type = float
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        fmt = self.read_format(ctx)
-        if fmt == "string":
-            self._pyarrow_type = "utf8"
-        if self.use_pyarrow_backend and ctx.as_pandas:
-            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
-        if fmt == 'string':
+        if self.read_format(ctx) == 'string':
             return [str(x) for x in column]
         if ctx.use_numpy and self.nullable and (not ctx.use_none):
             return np.array(column, dtype=self.np_type)
@@ -219,19 +202,16 @@ class Float(ArrayType, registered=False):
 
 
 class Float32(Float):
-    _pyarrow_type = "float32"
     np_type = '<f4'
 
 
 class Float64(Float):
-    _pyarrow_type = "float64"
     _array_type = 'd'
     np_type = '<f8'
 
 
 class BFloat16(ArrayType):
     _array_type = "H"
-    _pyarrow_type = "float16"
     python_type = float
     np_type = "<f4"
 
@@ -288,8 +268,6 @@ class BFloat16(ArrayType):
         return data_conv.build_nullable_column(floats, null_map, self._active_null(ctx))
 
     def _finalize_column(self, column, ctx: QueryContext):
-        if self.use_pyarrow_backend and ctx.as_pandas:
-            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
         if ctx.use_extended_dtypes and self.nullable:
             return pd.array(column, dtype="Float32")
         if ctx.use_numpy and not isinstance(column, np.ndarray):
@@ -308,7 +286,6 @@ class BFloat16(ArrayType):
 
 class Bool(ClickHouseType):
     np_type = '?'
-    _pyarrow_type = "bool"
     python_type = bool
     byte_size = 1
 
@@ -317,8 +294,6 @@ class Bool(ClickHouseType):
         return [b != 0 for b in column]
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        if self.use_pyarrow_backend and ctx.as_pandas:
-            return pd.array(column, dtype=f"{self._pyarrow_type}[pyarrow]")
         if ctx.use_numpy:
             return np.array(column)
         return column
@@ -336,7 +311,6 @@ class Enum(ClickHouseType):
     _array_type = 'b'
     valid_formats = 'native', 'int'
     python_type = str
-    _pyarrow_type = None
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -349,10 +323,8 @@ class Enum(ClickHouseType):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         column = source.read_array(self._array_type, num_rows)
         if self.read_format(ctx) == 'int':
-            self._pyarrow_type = "uint16"
             return column
         lookup = self._int_map.get
-        self._pyarrow_type = "utf8"
         return [lookup(x, None) for x in column]
 
     def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx:InsertContext):
