@@ -285,13 +285,13 @@ async def test_insert_df_arrow(test_async_client: AsyncClient, table_context: Ca
                 await test_async_client.insert_df_arrow(ctx.table, df)
 
     with table_context(
-        ctx.table,
+        "df_pyarrow_insert_test",
         [
             "i64 Int64",
             "ni64 Nullable(Int64)",
             "str String",
         ],
-    ):
+    ) as ctx:
         if IS_PANDAS_2:
             df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
             df["i64"] = df["i64"].astype(pd.ArrowDtype(arrow.int64()))

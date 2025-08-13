@@ -728,8 +728,8 @@ class AsyncClient:
         This method is optimized for DataFrames that already use PyArrow dtypes, providing
         better performance than the standard insert_df method.
 
-        IMPORTANT: This method assumes the DataFrame already has PyArrow-backed columns.
-        For regular DataFrames, use insert_df() instead.
+        IMPORTANT: This method requires the DataFrame to have PyArrow-backed columns. 
+        Validation is performed and an exception will be raised if this requirement is not met.
 
         :param table: ClickHouse table name
         :param df: Pandas DataFrame with PyArrow dtype backend (from query_df_arrow or pd.read_* with dtype_backend='pyarrow')
