@@ -9,7 +9,7 @@ from clickhouse_connect.common import set_setting
 from tests.integration_tests.conftest import TestConfig
 
 IS_PANDAS_2 = PANDAS_VERSION >= (2, 0)
-RES_SETTING_NAME = "preserve_pandas_datetime_resolution"
+SETTING_NAME = "preserve_pandas_datetime_resolution"
 
 pytestmark = pytest.mark.skipif(pd is None, reason="Pandas package not installed")
 
@@ -33,13 +33,13 @@ def test_pandas_date_compat(test_client: Client, table_context: Callable):
             columns=["key", "dt", "ndt"],
         )
         test_client.insert_df(table_name, df)
-        set_setting(RES_SETTING_NAME, False)
+        set_setting(SETTING_NAME, False)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
-        set_setting(RES_SETTING_NAME, True)
+        set_setting(SETTING_NAME, True)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
@@ -70,13 +70,13 @@ def test_pandas_date32_compat(test_client: Client, table_context: Callable):
             columns=["key", "dt", "ndt"],
         )
         test_client.insert_df(table_name, df)
-        set_setting(RES_SETTING_NAME, False)
+        set_setting(SETTING_NAME, False)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
-        set_setting(RES_SETTING_NAME, True)
+        set_setting(SETTING_NAME, True)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
@@ -107,13 +107,13 @@ def test_pandas_datetime_compat(test_client: Client, table_context: Callable):
             columns=["key", "dt", "ndt"],
         )
         test_client.insert_df(table_name, df)
-        set_setting(RES_SETTING_NAME, False)
+        set_setting(SETTING_NAME, False)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
-        set_setting(RES_SETTING_NAME, True)
+        set_setting(SETTING_NAME, True)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
@@ -163,13 +163,13 @@ def test_pandas_datetime64_compat(test_client: Client, table_context: Callable):
             columns=["key", "dt3", "null_dt3", "dt6", "null_dt6", "dt9", "null_dt9"],
         )
         test_client.insert_df(table_name, df)
-        set_setting(RES_SETTING_NAME, False)
+        set_setting(SETTING_NAME, False)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
-        set_setting(RES_SETTING_NAME, True)
+        set_setting(SETTING_NAME, True)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
@@ -211,13 +211,13 @@ def test_pandas_time_compat(
         )
 
         test_client.insert(table_name, data)
-        set_setting(RES_SETTING_NAME, False)
+        set_setting(SETTING_NAME, False)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
-        set_setting(RES_SETTING_NAME, True)
+        set_setting(SETTING_NAME, True)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
@@ -260,13 +260,13 @@ def test_pandas_time64_compat(
             [3, 100, 200, 300, 400, 500, 600],
         )
         test_client.insert(table_name, data)
-        set_setting(RES_SETTING_NAME, False)
+        set_setting(SETTING_NAME, False)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
-        set_setting(RES_SETTING_NAME, True)
+        set_setting(SETTING_NAME, True)
         result_df = test_client.query_df(f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:

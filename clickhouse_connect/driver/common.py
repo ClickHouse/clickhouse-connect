@@ -144,16 +144,6 @@ def first_value(column: Sequence, nullable:bool = True):
     return None
 
 
-def get_dtype_backend() -> str:
-    if get_setting("pandas_dtype_backend") == "numpy":
-        return "numpy"
-    if not IS_PANDAS_2:
-        return "numpy"
-    if arrow is None:
-        return "numpy"
-    return "pyarrow"
-
-
 class SliceView(Sequence):
     """
     Provides a view into a sequence rather than copying.  Borrows liberally from
