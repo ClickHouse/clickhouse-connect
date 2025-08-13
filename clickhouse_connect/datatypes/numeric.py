@@ -464,3 +464,47 @@ class Decimal128(BigDecimal):
 
 class Decimal256(BigDecimal):
     dec_size = 256
+
+
+class IntervalNanosecond(Int32):
+    pass
+
+
+class IntervalMicrosecond(Int32):
+    pass
+
+
+class IntervalMillisecond(Int32):
+    pass
+
+
+class IntervalSecond(Int32):
+    pass
+
+
+class IntervalMinute(Int32):
+    pass
+
+
+class IntervalHour(Int32):
+    pass
+
+
+class IntervalDay(Int32):
+    pass
+
+
+class IntervalWeek(Int32):
+    pass
+
+
+class IntervalMonth(Int32):
+    pass
+
+
+class IntervalQuarter(Int32):
+    pass
+
+
+class IntervalYear(Int32):
+    pass
