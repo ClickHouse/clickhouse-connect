@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from clickhouse_connect.driver.options import arrow
-
+from clickhouse_connect.driver.options import arrow, IS_PANDAS_2
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import AsyncClient
 
 
@@ -230,3 +230,73 @@ async def test_raw_insert(test_async_client: AsyncClient, table_context: Callabl
                                            fmt='CSV')
         result_set = (await test_async_client.query(f"SELECT * FROM {ctx.table} ORDER BY key ASC")).result_columns
         assert result_set == [[42, 144], ['foo', 'bar']]
+
+
+@pytest.mark.asyncio
+async def test_query_df_arrow(test_async_client: AsyncClient, table_context: Callable):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+
+    data = [[78, pd.NA, "a"], [51, 421, "b"]]
+    df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+
+    with table_context(
+        "df_pyarrow_query_test",
+        [
+            "i64 Int64",
+            "ni64 Nullable(Int64)",
+            "str String",
+        ],
+    ) as ctx:
+        if IS_PANDAS_2:
+            df = df.convert_dtypes(dtype_backend="pyarrow")
+            await test_async_client.insert_df(ctx.table, df)
+            result_df = await test_async_client.query_df_arrow(f"SELECT * FROM {ctx.table} ORDER BY i64")
+            for dt in list(result_df.dtypes):
+                assert isinstance(dt, pd.ArrowDtype)
+        else:
+            with pytest.raises(ProgrammingError):
+                result_df = await test_async_client.query_df_arrow(f"SELECT * FROM {ctx.table}")
+
+
+@pytest.mark.asyncio
+async def test_insert_df_arrow(test_async_client: AsyncClient, table_context: Callable):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+
+    data = [[78, pd.NA, "a"], [51, 421, "b"]]
+    df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+
+    with table_context(
+        "df_pyarrow_insert_test",
+        [
+            "i64 Int64",
+            "ni64 Nullable(Int64)",
+            "str String",
+        ],
+    ) as ctx:
+        if IS_PANDAS_2:
+            df = df.convert_dtypes(dtype_backend="pyarrow")
+            await test_async_client.insert_df_arrow(ctx.table, df)
+            res_df = await test_async_client.query(f"SELECT * from {ctx.table} ORDER BY i64")
+            assert res_df.result_rows == [(51, 421, "b"), (78, None, "a")]
+        else:
+            with pytest.raises(ProgrammingError, match="pandas 2.x"):
+                await test_async_client.insert_df_arrow(ctx.table, df)
+
+    with table_context(
+        "df_pyarrow_insert_test",
+        [
+            "i64 Int64",
+            "ni64 Nullable(Int64)",
+            "str String",
+        ],
+    ) as ctx:
+        if IS_PANDAS_2:
+            df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+            df["i64"] = df["i64"].astype(pd.ArrowDtype(arrow.int64()))
+            with pytest.raises(ProgrammingError, match="Non-Arrow columns found"):
+                await test_async_client.insert_df_arrow(ctx.table, df)
+        else:
+            with pytest.raises(ProgrammingError, match="pandas 2.x"):
+                await test_async_client.insert_df_arrow(ctx.table, df)

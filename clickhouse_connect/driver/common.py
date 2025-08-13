@@ -7,7 +7,6 @@ from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
 from clickhouse_connect.driver.types import Closable
 
-
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
 int_size = array.array('i').itemsize

@@ -22,6 +22,10 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added support for querying/inserting pyarrow-backed DataFrames:
+  - `query_df_arrow()`: returns a pandas DataFrame with PyArrow dtype backend. Note that Arrow data types are preserved without additional conversions.
+  - `query_df_arrow_stream()`: Streaming version of `query_df_arrow()` for processing large result sets.
+  - `insert_df_arrow()`: Optimized insertion method for pandas DataFrames with PyArrow backend, which should provide better performance than standard `insert_df()`.
 - Added support for special [interval types](https://clickhouse.com/docs/en/sql-reference/data-types/special-data-types/interval). Closes [#391](https://github.com/ClickHouse/clickhouse-connect/issues/391)
 - Added new common setting option "preserve_pandas_datetime_resolution" (default is `False`) allowing pandas 2.x users to opt into (when set to `True`) using the additional pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us". If set to `False` or using  pandas 1.x, all datetime64/timedelta64 resolutions will be coerced to "ns". (See [here](https://pandas.pydata.org/docs/whatsnew/v2.0.0.html#construction-with-datetime64-or-timedelta64-dtype-with-unsupported-resolution) for more info). Closes [#165](https://github.com/ClickHouse/clickhouse-connect/issues/165) and [#531](https://github.com/ClickHouse/clickhouse-connect/issues/531)
 - Support for both pandas 1.x and 2.x
