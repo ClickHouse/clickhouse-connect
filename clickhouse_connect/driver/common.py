@@ -6,9 +6,6 @@ from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator
 
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
 from clickhouse_connect.driver.types import Closable
-from clickhouse_connect.driver.options import arrow, IS_PANDAS_2
-from clickhouse_connect.common import get_setting
-
 
 # pylint: disable=invalid-name
 must_swap = sys.byteorder == 'big'
