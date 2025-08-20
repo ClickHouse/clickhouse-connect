@@ -1,4 +1,3 @@
-
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
 
@@ -33,9 +32,16 @@ class ClickHouseDialect(DefaultDialect):
     ischema_names = ischema_names
     inspector = ChInspector
 
+    # SQA 1 compatibility
     # pylint: disable=method-hidden
     @classmethod
     def dbapi(cls):
+        return dbapi
+
+    # SQA 2 compatibility
+    # pylint: disable=method-hidden
+    @classmethod
+    def import_dbapi(cls):
         return dbapi
 
     def initialize(self, connection):
