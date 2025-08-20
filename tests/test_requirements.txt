@@ -2,7 +2,7 @@ pytz
 urllib3>=1.26
 setuptools
 certifi
-sqlalchemy>=1.4.40,<2.0
+sqlalchemy>=2.0,<3.0
 cython==3.0.11
 pyarrow
 pytest

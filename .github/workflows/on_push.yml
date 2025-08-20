@@ -144,10 +144,10 @@ jobs:
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest tests/integration_tests/test_pandas_compat.py tests/integration_tests/test_pandas.py
 
-  sqlalchemy-2x-compat-test:
+  sqlalchemy-1x-compat-test:
     runs-on: ubuntu-latest
     needs: lint
-    name: SQLAlchemy 2.x Compatibility Tests
+    name: SQLAlchemy 1.x Compatibility Tests
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -166,8 +166,8 @@ jobs:
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
         run: pip install -r tests/test_requirements.txt
-      - name: Install sqlalchemy 2.x
-        run: pip install "sqlalchemy>=2.0,<3.0" # Override sqa version
+      - name: Install sqlalchemy 1.x
+        run: pip install "sqlalchemy>=1.4.40,<2.0" # Override sqa version
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
@@ -184,7 +184,7 @@ jobs:
 
   check-secret:
     runs-on: ubuntu-latest
-    needs: [tests, pandas-1x-compat-test, sqlalchemy-2x-compat-test]
+    needs: [tests, pandas-1x-compat-test, sqlalchemy-1x-compat-test]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:
