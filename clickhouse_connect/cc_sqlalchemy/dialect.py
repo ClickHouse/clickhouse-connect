@@ -47,8 +47,7 @@ class ClickHouseDialect(DefaultDialect):
     def initialize(self, connection):
         pass
 
-    @staticmethod
-    def get_schema_names(connection, **_):
+    def get_schema_names(self, connection, **_):
         return [row.name for row in connection.execute('SHOW DATABASES')]
 
     @staticmethod
