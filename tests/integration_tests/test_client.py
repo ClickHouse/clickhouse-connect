@@ -216,20 +216,25 @@ def test_empty_result(test_client: Client):
 
 
 def test_temporary_tables(test_client: Client):
+    session_id = test_client.get_client_setting("session_id")
+    session_settings = {"session_id": session_id}
     test_client.command("""
                         CREATE
                         TEMPORARY TABLE temp_test_table
             (
                 field1 String,
                 field2 String
-            )""")
+            )""", settings=session_settings)
 
-    test_client.command("INSERT INTO temp_test_table (field1, field2) VALUES ('test1', 'test2'), ('test3', 'test4')")
-    df = test_client.query_df('SELECT * FROM temp_test_table')
-    test_client.insert_df('temp_test_table', df)
-    df = test_client.query_df('SELECT * FROM temp_test_table')
+    test_client.command(
+        "INSERT INTO temp_test_table (field1, field2) VALUES ('test1', 'test2'), ('test3', 'test4')",
+        settings=session_settings,
+    )
+    df = test_client.query_df('SELECT * FROM temp_test_table', settings=session_settings)
+    test_client.insert_df('temp_test_table', df, settings=session_settings)
+    df = test_client.query_df('SELECT * FROM temp_test_table', settings=session_settings)
     assert len(df['field1']) == 4
-    test_client.command('DROP TABLE temp_test_table')
+    test_client.command('DROP TABLE temp_test_table', settings=session_settings)
 
 
 def test_str_as_bytes(test_client: Client, table_context: Callable):
