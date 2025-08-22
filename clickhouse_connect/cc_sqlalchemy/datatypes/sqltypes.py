@@ -78,6 +78,7 @@ class Bool(ChSqlaType, SqlaBoolean):
         SqlaBoolean.__init__(self)
 
 
+# pylint: disable=too-many-ancestors
 class Boolean(Bool):
     pass
 
@@ -272,6 +273,7 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         SqlaDateTime.__init__(self)
 
 
+# pylint: disable=too-many-ancestors
 class Time(ChSqlaType, Interval):
     """
     Represents the ClickHouse Time type, which corresponds to a timedelta.
@@ -282,22 +284,19 @@ class Time(ChSqlaType, Interval):
 
     def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF):
         ChSqlaType.__init__(self, type_def)
-        # The base Interval type is sufficient as ClickHouse handles precision internally.
         Interval.__init__(self)
 
     def process_bind_param(self, value, dialect):
-        # Our driver handles all the conversion later
         return value
 
     def process_result_value(self, value, dialect):
-        # Driver already hands you a timedelta back
         return value
 
     def process_literal_param(self, value, dialect):
-        # We don’t use SQLA’s literal rendering
         return None
 
 
+# pylint: disable=too-many-ancestors
 class Time64(ChSqlaType, Interval):
     """
     Represents the ClickHouse Time64 type with configurable precision.
@@ -315,7 +314,6 @@ class Time64(ChSqlaType, Interval):
         """
         if not type_def:
             if precision is None:
-                # Following ClickHouse behavior, if no precision is provided, it defaults to 3
                 precision = 3
 
             if precision not in (3, 6, 9):
@@ -328,19 +326,15 @@ class Time64(ChSqlaType, Interval):
 
         ChSqlaType.__init__(self, type_def)
 
-        # Pass the sub-second precision to the SQLAlchemy Interval type.
         Interval.__init__(self, second_precision=precision)
 
     def process_bind_param(self, value, dialect):
-        # Our driver handles all the conversion later
         return value
 
     def process_result_value(self, value, dialect):
-        # Driver already hands you a timedelta back
         return value
 
     def process_literal_param(self, value, dialect):
-        # We don’t use SQLA’s literal rendering
         return None
 
 

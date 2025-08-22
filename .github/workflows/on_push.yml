@@ -144,9 +144,47 @@ jobs:
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest tests/integration_tests/test_pandas_compat.py tests/integration_tests/test_pandas.py
 
+  sqlalchemy-1x-compat-test:
+    runs-on: ubuntu-latest
+    needs: lint
+    name: SQLAlchemy 1.x Compatibility Tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Start ClickHouse (version - latest) in Docker
+        uses: hoverkraft-tech/compose-action@v2.0.0
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
+        with:
+          compose-file: 'docker-compose.yml'
+          down-flags: '--volumes'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pip
+        run:  python -m pip install --upgrade pip
+      - name: Install Test Dependencies
+        run: pip install -r tests/test_requirements.txt
+      - name: Install sqlalchemy 1.x
+        run: pip install "sqlalchemy>=1.4.40,<2.0" # Override sqa version
+      - name: Build cython extensions
+        run: python setup.py build_ext --inplace
+      - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
+        run: python setup.py develop
+      - name: Add ClickHouse TLS instance to /etc/hosts
+        run: |
+          sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
+      - name: Run tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_TLS: 1
+          CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
+          SQLALCHEMY_SILENCE_UBER_WARNING: 1
+        run: pytest tests/integration_tests/test_sqlalchemy
+
   check-secret:
     runs-on: ubuntu-latest
-    needs: [tests, pandas-1x-compat-test]
+    needs: [tests, pandas-1x-compat-test, sqlalchemy-1x-compat-test]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:

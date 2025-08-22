@@ -22,6 +22,8 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added support for SQLAlchemy 2.x. The minimum required version is 1.4.40. Closes [#263](https://github.com/ClickHouse/clickhouse-connect/issues/263)
+  - **WARNING: BREAKING CHANGE**: Removed support for sqlalchemy 1.3 which reached its EOL in 2021.
 - Added support for querying/inserting pyarrow-backed DataFrames:
   - `query_df_arrow()`: returns a pandas DataFrame with PyArrow dtype backend. Note that Arrow data types are preserved without additional conversions.
   - `query_df_arrow_stream()`: Streaming version of `query_df_arrow()` for processing large result sets.

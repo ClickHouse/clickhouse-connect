@@ -64,7 +64,7 @@ def run_setup(try_c: bool = True):
             'lz4'
         ],
         extras_require={
-            'sqlalchemy': ['sqlalchemy>1.3.21,<2.0'],
+            'sqlalchemy': ['sqlalchemy>=1.4.40,<3.0'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'arrow': ['pyarrow'],
@@ -80,7 +80,6 @@ def run_setup(try_c: bool = True):
             'Development Status :: 4 - Beta',
             'Intended Audience :: Developers',
             'License :: OSI Approved :: Apache Software License',
-            'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10',
             'Programming Language :: Python :: 3.11',

@@ -1,9 +1,9 @@
 from pytest import fixture
 
 import sqlalchemy as db
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import Session
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import LowCardinality, String, UInt64
@@ -27,19 +27,19 @@ def test_model_fixture(test_client: Client, test_engine: Engine, test_db: str, t
         value_1 = db.Column(String)
         metric_2 = db.Column(UInt64)
         description = db.Column(String)
-
-    test_engine.execute('DROP TABLE IF EXISTS insert_model')
-    Base.metadata.create_all(test_engine)
-    yield Model
+    with test_engine.begin() as conn:
+        conn.execute(text('DROP TABLE IF EXISTS insert_model'))
+        Base.metadata.create_all(test_engine)
+        yield Model
 
 
 def test_single_insert(test_engine: Engine, test_model):
-    conn = test_engine.connect()
-    conn.execute(db.insert(test_model).values(test_name='single_insert',
-                                              value_1='v1',
-                                              metric_2=25738,
-                                              description='Single Desc'))
-    conn.execute(db.insert(test_model), {'test_name': 'another_single_insert'})
+    with test_engine.begin() as conn:
+        conn.execute(db.insert(test_model).values(test_name='single_insert',
+                                                value_1='v1',
+                                                metric_2=25738,
+                                                description='Single Desc'))
+        conn.execute(db.insert(test_model), {'test_name': 'another_single_insert'})
 
 
 def test_multiple_insert(test_engine: Engine, test_model):
