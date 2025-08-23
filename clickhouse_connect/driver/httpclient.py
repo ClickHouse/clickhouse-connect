@@ -75,7 +75,8 @@ class HttpClient(Client):
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
-                 proxy_path: str = ''):
+                 proxy_path: str = '',
+                 form_encode_query_params: bool = False):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -85,6 +86,7 @@ class HttpClient(Client):
             proxy_path = '/' + proxy_path
         self.url = f'{interface}://{host}:{port}{proxy_path}'
         self.headers = {}
+        self.form_encode_query_params = form_encode_query_params
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)
         self.http = pool_mgr
@@ -211,9 +213,9 @@ class HttpClient(Client):
         if self.protocol_version:
             params['client_protocol_version'] = self.protocol_version
             context.block_info = True
-        params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
+            params.update(context.bind_params)
             response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
                                          params, headers, retries=self.query_retries)
             json_result = json.loads(response.data)
@@ -231,15 +233,23 @@ class HttpClient(Client):
             if self._send_comp_setting:
                 params['enable_http_compression'] = '1'
         final_query = self._prep_query(context)
-        if context.external_data:
+        fields = {}
+        # Setup query body
+        if self.form_encode_query_params or context.external_data:  # form encoded body
             body = bytes()
             params['query'] = final_query
-            params.update(context.external_data.query_params)
-            fields = context.external_data.form_data
         else:
             body = final_query
-            fields = None
             headers['Content-Type'] = 'text/plain; charset=utf-8'
+        # Setup additional query parameters and fields
+        if context.external_data:
+            params.update(context.external_data.query_params)
+            fields.update(context.external_data.form_data)
+        if self.form_encode_query_params:
+            fields.update(context.bind_params)
+        else:
+            params.update(context.bind_params)
+
         response = self._raw_request(body,
                                      params,
                                      dict_copy(headers, context.transport_settings),
@@ -541,17 +551,23 @@ class HttpClient(Client):
         params = self._validate_settings(settings or {})
         if use_database and self.database:
             params['database'] = self.database
-        params.update(bind_params)
-        if external_data:
+        fields = {}
+        # Setup query body
+        if self.form_encode_query_params or external_data:  # form encoded body
             if isinstance(final_query, bytes):
                 raise ProgrammingError('Cannot combine binary query data with `External Data`')
             body = bytes()
             params['query'] = final_query
-            params.update(external_data.query_params)
-            fields = external_data.form_data
         else:
             body = final_query
-            fields = None
+        # Setup additional query parameters and fields
+        if external_data:
+            params.update(external_data.query_params)
+            fields.update(external_data.form_data)
+        if self.form_encode_query_params:
+            fields.update(bind_params)
+        else:
+            params.update(bind_params)
         return body, params, fields
 
     def ping(self):

@@ -22,6 +22,7 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added support for form encoding query parameters when using HTTP interface. This addresses [#342](https://github.com/ClickHouse/clickhouse-connect/issues/342). Query parameters can now be sent as form-encoded data in the request body by setting `form_encode_query_params=True` when creating the client. This is particularly useful for queries with large parameter payloads that might exceed URL length limits.
 - Added support for SQLAlchemy 2.x. The minimum required version is 1.4.40. Closes [#263](https://github.com/ClickHouse/clickhouse-connect/issues/263)
   - **WARNING: BREAKING CHANGE**: Removed support for sqlalchemy 1.3 which reached its EOL in 2021.
 - Added support for querying/inserting pyarrow-backed DataFrames:
