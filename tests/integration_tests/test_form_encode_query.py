@@ -13,7 +13,7 @@ def test_form_encode_query_basic(test_client: Client, test_config: TestConfig, t
         username=test_config.username,
         password=test_config.password,
         database=test_config.test_database,
-        form_encode_query=True
+        form_encode_query_params=True
     )
 
     with table_context('test_form_encode', ['id UInt32', 'name String', 'value Float64']):
@@ -45,7 +45,7 @@ def test_form_encode_with_arrays(test_client: Client, test_config: TestConfig, t
         username=test_config.username,
         password=test_config.password,
         database=test_config.test_database,
-        form_encode_query=True
+        form_encode_query_params=True
     )
 
     with table_context('test_form_arrays', ['id UInt32', 'tags Array(String)']):
@@ -77,7 +77,7 @@ def test_form_encode_raw_query(test_config: TestConfig):
         username=test_config.username,
         password=test_config.password,
         database=test_config.test_database,
-        form_encode_query=True
+        form_encode_query_params=True
     )
 
     result = form_client.raw_query(
@@ -96,7 +96,7 @@ def test_form_encode_vs_regular(test_client: Client, test_config: TestConfig, ta
         username=test_config.username,
         password=test_config.password,
         database=test_config.test_database,
-        form_encode_query=False
+        form_encode_query_params=False
     )
 
     form_client = get_client(
@@ -105,7 +105,7 @@ def test_form_encode_vs_regular(test_client: Client, test_config: TestConfig, ta
         username=test_config.username,
         password=test_config.password,
         database=test_config.test_database,
-        form_encode_query=True
+        form_encode_query_params=True
     )
 
     with table_context('test_comparison', ['id UInt32', 'text String', 'score Float64']):
@@ -130,7 +130,7 @@ def test_form_encode_nullable_params(test_config: TestConfig):
         username=test_config.username,
         password=test_config.password,
         database=test_config.test_database,
-        form_encode_query=True
+        form_encode_query_params=True
     )
 
     result = form_client.query(
