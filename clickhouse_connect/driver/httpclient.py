@@ -237,15 +237,17 @@ class HttpClient(Client):
         # Setup query body
         if self.form_encode_query_params or context.external_data:  # form encoded body
             body = bytes()
-            params['query'] = final_query
         else:
             body = final_query
             headers['Content-Type'] = 'text/plain; charset=utf-8'
         # Setup additional query parameters and fields
         if context.external_data:
+            params['query'] = final_query
             params.update(context.external_data.query_params)
             fields.update(context.external_data.form_data)
         if self.form_encode_query_params:
+            if 'query' not in params:
+                fields['query'] = final_query
             fields.update(context.bind_params)
         else:
             params.update(context.bind_params)
@@ -557,14 +559,16 @@ class HttpClient(Client):
             if isinstance(final_query, bytes):
                 raise ProgrammingError('Cannot combine binary query data with `External Data`')
             body = bytes()
-            params['query'] = final_query
         else:
             body = final_query
         # Setup additional query parameters and fields
         if external_data:
+            params['query'] = final_query
             params.update(external_data.query_params)
             fields.update(external_data.form_data)
         if self.form_encode_query_params:
+            if 'query' not in params:
+                fields['query'] = final_query
             fields.update(bind_params)
         else:
             params.update(bind_params)
