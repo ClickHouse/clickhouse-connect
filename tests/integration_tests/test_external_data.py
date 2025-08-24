@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from clickhouse_connect import get_client
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.options import arrow
@@ -111,3 +112,43 @@ def test_external_command(test_client: Client):
         assert 'query_id' in query_result.first_item
         test_client.raw_query('INSERT INTO movies_ext SELECT * FROM movies', external_data=data)
         assert 250 == test_client.command('SELECT COUNT() FROM movies_ext')
+
+
+def test_external_with_form_encode(test_config: TestConfig):
+    form_client = get_client(
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        database=test_config.test_database,
+        form_encode_query_params=True
+    )
+
+    movies_file = f'{Path(__file__).parent}/movies.csv'
+    data = ExternalData(movies_file, fmt='CSVWithNames',
+                        structure=['movie String', 'year UInt16', 'rating Decimal32(3)'])
+
+    # Test with parameters in the query
+    result = form_client.query(
+        'SELECT * FROM movies WHERE year > {year:UInt16} ORDER BY rating DESC LIMIT {limit:UInt32}',
+        parameters={'year': 1990, 'limit': 5},
+        external_data=data,
+        settings=ext_settings
+    ).result_rows
+
+    assert len(result) == 5
+    assert all(row[1] > 1990 for row in result)
+
+    # Verify results are sorted by rating
+    ratings = [row[2] for row in result]
+    assert ratings == sorted(ratings, reverse=True)
+
+    # Test raw query with external data and form encoding
+    raw_result = form_client.raw_query(
+        'SELECT COUNT() FROM movies WHERE rating > {min_rating:Decimal32(3)}',
+        parameters={'min_rating': 8.0},
+        external_data=data,
+        settings=ext_settings
+    )
+    count = int(raw_result.decode().strip())
+    assert count > 0
