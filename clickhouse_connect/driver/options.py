@@ -37,6 +37,10 @@ try:
 except ImportError:
     arrow = None
 
+try:
+    import polars as pl
+except ImportError:
+    pl = None
 
 def check_numpy():
     if np:
@@ -54,3 +58,9 @@ def check_arrow():
     if arrow:
         return arrow
     raise NotSupportedError('PyArrow package is not installed')
+
+
+def check_polars():
+    if pl:
+        return pl
+    raise NotSupportedError("Polars package is not installed")
