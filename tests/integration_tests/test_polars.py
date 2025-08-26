@@ -110,8 +110,6 @@ def test_polars_arrow_stream(test_client: Client, table_context: Callable):
             assert df["counter"].dtype == pl.Int64
             assert df["letter"].dtype == pl.String
             expected_letter = df["counter"].map_elements(lambda x: alphabet[x % 26], return_dtype=pl.String)
-            print(expected_letter)
-            print(df["letter"])
             assert df["letter"].equals(expected_letter)
             total_rows += len(df)
         assert total_rows == 1000000
