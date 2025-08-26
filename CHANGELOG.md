@@ -22,6 +22,7 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added Polars support for Arrow-based query and insert methods (query_df_arrow, query_df_arrow_stream, insert_df_arrow). This initial implementation provides basic dataframe conversion through the Arrow format, similar to how we support the pyarrow-backed pandas dataframes. Closes [#111](https://github.com/ClickHouse/clickhouse-connect/issues/111) and [#542](https://github.com/ClickHouse/clickhouse-connect/issues/542)
 - Added support for SQLAlchemy 2.x. The minimum required version is 1.4.40. Closes [#263](https://github.com/ClickHouse/clickhouse-connect/issues/263)
   - **WARNING: BREAKING CHANGE**: Removed support for sqlalchemy 1.3 which reached its EOL in 2021.
 - Added support for querying/inserting pyarrow-backed DataFrames:
