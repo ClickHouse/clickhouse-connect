@@ -849,8 +849,7 @@ class Client(ABC):
         This method is optimized for DataFrames that already use Arrow format, providing
         better performance than the standard insert_df method.
         
-        IMPORTANT: For pandas DataFrames, this method requires the DataFrame to have PyArrow-backed columns. 
-        Validation is performed and an exception will be raised if this requirement is not met.py
+        Validation is performed and an exception will be raised if this requirement is not met.
         Polars DataFrames are natively Arrow-based and don't require additional validation.
         
         :param table: ClickHouse table name
