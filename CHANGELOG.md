@@ -45,7 +45,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
 - Added support for Nullable(JSON) types
 - Added support for BFloat16 types
-- Replace the use of deprecated datetime.utcfromtimestamp
+-- Replace the use of deprecated datetime.utcfromtimestamp
 
 ## 0.8.18, 2025-06-24
 
@@ -80,7 +80,7 @@ behind a proxy that used path based routing (such as `https://big_proxy:8080/cli
 
 ## 0.8.16, 2025-03-28
 ### Bug Fixes
-- Don't send a setting value if the setting is already correct according to the `system.settings` table.
+- Don't send a setting value if the setting is already correct according to the `system.settings` table. 
 Closes https://github.com/ClickHouse/clickhouse-connect/issues/469
 - Ensure that the http `user_agent` header is in ascii.  Note this could lead to an incorrectly encoded `os_user` if the
 os_user is not an Ascii string.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/484
@@ -101,7 +101,7 @@ for the optimization
 async clients were created.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/424.  Note that the `close`
 function for the async client is now async to cleanly close down the pool.  The recommended way to use an async client
 is now within an AsyncContext.  See the associated [PR](https://github.com/ClickHouse/clickhouse-connect/pull/457) for details.
-Thanks to ClickHouse core developer @pufit for the fix!
+Thanks to ClickHouse core developer @pufit for the fix!  
 
 ## 0.8.14, 2025-01-13
 ### Bug Fix
@@ -114,10 +114,10 @@ inserting into a ClickHouse "big int" table of U/Int128/256.  Closes https://git
 
 ## 0.8.12, 2025-01-06
 ### Improvement
-- Added support for JWT authentication (ClickHouse Cloud feature).
-It can be set via the `access_token` client configuration option for both sync and async clients.
+- Added support for JWT authentication (ClickHouse Cloud feature). 
+It can be set via the `access_token` client configuration option for both sync and async clients. 
 The token can also be updated via the `set_access_token` method in the existing client instance.
-NB: do not mix access token and username/password credentials in the configuration;
+NB: do not mix access token and username/password credentials in the configuration; 
 the client will throw an error if both are set.
 
 ## 0.8.11, 2024-12-21
@@ -199,7 +199,7 @@ https://github.com/ClickHouse/clickhouse-connect/issues/407
 
 ## 0.8.1, 2024-09-29
 ### Bug Fix
-- Fixed an edge case where the HTTP buffer could theoretically return empty blocks.
+- Fixed an edge case where the HTTP buffer could theoretically return empty blocks.  
 
 ## 0.8.0, 2024-09-26
 ### Experimental Feature - "New" JSON/Dynamic/Variant DataTypes
@@ -253,14 +253,14 @@ slow processing of large queries will still cause connection and processing fail
   ```python
     query = 'SELECT {p1:DateTime64(3)}'  # Server side binding with dictionary
     parameters={'p1': DT64Param(dt_value)}
-
-    query = 'SELECT %s as string, toDateTime64(%s,6) as dateTime' # Client side binding with list
+  
+    query = 'SELECT %s as string, toDateTime64(%s,6) as dateTime' # Client side binding with list 
     parameters=['a string', DT64Param(datetime.now())]
   ```
   - If using a dictionary of parameter values, append the string `_64` to the parameter name
   ```python
     query = 'SELECT {p1:DateTime64(3)}, {a1:Array(DateTime(3))}'  # Server side binding with dictionary
-
+  
     parameters={'p1_64': dt_value, 'a1_64': [dt_value1, dt_value2]}
   ```
   This closes https://github.com/ClickHouse/clickhouse-connect/issues/396, see also the similar issue https://github.com/ClickHouse/clickhouse-connect/issues/212
@@ -285,10 +285,10 @@ set the new common/global setting `send_os_user` to False.  Closes https://githu
 
 ## 0.7.16, 2024-07-08
 ### Improvement
-- Added the `AsyncClient` wrapper which is intended for `asyncio` environment usage. `AsyncClient` has the same methods
-with the same parameters as the standard `Client`, but they are coroutines when applicable. Internally, these methods
-from the `Client` that perform I/O operations are wrapped in a
-[run_in_executor](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.run_in_executor) call.
+- Added the `AsyncClient` wrapper which is intended for `asyncio` environment usage. `AsyncClient` has the same methods 
+with the same parameters as the standard `Client`, but they are coroutines when applicable. Internally, these methods 
+from the `Client` that perform I/O operations are wrapped in a 
+[run_in_executor](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.run_in_executor) call. 
 See also the updated [run_async example](./examples/run_async.py).
 
 ## 0.7.15, 2024-07-01
@@ -331,7 +331,7 @@ to [Frederik Eychenié](https://github.com/feychenie) for the investigation and 
 - Clean up pandas series concatenation issue
 
 ## 0.7.9, 2024-05-21
-### Bug Fixes
+### Bug Fixes 
 - query_df would raise a deprecation warning with recent Pandas version if there were empty blocks.  This should be fixed.
 https://github.com/ClickHouse/clickhouse-connect/issues/349
 - avoid a warning in timezone handling using the tzlocal library.  Thanks to [Tanner](https://github.com/tstenson) for the
@@ -380,7 +380,7 @@ https://github.com/ClickHouse/clickhouse-connect/issues/327
 
 ## 0.7.3, 2024-03-14
 ### Improvement
-- Add summary field to Cursor object to retrieve the result of 'X-Clickhouse-Summary' header.  Thanks to
+- Add summary field to Cursor object to retrieve the result of 'X-Clickhouse-Summary' header.  Thanks to 
 [elchyn-cheliabiyeu](https://github.com/elchyn-cheliabiyeu) for the PR!
 
 ## 0.7.2, 2024-03-07
@@ -541,12 +541,12 @@ on importlib_metadata.
 
 ### Improvement
 - Add compression parameter to the clickhouse `tools.insert_file` method.  '.gz' and '.gzip' extensions are automatically
-recognized.
+recognized.  
 
 ## 0.6.7, 2023-07-18
 ### Bug Fixes
 - Fixed an issue for older versions of ClickHouse where the server would send an initial block of 0 rows for larger queries.
-This would break some queries with LowCardinality columns.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/221
+This would break some queries with LowCardinality columns.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/221 
 - Fixed the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
 
 ### Improvements
@@ -669,7 +669,7 @@ can help with certain load balancing issues.  It defaults to 10 minutes
 in the case of many small inserts.  It can still be added using the `settings` dictionary of the client `*insert` methods if needed for some reason.
 - The query setting `use_na_values` has been renamed to `use_extended_dtypes` and now applies to all extended/special Pandas dtypes (except the Pandas Timestamp type).
 Set this to `False` to limit  the dtypes returned in Pandas dataframes to the "basic" numpy types.  (Note that this will force the use of numpy object arrays
-for most "nullable types")  This should allow creating "basic" dataframes for greater compatibility. Closes https://github.com/ClickHouse/clickhouse-connect/issues/172.
+for most "nullable types")  This should allow creating "basic" dataframes for greater compatibility. Closes https://github.com/ClickHouse/clickhouse-connect/issues/172.  
 
 ## 0.5.20, 2023-04-06
 ### Bug Fixes
@@ -799,7 +799,7 @@ raise a StreamClosedError.  Thanks to [Stas](https://github.com/reijnnn) for the
 - A better error message is returned when trying to read a "non-standard" DateTime64 column function for a numpy array
 or Pandas DataFrame.  "non-standard" means a DateTime64 precision not conforming to seconds, milliseconds, microseconds,
 or nanoseconds (0, 3, 6, or 9 respectively).  These DateTime64 types are not supported for numpy or Pandas because there is
-no corresponding standard numpy datetime64 type and conversion would be unacceptably slow (supported numpy types are
+no corresponding standard numpy datetime64 type and conversion would be unacceptably slow (supported numpy types are 
 `datetime64[s]`, `datetime64[ms]`, `datetime64[us]`, and `datetime64[ns]`).  A workaround is to cast the DateTime64 type
 to a supported type, i.e. `SELECT toDateTime64(col_name, 3)` for a millisecond column.
 - The base configuration required for a urllib PoolManager has been broken out into its own help method,
@@ -947,7 +947,7 @@ Dependency Changes below).  Instead, the HttpClient constructor now accepts an o
 can be used to set a custom `urllib.poolmanager.PoolManager` for the client.  In most cases the default PoolManager is
 all that is needed, but multiple PoolManagers may be required for advanced server/proxy applications with many client instances.
 
-### Dependency Changes
+### Dependency Changes 
 * ClickHouse Connect no longer requires the popular `requests` library.  The `requests` library is built on
 [urllib3](https://pypi.org/project/urllib3/), but ClickHouse Connect was utilizing very little of the added functionality.
 Requests also has very restricted access to the `urllib3` streaming API, which made adding additional compression methods
@@ -962,7 +962,7 @@ is optimized to work with them, so ClickHouse Connect now takes advantages of th
   * `stream_column_blocks` - returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface.
   * `stream_row_blocks` - returns a generator of smaller result sets matching the ClickHouse blocks returned by the native interface,
 but "pivoted" to return data rows.
-  * `stream_rows` - returns a generator that returns a row of data with each iteration.
+  * `stream_rows` - returns a generator that returns a row of data with each iteration.  
 These methods should be used within a `with` context to ensure the stream is properly closed when done.  In addition, two new properties
 `result_columns` and `result_rows` have been added to `QueryResult`.  Referencing either of these properties will consume the stream
 and return the full dataset.  Note that these properties should be used instead of the ambiguous `result_set`, which returns
@@ -992,9 +992,9 @@ https://github.com/ClickHouse/clickhouse-connect/issues/94. This has been fixed.
 ### New Features
 * [Documentation](https://clickhouse.com/docs/en/integrations/language-clients/python/intro) has been expanded to cover recent updates.
 * File upload support.  The new `driver.tools` module adds the function `insert_file` to simplify
-directly inserting data files into a table.  See the [test file](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_tools.py)
+directly inserting data files into a table.  See the [test file](https://github.com/ClickHouse/clickhouse-connect/blob/main/tests/integration_tests/test_tools.py) 
 for examples.  This closes https://github.com/ClickHouse/clickhouse-connect/issues/41.
-* Added support for server side [http query parameters](https://clickhouse.com/docs/en/interfaces/http/#cli-queries-with-parameters)
+* Added support for server side [http query parameters](https://clickhouse.com/docs/en/interfaces/http/#cli-queries-with-parameters) 
 For queries that contain bindings of the form `{<name>:<datatype>}`, the client will automatically convert the query* method
 `parameters` dictionary to the appropriate http query parameters.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/49.
 * The main `clickhouse_connect.get_client` command will now accept a standard Python `dsn` argument and extract host, port,
@@ -1025,7 +1025,7 @@ precedence over values extracted from the dsn.
 ## 0.4.4, 2022-11-22
 
 ### Bug Fixes
-* Ignore all "transport settings" when validating settings.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/80
+* Ignore all "transport settings" when validating settings.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/80 
 for older ClickHouse versions
 
 
@@ -1184,7 +1184,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.2.5, 2022-08-30
 
 ### Bug Fixes
-* Fixed an issue where DBAPI cursors returned an invalid description object for columns.  This would cause `'property' object has no attribute 'startswith'` errors for some SqlAlchemy and SuperSet queries.
+* Fixed an issue where DBAPI cursors returned an invalid description object for columns.  This would cause `'property' object has no attribute 'startswith'` errors for some SqlAlchemy and SuperSet queries.  
 * Fixed an issue where datetime parameters would not be correctly rendered as ClickHouse compatible strings
 
 ### New Features
