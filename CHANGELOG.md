@@ -46,6 +46,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
 - Added support for Nullable(JSON) types
 - Added support for BFloat16 types
+-- Replace the use of deprecated datetime.utcfromtimestamp
 
 ## 0.8.18, 2025-06-24
 
