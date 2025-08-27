@@ -2,12 +2,14 @@ import pytz
 
 import array
 from datetime import date, datetime, tzinfo, timedelta, time
+
 from typing import Union, Sequence, MutableSequence, Any, NamedTuple, Optional
 from abc import abstractmethod
 import re
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
 from clickhouse_connect.common import get_setting
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import write_array, np_date_types, int_size, first_value
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
@@ -269,7 +271,7 @@ class DateTime64(DateTimeBase):
     def _read_binary_naive(self, column: Sequence):
         new_col = []
         app = new_col.append
-        dt_from = datetime.utcfromtimestamp
+        dt_from = tzutil.utcfromtimestamp
         prec = self.prec
         for ticks in column:
             seconds = ticks // prec
