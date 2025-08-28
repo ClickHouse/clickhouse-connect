@@ -144,3 +144,42 @@ def test_form_encode_nullable_params(test_config: TestConfig):
         parameters={'val': 'test_value'}
     )
     assert result.first_row[0] == 'test_value'
+
+
+def test_form_encode_schema_probe_query(test_config: TestConfig, table_context: Callable):
+    """Test that schema-probe queries (LIMIT 0) work correctly with form_encode_query_params"""
+    form_client = get_client(
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        database=test_config.test_database,
+        form_encode_query_params=True
+    )
+
+    # Test with a simple LIMIT 0 query
+    result = form_client.query('SELECT name, database, NOW() as dt FROM system.tables LIMIT 0')
+    assert result.column_names == ('name', 'database', 'dt')
+    assert len(result.column_types) == 3
+    assert len(result.result_set) == 0
+
+    # Test with LIMIT 0 and parameters
+    with table_context('test_schema_probe', ['id UInt32', 'name String', 'value Float64']):
+        result = form_client.query(
+            'SELECT * FROM test_schema_probe WHERE id = {id:UInt32} LIMIT 0',
+            parameters={'id': 1}
+        )
+        assert result.column_names == ('id', 'name', 'value')
+        assert len(result.column_types) == 3
+        assert len(result.result_set) == 0
+
+        # Test with complex query and parameters
+        result = form_client.query(
+            'SELECT id, name, value * {multiplier:Float64} as adjusted_value '
+            'FROM test_schema_probe '
+            'WHERE name = {filter_name:String} LIMIT 0',
+            parameters={'multiplier': 2.5, 'filter_name': 'test'}
+        )
+        assert result.column_names == ('id', 'name', 'adjusted_value')
+        assert len(result.column_types) == 3
+        assert len(result.result_set) == 0

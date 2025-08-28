@@ -46,7 +46,8 @@ class HttpClient(Client):
                                    'enable_http_compression'}
     _owns_pool_manager = False
 
-    # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
+    # R0917: too-many-positional-arguments
+    # pylint: disable=too-many-arguments,R0917,too-many-locals,too-many-branches,too-many-statements,unused-argument
     def __init__(self,
                  interface: str,
                  host: str,
@@ -215,9 +216,15 @@ class HttpClient(Client):
             context.block_info = True
         params.update(self._validate_settings(context.settings))
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
-            params.update(context.bind_params)
-            response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
-                                         params, headers, retries=self.query_retries)
+            # Mirror normal query behavior for form encoding
+            if self.form_encode_query_params:
+                fields = {'query': f'{context.final_query}\n FORMAT JSON'}
+                fields.update(context.bind_params)
+                response = self._raw_request(bytes(), params, headers, retries=self.query_retries, fields=fields)
+            else:
+                params.update(context.bind_params)
+                response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
+                                             params, headers, retries=self.query_retries)
             json_result = json.loads(response.data)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -556,9 +563,8 @@ class HttpClient(Client):
             params['database'] = self.database
         fields = {}
         # Setup query body
-        if self.form_encode_query_params or external_data:  # form encoded body
-            if isinstance(final_query, bytes):
-                raise ProgrammingError('Cannot combine binary query data with `External Data`')
+        if external_data and not self.form_encode_query_params and isinstance(final_query, bytes):
+            raise ProgrammingError("Binary query cannot be placed in URL when using External Data; enable form encoding.")
         # Setup additional query parameters and body
         if self.form_encode_query_params:
             body = bytes()

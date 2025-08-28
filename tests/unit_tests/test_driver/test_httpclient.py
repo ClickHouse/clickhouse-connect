@@ -604,3 +604,50 @@ class TestQuery:
         assert '_file1_format' in params
         assert '_file1' in fields
         assert 'param_min_val' in fields
+
+    @patch.object(HttpClient, "_raw_request")
+    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    def test_query_with_context_schema_probe_form_encode(self, mock_columns_re, mock_raw_request):
+        """Test that schema-probe queries (LIMIT 0) work correctly with form_encode_query_params"""
+        self.client.form_encode_query_params = True
+
+        # Mock the columns_only_re to match LIMIT 0
+        mock_columns_re.search.return_value = True
+
+        # Setup mock response for schema probe
+        mock_response = Mock()
+        mock_response.data = b'{"meta": [{"name": "id", "type": "UInt32"}, {"name": "name", "type": "String"}]}'
+        mock_response.headers = {}
+        mock_raw_request.return_value = mock_response
+
+        # Create query context
+        context = self.create_mock_query_context(
+            query="SELECT * FROM table WHERE id = {id:UInt32} LIMIT 0",
+            bind_params={"param_id": "123"}
+        )
+        context.uncommented_query = "SELECT * FROM table WHERE id = {id:UInt32} LIMIT 0"
+        context.is_insert = False
+        context.final_query = "SELECT * FROM table WHERE id = {id:UInt32} LIMIT 0"
+        context.settings = {}
+        context.transport_settings = {}
+        context.streaming = False
+        context.block_info = False
+        context.set_response_tz = Mock()
+
+        # Call _query_with_context
+        self.client._query_with_context(context)
+
+        # Extract parameters from the mock call
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+
+        # Verify that form encoding was used for schema probe
+        assert body == b""  # Body should be empty with form encoding
+        assert fields is not None  # Fields should be populated
+        assert "query" in fields
+        assert "FORMAT JSON" in fields["query"]
+        assert "param_id" in fields
+        assert fields["param_id"] == "123"
+
+        # Verify params dont contain the query or bind params
+        assert "query" not in params
+        assert "param_id" not in params
