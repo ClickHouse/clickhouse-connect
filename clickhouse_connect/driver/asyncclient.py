@@ -351,9 +351,10 @@ class AsyncClient:
         use_strings: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
-    ):
+        dataframe_library: str = "pandas",
+    ) -> Union["pd.DataFrame", "pl.DataFrame"]:
         """
-        Query method using the ClickHouse Arrow format to return a pandas DataFrame
+        Query method using the ClickHouse Arrow format to return a DataFrame
         with PyArrow dtype backend. This provides better performance and memory efficiency
         compared to the standard query_df method, though fewer output formatting options.
 
@@ -363,7 +364,8 @@ class AsyncClient:
         :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
         :param external_data: ClickHouse "external data" to send with query
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
-        :return: Pandas DataFrame with PyArrow dtype backend
+        :param dataframe_library: Library to use for DataFrame creation ("pandas" or "polars")
+        :return: DataFrame (pandas or polars based on dataframe_library parameter)
         """
 
         def _query_df_arrow():
@@ -374,6 +376,7 @@ class AsyncClient:
                 use_strings=use_strings,
                 external_data=external_data,
                 transport_settings=transport_settings,
+                dataframe_library=dataframe_library
             )
 
         loop = asyncio.get_running_loop()
@@ -423,9 +426,10 @@ class AsyncClient:
         use_strings: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
-    ):
+        dataframe_library: str = "pandas"
+    ) -> StreamContext:
         """
-        Query method that returns the results as a stream of pandas DataFrames with PyArrow dtype backend.
+        Query method that returns the results as a stream of DataFrames with PyArrow dtype backend.
         Each DataFrame represents a block from the ClickHouse response.
 
         :param query: Query statement/format string
@@ -434,7 +438,8 @@ class AsyncClient:
         :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
         :param external_data: ClickHouse "external data" to send with query
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
-        :return: Generator that yields pandas DataFrames with PyArrow dtype backend
+        :param dataframe_library: Library to use for DataFrame creation ("pandas" or "polars")
+        :return: StreamContext that yields DataFrames (pandas or polars based on dataframe_library parameter)
         """
 
         def _query_df_arrow_stream():
@@ -445,6 +450,7 @@ class AsyncClient:
                 use_strings=use_strings,
                 external_data=external_data,
                 transport_settings=transport_settings,
+                dataframe_library=dataframe_library
             )
 
         loop = asyncio.get_running_loop()
@@ -718,21 +724,21 @@ class AsyncClient:
     async def insert_df_arrow(
         self,
         table: str,
-        df: "pd.DataFrame",
+        df: Union["pd.DataFrame", "pl.DataFrame"],
         database: Optional[str] = None,
         settings: Optional[Dict] = None,
         transport_settings: Optional[Dict[str, str]] = None,
     ) -> QuerySummary:
         """
-        Insert a pandas DataFrame with PyArrow backend into ClickHouse using Arrow format.
-        This method is optimized for DataFrames that already use PyArrow dtypes, providing
+        Insert a pandas DataFrame with PyArrow backend or a polars DataFrame into ClickHouse using Arrow format.
+        This method is optimized for DataFrames that already use Arrow format, providing
         better performance than the standard insert_df method.
-
-        IMPORTANT: This method requires the DataFrame to have PyArrow-backed columns. 
+        
         Validation is performed and an exception will be raised if this requirement is not met.
-
+        Polars DataFrames are natively Arrow-based and don't require additional validation.
+        
         :param table: ClickHouse table name
-        :param df: Pandas DataFrame with PyArrow dtype backend (from query_df_arrow or pd.read_* with dtype_backend='pyarrow')
+        :param df: Pandas DataFrame with PyArrow dtype backend or Polars DataFrame
         :param database: Optional ClickHouse database name
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)

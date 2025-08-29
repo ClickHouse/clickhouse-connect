@@ -16,9 +16,10 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.special import UUID
 from clickhouse_connect.datatypes.string import String, FixedString
 from clickhouse_connect.datatypes.temporal import Date, Date32, DateTime, DateTime64
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import array_sizes
 
-dt_from_ts = datetime.utcfromtimestamp
+dt_from_ts = tzutil.utcfromtimestamp
 dt_from_ts_tz = datetime.fromtimestamp
 epoch_date = date(1970, 1, 1)
 date32_start_date = date(1925, 1, 1)
