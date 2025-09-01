@@ -651,3 +651,92 @@ class TestQuery:
         # Verify params dont contain the query or bind params
         assert "query" not in params
         assert "param_id" not in params
+
+    @patch.object(HttpClient, "_raw_request")
+    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    def test_query_with_context_schema_probe_external_data(self, mock_columns_re, mock_raw_request):
+        """Test schema-probe queries (LIMIT 0) with external data but no form encoding"""
+        self.client.form_encode_query_params = False
+
+        # Mock the columns_only_re to match LIMIT 0
+        mock_columns_re.search.return_value = True
+
+        # Setup mock response for schema probe
+        mock_response = Mock()
+        mock_response.data = b'{"meta": [{"name": "id", "type": "UInt32"}, {"name": "count", "type": "UInt64"}]}'
+        mock_response.headers = {}
+        mock_raw_request.return_value = mock_response
+
+        # Create external data and context
+        external_data = self.create_mock_external_data()
+        context = self.create_mock_query_context(
+            query="SELECT * FROM file1 LIMIT 0",
+            external_data=external_data
+        )
+        context.uncommented_query = "SELECT * FROM file1 LIMIT 0"
+        context.is_insert = False
+        context.final_query = "SELECT * FROM file1 LIMIT 0"
+        context.settings = {}
+        context.transport_settings = {}
+        context.streaming = False
+        context.block_info = False
+        context.set_response_tz = Mock()
+
+        # Call _query_with_context
+        self.client._query_with_context(context)
+
+        # Extract parameters from the mock call
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+
+        # Verify external data handling without form encoding
+        assert body == b""  # Body should be empty when using external data
+        assert "query" in params  # Query should be in params
+        assert "FORMAT JSON" in params["query"]
+        assert "_file1_format" in params  # External data query params
+        assert "_file1" in fields  # External data form fields
+
+    @patch.object(HttpClient, "_raw_request")
+    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    def test_query_with_context_schema_probe_form_encode_external_data(self, mock_columns_re, mock_raw_request):
+        """Test schema-probe queries (LIMIT 0) with both form encoding and external data"""
+        self.client.form_encode_query_params = True
+
+        # Mock the columns_only_re to match LIMIT 0
+        mock_columns_re.search.return_value = True
+
+        # Setup mock response for schema probe
+        mock_response = Mock()
+        mock_response.data = b'{"meta": [{"name": "id", "type": "UInt32"}, {"name": "value", "type": "Float64"}]}'
+        mock_response.headers = {}
+        mock_raw_request.return_value = mock_response
+
+        # Create external data and context
+        external_data = self.create_mock_external_data()
+        context = self.create_mock_query_context(
+            query="SELECT * FROM file1 WHERE value > 10",
+            bind_params={"param_min_val": 10},
+            external_data=external_data
+        )
+        context.uncommented_query = "SELECT * FROM file1 WHERE value > 10"
+        context.is_insert = False
+        context.final_query = "SELECT * FROM file1 WHERE value > 10"
+        context.settings = {}
+        context.transport_settings = {}
+        context.streaming = False
+        context.block_info = False
+        context.set_response_tz = Mock()
+
+        # Call _query_with_context
+        self.client._query_with_context(context)
+
+        # Extract parameters from the mock call
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+
+        # Verify both form encoding and external data handling
+        assert body == b""  # Body should be empty
+        assert "query" in fields  # Query should be in fields (form encoding)
+        assert "FORMAT JSON" in fields["query"]
+        assert "param_min_val" in fields  # Bind params in fields
+        assert "_file1_format" in params  # External data query params
+        assert "_file1" in fields  # External data form fields
+        assert "query" not in params  # Query should not be in params when form encoding

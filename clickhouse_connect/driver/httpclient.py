@@ -216,14 +216,24 @@ class HttpClient(Client):
             context.block_info = True
         params.update(self._validate_settings(context.settings))
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
-            # Mirror normal query behavior for form encoding
+            # Mirror normal query behavior for form encoding and external data
+            fmt_json_query = f'{context.final_query}\n FORMAT JSON'
             if self.form_encode_query_params:
-                fields = {'query': f'{context.final_query}\n FORMAT JSON'}
+                fields = {'query': fmt_json_query}
                 fields.update(context.bind_params)
+                if context.external_data:  # Deal with form encoding + external data
+                    params.update(context.external_data.query_params)
+                    fields.update(context.external_data.form_data)
                 response = self._raw_request(bytes(), params, headers, retries=self.query_retries, fields=fields)
-            else:
+            elif context.external_data:  # Deal with external data without form encoding
+                fields = context.external_data.form_data
                 params.update(context.bind_params)
-                response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
+                params.update(context.external_data.query_params)
+                params['query'] = fmt_json_query
+                response = self._raw_request(bytes(), params, headers, retries=self.query_retries, fields=fields)
+            else:  # Legacy behavior (plain body, bind params in URL)
+                params.update(context.bind_params)
+                response = self._raw_request(fmt_json_query,
                                              params, headers, retries=self.query_retries)
             json_result = json.loads(response.data)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
