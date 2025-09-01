@@ -67,6 +67,7 @@ def run_setup(try_c: bool = True):
             'sqlalchemy': ['sqlalchemy>=1.4.40,<3.0'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
+            'polars': ['polars>=1.0'],
             'arrow': ['pyarrow'],
             'orjson': ['orjson'],
             'tzlocal': ['tzlocal>=4.0'],
