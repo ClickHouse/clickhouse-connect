@@ -77,6 +77,11 @@ _init_common('product_name', (), '')  # Product name used as part of client iden
 _init_common('readonly', (0, 1), 0)  # Implied "read_only" ClickHouse settings for versions prior to 19.17
 _init_common('send_os_user', (True, False), True)
 
+# Include integration tags (library name/version) in the User-Agent, e.g.:
+# pandas/2.2.5; polars/0.20.x; sqlalchemy/2.0.x. These tags are only included
+# when using relevant API methods.
+_init_common('send_integration_tags', (True, False), True)
+
 # Use the client protocol version  This is needed for DateTime timezone columns but breaks with current version of
 # chproxy
 _init_common('use_protocol_version', (True, False), True)

@@ -42,6 +42,16 @@ def test_single_insert(test_engine: Engine, test_model):
         conn.execute(db.insert(test_model), {'test_name': 'another_single_insert'})
 
 
+def test_user_agent_integration_tags(test_engine: Engine):
+    with test_engine.begin():
+        client = test_engine.raw_connection().driver_connection.client
+        ua = client.headers["User-Agent"]
+        if db.__version__.startswith("1."):
+            assert "sqlalchemy/1." in ua
+        else:
+            assert "sqlalchemy/2." in ua
+
+
 def test_multiple_insert(test_engine: Engine, test_model):
     session = Session(test_engine)
     model_1 = test_model(test_name='multi_1',

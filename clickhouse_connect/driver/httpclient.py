@@ -3,6 +3,8 @@ import json
 import logging
 import re
 import uuid
+from importlib import import_module
+from importlib.metadata import version as dist_version
 from base64 import b64encode
 from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
@@ -125,6 +127,7 @@ class HttpClient(Client):
         elif (not client_cert or tls_mode in ('strict', 'proxy')) and username:
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
+        self._reported_libs = set()
         self.headers['User-Agent'] = common.build_client_name(client_name)
         self._read_format = self._write_format = 'Native'
         self._transform = NativeTransform()
@@ -553,6 +556,51 @@ class HttpClient(Client):
             body = final_query
             fields = None
         return body, params, fields
+
+    # pylint: disable=broad-exception-caught
+    def _add_integration_tag(self, name: str):
+        """
+        Dynamically adds a product (like pandas or sqlalchemy) to the User-Agent string details section.
+        """
+        if not common.get_setting("send_integration_tags") or name in self._reported_libs:
+            return
+
+        try:
+            ver = "unknown"
+            try:
+                ver = dist_version(name)
+            except Exception:
+                try:
+                    mod = import_module(name)
+                    ver = getattr(mod, "__version__", "unknown")
+                except Exception:
+                    pass
+
+            product_info = f"{name}/{ver}"
+
+            ua = self.headers.get("User-Agent", "")
+            start = ua.find("(")
+            if start == -1:
+                return
+            end = ua.find(")", start + 1)
+            if end == -1:
+                return
+
+            details = ua[start + 1 : end].strip()
+
+            if product_info in details:
+                self._reported_libs.add(name)
+                return
+
+            new_details = f"{product_info}; {details}" if details else product_info
+            new_ua = f"{ua[: start + 1]}{new_details}{ua[end:]}"
+            self.headers["User-Agent"] = new_ua.strip()
+
+            self._reported_libs.add(name)
+            logger.debug("Added '%s' to User-Agent", product_info)
+
+        except Exception as e:
+            logger.debug("Problem adding '%s' to User-Agent: %s", name, e)
 
     def ping(self):
         """

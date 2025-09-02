@@ -29,6 +29,10 @@ class Connection:
                                     secure=secure,
                                     dsn=dsn,
                                     generic_args=kwargs)
+        try:
+            self.client._add_integration_tag("sqlalchemy")
+        except Exception: # pylint: disable=broad-exception-caught
+            pass
         self.timezone = self.client.server_tz
 
     def close(self):
