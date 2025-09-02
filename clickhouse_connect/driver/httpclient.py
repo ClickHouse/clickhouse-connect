@@ -48,7 +48,8 @@ class HttpClient(Client):
                                    'enable_http_compression'}
     _owns_pool_manager = False
 
-    # pylint: disable=too-many-positional-arguments,too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
+    # R0917: too-many-positional-arguments
+    # pylint: disable=too-many-arguments,R0917,too-many-locals,too-many-branches,too-many-statements,unused-argument
     def __init__(self,
                  interface: str,
                  host: str,
@@ -77,7 +78,8 @@ class HttpClient(Client):
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
-                 proxy_path: str = ''):
+                 proxy_path: str = '',
+                 form_encode_query_params: bool = False):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -87,6 +89,7 @@ class HttpClient(Client):
             proxy_path = '/' + proxy_path
         self.url = f'{interface}://{host}:{port}{proxy_path}'
         self.headers = {}
+        self.form_encode_query_params = form_encode_query_params
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)
         self.http = pool_mgr
@@ -214,11 +217,27 @@ class HttpClient(Client):
         if self.protocol_version:
             params['client_protocol_version'] = self.protocol_version
             context.block_info = True
-        params.update(context.bind_params)
         params.update(self._validate_settings(context.settings))
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
-            response = self._raw_request(f'{context.final_query}\n FORMAT JSON',
-                                         params, headers, retries=self.query_retries)
+            # Mirror normal query behavior for form encoding and external data
+            fmt_json_query = f'{context.final_query}\n FORMAT JSON'
+            if self.form_encode_query_params:
+                fields = {'query': fmt_json_query}
+                fields.update(context.bind_params)
+                if context.external_data:  # Deal with form encoding + external data
+                    params.update(context.external_data.query_params)
+                    fields.update(context.external_data.form_data)
+                response = self._raw_request(bytes(), params, headers, retries=self.query_retries, fields=fields)
+            elif context.external_data:  # Deal with external data without form encoding
+                fields = context.external_data.form_data
+                params.update(context.bind_params)
+                params.update(context.external_data.query_params)
+                params['query'] = fmt_json_query
+                response = self._raw_request(bytes(), params, headers, retries=self.query_retries, fields=fields)
+            else:  # Legacy behavior (plain body, bind params in URL)
+                params.update(context.bind_params)
+                response = self._raw_request(fmt_json_query,
+                                             params, headers, retries=self.query_retries)
             json_result = json.loads(response.data)
             # ClickHouse will respond with a JSON object of meta, data, and some other objects
             # We just grab the column names and column types from the metadata sub object
@@ -234,12 +253,23 @@ class HttpClient(Client):
             if self._send_comp_setting:
                 params['enable_http_compression'] = '1'
         final_query = self._prep_query(context)
-        if context.external_data:
+        fields = {}
+        # Setup additional query parameters and body
+        if self.form_encode_query_params:
+            body = bytes()
+            fields['query'] = final_query
+            fields.update(context.bind_params)
+            if context.external_data:
+                params.update(context.external_data.query_params)
+                fields.update(context.external_data.form_data)
+        elif context.external_data:
+            params.update(context.bind_params)
             body = bytes()
             params['query'] = final_query
             params.update(context.external_data.query_params)
             fields = context.external_data.form_data
         else:
+            params.update(context.bind_params)
             body = final_query
             fields = None
             headers['Content-Type'] = 'text/plain; charset=utf-8'
@@ -544,15 +574,26 @@ class HttpClient(Client):
         params = self._validate_settings(settings or {})
         if use_database and self.database:
             params['database'] = self.database
-        params.update(bind_params)
-        if external_data:
-            if isinstance(final_query, bytes):
-                raise ProgrammingError('Cannot combine binary query data with `External Data`')
+        fields = {}
+        # Setup query body
+        if external_data and not self.form_encode_query_params and isinstance(final_query, bytes):
+            raise ProgrammingError("Binary query cannot be placed in URL when using External Data; enable form encoding.")
+        # Setup additional query parameters and body
+        if self.form_encode_query_params:
+            body = bytes()
+            fields['query'] = final_query
+            fields.update(bind_params)
+            if external_data:
+                params.update(external_data.query_params)
+                fields.update(external_data.form_data)
+        elif external_data:
+            params.update(bind_params)
             body = bytes()
             params['query'] = final_query
             params.update(external_data.query_params)
             fields = external_data.form_data
         else:
+            params.update(bind_params)
             body = final_query
             fields = None
         return body, params, fields
