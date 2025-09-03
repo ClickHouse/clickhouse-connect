@@ -358,6 +358,7 @@ class Client(ABC):
         :return: Numpy array representing the result set
         """
         check_numpy()
+        self._add_integration_tag("numpy")
         return self._context_query(locals(), use_numpy=True).np_result
 
     # pylint: disable=duplicate-code,too-many-arguments,unused-argument
@@ -379,6 +380,7 @@ class Client(ABC):
         :return: Generator that yield a numpy array per block representing the result set
         """
         check_numpy()
+        self._add_integration_tag("numpy")
         return self._context_query(locals(), use_numpy=True, streaming=True).np_stream
 
     # pylint: disable=duplicate-code,unused-argument
@@ -404,6 +406,7 @@ class Client(ABC):
         :return: Pandas dataframe representing the result set
         """
         check_pandas()
+        self._add_integration_tag("pandas")
         return self._context_query(locals(), use_numpy=True, as_pandas=True).df_result
 
     # pylint: disable=duplicate-code,unused-argument
@@ -429,6 +432,7 @@ class Client(ABC):
         :return: Generator that yields a Pandas dataframe per block representing the result set
         """
         check_pandas()
+        self._add_integration_tag("pandas")
         return self._context_query(locals(), use_numpy=True,
                                    as_pandas=True,
                                    streaming=True).df_stream
@@ -548,6 +552,7 @@ class Client(ABC):
         :return: PyArrow.Table
         """
         check_arrow()
+        self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
         return to_arrow(self.raw_query(query,
                                        parameters,
@@ -574,6 +579,7 @@ class Client(ABC):
         :return: Generator that yields a PyArrow.Table for per block representing the result set
         """
         check_arrow()
+        self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
         return to_arrow_batches(self.raw_stream(query,
                                                 parameters,
@@ -609,6 +615,7 @@ class Client(ABC):
 
         if dataframe_library == "pandas":
             check_pandas()
+            self._add_integration_tag("pandas")
             if not IS_PANDAS_2:
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
@@ -617,6 +624,7 @@ class Client(ABC):
 
         elif dataframe_library == "polars":
             check_polars()
+            self._add_integration_tag("polars")
 
             def converter(table: arrow.Table) -> pl.DataFrame:
                 return pl.from_arrow(table)
@@ -659,6 +667,7 @@ class Client(ABC):
         check_arrow()
         if dataframe_library == "pandas":
             check_pandas()
+            self._add_integration_tag("pandas")
             if not IS_PANDAS_2:
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
@@ -666,6 +675,7 @@ class Client(ABC):
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
         elif dataframe_library == "polars":
             check_polars()
+            self._add_integration_tag("polars")
 
             def converter(table: arrow.Table) -> pl.DataFrame:
                 return pl.from_arrow(table)
@@ -804,6 +814,7 @@ class Client(ABC):
         :return: QuerySummary with summary information, throws exception if insert fails
         """
         check_pandas()
+        self._add_integration_tag("pandas")
         if context is None:
             if column_names is None:
                 column_names = df.columns
@@ -833,6 +844,7 @@ class Client(ABC):
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         """
         check_arrow()
+        self._add_integration_tag("arrow")
         full_table = table if '.' in table or not database else f'{database}.{table}'
         compression = self.write_compression if self.write_compression in ('zstd', 'lz4') else None
         column_names, insert_block = arrow_buffer(arrow_table, compression)
@@ -889,6 +901,7 @@ class Client(ABC):
             except Exception as e:
                 raise DataError(f"Failed to convert polars DataFrame to Arrow table: {e}") from e
 
+        self._add_integration_tag(df_lib)
         return self.insert_arrow(
             table=table,
             arrow_table=arrow_table,
@@ -983,6 +996,11 @@ class Client(ABC):
             if x < y:
                 return False
         return True
+
+    # pylint: disable=no-self-use
+    def _add_integration_tag(self, name: str) -> None:
+        """Transport hook to surface 3rd party lib integration info (default: no-op)."""
+        return
 
     @abstractmethod
     def data_insert(self, context: InsertContext) -> QuerySummary:
