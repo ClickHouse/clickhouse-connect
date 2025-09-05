@@ -274,3 +274,70 @@ def test_embedded_binary(test_client: Client):
     binary_params = {'$mult$': 'foobar'.encode()}
     result = test_client.query("SELECT $mult$ as m1, $mult$ as m2 WHERE m1 = 'foobar'", parameters=binary_params)
     assert result.first_item['m2'] == 'foobar'
+
+
+def test_column_rename_setting_none(test_config: TestConfig):
+    sql = "SELECT 1 as `a.b.c d_e`"
+    session_id = "TEST_SESSION_ID_" + test_config.test_database
+    client = create_client(
+        session_id=session_id,
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+    )
+    names = client.query(
+        sql,
+    ).column_names
+    client.close()
+    assert names[0] == "a.b.c d_e"
+
+
+def test_column_rename_limit_0_path(test_config: TestConfig):
+    sql = "SELECT 1 as `a.b.c d_e` LIMIT 0"
+    session_id = "TEST_SESSION_ID_" + test_config.test_database
+    client = create_client(
+        session_id=session_id,
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        rename_response_column="to_camelcase_without_prefix",
+    )
+    names = client.query(
+        sql,
+    ).column_names
+    client.close()
+    assert names[0] == "cDE"
+
+
+def test_column_rename_data_path(test_config: TestConfig):
+    sql = "SELECT 1 as `a.b.c d_e`"
+    session_id = "TEST_SESSION_ID_" + test_config.test_database
+    client = create_client(
+        session_id=session_id,
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        rename_response_column="to_camelcase_without_prefix",
+    )
+    names = client.query(
+        sql,
+    ).column_names
+    client.close()
+    assert names[0] == "cDE"
+
+
+def test_column_rename_with_bad_option(test_config: TestConfig):
+    session_id = "TEST_SESSION_ID_" + test_config.test_database
+
+    with pytest.raises(ValueError, match="Invalid option"):
+        create_client(
+            session_id=session_id,
+            host=test_config.host,
+            port=test_config.port,
+            username=test_config.username,
+            password=test_config.password,
+            rename_response_column="not_an_option",
+        )
