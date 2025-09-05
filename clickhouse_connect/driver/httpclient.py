@@ -42,7 +42,8 @@ class HttpClient(Client):
     valid_transport_settings = {'database', 'buffer_size', 'session_id',
                                 'compress', 'decompress', 'session_timeout',
                                 'session_check', 'query_id', 'quota_key',
-                                'wait_end_of_query', 'client_protocol_version'}
+                                'wait_end_of_query', 'client_protocol_version',
+                                'role'}
     optional_transport_settings = {'send_progress_in_http_headers',
                                    'http_headers_progress_interval_ms',
                                    'enable_http_compression'}
