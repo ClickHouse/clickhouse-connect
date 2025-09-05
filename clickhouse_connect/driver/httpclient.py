@@ -18,7 +18,7 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int, dict_add
+from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int, dict_add, get_rename_method
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
@@ -79,7 +79,8 @@ class HttpClient(Client):
                  autogenerate_session_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
                  proxy_path: str = '',
-                 form_encode_query_params: bool = False):
+                 form_encode_query_params: bool = False,
+                 rename_response_column: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -146,6 +147,7 @@ class HttpClient(Client):
         self._send_comp_setting = False
         self._progress_interval = None
         self._active_session = None
+        self._column_renamer = get_rename_method(rename_response_column)
 
         # allow to override the global autogenerate_session_id setting via the constructor params
         _autogenerate_session_id = common.get_setting('autogenerate_session_id') \
@@ -244,7 +246,13 @@ class HttpClient(Client):
             names: List[str] = []
             types: List[ClickHouseType] = []
             for col in json_result['meta']:
-                names.append(col['name'])
+                name = col['name']
+                if self._column_renamer:
+                    try:
+                        name = self._column_renamer(name)
+                    except Exception as e: # pylint: disable=broad-exception-caught
+                        logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
+                names.append(name)
                 types.append(registry.get_from_name(col['type']))
             return QueryResult([], None, tuple(names), tuple(types))
 
@@ -283,6 +291,12 @@ class HttpClient(Client):
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
+        if self._column_renamer:
+            try:
+                renamed = tuple(self._column_renamer(n) for n in query_result.column_names)
+                query_result.column_names = renamed
+            except Exception as e: # pylint: disable=broad-exception-caught
+                logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
         query_result.summary = self._summary(response)
         return query_result
 

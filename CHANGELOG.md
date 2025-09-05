@@ -22,6 +22,7 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+- Added client connection option `rename_response_column` (default `None`) that allows the user to define how response columns are automatically renamed according to a predefined scheme. Helpful for stripping alias prefixes, etc. in potentially complex queries. Closes [#228](https://github.com/ClickHouse/clickhouse-connect/issues/228)
 - Add third-party library identifiers (name/version) in the User-Agent, e.g. pandas/2.2.5. Users can opt out by changing the common setting `send_integration_tags` to `False`.
 - Added support for form encoding query parameters when using HTTP interface. This addresses [#342](https://github.com/ClickHouse/clickhouse-connect/issues/342). Query parameters can now be sent as form-encoded data in the request body by setting `form_encode_query_params=True` when creating the client. This is particularly useful for queries with large parameter payloads that might exceed URL length limits.
 - Added Polars support for Arrow-based query and insert methods (query_df_arrow, query_df_arrow_stream, insert_df_arrow). This initial implementation provides basic dataframe conversion through the Arrow format, similar to how we support the pyarrow-backed pandas dataframes. Closes [#111](https://github.com/ClickHouse/clickhouse-connect/issues/111) and [#542](https://github.com/ClickHouse/clickhouse-connect/issues/542)
