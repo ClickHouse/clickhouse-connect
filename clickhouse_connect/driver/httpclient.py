@@ -18,7 +18,7 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int, dict_add, get_rename_method
+from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int, dict_add
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
@@ -147,7 +147,7 @@ class HttpClient(Client):
         self._send_comp_setting = False
         self._progress_interval = None
         self._active_session = None
-        self._column_renamer = get_rename_method(rename_response_column)
+        self._rename_response_column = rename_response_column
 
         # allow to override the global autogenerate_session_id setting via the constructor params
         _autogenerate_session_id = common.get_setting('autogenerate_session_id') \
@@ -220,6 +220,7 @@ class HttpClient(Client):
             params['client_protocol_version'] = self.protocol_version
             context.block_info = True
         params.update(self._validate_settings(context.settings))
+        context.rename_response_column = self._rename_response_column
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
             # Mirror normal query behavior for form encoding and external data
             fmt_json_query = f'{context.final_query}\n FORMAT JSON'
@@ -245,12 +246,13 @@ class HttpClient(Client):
             # We just grab the column names and column types from the metadata sub object
             names: List[str] = []
             types: List[ClickHouseType] = []
+            renamer = context.column_renamer
             for col in json_result['meta']:
                 name = col['name']
-                if self._column_renamer:
+                if renamer is not None:
                     try:
-                        name = self._column_renamer(name)
-                    except Exception as e: # pylint: disable=broad-exception-caught
+                        name = renamer(name)
+                    except Exception as e:  # pylint: disable=broad-exception-caught
                         logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
                 names.append(name)
                 types.append(registry.get_from_name(col['type']))
@@ -291,12 +293,6 @@ class HttpClient(Client):
         byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
-        if self._column_renamer:
-            try:
-                renamed = tuple(self._column_renamer(n) for n in query_result.column_names)
-                query_result.column_names = renamed
-            except Exception as e: # pylint: disable=broad-exception-caught
-                logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
         query_result.summary = self._summary(response)
         return query_result
 
