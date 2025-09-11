@@ -7,7 +7,7 @@ from clickhouse_connect.cc_sqlalchemy.sql import format_table
 class ChStatementCompiler(SQLCompiler):
 
     # pylint: disable=attribute-defined-outside-init
-    def visit_delete(self, delete_stmt, **kw):
+    def visit_delete(self, delete_stmt, visiting_cte=None, **kw):
         table = delete_stmt.table
         text = f"DELETE FROM {format_table(table)}"
 
@@ -22,7 +22,7 @@ class ChStatementCompiler(SQLCompiler):
 
         return text
 
-    def visit_column(self, column, add_to_result_map=None, include_table=True, result_map_targets=(), **kw):
+    def visit_column(self, column, add_to_result_map=None, include_table=True, result_map_targets=(), ambiguous_table_name_map=None, **kw):
         if getattr(self, "_in_delete_where", False):
             return self.preparer.quote(column.name)
 
@@ -35,7 +35,7 @@ class ChStatementCompiler(SQLCompiler):
         )
 
     # Abstract methods required by SQLCompiler
-    def delete_extra_from_clause(self, update_stmt, from_table, extra_froms, from_hints, **kw):
+    def delete_extra_from_clause(self, delete_stmt, from_table, extra_froms, from_hints, **kw):
         raise NotImplementedError("ClickHouse doesn't support DELETE with extra FROM clause")
 
     def update_from_clause(self, update_stmt, from_table, extra_froms, from_hints, **kw):
