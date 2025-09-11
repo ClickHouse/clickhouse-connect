@@ -79,7 +79,8 @@ class HttpClient(Client):
                  autogenerate_session_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
                  proxy_path: str = '',
-                 form_encode_query_params: bool = False):
+                 form_encode_query_params: bool = False,
+                 rename_response_column: Optional[str] = None):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -146,6 +147,7 @@ class HttpClient(Client):
         self._send_comp_setting = False
         self._progress_interval = None
         self._active_session = None
+        self._rename_response_column = rename_response_column
 
         # allow to override the global autogenerate_session_id setting via the constructor params
         _autogenerate_session_id = common.get_setting('autogenerate_session_id') \
@@ -218,6 +220,7 @@ class HttpClient(Client):
             params['client_protocol_version'] = self.protocol_version
             context.block_info = True
         params.update(self._validate_settings(context.settings))
+        context.rename_response_column = self._rename_response_column
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
             # Mirror normal query behavior for form encoding and external data
             fmt_json_query = f'{context.final_query}\n FORMAT JSON'
@@ -243,8 +246,15 @@ class HttpClient(Client):
             # We just grab the column names and column types from the metadata sub object
             names: List[str] = []
             types: List[ClickHouseType] = []
+            renamer = context.column_renamer
             for col in json_result['meta']:
-                names.append(col['name'])
+                name = col['name']
+                if renamer is not None:
+                    try:
+                        name = renamer(name)
+                    except Exception as e:  # pylint: disable=broad-exception-caught
+                        logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
+                names.append(name)
                 types.append(registry.get_from_name(col['type']))
             return QueryResult([], None, tuple(names), tuple(types))
 

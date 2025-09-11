@@ -633,6 +633,7 @@ class TestQuery:
         context.streaming = False
         context.block_info = False
         context.set_response_tz = Mock()
+        context.column_renamer = None
 
         # Call _query_with_context
         self.client._query_with_context(context)
@@ -681,6 +682,7 @@ class TestQuery:
         context.streaming = False
         context.block_info = False
         context.set_response_tz = Mock()
+        context.column_renamer = None
 
         # Call _query_with_context
         self.client._query_with_context(context)
@@ -725,6 +727,7 @@ class TestQuery:
         context.streaming = False
         context.block_info = False
         context.set_response_tz = Mock()
+        context.column_renamer = None
 
         # Call _query_with_context
         self.client._query_with_context(context)

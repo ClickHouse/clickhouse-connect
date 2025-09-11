@@ -22,10 +22,10 @@ def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: 
             create_db = f'create_db_{test_db}'
             if not test_engine.dialect.has_database(conn, create_db):
                 if test_config.host == 'localhost' and conn.connection.driver_connection.client.min_version('20'):
-                    conn.execute(CreateDatabase(create_db, 'Atomic'))
+                    conn.execute(CreateDatabase(create_db, 'Atomic', exists_ok=True))
                 else:
-                    conn.execute(CreateDatabase(create_db))
-            conn.execute(DropDatabase(create_db))
+                    conn.execute(CreateDatabase(create_db, exists_ok=True))
+            conn.execute(DropDatabase(create_db, missing_ok=True))
 
 
 class ColorEnum(PyEnum):

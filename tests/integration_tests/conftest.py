@@ -120,6 +120,18 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
                 raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
     client.command(f'CREATE DATABASE IF NOT EXISTS {test_config.test_database}', use_database=False)
+
+    # In cloud env, there seems to be some issues with creating a db and then immediately using it.
+    # This ensures it's visible before yielding it back to the test.
+    visible = False
+    for _ in range(30):
+        rows = client.query("SELECT name FROM system.databases").result_rows
+        if any(r[0] == test_config.test_database for r in rows):
+            visible = True
+            break
+        time.sleep(0.1)
+    if not visible:
+        raise TestException(f"Database {test_config.test_database} not visible after waiting")
     yield client
 
     if test_config.docker:
