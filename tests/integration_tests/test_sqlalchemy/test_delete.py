@@ -29,14 +29,14 @@ def test_delete_with_table_object(test_engine: Engine, test_db: str, test_table_
         conn.execute(db.insert(test_table).values({"id": 1, "name": "hello world", "status": "active"}))
         conn.execute(db.insert(test_table).values({"id": 2, "name": "test data", "status": "inactive"}))
         conn.execute(db.insert(test_table).values({"id": 3, "name": "hello test", "status": "active"}))
-        starting = conn.execute(db.select(test_table)).fetchall()
+        starting = conn.execute(db.select(test_table).order_by(test_table.c.id)).fetchall()
         assert len(starting) == 3
         assert [row.id for row in starting] == [1, 2, 3]
 
         delete_stmt = delete(test_table).where(test_table.c.name.like("%hello%"))
         conn.execute(delete_stmt)
 
-        remaining = conn.execute(db.select(test_table)).fetchall()
+        remaining = conn.execute(db.select(test_table).order_by(test_table.c.id)).fetchall()
         assert len(remaining) == 1
         assert remaining[0].name == "test data"
 
