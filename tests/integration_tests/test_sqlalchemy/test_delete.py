@@ -157,3 +157,34 @@ def test_delete_with_text_condition(test_engine: Engine, test_table_engine: str)
         result = conn.execute(db.select(test_table).order_by(test_table.c.id)).fetchall()
         assert len(result) == 2
         assert [row.id for row in result] == [1, 3]
+
+
+def test_explicit_delete(test_engine: Engine, test_table_engine: str):
+    """Test explicit DELETE"""
+    engine_cls = engine_map[test_table_engine]
+    metadata = MetaData()
+
+    test_table = db.Table(
+        "delete_explicit_test",
+        metadata,
+        db.Column("id", UInt64),
+        db.Column("name", String),
+        engine_cls("id"),
+    )
+
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS delete_explicit_test"))
+        test_table.create(conn)
+
+        conn.execute(db.insert(test_table).values({"id": 1, "name": "hello world"}))
+        conn.execute(db.insert(test_table).values({"id": 2, "name": "test data"}))
+        conn.execute(db.insert(test_table).values({"id": 3, "name": "hello test"}))
+        starting = conn.execute(db.select(test_table).order_by(test_table.c.id)).fetchall()
+        assert len(starting) == 3
+        assert [row.id for row in starting] == [1, 2, 3]
+
+        conn.execute(text("DELETE FROM delete_explicit_test WHERE name LIKE '%hello%'"))
+
+        result = conn.execute(db.select(test_table).order_by(test_table.c.id)).fetchall()
+        assert len(result) == 1
+        assert result[0].name == "test data"
