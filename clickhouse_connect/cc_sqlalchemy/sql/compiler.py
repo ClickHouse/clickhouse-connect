@@ -4,6 +4,7 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 
 
+# pylint: disable=arguments-differ
 class ChStatementCompiler(SQLCompiler):
 
     # pylint: disable=attribute-defined-outside-init
@@ -19,6 +20,47 @@ class ChStatementCompiler(SQLCompiler):
                 self._in_delete_where = False
         else:
             raise CompileError("ClickHouse DELETE statements require a WHERE clause. To delete all rows, use 'TRUNCATE TABLE' instead.")
+
+        return text
+
+    def visit_select(self, select_stmt, **kw):
+        return super().visit_select(select_stmt, **kw)
+
+    def visit_join(self, join, **kw):
+        left = self.process(join.left, **kw)
+        right = self.process(join.right, **kw)
+
+        if join.isouter:
+            join_type = " LEFT OUTER JOIN "
+        else:
+            join_type = " INNER JOIN "
+
+        text = left + join_type + right
+
+        if join.onclause is not None:
+            text += " ON " + self.process(join.onclause, **kw)
+
+        return text
+
+    def visit_innerjoin(self, join, **kw):
+        left = self.process(join.left, **kw)
+        right = self.process(join.right, **kw)
+
+        text = left + " INNER JOIN " + right
+
+        if join.onclause is not None:
+            text += " ON " + self.process(join.onclause, **kw)
+
+        return text
+
+    def visit_outerjoin(self, join, **kw):
+        left = self.process(join.left, **kw)
+        right = self.process(join.right, **kw)
+
+        text = left + " LEFT OUTER JOIN " + right
+
+        if join.onclause is not None:
+            text += " ON " + self.process(join.onclause, **kw)
 
         return text
 
