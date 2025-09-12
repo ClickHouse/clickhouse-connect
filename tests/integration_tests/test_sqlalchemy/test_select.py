@@ -1,4 +1,6 @@
 # pylint: disable=no-member
+import time
+
 from pytest import fixture
 from sqlalchemy import MetaData, Table, select, text
 from sqlalchemy.engine import Engine
@@ -66,6 +68,26 @@ def test_tables(test_engine: Engine, test_db: str):
         """
             )
         )
+
+        # Verify data is actually queryable before yielding to tests--been an issue in cloud env
+        max_retries = 30
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                user_count = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.select_test_users")).scalar()
+                order_count = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.select_test_orders")).scalar()
+                if user_count == 3 and order_count == 4:
+                    break
+                retry_count += 1
+                if retry_count < max_retries:
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError(f"Data verification failed: users={user_count}, orders={order_count}")
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise RuntimeError(f"Failed to verify test data after {max_retries} retries.") from e
+                time.sleep(0.1)
 
         yield
 
