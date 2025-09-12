@@ -27,7 +27,7 @@ def test_tables(test_engine: Engine, test_db: str):
                 id UInt32,
                 name String,
                 created_at DateTime64(3)
-            ) ENGINE Memory
+            ) ENGINE MergeTree() ORDER BY tuple()
         """
             )
         )
@@ -41,7 +41,7 @@ def test_tables(test_engine: Engine, test_db: str):
                 user_id UInt32,
                 product String,
                 amount UInt32
-            ) ENGINE Memory
+            ) ENGINE MergeTree() ORDER BY tuple()
         """
             )
         )
