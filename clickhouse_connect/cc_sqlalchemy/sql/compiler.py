@@ -29,38 +29,21 @@ class ChStatementCompiler(SQLCompiler):
     def visit_join(self, join, **kw):
         left = self.process(join.left, **kw)
         right = self.process(join.right, **kw)
+        onclause = join.onclause
 
-        if join.isouter:
-            join_type = " LEFT OUTER JOIN "
+        if getattr(join, "full", False):
+            join_kw = " FULL OUTER JOIN "
+        elif onclause is None:
+            join_kw = " CROSS JOIN "
+        elif join.isouter:
+            join_kw = " LEFT OUTER JOIN "
         else:
-            join_type = " INNER JOIN "
+            join_kw = " INNER JOIN "
 
-        text = left + join_type + right
+        text = left + join_kw + right
 
-        if join.onclause is not None:
-            text += " ON " + self.process(join.onclause, **kw)
-
-        return text
-
-    def visit_innerjoin(self, join, **kw):
-        left = self.process(join.left, **kw)
-        right = self.process(join.right, **kw)
-
-        text = left + " INNER JOIN " + right
-
-        if join.onclause is not None:
-            text += " ON " + self.process(join.onclause, **kw)
-
-        return text
-
-    def visit_outerjoin(self, join, **kw):
-        left = self.process(join.left, **kw)
-        right = self.process(join.right, **kw)
-
-        text = left + " LEFT OUTER JOIN " + right
-
-        if join.onclause is not None:
-            text += " ON " + self.process(join.onclause, **kw)
+        if onclause is not None:
+            text += " ON " + self.process(onclause, **kw)
 
         return text
 
