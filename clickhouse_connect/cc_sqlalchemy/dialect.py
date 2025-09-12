@@ -6,6 +6,7 @@ from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
+from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy import ischema_names, dialect_name
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 from clickhouse_connect.driver.binding import quote_identifier, format_str
@@ -26,6 +27,7 @@ class ClickHouseDialect(DefaultDialect):
     returns_unicode_strings = True
     postfetch_lastrowid = False
     ddl_compiler = ChDDLCompiler
+    statement_compiler = ChStatementCompiler
     preparer = ChIdentifierPreparer
     description_encoding = None
     max_identifier_length = 127
