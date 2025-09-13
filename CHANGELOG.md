@@ -50,6 +50,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Added support for Nullable(JSON) types
 - Added support for BFloat16 types
 - Replace the use of deprecated `datetime.utcfromtimestamp`
+- Allow passing `role` as a field in the `settings` keyword argument to set a role for a specific query
 
 ## 0.8.18, 2025-06-24
 
