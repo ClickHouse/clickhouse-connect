@@ -37,7 +37,7 @@ def run_setup(try_c: bool = True):
     else:
         with open(os.path.join(project_dir, 'clickhouse_connect', '__version__.py'), encoding='utf-8') as version_file:
             file_version = version_file.read().strip()
-            match = re.search(r"version\s*=\s*'(.+)'", file_version)
+            match = re.search(r"version\s*=\s*['\"](.+)['\"]", file_version)
             if match is None:
                 raise ValueError(f'invalid version {file_version} in clickhouse_connect/__version__.py')
             version = match.group(1)

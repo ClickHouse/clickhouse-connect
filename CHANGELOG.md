@@ -22,35 +22,46 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
-- Add support for lightweight `DELETE` in sqlalchemy. Closes [#382](https://github.com/ClickHouse/clickhouse-connect/issues/382)
-- Added client connection option `rename_response_column` (default `None`) that allows the user to define how response columns are automatically renamed according to a predefined scheme. Helpful for stripping alias prefixes, etc. in potentially complex queries. Closes [#228](https://github.com/ClickHouse/clickhouse-connect/issues/228)
-- Add third-party library identifiers (name/version) in the User-Agent, e.g. pandas/2.2.5. Users can opt out by changing the common setting `send_integration_tags` to `False`.
-- Added support for form encoding query parameters when using HTTP interface. This addresses [#342](https://github.com/ClickHouse/clickhouse-connect/issues/342). Query parameters can now be sent as form-encoded data in the request body by setting `form_encode_query_params=True` when creating the client. This is particularly useful for queries with large parameter payloads that might exceed URL length limits.
-- Added Polars support for Arrow-based query and insert methods (query_df_arrow, query_df_arrow_stream, insert_df_arrow). This initial implementation provides basic dataframe conversion through the Arrow format, similar to how we support the pyarrow-backed pandas dataframes. Closes [#111](https://github.com/ClickHouse/clickhouse-connect/issues/111) and [#542](https://github.com/ClickHouse/clickhouse-connect/issues/542)
-- Added support for SQLAlchemy 2.x. The minimum required version is 1.4.40. Closes [#263](https://github.com/ClickHouse/clickhouse-connect/issues/263)
-  - **WARNING: BREAKING CHANGE**: Removed support for sqlalchemy 1.3 which reached its EOL in 2021.
-- Added support for querying/inserting pyarrow-backed DataFrames:
-  - `query_df_arrow()`: returns a pandas DataFrame with PyArrow dtype backend. Note that Arrow data types are preserved without additional conversions.
-  - `query_df_arrow_stream()`: Streaming version of `query_df_arrow()` for processing large result sets.
-  - `insert_df_arrow()`: Optimized insertion method for pandas DataFrames with PyArrow backend, which should provide better performance than standard `insert_df()`.
-- Added support for special [interval types](https://clickhouse.com/docs/en/sql-reference/data-types/special-data-types/interval). Closes [#391](https://github.com/ClickHouse/clickhouse-connect/issues/391)
-- Added new common setting option "preserve_pandas_datetime_resolution" (default is `False`) allowing pandas 2.x users to opt into (when set to `True`) using the additional pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us". If set to `False` or using  pandas 1.x, all datetime64/timedelta64 resolutions will be coerced to "ns". (See [here](https://pandas.pydata.org/docs/whatsnew/v2.0.0.html#construction-with-datetime64-or-timedelta64-dtype-with-unsupported-resolution) for more info). Closes [#165](https://github.com/ClickHouse/clickhouse-connect/issues/165) and [#531](https://github.com/ClickHouse/clickhouse-connect/issues/531)
-- Support for both pandas 1.x and 2.x
-- Added pandas 1.x/2.x compatibility tests to CI
-- Tightens up type consistency of date-like objects when using `query_df`
-- Fixes problem with df inserts of Time and Time64 types. Closes [#524](https://github.com/ClickHouse/clickhouse-connect/issues/524)
-- Added Time and Time64 type support and relevant tests. Closes [#509](https://github.com/ClickHouse/clickhouse-connect/issues/509)
+
+
+## 0.9.0, 2025-09-16
+
+### Breaking Changes
+- **WARNING: BREAKING CHANGE** — Removed support for sqlalchemy 1.3 which reached its EOL in 2021. The minimum required version is now 1.4.40.
 - **WARNING: BREAKING CHANGE** — Behavior for reading from IPv6 columns has changed:
   - With `read_format='native'`, the client will **always** return [`ipaddress.IPv6Address`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address) objects, even for IPv4-mapped addresses (e.g., `"::ffff:192.168.1.1"`). Previously, the client returned [`ipaddress.IPv4Address`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv4Address) objects for these cases. This change enforces type consistency and avoids surprising implicit conversions. If your application requires IPv4 objects, you can explicitly convert using the [`ipv4_mapped`](https://docs.python.org/3/library/ipaddress.html#ipaddress.IPv6Address.ipv4_mapped) attribute of `IPv6Address`.
   - With `read_format='string'`, the client will **always** return IPv6 string representations, e.g., `"::ffff:192.168.1.1"` instead of `"192.168.1.1"`, for the same reasons as above. If you require only the IPv4 string, you can parse or truncate this in your application code.
   - Closes [#493](https://github.com/ClickHouse/clickhouse-connect/issues/493)
-- When writing to an IPv6 column type, the client will "promote" IPv4 addresses to IPv4-mapped IPv6 addresses to prevent write errors: Closes [#498](https://github.com/ClickHouse/clickhouse-connect/issues/498)
-- Changed `AsyncClient.settings` typing to `Optional[Dict[str, Any]]` to accept None inputs.
-- Added more robust error handling and tests. Closes [#508](https://github.com/ClickHouse/clickhouse-connect/issues/508)
-- Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
+
+### Major Features
+- Added support for SQLAlchemy 2.x. The minimum required version is 1.4.40. Closes [#263](https://github.com/ClickHouse/clickhouse-connect/issues/263)
+- Added Polars support for Arrow-based query and insert methods (`query_df_arrow`, `query_df_arrow_stream`, `insert_df_arrow`). This initial implementation provides basic dataframe conversion through the Arrow format, similar to how we support the pyarrow-backed pandas dataframes. Closes [#111](https://github.com/ClickHouse/clickhouse-connect/issues/111) and [#542](https://github.com/ClickHouse/clickhouse-connect/issues/542)
+- Added support for querying/inserting pyarrow-backed DataFrames:
+  - `query_df_arrow()`: returns a pandas DataFrame with PyArrow dtype backend. Note that Arrow data types are preserved without additional conversions.
+  - `query_df_arrow_stream()`: Streaming version of `query_df_arrow()` for processing large result sets.
+  - `insert_df_arrow()`: Optimized insertion method for pandas DataFrames with PyArrow backend, which should provide better performance than standard `insert_df()`.
+- Added Time and Time64 type support. Closes [#509](https://github.com/ClickHouse/clickhouse-connect/issues/509)
+- Support for both pandas 1.x and 2.x.
 - Added support for Nullable(JSON) types
 - Added support for BFloat16 types
+
+### Improvements
+- Add support for lightweight `DELETE` in sqlalchemy. Closes [#382](https://github.com/ClickHouse/clickhouse-connect/issues/382)
+- Added support for `SELECT`/`JOIN` operations via SQLAlchemy's core API (table operations and explicit statements--not ORM sessions-based queries)
+- Added client connection option `rename_response_column` (default `None`) that allows the user to define how response columns are automatically renamed according to a predefined scheme. Helpful for stripping alias prefixes, etc. in potentially complex queries. Closes [#228](https://github.com/ClickHouse/clickhouse-connect/issues/228)
+- Add third-party library identifiers (name/version) in the User-Agent, e.g. pandas/2.2.5. Users can opt out by changing the common setting `send_integration_tags` to `False`.
+- Added support for form encoding query parameters when using HTTP interface. This addresses [#342](https://github.com/ClickHouse/clickhouse-connect/issues/342). Query parameters can now be sent as form-encoded data in the request body by setting `form_encode_query_params=True` when creating the client. This is particularly useful for queries with large parameter payloads that might exceed URL length limits.
+- Added support for special [interval types](https://clickhouse.com/docs/en/sql-reference/data-types/special-data-types/interval). Closes [#391](https://github.com/ClickHouse/clickhouse-connect/issues/391)
+- Added new common setting option "preserve_pandas_datetime_resolution" (default is `False`) allowing pandas 2.x users to opt into (when set to `True`) using the additional pandas 2.x datetime64/timedelta64 resolutions of "s", "ms", "us". If set to `False` or using pandas 1.x, all datetime64/timedelta64 resolutions will be coerced to "ns". (See [here](https://pandas.pydata.org/docs/whatsnew/v2.0.0.html#construction-with-datetime64-or-timedelta64-dtype-with-unsupported-resolution) for more info). Closes [#165](https://github.com/ClickHouse/clickhouse-connect/issues/165) and [#531](https://github.com/ClickHouse/clickhouse-connect/issues/531)
+- Tightens up type consistency of date-like objects when using `query_df`
+- When writing to an IPv6 column type, the client will "promote" IPv4 addresses to IPv4-mapped IPv6 addresses to prevent write errors. Closes [#498](https://github.com/ClickHouse/clickhouse-connect/issues/498)
+- Changed `AsyncClient.settings` typing to `Optional[Dict[str, Any]]` to accept None inputs.
+- Added more robust error handling and tests. Closes [#508](https://github.com/ClickHouse/clickhouse-connect/issues/508)
 - Replace the use of deprecated `datetime.utcfromtimestamp`
+
+### Bug Fixes
+- Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
+- Fixes problem with df inserts of Time and Time64 types. Closes [#524](https://github.com/ClickHouse/clickhouse-connect/issues/524)
 
 ## 0.8.18, 2025-06-24
 
