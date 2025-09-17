@@ -435,14 +435,15 @@ class TimeBase(ClickHouseType, registered=False):
             return []
 
         converter_map = {
-            np.timedelta64: self._timedelta_to_ticks,
             timedelta: self._timedelta_to_ticks,
             time: self._time_to_ticks,
-            np.int64: self._numerical_to_ticks,
             float: self._numerical_to_ticks,
             int: self._numerical_to_ticks,
             str: self._string_to_ticks,
         }
+        if np is not None:
+            converter_map[np.timedelta64] = self._timedelta_to_ticks
+            converter_map[np.int64] = self._numerical_to_ticks
         converter = converter_map.get(expected_type, None)
 
         if converter is None:
@@ -468,7 +469,7 @@ class TimeBase(ClickHouseType, registered=False):
                 f"Ticks value {ticks} is outside valid range for datetime.time object."
             )
 
-    def _numerical_to_ticks(self, value: Union[int, float, np.int64]) -> int:
+    def _numerical_to_ticks(self, value: Union[int, float, "np.int64"]) -> int:
         """Convert numerical value to ticks, with range validation."""
         value = int(value)
         self._validate_standard_range(value, value)
@@ -527,7 +528,7 @@ class TimeBase(ClickHouseType, registered=False):
         raise NotImplementedError
 
     @abstractmethod
-    def _timedelta_to_ticks(self, td: Union[timedelta, np.timedelta64]) -> int:
+    def _timedelta_to_ticks(self, td: Union[timedelta, "np.timedelta64"]) -> int:
         """Convert a timedelta into integer ticks."""
         raise NotImplementedError
 
@@ -619,7 +620,7 @@ class Time(TimeBase):
 
         return f"{sign}{h:03d}:{m:02d}:{s:02d}"
 
-    def _timedelta_to_ticks(self, td: Union[timedelta, np.timedelta64]) -> int:
+    def _timedelta_to_ticks(self, td: Union[timedelta, "np.timedelta64"]) -> int:
         """Convert timedelta to ticks (seconds), flooring fractional seconds."""
         if isinstance(td, timedelta):
             total = int(td.total_seconds())
@@ -716,7 +717,7 @@ class Time64(TimeBase):
 
         return f"{sign}{h:03d}:{m:02d}:{s:02d}{frac_str}"
 
-    def _timedelta_to_ticks(self, td: Union[timedelta, np.timedelta64]) -> int:
+    def _timedelta_to_ticks(self, td: Union[timedelta, "np.timedelta64"]) -> int:
         """Convert timedelta to ticks with sub-second precision."""
         if isinstance(td, timedelta):
             total_us = (
@@ -740,7 +741,7 @@ class Time64(TimeBase):
 
         return -td if neg else td
 
-    def _ticks_to_np_timedelta(self, ticks: int) -> np.timedelta64:
+    def _ticks_to_np_timedelta(self, ticks: int) -> "np.timedelta64":
         """Convert ticks to numpy timedelta64 with nanosecond precision."""
         res_map = {3: "ms", 6: "us", 9: "ns"}
 
