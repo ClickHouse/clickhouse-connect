@@ -23,6 +23,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+- Fix problem with typing that forced numpy to be installed.
 
 ## 0.9.0, 2025-09-16
 
