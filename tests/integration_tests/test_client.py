@@ -343,7 +343,7 @@ def test_column_rename_with_bad_option(test_config: TestConfig):
         )
 
 
-def test_role_setting_works(test_client: Client, test_config: TestConfig):
+def test_role_setting_works(test_client: Client):
     role_limited = 'limit_rows_role'
     user_limited = 'limit_rows_user'
 
