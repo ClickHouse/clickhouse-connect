@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+- Allow passing `role` as a field in the `settings` keyword argument to set a role for a specific query
+
 ## 0.9.1, 2025-09-16
 
 - Fix problem with typing that forced numpy to be installed.
