@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+- Allow passing `role` as a field in the `settings` keyword argument to set a role for a specific query
+
 ## 0.9.1, 2025-09-16
 
 - Fix problem with typing that forced numpy to be installed.
@@ -61,7 +63,6 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Changed `AsyncClient.settings` typing to `Optional[Dict[str, Any]]` to accept None inputs.
 - Added more robust error handling and tests. Closes [#508](https://github.com/ClickHouse/clickhouse-connect/issues/508)
 - Replace the use of deprecated `datetime.utcfromtimestamp`
-- Allow passing `role` as a field in the `settings` keyword argument to set a role for a specific query
 
 ### Bug Fixes
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
