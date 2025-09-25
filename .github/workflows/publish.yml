@@ -12,14 +12,14 @@ on:
           - release
           - build
 env:
-  CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-*'
+  CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-* pp38-*'
 
 jobs:
   build_x86_manylinux_wheels:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp36-* cp37-* pp37-* pp38-* *-musllinux*'
+      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-* pp38-* *-musllinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -33,7 +33,7 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp36-* cp37-* pp37-* pp38-* *-manylinux*'
+      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-* pp38-* *-manylinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: 'cp36-* cp37-* pp* *-musllinux*'
+      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp* *-musllinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: 'cp36-* cp37-* pp* *-manylinux*'
+      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp* *-manylinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
