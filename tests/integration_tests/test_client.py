@@ -346,7 +346,7 @@ def test_column_rename_with_bad_option(test_config: TestConfig):
 def test_role_setting_works(test_client: Client):
     role_limited = 'limit_rows_role'
     user_limited = 'limit_rows_user'
-    user_password = 'test_password_123'
+    user_password = 'R7m!pZt9qL#x'
 
     test_client.command(f'CREATE ROLE IF NOT EXISTS {role_limited}')
     test_client.command(f'CREATE USER IF NOT EXISTS {user_limited} IDENTIFIED BY \'{user_password}\'')
