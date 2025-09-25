@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+## 0.9.2, 2025-09-25
+
 - Updated `python_requires` to drop Python 3.8 and advertise support for 3.9–3.13
 - Allow passing `role` as a field in the `settings` keyword argument to set a role for a specific query
 
