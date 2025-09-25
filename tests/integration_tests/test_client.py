@@ -343,12 +343,16 @@ def test_column_rename_with_bad_option(test_config: TestConfig):
         )
 
 
-def test_role_setting_works(test_client: Client):
+def test_role_setting_works(test_client: Client, test_config: TestConfig):
+    if test_config.cloud:
+        pytest.skip("Skipping role test in cloud mode - cannot create custom users")
+
     role_limited = 'limit_rows_role'
     user_limited = 'limit_rows_user'
+    user_password = 'R7m!pZt9qL#x'
 
     test_client.command(f'CREATE ROLE IF NOT EXISTS {role_limited}')
-    test_client.command(f'CREATE USER IF NOT EXISTS {user_limited} IDENTIFIED WITH no_password')
+    test_client.command(f'CREATE USER IF NOT EXISTS {user_limited} IDENTIFIED BY \'{user_password}\'')
     test_client.command(f'GRANT SELECT ON system.numbers TO {user_limited}')
     test_client.command(f'GRANT {role_limited} TO {user_limited}')
     test_client.command(f'SET DEFAULT ROLE NONE TO {user_limited}')
@@ -357,7 +361,7 @@ def test_role_setting_works(test_client: Client):
         host=test_client.server_host_name,
         port=test_client.url.rsplit(':', 1)[-1].split('/')[0],
         username=user_limited,
-        password='',
+        password=user_password,
     )
 
     # the default should not have the role
@@ -373,7 +377,7 @@ def test_role_setting_works(test_client: Client):
         host=test_client.server_host_name,
         port=test_client.url.rsplit(':', 1)[-1].split('/')[0],
         username=user_limited,
-        password='',
+        password=user_password,
         settings={'role': role_limited},
     )
     res = role_client.query('SELECT currentRoles()')
