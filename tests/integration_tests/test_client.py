@@ -343,7 +343,10 @@ def test_column_rename_with_bad_option(test_config: TestConfig):
         )
 
 
-def test_role_setting_works(test_client: Client):
+def test_role_setting_works(test_client: Client, test_config: TestConfig):
+    if test_config.cloud:
+        pytest.skip("Skipping role test in cloud mode - cannot create custom users")
+
     role_limited = 'limit_rows_role'
     user_limited = 'limit_rows_user'
     user_password = 'R7m!pZt9qL#x'
