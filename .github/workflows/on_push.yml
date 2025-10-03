@@ -65,11 +65,11 @@ jobs:
           - '3.12'
           - '3.13'
         clickhouse-version:
-          - '24.8'
-          - '25.3'
-          - '25.5'
-          - '25.6'
-          - '25.7'
+          - '25.3' # LTS
+          - '25.6' # Stable
+          - '25.7' # Stable
+          - '25.8' # LTS
+          - '25.9' # Stable
           - latest
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
