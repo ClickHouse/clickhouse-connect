@@ -181,8 +181,6 @@ class QueryContext(BaseQueryContext):
             active_tz = self.server_tz
         else:
             active_tz = tzutil.local_tz
-        if active_tz == pytz.UTC:
-            return None
         return active_tz
 
     # pylint disable=too-many-positional-arguments

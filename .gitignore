@@ -1,5 +1,6 @@
 # Test data
 .pytest_cache
+.benchmarks
 
 # Development Python environments
 *venv
