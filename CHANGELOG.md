@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+- Fixed issue with JSON key dot escaping. Closes [#571](https://github.com/ClickHouse/clickhouse-connect/issues/571)
+
 ## 0.9.2, 2025-09-25
 
 - Updated `python_requires` to drop Python 3.8 and advertise support for 3.9–3.13
