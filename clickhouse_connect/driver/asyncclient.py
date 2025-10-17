@@ -85,6 +85,7 @@ class AsyncClient:
                     context: QueryContext = None,
                     query_tz: Optional[Union[str, tzinfo]] = None,
                     column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                    utc_tz_aware: Optional[bool] = None,
                     external_data: Optional[ExternalData] = None,
                     transport_settings: Optional[Dict[str, str]] = None) -> QueryResult:
         """
@@ -98,6 +99,7 @@ class AsyncClient:
                                      column_formats=column_formats, encoding=encoding, use_none=use_none,
                                      column_oriented=column_oriented, use_numpy=use_numpy, max_str_len=max_str_len,
                                      context=context, query_tz=query_tz, column_tzs=column_tzs,
+                                     utc_tz_aware=utc_tz_aware,
                                      external_data=external_data, transport_settings=transport_settings)
 
         loop = asyncio.get_running_loop()
@@ -115,6 +117,7 @@ class AsyncClient:
                                         context: QueryContext = None,
                                         query_tz: Optional[Union[str, tzinfo]] = None,
                                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                                        utc_tz_aware: Optional[bool] = None,
                                         external_data: Optional[ExternalData] = None,
                                         transport_settings: Optional[Dict[str, str]] = None,
                                         ) -> StreamContext:
@@ -129,6 +132,7 @@ class AsyncClient:
                                                          query_formats=query_formats, column_formats=column_formats,
                                                          encoding=encoding, use_none=use_none, context=context,
                                                          query_tz=query_tz, column_tzs=column_tzs,
+                                                         utc_tz_aware=utc_tz_aware,
                                                          external_data=external_data, transport_settings=transport_settings)
 
         loop = asyncio.get_running_loop()
@@ -146,6 +150,7 @@ class AsyncClient:
                                      context: QueryContext = None,
                                      query_tz: Optional[Union[str, tzinfo]] = None,
                                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                                     utc_tz_aware: Optional[bool] = None,
                                      external_data: Optional[ExternalData] = None,
                                      transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -159,6 +164,7 @@ class AsyncClient:
                                                       query_formats=query_formats, column_formats=column_formats,
                                                       encoding=encoding, use_none=use_none, context=context,
                                                       query_tz=query_tz, column_tzs=column_tzs,
+                                                      utc_tz_aware=utc_tz_aware,
                                                       external_data=external_data, transport_settings=transport_settings)
 
         loop = asyncio.get_running_loop()
@@ -176,6 +182,7 @@ class AsyncClient:
                                 context: QueryContext = None,
                                 query_tz: Optional[Union[str, tzinfo]] = None,
                                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                                utc_tz_aware: Optional[bool] = None,
                                 external_data: Optional[ExternalData] = None,
                                 transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -189,6 +196,7 @@ class AsyncClient:
                                                  query_formats=query_formats, column_formats=column_formats,
                                                  encoding=encoding, use_none=use_none, context=context,
                                                  query_tz=query_tz, column_tzs=column_tzs,
+                                                 utc_tz_aware=utc_tz_aware,
                                                  external_data=external_data, transport_settings=transport_settings)
 
         loop = asyncio.get_running_loop()
@@ -321,6 +329,7 @@ class AsyncClient:
                        use_na_values: Optional[bool] = None,
                        query_tz: Optional[str] = None,
                        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                       utc_tz_aware: Optional[bool] = None,
                        context: QueryContext = None,
                        external_data: Optional[ExternalData] = None,
                        use_extended_dtypes: Optional[bool] = None,
@@ -335,7 +344,8 @@ class AsyncClient:
             return self.client.query_df(query=query, parameters=parameters, settings=settings,
                                         query_formats=query_formats, column_formats=column_formats, encoding=encoding,
                                         use_none=use_none, max_str_len=max_str_len, use_na_values=use_na_values,
-                                        query_tz=query_tz, column_tzs=column_tzs, context=context,
+                                        query_tz=query_tz, column_tzs=column_tzs, utc_tz_aware=utc_tz_aware,
+                                        context=context,
                                         external_data=external_data, use_extended_dtypes=use_extended_dtypes,
                                         transport_settings=transport_settings)
 
@@ -395,6 +405,7 @@ class AsyncClient:
                               use_na_values: Optional[bool] = None,
                               query_tz: Optional[str] = None,
                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                              utc_tz_aware: Optional[bool] = None,
                               context: QueryContext = None,
                               external_data: Optional[ExternalData] = None,
                               use_extended_dtypes: Optional[bool] = None,
@@ -410,7 +421,8 @@ class AsyncClient:
                                                query_formats=query_formats, column_formats=column_formats,
                                                encoding=encoding,
                                                use_none=use_none, max_str_len=max_str_len, use_na_values=use_na_values,
-                                               query_tz=query_tz, column_tzs=column_tzs, context=context,
+                                               query_tz=query_tz, column_tzs=column_tzs,
+                                               utc_tz_aware=utc_tz_aware, context=context,
                                                external_data=external_data, use_extended_dtypes=use_extended_dtypes,
                                                transport_settings=transport_settings)
 

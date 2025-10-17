@@ -10,7 +10,6 @@ pytest-asyncio
 pytest-mock
 pytest-dotenv
 pytest-cov
-pytest-benchmark[histogram]
 numpy~=1.22.0; python_version >= '3.8' and python_version <= '3.10'
 numpy~=1.26.0; python_version >= '3.11' and python_version <= '3.12'
 numpy~=2.1.0; python_version >= '3.13'
