@@ -1,3 +1,5 @@
+import pytz
+
 from clickhouse_connect.driver.query import QueryContext
 
 
@@ -24,3 +26,15 @@ def test_copy_context():
     assert context_copy.settings['max_execution_time'] == 120
     assert context_copy.settings['max_bytes_for_external_group_by'] == 25165824
     assert context_copy.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_2'"
+
+
+def test_active_tz_utc_defaults_to_naive():
+    ctx = QueryContext(query_tz=pytz.UTC)
+    assert ctx.utc_tz_aware is False
+    assert ctx.active_tz(None) is None
+
+
+def test_active_tz_utc_opt_in_timezone():
+    ctx = QueryContext(query_tz=pytz.UTC, utc_tz_aware=True)
+    assert ctx.utc_tz_aware is True
+    assert ctx.active_tz(None) == pytz.UTC

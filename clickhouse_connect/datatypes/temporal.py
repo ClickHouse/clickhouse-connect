@@ -249,11 +249,11 @@ class DateTime64(DateTimeBase):
         active_tz = ctx.active_tz(self.tzinfo)
         if ctx.use_numpy:
             np_array = numpy_conv.read_numpy_array(source, self.np_type, num_rows)
-            if ctx.as_pandas and active_tz and active_tz != pytz.UTC:
+            if ctx.as_pandas and active_tz:
                 return pd.DatetimeIndex(np_array, tz='UTC').tz_convert(active_tz)
             return np_array
         column = source.read_array('q', num_rows)
-        if active_tz and active_tz != pytz.UTC:
+        if active_tz:
             return self._read_binary_tz(column, active_tz)
         return self._read_binary_naive(column)
 
