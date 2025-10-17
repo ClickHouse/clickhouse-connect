@@ -167,25 +167,19 @@ def test_timezone_binding_server(test_client: Client):
 
 
 def test_utc_tz_aware(test_client: Client):
-    # Test DateTime and DateTime64 with UTC timezone using the utc_tz_aware parameter
-
-    # Default behavior (utc_tz_aware=False): Returns naive UTC datetimes (backward compatible)
     row = test_client.query("SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC').first_row
     assert row[0].tzinfo is None  # Naive datetime
     assert row[1].tzinfo is None  # Naive datetime
 
-    # Opt-in behavior (utc_tz_aware=True): Returns timezone-aware UTC datetimes
     row = test_client.query("SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC', utc_tz_aware=True).first_row
     assert row[0].tzinfo == pytz.UTC  # Timezone-aware UTC
     assert row[1].tzinfo == pytz.UTC  # Timezone-aware UTC
 
-    # Test DateTime64 with utc_tz_aware
     if test_client.min_version('20'):
-        # Default: naive UTC
         row = test_client.query("SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
                                 "toDateTime64('2023-07-05 15:10:40.123456', 6, 'UTC') as dt64_utc",
                                 query_tz='UTC').first_row
@@ -193,7 +187,6 @@ def test_utc_tz_aware(test_client: Client):
         assert row[1].tzinfo is None
         assert row[0].microsecond == 123456
 
-        # Opt-in: timezone-aware UTC
         row = test_client.query("SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
                                 "toDateTime64('2023-07-05 15:10:40.123456', 6, 'UTC') as dt64_utc",
                                 query_tz='UTC', utc_tz_aware=True).first_row

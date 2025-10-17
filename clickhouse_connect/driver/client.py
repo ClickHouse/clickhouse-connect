@@ -271,13 +271,13 @@ class Client(ABC):
                                query_formats: Optional[Dict[str, str]] = None,
                                column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                                encoding: Optional[str] = None,
-                                  use_none: Optional[bool] = None,
-                                  context: QueryContext = None,
-                                  query_tz: Optional[Union[str, tzinfo]] = None,
-                                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                  utc_tz_aware: Optional[bool] = None,
-                                  external_data: Optional[ExternalData] = None,
-                                  transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+                               use_none: Optional[bool] = None,
+                               context: QueryContext = None,
+                               query_tz: Optional[Union[str, tzinfo]] = None,
+                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                               utc_tz_aware: Optional[bool] = None,
+                               external_data: Optional[ExternalData] = None,
+                               transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks. For
         parameters, see the create_query_context method.
@@ -292,13 +292,13 @@ class Client(ABC):
                           query_formats: Optional[Dict[str, str]] = None,
                           column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                           encoding: Optional[str] = None,
-                                  use_none: Optional[bool] = None,
-                                  context: QueryContext = None,
-                                  query_tz: Optional[Union[str, tzinfo]] = None,
-                                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                  utc_tz_aware: Optional[bool] = None,
-                                  external_data: Optional[ExternalData] = None,
-                                  transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+                          use_none: Optional[bool] = None,
+                          context: QueryContext = None,
+                          query_tz: Optional[Union[str, tzinfo]] = None,
+                          column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+                          utc_tz_aware: Optional[bool] = None,
+                          external_data: Optional[ExternalData] = None,
+                          transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks. For
         parameters, see the create_query_context method.
