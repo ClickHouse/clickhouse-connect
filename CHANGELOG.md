@@ -23,6 +23,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Improvements
+- Added `utc_tz_aware` parameter to client and query methods to opt in to returning timezone-aware UTC objects for DateTime/DateTime64 columns. Default behavior remains the same and returns tz naive objects for backward compatibility. Note: this parameter will likely be removed and only return tz-aware dts in some future release.
+
 ## 0.9.2, 2025-09-25
 
 - Updated `python_requires` to drop Python 3.8 and advertise support for 3.9–3.13
