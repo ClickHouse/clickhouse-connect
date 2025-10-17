@@ -170,14 +170,14 @@ def test_utc_tz_aware(test_client: Client):
     row = test_client.query("SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC').first_row
-    assert row[0].tzinfo is None  # Naive datetime
-    assert row[1].tzinfo is None  # Naive datetime
+    assert row[0].tzinfo is None
+    assert row[1].tzinfo is None
 
     row = test_client.query("SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC', utc_tz_aware=True).first_row
-    assert row[0].tzinfo == pytz.UTC  # Timezone-aware UTC
-    assert row[1].tzinfo == pytz.UTC  # Timezone-aware UTC
+    assert row[0].tzinfo == pytz.UTC
+    assert row[1].tzinfo == pytz.UTC
 
     if test_client.min_version('20'):
         row = test_client.query("SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
