@@ -138,6 +138,38 @@ def test_basic_json(test_client: Client, table_context: Callable):
         assert result[3][1] == 53
 
 
+def test_json_escaped_dots_roundtrip(test_client: Client, table_context: Callable):
+    type_available(test_client, "json")
+    if test_client.server_settings.get("json_type_escape_dots_in_keys") is None:
+        pytest.skip("json_type_escape_dots_in_keys setting unavailable on this server version")
+
+    # with escaping enabled dots are preserved in keys
+    test_client.command("SET json_type_escape_dots_in_keys=1")
+    with table_context("json_dots_escape", ["value JSON"], order_by="()"):
+        payload = {"a.b": 123, "c": {"d.e": 456}}
+        test_client.insert("json_dots_escape", [[payload]])
+        result = test_client.query("SELECT value FROM json_dots_escape").result_set
+        returned = result[0][0]
+
+        assert "a.b" in returned
+        assert "c" in returned
+        assert "d.e" in returned["c"]
+        assert returned["a.b"] == 123
+        assert returned["c"]["d.e"] == 456
+
+    # with escaping disabled dots create nested structure
+    test_client.command("SET json_type_escape_dots_in_keys=0")
+    with table_context("json_dots_no_escape", ["value JSON"], order_by="()"):
+        payload = {"a.b": 789}
+        test_client.insert("json_dots_no_escape", [[payload]])
+        result = test_client.query("SELECT value FROM json_dots_no_escape").result_set
+        returned = result[0][0]
+
+        assert "a" in returned
+        assert "b" in returned["a"]
+        assert returned["a"]["b"] == 789
+
+
 def test_typed_json(test_client: Client, table_context: Callable):
     type_available(test_client, 'json')
     with table_context('new_json_typed', [

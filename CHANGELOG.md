@@ -23,8 +23,11 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Bug Fixes
+- Fixed issue with JSON key dot escaping. Closes [#571](https://github.com/ClickHouse/clickhouse-connect/issues/571)
+
 ### Improvements
-- Added `utc_tz_aware` parameter to client and query methods to opt in to returning timezone-aware UTC objects for DateTime/DateTime64 columns. Default behavior remains the same and returns tz naive objects for backward compatibility. Note: this parameter will likely be removed and only return tz-aware dts in some future release.
+- Added `utc_tz_aware` parameter to client and query methods to opt in to returning timezone-aware UTC objects for DateTime/DateTime64 columns. Default behavior remains the same and returns tz naive objects for backward compatibility. Note: this parameter will likely be removed and only return tz-aware dts in some future release. Closes [#566](https://github.com/ClickHouse/clickhouse-connect/issues/566)
 
 ## 0.9.2, 2025-09-25
 
