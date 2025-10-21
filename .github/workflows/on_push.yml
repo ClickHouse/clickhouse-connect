@@ -64,9 +64,9 @@ jobs:
           - '3.11'
           - '3.12'
           - '3.13'
+          - '3.14'
         clickhouse-version:
           - '25.3' # LTS
-          - '25.6' # Stable
           - '25.7' # Stable
           - '25.8' # LTS
           - '25.9' # Stable
@@ -208,6 +208,7 @@ jobs:
           - '3.11'
           - '3.12'
           - '3.13'
+          - '3.14'
 
     steps:
       - name: Checkout

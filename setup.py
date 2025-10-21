@@ -54,7 +54,7 @@ def run_setup(try_c: bool = True):
         package_data={'clickhouse_connect': ['VERSION', 'py.typed']},
         url='https://github.com/ClickHouse/clickhouse-connect',
         packages=find_packages(exclude=['tests*']),
-        python_requires='>=3.9,<3.14',
+        python_requires='>=3.9,<3.15',
         license='Apache License 2.0',
         install_requires=[
             'certifi',
@@ -86,6 +86,7 @@ def run_setup(try_c: bool = True):
             'Programming Language :: Python :: 3.11',
             'Programming Language :: Python :: 3.12',
             'Programming Language :: Python :: 3.13',
+            'Programming Language :: Python :: 3.14',
         ],
         **kwargs
     )

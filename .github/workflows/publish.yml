@@ -12,18 +12,18 @@ on:
           - release
           - build
 env:
-  CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-* pp38-*'
+  CIBW_SKIP: 'cp38-* pp37-* pp38-*'
 
 jobs:
   build_x86_manylinux_wheels:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-* pp38-* *-musllinux*'
+      CIBW_SKIP: 'cp38-* pp37-* pp38-* *-musllinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
       - uses: actions/upload-artifact@v4
         with:
           name: build-x86-manylinux
@@ -33,11 +33,11 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp37-* pp38-* *-manylinux*'
+      CIBW_SKIP: 'cp38-* pp37-* pp38-* *-manylinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
       - uses: actions/upload-artifact@v4
         with:
           name: build-x86-musllinux
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp* *-musllinux*'
+      CIBW_SKIP: 'cp38-* pp* *-musllinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -56,7 +56,7 @@ jobs:
         with:
           platforms: all
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
       - uses: actions/upload-artifact@v4
         with:
           name: build-aarch64-manylinux
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: 'cp36-* cp37-* cp38-* pp* *-manylinux*'
+      CIBW_SKIP: 'cp38-* pp* *-manylinux*'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -75,7 +75,7 @@ jobs:
         with:
           platforms: all
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
       - uses: actions/upload-artifact@v4
         with:
           name: build-aarch64-musllinux
@@ -86,7 +86,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_BUILD: 'pp39-* pp310-*'
+      CIBW_BUILD: 'pp39-* pp310-* pp311-*'
+      CIBW_ENABLE: 'pypy'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -94,7 +95,7 @@ jobs:
         with:
           platforms: all
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
       - uses: actions/upload-artifact@v4
         with:
           name: build-aarch64-pypy
@@ -106,7 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
         env:
           CIBW_ARCHS_MACOS: x86_64 arm64
       - uses: actions/upload-artifact@v4
@@ -122,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.2.1
       - uses: actions/upload-artifact@v4
         with:
           name: build-windows
