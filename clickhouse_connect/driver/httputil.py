@@ -12,12 +12,19 @@ from typing import Dict, Any, Optional, Tuple, Callable
 import certifi
 import lz4.frame
 import urllib3
-import zstandard
+
 from urllib3.poolmanager import PoolManager, ProxyManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect import common
+
+# Python 3.14+ includes zstd in stdlib
+if sys.version_info >= (3, 14):
+    from compression import zstd as zstandard
+else:
+    import zstandard
+
 
 logger = logging.getLogger(__name__)
 

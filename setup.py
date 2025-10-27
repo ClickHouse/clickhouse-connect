@@ -60,7 +60,7 @@ def run_setup(try_c: bool = True):
             'certifi',
             'urllib3>=1.26',
             'pytz',
-            'zstandard',
+            'zstandard; python_version<"3.14"',
             'lz4'
         ],
         extras_require={
@@ -68,7 +68,7 @@ def run_setup(try_c: bool = True):
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'polars': ['polars>=1.0'],
-            'arrow': ['pyarrow'],
+            'arrow': ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             'orjson': ['orjson'],
             'tzlocal': ['tzlocal>=4.0'],
         },
