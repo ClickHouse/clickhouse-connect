@@ -36,8 +36,10 @@ class AsyncClient:
         if executor_threads == 0:
             executor_threads = min(32, (os.cpu_count() or 1) + 4)  # Mimic the default behavior
         if executor is NEW_THREAD_POOL_EXECUTOR:
+            self.new_executor = True
             self.executor = ThreadPoolExecutor(max_workers=executor_threads)
         else:
+            self.new_executor = False
             self.executor = executor
 
     def set_client_setting(self, key, value):
@@ -80,7 +82,7 @@ class AsyncClient:
         """
         self.client.close()
 
-        if self.executor is None:
+        if self.new_executor:
             await asyncio.to_thread(self.executor.shutdown, True)
 
     async def query(self,
