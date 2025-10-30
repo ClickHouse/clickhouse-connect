@@ -14,6 +14,9 @@ from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.insert import InsertContext
 
+# Sentinel value to preserve default behavior and also allow passing `None`
+NEW_THREAD_POOL_EXECUTOR = object()
+
 
 # pylint: disable=too-many-public-methods,too-many-instance-attributes,too-many-arguments,too-many-positional-arguments,too-many-locals
 class AsyncClient:
@@ -22,13 +25,20 @@ class AsyncClient:
     Internally, each of the methods that uses IO is wrapped in a call to EventLoop.run_in_executor.
     """
 
-    def __init__(self, *, client: Client, executor_threads: int = 0):
+    def __init__(self,
+                 *,
+                 client: Client,
+                 executor_threads: int | None = None,
+                 executor: Union[Optional[ThreadPoolExecutor], object] = NEW_THREAD_POOL_EXECUTOR):
         if isinstance(client, HttpClient):
             client.headers['User-Agent'] = client.headers['User-Agent'].replace('mode:sync;', 'mode:async;')
         self.client = client
         if executor_threads == 0:
             executor_threads = min(32, (os.cpu_count() or 1) + 4)  # Mimic the default behavior
-        self.executor = ThreadPoolExecutor(max_workers=executor_threads)
+        if executor is NEW_THREAD_POOL_EXECUTOR:
+            self.executor = ThreadPoolExecutor(max_workers=executor_threads)
+        else:
+            self.executor = executor
 
     def set_client_setting(self, key, value):
         """
@@ -69,7 +79,9 @@ class AsyncClient:
         Subclass implementation to close the connection to the server/deallocate the client
         """
         self.client.close()
-        await asyncio.to_thread(self.executor.shutdown, True)
+
+        if self.executor is None:
+            await asyncio.to_thread(self.executor.shutdown, True)
 
     async def query(self,
                     query: Optional[str] = None,

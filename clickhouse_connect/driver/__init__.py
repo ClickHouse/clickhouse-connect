@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
 from typing import Optional, Union, Dict, Any
 from urllib.parse import urlparse, parse_qs
@@ -8,7 +9,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.asyncclient import AsyncClient, NEW_THREAD_POOL_EXECUTOR
 
 
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
@@ -147,6 +148,7 @@ async def create_async_client(*,
                               settings: Optional[Dict[str, Any]] = None,
                               generic_args: Optional[Dict[str, Any]] = None,
                               executor_threads: Optional[int] = None,
+                              executor: Union[Optional[ThreadPoolExecutor], object] = NEW_THREAD_POOL_EXECUTOR,
                               **kwargs) -> AsyncClient:
     """
     The preferred method to get an async ClickHouse Connect Client instance.
@@ -170,6 +172,9 @@ async def create_async_client(*,
       It is not recommended to use this parameter externally
     :param: executor_threads 'max_worker' threads used by the client ThreadPoolExecutor.  If not set, the default
       of 4 + detected CPU cores will be used
+    :param executor: Optional `ThreadPoolExecutor` to use for async operations.  If not set, a new `ThreadPoolExecutor`
+      will be created with the number of threads specified by `executor_threads`.  If set to `None` it will use the
+      default executor of the event loop.
     :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
@@ -215,4 +220,4 @@ async def create_async_client(*,
 
     loop = asyncio.get_running_loop()
     _client = await loop.run_in_executor(None, _create_client)
-    return AsyncClient(client=_client, executor_threads=executor_threads)
+    return AsyncClient(client=_client, executor_threads=executor_threads, executor=executor)
