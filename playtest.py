@@ -1,8 +1,9 @@
 import clickhouse_connect
+from clickhouse_connect.common import version
 
 
 def main():
-    print(f'\nClickHouse Connect installed version: {clickhouse_connect.version()}')
+    print(f'\nClickHouse Connect installed version: {version()}')
     client = clickhouse_connect.get_client(host='play.clickhouse.com',
                                            username='play',
                                            password='clickhouse',
