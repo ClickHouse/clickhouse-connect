@@ -1,4 +1,4 @@
-from sqlalchemy import Column, MetaData, Table, literal_column, select
+from sqlalchemy import Column, literal_column, select
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.types import Integer, String
 
@@ -6,24 +6,22 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String as ChString
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import array_join
+from tests.integration_tests.test_sqlalchemy.conftest import table_context
 
 
 def test_array_join(test_engine: Engine, test_db: str):
     """Test ARRAY JOIN clause"""
-    with test_engine.begin() as conn:
-        metadata = MetaData(schema=test_db)
-
-        test_table = Table(
-            "test_array_join",
-            metadata,
+    with table_context(
+        test_engine,
+        test_db,
+        "test_array_join",
+        [
             Column("id", Integer),
             Column("name", String),
             Column("tags", Array(ChString)),
-            MergeTree(order_by="id"),
-        )
-
-        test_table.drop(conn, checkfirst=True)
-        test_table.create(conn)
+        ],
+        MergeTree(order_by="id"),
+    ) as (conn, test_table):
 
         conn.execute(
             test_table.insert(),
@@ -59,20 +57,17 @@ def test_array_join(test_engine: Engine, test_db: str):
 
 def test_left_array_join_with_alias(test_engine: Engine, test_db: str):
     """Test LEFT ARRAY JOIN with alias"""
-    with test_engine.begin() as conn:
-        metadata = MetaData(schema=test_db)
-
-        test_table = Table(
-            "test_left_array_join",
-            metadata,
+    with table_context(
+        test_engine,
+        test_db,
+        "test_left_array_join",
+        [
             Column("id", Integer),
             Column("name", String),
             Column("tags", Array(ChString)),
-            MergeTree(order_by="id"),
-        )
-
-        test_table.drop(conn, checkfirst=True)
-        test_table.create(conn)
+        ],
+        MergeTree(order_by="id"),
+    ) as (conn, test_table):
 
         conn.execute(
             test_table.insert(),

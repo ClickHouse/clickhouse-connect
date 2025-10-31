@@ -1,6 +1,7 @@
+from contextlib import contextmanager
 from typing import Iterator
 from pytest import fixture
-
+from sqlalchemy import MetaData, Table
 from sqlalchemy.engine import create_engine
 from sqlalchemy.engine.base import Engine
 
@@ -17,3 +18,18 @@ def test_engine_fixture(test_config: TestConfig) -> Iterator[Engine]:
 
     yield test_engine
     test_engine.dispose()
+
+
+def create_test_table(conn, metadata, table_name, columns, engine_params):
+    test_table = Table(table_name, metadata, *columns, engine_params)
+    test_table.drop(conn, checkfirst=True)
+    test_table.create(conn)
+    return test_table
+
+
+@contextmanager
+def table_context(engine, test_db, table_name, columns, engine_params):
+    with engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        test_table = create_test_table(conn, metadata, table_name, columns, engine_params)
+        yield conn, test_table

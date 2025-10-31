@@ -14,6 +14,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     UInt32,
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
+from tests.integration_tests.test_sqlalchemy.conftest import table_context
 
 
 @fixture(scope="module", autouse=True)
@@ -279,21 +280,18 @@ def test_reflection_integration(test_engine: Engine, test_db: str):
 
 def test_argmax_aggregate_function(test_engine: Engine, test_db: str):
     """Test ClickHouse argMax aggregate function"""
-    with test_engine.begin() as conn:
-        metadata = MetaData(schema=test_db)
-
-        test_table = Table(
-            "test_argmax",
-            metadata,
+    with table_context(
+        test_engine,
+        test_db,
+        "test_argmax",
+        [
             Column("id", Integer),
             Column("name", String),
             Column("value", Integer),
             Column("updated_at", DateTime),
-            MergeTree(order_by="id"),
-        )
-
-        test_table.drop(conn, checkfirst=True)
-        test_table.create(conn)
+        ],
+        MergeTree(order_by="id"),
+    ) as (conn, test_table):
 
         conn.execute(
             test_table.insert(),
