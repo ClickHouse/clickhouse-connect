@@ -71,7 +71,7 @@ class ChStatementCompiler(SQLCompiler):
         )
 
     # Abstract methods required by SQLCompiler
-    def delete_extra_from_clause(self, update_stmt, from_table, extra_froms, from_hints, **kw):
+    def delete_extra_from_clause(self, delete_stmt, from_table, extra_froms, from_hints, **kw):
         raise NotImplementedError("ClickHouse doesn't support DELETE with extra FROM clause")
 
     def update_from_clause(self, update_stmt, from_table, extra_froms, from_hints, **kw):
