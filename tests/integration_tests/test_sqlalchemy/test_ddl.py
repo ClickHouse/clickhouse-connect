@@ -123,11 +123,8 @@ def test_final_modifier_replacing_merge_tree(test_engine: Engine, test_db: str):
 
         query_with_final = select(test_table).final().order_by(test_table.c.id)
         compiled = query_with_final.compile(dialect=test_engine.dialect)
-
-        # In low-load test envs, the merge usually happens so fast that FINAL doesn't
-        #  seem to make a difference, but the important part is seeing FINAL in the
-        #  actual compiled compiled query.
-        assert "FINAL" in str(compiled).upper()
+        compiled_str = str(compiled)
+        assert " FINAL" in compiled_str
         result = conn.execute(query_with_final)
         rows = result.fetchall()
         assert len(rows) == 2

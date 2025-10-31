@@ -83,3 +83,8 @@ class ChStatementCompiler(SQLCompiler):
 
     def visit_sequence(self, sequence, **kw):
         raise NotImplementedError("ClickHouse doesn't support sequences")
+
+    def get_from_hint_text(self, table, text):
+        if text == "FINAL":
+            return "FINAL"
+        return super().get_from_hint_text(table, text)
