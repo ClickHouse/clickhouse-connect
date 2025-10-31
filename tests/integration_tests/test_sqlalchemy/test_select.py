@@ -1,9 +1,11 @@
 # pylint: disable=no-member
+import datetime
 import time
 
 from pytest import fixture
-from sqlalchemy import MetaData, Table, select, text
+from sqlalchemy import Column, Integer, MetaData, Table, func, select, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.types import DateTime
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
@@ -11,6 +13,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     String,
     UInt32,
 )
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 
 
 @fixture(scope="module", autouse=True)
@@ -272,3 +275,56 @@ def test_reflection_integration(test_engine: Engine, test_db: str):
         for row in rows:
             assert isinstance(row.id, int)
             assert isinstance(row.name, str)
+
+
+def test_argmax_aggregate_function(test_engine: Engine, test_db: str):
+    """Test ClickHouse argMax aggregate function"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+
+        test_table = Table(
+            "test_argmax",
+            metadata,
+            Column("id", Integer),
+            Column("name", String),
+            Column("value", Integer),
+            Column("updated_at", DateTime),
+            MergeTree(order_by="id"),
+        )
+
+        test_table.drop(conn, checkfirst=True)
+        test_table.create(conn)
+
+        conn.execute(
+            test_table.insert(),
+            [
+                {"id": 1, "name": "Alice_v1", "value": 100, "updated_at": datetime.datetime(2024, 1, 1)},
+                {"id": 1, "name": "Alice_v2", "value": 150, "updated_at": datetime.datetime(2025, 1, 2)},
+                {"id": 1, "name": "Alice_v3", "value": 200, "updated_at": datetime.datetime(2024, 1, 3)},
+                {"id": 2, "name": "Bob_v1", "value": 300, "updated_at": datetime.datetime(2024, 1, 1)},
+                {"id": 2, "name": "Bob_v2", "value": 250, "updated_at": datetime.datetime(2024, 1, 2)},
+            ],
+        )
+
+        query = (
+            select(
+                test_table.c.id,
+                func.argMax(test_table.c.name, test_table.c.updated_at).label("latest_name"),
+                func.argMax(test_table.c.value, test_table.c.updated_at).label("latest_value"),
+            )
+            .group_by(test_table.c.id)
+            .order_by(test_table.c.id)
+        )
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+
+        assert len(rows) == 2
+        assert rows[0].id == 1
+        assert rows[0].latest_name == "Alice_v2"
+        assert rows[0].latest_value == 150
+        assert rows[1].id == 2
+        assert rows[1].latest_name == "Bob_v2"
+        assert rows[1].latest_value == 250
+
+        test_table.drop(conn)
