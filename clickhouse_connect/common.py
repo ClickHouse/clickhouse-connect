@@ -8,7 +8,7 @@ from clickhouse_connect import __version__
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
-def version():
+def version() -> str:
     return __version__.version
 
 
