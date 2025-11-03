@@ -9,7 +9,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver.asyncclient import AsyncClient, NEW_THREAD_POOL_EXECUTOR
+from clickhouse_connect.driver.asyncclient import AsyncClient, DefaultThreadPoolExecutor, NEW_THREAD_POOL_EXECUTOR
 
 
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
@@ -148,7 +148,7 @@ async def create_async_client(*,
                               settings: Optional[Dict[str, Any]] = None,
                               generic_args: Optional[Dict[str, Any]] = None,
                               executor_threads: Optional[int] = None,
-                              executor: Union[Optional[ThreadPoolExecutor], object] = NEW_THREAD_POOL_EXECUTOR,
+                              executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR,
                               **kwargs) -> AsyncClient:
     """
     The preferred method to get an async ClickHouse Connect Client instance.

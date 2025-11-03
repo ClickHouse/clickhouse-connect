@@ -14,8 +14,12 @@ from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.insert import InsertContext
 
+class DefaultThreadPoolExecutor:
+    pass
+
+
 # Sentinel value to preserve default behavior and also allow passing `None`
-NEW_THREAD_POOL_EXECUTOR = object()
+NEW_THREAD_POOL_EXECUTOR = DefaultThreadPoolExecutor()
 
 
 # pylint: disable=too-many-public-methods,too-many-instance-attributes,too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -29,7 +33,7 @@ class AsyncClient:
                  *,
                  client: Client,
                  executor_threads: int | None = None,
-                 executor: Union[Optional[ThreadPoolExecutor], object] = NEW_THREAD_POOL_EXECUTOR):
+                 executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR):
         if isinstance(client, HttpClient):
             client.headers['User-Agent'] = client.headers['User-Agent'].replace('mode:sync;', 'mode:async;')
         self.client = client
