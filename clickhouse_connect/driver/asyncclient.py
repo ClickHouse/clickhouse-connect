@@ -1,5 +1,6 @@
 import asyncio
 import io
+import logging
 import os
 from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import tzinfo
@@ -13,6 +14,9 @@ from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.insert import InsertContext
+
+logger = logging.getLogger(__name__)
+
 
 class DefaultThreadPoolExecutor:
     pass
@@ -43,6 +47,9 @@ class AsyncClient:
             self.new_executor = True
             self.executor = ThreadPoolExecutor(max_workers=executor_threads)
         else:
+            if executor_threads != 0:
+                logger.warning('executor_threads parameter is ignored when passing an executor object')
+
             self.new_executor = False
             self.executor = executor
 
