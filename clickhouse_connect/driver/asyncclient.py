@@ -32,7 +32,7 @@ class AsyncClient:
     def __init__(self,
                  *,
                  client: Client,
-                 executor_threads: int | None = None,
+                 executor_threads: int = 0,
                  executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR):
         if isinstance(client, HttpClient):
             client.headers['User-Agent'] = client.headers['User-Agent'].replace('mode:sync;', 'mode:async;')
