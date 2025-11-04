@@ -89,8 +89,8 @@ class Date(ClickHouseType):
                 if column.tz is None:
                     return column.astype(self.pandas_dtype)
 
-                naive = column.tz_localize(None).astype(self.pandas_dtype)
-                return pd.DatetimeIndex(naive, tz=column.tz)
+                naive = column.tz_convert("UTC").tz_localize(None).astype(self.pandas_dtype)
+                return naive.tz_localize("UTC").tz_convert(column.tz)
 
             if self.nullable and isinstance(column, list):
                 return np.array([None if pd.isna(s) else s for s in column]).astype(
@@ -159,8 +159,8 @@ class DateTimeBase(ClickHouseType, registered=False):
                     result = column.astype(self.pandas_dtype)
                     return pd.array(result) if self.nullable else result
 
-                naive_ns = column.tz_localize(None).astype(self.pandas_dtype)
-                tz_aware_result = pd.DatetimeIndex(naive_ns, tz=column.tz)
+                naive_ns = column.tz_convert("UTC").tz_localize(None).astype(self.pandas_dtype)
+                tz_aware_result = naive_ns.tz_localize("UTC").tz_convert(column.tz)
                 return (
                     pd.array(tz_aware_result) if self.nullable else tz_aware_result
                 )
