@@ -116,7 +116,7 @@ These tests require the `CLICKHOUSE_CONNECT_TEST_TLS` environment variable to be
 Additionally, the TLS ClickHouse instance should be running (see [docker-compose.yml](docker-compose.yml)).
 
 ```bash
-CLICKHOUSE_CONNECT_TEST_TLS=1 pytest tests/tls
+CLICKHOUSE_CONNECT_TEST_TLS=1 pytest tests/integration_tests/test_tls.py
 ```
 
 ### Running the integration tests with ClickHouse Cloud
