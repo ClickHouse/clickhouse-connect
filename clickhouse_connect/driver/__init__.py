@@ -147,7 +147,7 @@ async def create_async_client(*,
                               dsn: Optional[str] = None,
                               settings: Optional[Dict[str, Any]] = None,
                               generic_args: Optional[Dict[str, Any]] = None,
-                              executor_threads: Optional[int] = None,
+                              executor_threads: int = 0,
                               executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR,
                               **kwargs) -> AsyncClient:
     """
@@ -170,7 +170,7 @@ async def create_async_client(*,
     :param settings: ClickHouse server settings to be used with the session/every request
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
-    :param: executor_threads 'max_worker' threads used by the client ThreadPoolExecutor.  If not set, the default
+    :param executor_threads: 'max_worker' threads used by the client ThreadPoolExecutor.  If not set, the default
       of 4 + detected CPU cores will be used
     :param executor: Optional `ThreadPoolExecutor` to use for async operations.  If not set, a new `ThreadPoolExecutor`
       will be created with the number of threads specified by `executor_threads`.  If set to `None` it will use the
