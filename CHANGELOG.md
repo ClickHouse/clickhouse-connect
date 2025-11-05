@@ -24,6 +24,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 
 ### Bug Fixes
+- Fixed DST fallback bug in DateTime and DateTime64 types caused by passing potentially ambiguous times to pd.DateTimeIndex constructor.
 - Fixed issue with JSON key dot escaping. Closes [#571](https://github.com/ClickHouse/clickhouse-connect/issues/571)
 
 ### Improvements
