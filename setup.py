@@ -61,7 +61,9 @@ def run_setup(try_c: bool = True):
             'urllib3>=1.26',
             'pytz',
             'zstandard; python_version<"3.14"',
-            'lz4'
+            'zstandard>=0.25.0; python_version>="3.14"',
+            'lz4; python_version<"3.14"',
+            'lz4>=4.4.5; python_version>="3.14"'
         ],
         extras_require={
             'sqlalchemy': ['sqlalchemy>=1.4.40,<3.0'],

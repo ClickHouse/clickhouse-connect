@@ -1,16 +1,10 @@
-import sys
 import zlib
 from abc import abstractmethod
 from typing import Union
 
 import lz4
 import lz4.frame
-
-# Python 3.14+ includes zstd in stdlib
-if sys.version_info >= (3, 14):
-    from compression import zstd as zstandard
-else:
-    import zstandard
+import zstandard
 
 try:
     import brotli
