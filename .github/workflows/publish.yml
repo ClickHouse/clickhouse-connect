@@ -87,7 +87,7 @@ jobs:
     env:
       CIBW_ARCHS_LINUX: aarch64
       CIBW_BUILD: 'pp39-* pp310-* pp311-*'
-      CIBW_ENABLE: 'pypy pp39'
+      CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
