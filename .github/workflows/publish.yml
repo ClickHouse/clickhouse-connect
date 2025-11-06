@@ -12,14 +12,16 @@ on:
           - release
           - build
 env:
-  CIBW_SKIP: 'cp38-* pp37-* pp38-* cp314t-*'
+  CIBW_SKIP: 'cp38-* cp314t-*'
+  CIBW_ENABLE: 'pypy pypy-eol'
 
 jobs:
   build_x86_manylinux_wheels:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp38-* pp37-* pp38-* cp314t-* *-musllinux*'
+      CIBW_SKIP: 'cp38-* cp314t-* *-musllinux*'
+      CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -33,7 +35,8 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: 'cp38-* pp37-* pp38-* cp314t-* *-manylinux*'
+      CIBW_SKIP: 'cp38-* cp314t-* *-manylinux*'
+      CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -86,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_BUILD: 'pp39-* pp310-* pp311-*'
+      CIBW_BUILD: 'pp39-* pp310-*'
       CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +107,9 @@ jobs:
   build_macos_wheels:
     name: Build wheels on macos
     runs-on: macos-14
+    env:
+      CIBW_ENABLE: 'pypy pypy-eol'
+      CIBW_SKIP: 'cp38-* cp314t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -120,6 +126,8 @@ jobs:
     runs-on: windows-latest
     env:
       CIBW_BUILD_VERBOSITY: 2
+      CIBW_ENABLE: 'pypy pypy-eol'
+      CIBW_SKIP: 'cp38-* cp314t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
