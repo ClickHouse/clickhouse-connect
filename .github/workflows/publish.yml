@@ -17,7 +17,7 @@ jobs:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: '*-musllinux* pp38-* pp311-* cp314t-*'
+      CIBW_SKIP: '*-musllinux* pp38-* pp311-* cp38-* cp314t-*'
       CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: '*-manylinux* pp38-* pp311-* cp314t-*'
+      CIBW_SKIP: '*-manylinux* pp38-* pp311-* cp38-* cp314t-*'
       CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: '*-musllinux* cp314t-*'
+      CIBW_SKIP: '*-musllinux* cp38-* cp314t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: '*-manylinux* cp314t-*'
+      CIBW_SKIP: '*-manylinux* cp38-* cp314t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -107,7 +107,7 @@ jobs:
     env:
       CIBW_ARCHS_MACOS: x86_64 arm64
       CIBW_ENABLE: 'pypy pypy-eol'
-      CIBW_SKIP: 'pp38-* pp11-* cp314t-*'
+      CIBW_SKIP: 'pp38-* pp311-* cp38-* cp314t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -125,7 +125,7 @@ jobs:
     env:
       CIBW_BUILD_VERBOSITY: 2
       CIBW_ENABLE: 'pypy pypy-eol'
-      CIBW_SKIP: 'pp38-* pp311-* cp314t-*'
+      CIBW_SKIP: 'pp38-* pp311-* cp38-* cp314t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
