@@ -1,9 +1,10 @@
-from contextlib import contextmanager
+import time
 from typing import Iterator
+
 from pytest import fixture
-from sqlalchemy import MetaData, Table
+from sqlalchemy import text
 from sqlalchemy.engine import create_engine
-from sqlalchemy.engine.base import Engine
+from sqlalchemy.engine.base import Connection, Engine
 
 from tests.integration_tests.conftest import TestConfig
 
@@ -20,16 +21,32 @@ def test_engine_fixture(test_config: TestConfig) -> Iterator[Engine]:
     test_engine.dispose()
 
 
-def create_test_table(conn, metadata, table_name, columns, engine_params):
-    test_table = Table(table_name, metadata, *columns, engine_params)
-    test_table.drop(conn, checkfirst=True)
-    test_table.create(conn)
-    return test_table
+def verify_tables_ready(conn: Connection, table_checks: dict[str, int], max_retries: int = 30, delay: float = 0.1) -> None:
+    """Verify that tables are queryable and have expected row counts.
 
+    This is helpful for cloud envs where there can be a delay between
+    table creation/insertion and when the data becomes queryable.
+    """
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            counts = {}
+            for table_name, _ in table_checks.items():
+                actual_count = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
+                counts[table_name] = actual_count
 
-@contextmanager
-def table_context(engine, test_db, table_name, columns, engine_params):
-    with engine.begin() as conn:
-        metadata = MetaData(schema=test_db)
-        test_table = create_test_table(conn, metadata, table_name, columns, engine_params)
-        yield conn, test_table
+            if all(counts[table] == expected for table, expected in table_checks.items()):
+                return
+
+            retry_count += 1
+            if retry_count >= max_retries:
+                count_strs = [f"{table}={counts[table]}" for table in table_checks]
+                raise RuntimeError(f"Data verification failed after {max_retries} retries: {', '.join(count_strs)}")
+
+            time.sleep(delay)
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            retry_count += 1
+            if retry_count >= max_retries:
+                raise RuntimeError(f"Failed to verify test data after {max_retries} retries.") from e
+            time.sleep(delay)

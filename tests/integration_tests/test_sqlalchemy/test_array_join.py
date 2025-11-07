@@ -1,37 +1,53 @@
-from sqlalchemy import Column, literal_column, select
+from pytest import fixture
+from sqlalchemy import MetaData, Table, literal_column, select, text
 from sqlalchemy.engine.base import Engine
-from sqlalchemy.types import Integer, String
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String as ChString
-from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import array_join
-from tests.integration_tests.test_sqlalchemy.conftest import table_context
+from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
+
+
+@fixture(scope="module", autouse=True)
+def test_tables(test_engine: Engine, test_db: str):
+    """Create test tables for ARRAY JOIN tests"""
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_array_join"))
+        conn.execute(
+            text(
+                f"""
+            CREATE TABLE {test_db}.test_array_join (
+                id Int32,
+                name String,
+                tags Array(String)
+            ) ENGINE MergeTree() ORDER BY id
+        """
+            )
+        )
+
+        conn.execute(
+            text(
+                f"""
+            INSERT INTO {test_db}.test_array_join VALUES
+            (1, 'Alice', ['python', 'sql', 'clickhouse']),
+            (2, 'Bob', ['java', 'sql']),
+            (3, 'Joe', ['python', 'javascript']),
+            (4, 'Charlie', [])
+        """
+            )
+        )
+
+        # Verify data is actually queryable before yielding to tests
+        verify_tables_ready(conn, {f"{test_db}.test_array_join": 4})
+
+        yield
+
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_array_join"))
 
 
 def test_array_join(test_engine: Engine, test_db: str):
     """Test ARRAY JOIN clause"""
-    with table_context(
-        test_engine,
-        test_db,
-        "test_array_join",
-        [
-            Column("id", Integer),
-            Column("name", String),
-            Column("tags", Array(ChString)),
-        ],
-        MergeTree(order_by="id"),
-    ) as (conn, test_table):
-
-        conn.execute(
-            test_table.insert(),
-            [
-                {"id": 1, "name": "Alice", "tags": ["python", "sql", "clickhouse"]},
-                {"id": 2, "name": "Bob", "tags": ["java", "sql"]},
-                {"id": 3, "name": "Joe", "tags": ["python", "javascript"]},
-                {"id": 4, "name": "Charlie", "tags": []},
-            ],
-        )
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        test_table = Table("test_array_join", metadata, autoload_with=test_engine)
 
         query = (
             select(test_table.c.id, test_table.c.name, test_table.c.tags)
@@ -52,32 +68,12 @@ def test_array_join(test_engine: Engine, test_db: str):
         # ARRAY JOIN should not contain items with empty lists
         assert "Charlie" not in [row.name for row in rows]
 
-        test_table.drop(conn)
-
 
 def test_left_array_join_with_alias(test_engine: Engine, test_db: str):
     """Test LEFT ARRAY JOIN with alias"""
-    with table_context(
-        test_engine,
-        test_db,
-        "test_left_array_join",
-        [
-            Column("id", Integer),
-            Column("name", String),
-            Column("tags", Array(ChString)),
-        ],
-        MergeTree(order_by="id"),
-    ) as (conn, test_table):
-
-        conn.execute(
-            test_table.insert(),
-            [
-                {"id": 1, "name": "Alice", "tags": ["python", "sql", "clickhouse"]},
-                {"id": 2, "name": "Bob", "tags": ["java", "sql"]},
-                {"id": 3, "name": "Joe", "tags": ["python", "javascript"]},
-                {"id": 4, "name": "Charlie", "tags": []},
-            ],
-        )
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        test_table = Table("test_array_join", metadata, autoload_with=test_engine)
 
         query = (
             select(
@@ -110,5 +106,3 @@ def test_left_array_join_with_alias(test_engine: Engine, test_db: str):
         charlie_rows = [row for row in rows if row.name == "Charlie"]
         assert len(charlie_rows) == 1
         assert charlie_rows[0].tag == ""
-
-        test_table.drop(conn)
