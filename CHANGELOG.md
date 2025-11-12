@@ -30,6 +30,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ### Improvements
 - Added Python 3.14 support (non-free-threaded build only; free-threaded builds are not yet supported). Closes [#574](https://github.com/ClickHouse/clickhouse-connect/issues/574)
 - Added `utc_tz_aware` parameter to client and query methods to opt in to returning timezone-aware UTC objects for DateTime/DateTime64 columns. Default behavior remains the same and returns tz naive objects for backward compatibility. Note: this parameter will likely be removed and only return tz-aware dts in some future release. Closes [#566](https://github.com/ClickHouse/clickhouse-connect/issues/566)
+- Added `executor` parameter to `AsyncClient` constructor to allow passing a custom executor for async operations. This allows users to control the concurrency and thread pool used by the async client.
 
 ## 0.9.2, 2025-09-25
 
