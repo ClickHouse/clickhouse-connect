@@ -54,21 +54,23 @@ def run_setup(try_c: bool = True):
         package_data={'clickhouse_connect': ['VERSION', 'py.typed']},
         url='https://github.com/ClickHouse/clickhouse-connect',
         packages=find_packages(exclude=['tests*']),
-        python_requires='>=3.9,<3.14',
+        python_requires='>=3.9,<3.15',
         license='Apache License 2.0',
         install_requires=[
             'certifi',
             'urllib3>=1.26',
             'pytz',
-            'zstandard',
-            'lz4'
+            'zstandard; python_version<"3.14"',
+            'zstandard>=0.25.0; python_version>="3.14"',
+            'lz4; python_version<"3.14"',
+            'lz4>=4.4.5; python_version>="3.14"'
         ],
         extras_require={
             'sqlalchemy': ['sqlalchemy>=1.4.40,<3.0'],
             'numpy': ['numpy'],
             'pandas': ['pandas'],
             'polars': ['polars>=1.0'],
-            'arrow': ['pyarrow'],
+            'arrow': ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             'orjson': ['orjson'],
             'tzlocal': ['tzlocal>=4.0'],
         },
@@ -86,6 +88,7 @@ def run_setup(try_c: bool = True):
             'Programming Language :: Python :: 3.11',
             'Programming Language :: Python :: 3.12',
             'Programming Language :: Python :: 3.13',
+            'Programming Language :: Python :: 3.14',
         ],
         **kwargs
     )
