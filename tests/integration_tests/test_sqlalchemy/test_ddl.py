@@ -1,7 +1,8 @@
 from enum import Enum as PyEnum
 
+import pytest
 import sqlalchemy as db
-from sqlalchemy import MetaData, text
+from sqlalchemy import MetaData, Column, Integer, select, text
 
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.orm import declarative_base
@@ -11,8 +12,9 @@ from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
     FixedString, String, UInt64, UUID, DateTime, DateTime64, LowCardinality, Nullable, Array, AggregateFunction, \
     UInt32, IPv4
+from clickhouse_connect.cc_sqlalchemy import final
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
-from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map, ReplacingMergeTree
 
 
 def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: str):
@@ -91,3 +93,91 @@ def test_declarative(test_engine: Engine, test_db: str, test_table_engine: str):
         base_cls.metadata.create_all(test_engine)
         user = User(name='Alice')
         assert user.name == 'Alice'
+
+
+def test_final_modifier_replacing_merge_tree(test_engine: Engine, test_db: str):
+    common.set_setting('invalid_setting_action', 'drop')
+    with test_engine.begin() as conn:
+        metadata = db.MetaData(schema=test_db)
+
+        test_table = db.Table(
+            "test_final",
+            metadata,
+            Column("id", Integer),
+            Column("name", String),
+            Column("value", Integer),
+            ReplacingMergeTree(order_by="id"),
+        )
+
+        test_table.drop(conn, checkfirst=True)
+        test_table.create(conn)
+
+        conn.execute(
+            test_table.insert(),
+            [
+                {"id": 1, "name": "Alice", "value": 100},
+                {"id": 1, "name": "Alice", "value": 200},  # Duplicate
+                {"id": 2, "name": "Bob", "value": 300},
+            ],
+        )
+
+        query_with_final = select(test_table).final().order_by(test_table.c.id)
+        compiled = query_with_final.compile(dialect=test_engine.dialect)
+        compiled_str = str(compiled)
+        assert " FINAL" in compiled_str
+        result = conn.execute(query_with_final)
+        rows = result.fetchall()
+        assert len(rows) == 2
+
+        test_table.drop(conn)
+
+
+def test_final_modifier_error_cases(test_engine: Engine, test_db: str):
+    """Test FINAL modifier error handling"""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        metadata = db.MetaData(schema=test_db)
+
+        test_table = db.Table(
+            "test_final_errors",
+            metadata,
+            Column("id", Integer),
+            Column("name", String),
+            ReplacingMergeTree(order_by="id"),
+        )
+
+        test_table.drop(conn, checkfirst=True)
+        test_table.create(conn)
+
+        # Not a Select instance
+        with pytest.raises(TypeError, match="final\\(\\) expects a SQLAlchemy Select instance"):
+            final("not a select")
+
+        # No FROM clause
+        query_no_from = select(db.literal(1))
+        with pytest.raises(ValueError, match="final\\(\\) requires a table to apply the FINAL modifier"):
+            query_no_from.final()
+
+        # Multiple FROMs and no explicit table
+        other_table = db.Table(
+            "other_table",
+            metadata,
+            Column("id", Integer),
+            Column("value", String),
+            ReplacingMergeTree(order_by="id"),
+        )
+        other_table.drop(conn, checkfirst=True)
+        other_table.create(conn)
+
+        query_multi_from = select(test_table.c.id, other_table.c.value).select_from(test_table).select_from(other_table)
+
+        with pytest.raises(ValueError, match="final\\(\\) is ambiguous for statements with multiple FROM clauses"):
+            query_multi_from.final()
+
+        # Invalid table parameter type
+        with pytest.raises(TypeError, match="table must be a SQLAlchemy FromClause when provided"):
+            query_with_from = select(test_table)
+            final(query_with_from, table="not a table")
+
+        test_table.drop(conn)
+        other_table.drop(conn)

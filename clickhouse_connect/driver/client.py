@@ -961,7 +961,7 @@ class Client(ABC):
                 full_table = quote_identifier(table)
         column_defs = []
         if column_types is None and column_type_names is None:
-            describe_result = self.query(f'DESCRIBE TABLE {full_table}')
+            describe_result = self.query(f'DESCRIBE TABLE {full_table}', settings=settings)
             column_defs = [ColumnDef(**row) for row in describe_result.named_results()
                            if row['default_type'] not in ('ALIAS', 'MATERIALIZED')]
         if column_names is None or isinstance(column_names, str) and column_names == '*':

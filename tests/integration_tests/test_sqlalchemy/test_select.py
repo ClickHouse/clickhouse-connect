@@ -1,8 +1,6 @@
 # pylint: disable=no-member
-import time
-
 from pytest import fixture
-from sqlalchemy import MetaData, Table, select, text
+from sqlalchemy import MetaData, Table, func, select, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
@@ -11,6 +9,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     String,
     UInt32,
 )
+from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
 
 
 @fixture(scope="module", autouse=True)
@@ -46,6 +45,20 @@ def test_tables(test_engine: Engine, test_db: str):
             )
         )
 
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_argmax"))
+        conn.execute(
+            text(
+                f"""
+            CREATE TABLE {test_db}.test_argmax (
+                id Int32,
+                name String,
+                value Int32,
+                updated_at DateTime
+            ) ENGINE MergeTree() ORDER BY id
+        """
+            )
+        )
+
         conn.execute(
             text(
                 f"""
@@ -69,30 +82,30 @@ def test_tables(test_engine: Engine, test_db: str):
             )
         )
 
-        # Verify data is actually queryable before yielding to tests--been an issue in cloud env
-        max_retries = 30
-        retry_count = 0
-        while retry_count < max_retries:
-            try:
-                user_count = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.select_test_users")).scalar()
-                order_count = conn.execute(text(f"SELECT COUNT(*) FROM {test_db}.select_test_orders")).scalar()
-                if user_count == 3 and order_count == 4:
-                    break
-                retry_count += 1
-                if retry_count < max_retries:
-                    time.sleep(0.1)
-                else:
-                    raise RuntimeError(f"Data verification failed: users={user_count}, orders={order_count}")
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                retry_count += 1
-                if retry_count >= max_retries:
-                    raise RuntimeError(f"Failed to verify test data after {max_retries} retries.") from e
-                time.sleep(0.1)
+        conn.execute(
+            text(
+                f"""
+            INSERT INTO {test_db}.test_argmax VALUES
+            (1, 'Alice_v1', 100, '2024-01-01 00:00:00'),
+            (1, 'Alice_v2', 150, '2025-01-02 00:00:00'),
+            (1, 'Alice_v3', 200, '2024-01-03 00:00:00'),
+            (2, 'Bob_v1', 300, '2024-01-01 00:00:00'),
+            (2, 'Bob_v2', 250, '2024-01-02 00:00:00')
+        """
+            )
+        )
+
+        verify_tables_ready(conn, {
+            f"{test_db}.select_test_users": 3,
+            f"{test_db}.select_test_orders": 4,
+            f"{test_db}.test_argmax": 5
+        })
 
         yield
 
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.select_test_users"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.select_test_orders"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_argmax"))
 
 
 def test_basic_select(test_engine: Engine, test_db: str):
@@ -272,3 +285,31 @@ def test_reflection_integration(test_engine: Engine, test_db: str):
         for row in rows:
             assert isinstance(row.id, int)
             assert isinstance(row.name, str)
+
+
+def test_argmax_aggregate_function(test_engine: Engine, test_db: str):
+    """Test ClickHouse argMax aggregate function"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        test_table = Table("test_argmax", metadata, autoload_with=test_engine)
+
+        query = (
+            select(
+                test_table.c.id,
+                func.argMax(test_table.c.name, test_table.c.updated_at).label("latest_name"),
+                func.argMax(test_table.c.value, test_table.c.updated_at).label("latest_value"),
+            )
+            .group_by(test_table.c.id)
+            .order_by(test_table.c.id)
+        )
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+
+        assert len(rows) == 2
+        assert rows[0].id == 1
+        assert rows[0].latest_name == "Alice_v2"
+        assert rows[0].latest_value == 150
+        assert rows[1].id == 2
+        assert rows[1].latest_name == "Bob_v2"
+        assert rows[1].latest_value == 250
