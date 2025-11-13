@@ -38,9 +38,9 @@ jobs:
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest tests/integration_tests
 
-      - name: Run ClickHouse Container (LATEST)
-        run: CLICKHOUSE_CONNECT_TEST_CH_VERSION=latest docker compose up -d clickhouse
-      - name: Run LATEST tests
+      - name: Run ClickHouse Container (HEAD)
+        run: CLICKHOUSE_CONNECT_TEST_CH_VERSION=head docker compose up -d clickhouse
+      - name: Run HEAD tests
         run: pytest tests/integration_tests
-      - name: remove latest container
+      - name: remove HEAD container
         run: docker compose down -v
