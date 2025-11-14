@@ -22,9 +22,13 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+### Bug Fixes
+### Improvements
+
+## 0.10.0, 2025-11-14
 
 ### Bug Fixes
-- Fixed DST fallback bug in DateTime and DateTime64 types caused by passing potentially ambiguous times to pd.DateTimeIndex constructor.
+- Fixed DST fallback bug in DateTime and DateTime64 types caused by passing potentially ambiguous times to pd.DateTimeIndex constructor. Closes [#585](https://github.com/ClickHouse/clickhouse-connect/issues/585)
 - Fixed issue with JSON key dot escaping. Closes [#571](https://github.com/ClickHouse/clickhouse-connect/issues/571)
 
 ### Improvements
