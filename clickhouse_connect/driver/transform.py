@@ -1,4 +1,6 @@
+import json
 import logging
+from urllib3.response import HTTPResponse
 from typing import Union
 
 from clickhouse_connect.datatypes import registry
@@ -7,7 +9,6 @@ from clickhouse_connect.driver.exceptions import StreamCompleteException, Stream
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryResult, QueryContext
-from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.driver.compression import get_compressor
 
 _EMPTY_CTX = QueryContext()
@@ -15,10 +16,35 @@ _EMPTY_CTX = QueryContext()
 logger = logging.getLogger(__name__)
 
 
+class JSONTransform:
+
+    @staticmethod
+    def parse_response(response: HTTPResponse, context: QueryContext = _EMPTY_CTX) -> Union[NumpyResult, QueryResult]:
+        result_set = []
+        names = []
+        col_types = []
+        resp_data = response.data
+        headers = response.headers
+        if resp_data:
+            resp_json = json.loads(resp_data)
+            # if context.use_numpy:
+            #     res_types = [col.dtype if hasattr(col, 'dtype') else 'O' for col in first_block]
+            #     return NumpyResult(gen(), tuple(names), tuple(col_types), res_types, source)
+            for col in resp_json["meta"]:
+                names.append(col["name"])
+                col_types.append(registry.get_from_name(col["type"]))
+            result_set = resp_json["data"]
+        return QueryResult(result_set, None, tuple(names), tuple(col_types), False)
+
+
 class NativeTransform:
     # pylint: disable=too-many-locals
     @staticmethod
-    def parse_response(source: ByteSource, context: QueryContext = _EMPTY_CTX) -> Union[NumpyResult, QueryResult]:
+    def parse_response(response: HTTPResponse, context: QueryContext = _EMPTY_CTX) -> Union[NumpyResult, QueryResult]:
+        from driver.ctypes import RespBuffCls
+        from driver.httputil import ResponseSource
+
+        source = RespBuffCls(ResponseSource(response))
         names = []
         col_types = []
         block_num = 0

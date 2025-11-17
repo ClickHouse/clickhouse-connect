@@ -28,6 +28,7 @@ class TestConfig(NamedTuple):
     compress: str
     insert_quorum: int
     proxy_address: str
+    read_format_json: bool
     __test__ = False
 
 
@@ -52,7 +53,7 @@ def test_config_fixture() -> Iterator[TestConfig]:
     insert_quorum = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM', '0'))
     proxy_address = os.environ.get('CLICKHOUSE_CONNECT_TEST_PROXY_ADDR', '')
     yield TestConfig(host, port, username, password, docker, test_database, cloud, compress,
-                     insert_quorum, proxy_address)
+                     insert_quorum, proxy_address, True)
 
 
 @fixture(scope='session', name='test_db')
@@ -63,20 +64,24 @@ def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
 @fixture(scope='session', name='test_create_client')
 def test_create_client_fixture(test_config: TestConfig) -> Callable:
     def f(**kwargs):
+        settings = {}
+        if not test_config.read_format_json:
+            settings={'allow_suspicious_low_cardinality_types': 1}
         client = create_client(host=test_config.host,
                                port=test_config.port,
                                user=test_config.username,
                                password=test_config.password,
                                compress=test_config.compress,
-                               settings={'allow_suspicious_low_cardinality_types': 1},
+                               settings=settings,
                                client_name='int_tests/test',
                                **kwargs)
-        if client.min_version('22.8'):
+        if client.min_version('22.8') and not test_config.read_format_json:
             client.set_client_setting('database_replicated_enforce_synchronous_settings', 1)
         if client.min_version('24.8') and (client.min_version('24.12') or not test_config.cloud):
-            client.set_client_setting('allow_experimental_json_type', 1)
-            client.set_client_setting('allow_experimental_dynamic_type', 1)
-            client.set_client_setting('allow_experimental_variant_type', 1)
+            if not test_config.read_format_json:
+                client.set_client_setting('allow_experimental_json_type', 1)
+                client.set_client_setting('allow_experimental_dynamic_type', 1)
+                client.set_client_setting('allow_experimental_variant_type', 1)
         if test_config.insert_quorum:
             client.set_client_setting('insert_quorum', test_config.insert_quorum)
         elif test_config.cloud:

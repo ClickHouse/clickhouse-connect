@@ -182,6 +182,26 @@ def random_query(row_count: int = 10000, col_count: int = 10, date32: bool = Tru
     return f"SELECT * FROM generateRandom('{columns}') LIMIT {row_count}"
 
 
+def str_source(data_s: str, chunk_size: int = 256, cls: Type = ResponseBuffer):
+    data = data_s.encode()
+    def gen():
+        end = 0
+        for _ in range(len(data) // chunk_size):
+            yield data[end:end + chunk_size]
+            end += chunk_size
+        if end < len(data):
+            yield data[end:]
+
+    class TestSource:
+        def __init__(self):
+            self.gen = gen()
+
+        def close(self, ex: Exception = None):
+            pass
+
+    return cls(TestSource())
+
+
 def bytes_source(data: Union[str, bytes], chunk_size: int = 256, cls: Type = ResponseBuffer):
     if isinstance(data, str):
         data = bytes.fromhex(data)

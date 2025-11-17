@@ -18,16 +18,16 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import dict_copy, coerce_bool, coerce_int, dict_add
 from clickhouse_connect.driver.compression import available_compression
-from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
-from clickhouse_connect.driver.httputil import ResponseSource, get_pool_manager, get_response_data, \
+from clickhouse_connect.driver.httputil import get_pool_manager, get_response_data, \
     default_pool_manager, get_proxy_manager, all_managers, check_env_proxy, check_conn_expiration
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryResult, QueryContext
 from clickhouse_connect.driver.binding import quote_identifier, bind_query
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform
+from clickhouse_connect.driver.transform import JSONTransform
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
@@ -75,7 +75,8 @@ class HttpClient(Client):
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
-                 proxy_path: str = ''):
+                 proxy_path: str = '',
+                 read_format: str = 'Native'):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
@@ -126,8 +127,12 @@ class HttpClient(Client):
             self.headers['Authorization'] = 'Basic ' + b64encode(f'{username}:{password}'.encode()).decode()
 
         self.headers['User-Agent'] = common.build_client_name(client_name)
-        self._read_format = self._write_format = 'Native'
-        self._transform = NativeTransform()
+        self._write_format = 'Native'
+        self._read_format = read_format
+        if read_format == 'Native':
+            self._transform = NativeTransform()
+        elif read_format == 'JSONCompact':
+            self._transform = JSONTransform()
 
         # There are use cases when the client needs to disable timeouts.
         if connect_timeout is not None:
@@ -247,9 +252,8 @@ class HttpClient(Client):
                                      retries=self.query_retries,
                                      fields=fields,
                                      server_wait=not context.streaming)
-        byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
-        query_result = self._transform.parse_response(byte_source, context)
+        query_result = self._transform.parse_response(response, context)
         query_result.summary = self._summary(response)
         return query_result
 
