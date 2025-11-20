@@ -11,7 +11,7 @@ from tests.integration_tests.conftest import TestConfig
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int8, UInt16, Decimal, Enum16, Float64, Boolean, \
     FixedString, String, UInt64, UUID, DateTime, DateTime64, LowCardinality, Nullable, Array, AggregateFunction, \
-    UInt32, IPv4
+    UInt32, IPv4, QBit
 from clickhouse_connect.cc_sqlalchemy import final
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map, ReplacingMergeTree
@@ -181,3 +181,32 @@ def test_final_modifier_error_cases(test_engine: Engine, test_db: str):
 
         test_table.drop(conn)
         other_table.drop(conn)
+
+
+def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str):
+    """Test QBit type DDL and basic operations"""
+    common.set_setting('invalid_setting_action', 'drop')
+    with test_engine.begin() as conn:
+        if not conn.connection.driver_connection.client.min_version('25.10'):
+            pytest.skip('QBit type requires ClickHouse version 25.10+')
+
+        conn.execute(text('SET allow_experimental_qbit_type = 1'))
+
+        table_cls = engine_map[test_table_engine]
+        metadata = MetaData(schema=test_db)
+        conn.execute(text('DROP TABLE IF EXISTS qbit_test'))
+
+        table = db.Table('qbit_test', metadata,
+                        db.Column('id', UInt32),
+                        db.Column('vector', QBit('Float32', 8)),
+                        db.Column('embedding', QBit('Float32', 128)),
+                        table_cls('id'))
+        table.create(conn)
+
+        # Verify table was created
+        result = conn.execute(text("SHOW CREATE TABLE qbit_test"))
+        create_sql = result.fetchone()[0]
+        assert 'QBit(Float32, 8)' in create_sql
+        assert 'QBit(Float32, 128)' in create_sql
+
+        conn.execute(text('DROP TABLE qbit_test'))
