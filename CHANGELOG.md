@@ -22,8 +22,11 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+
 ### Bug Fixes
+
 ### Improvements
+- Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
 
 ## 0.10.0, 2025-11-14
 
