@@ -164,7 +164,7 @@ def test_qbit_batch_insert(test_client: Client, table_context: Callable):
         count = test_client.query("SELECT COUNT(*) FROM embeddings").result_set[0][0]
         assert count == 100
 
-        # Sport check a few
+        # Spot check a few
         for test_id in [0, 50, 99]:
             original_vec = batch_data[test_id][1]
             result = test_client.query("SELECT embedding FROM embeddings WHERE id = %(id)s", parameters={"id": test_id})
