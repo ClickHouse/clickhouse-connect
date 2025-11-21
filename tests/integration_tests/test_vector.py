@@ -25,11 +25,11 @@ def module_setup_and_checks(test_client: Client, test_config: TestConfig):
     if not test_client.min_version("25.10"):
         pytest.skip("QBit type requires ClickHouse 25.10+", allow_module_level=True)
 
+    test_client.command("SET allow_experimental_qbit_type = 1")
+
 
 def test_qbit_roundtrip_float64(test_client: Client, table_context: Callable):
     """Test QBit(Float64) round-trip accuracy with fruit_animal example data"""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with table_context("fruit_animal", ["word String", "vec QBit(Float64, 5)"]):
         test_data = [
@@ -55,8 +55,6 @@ def test_qbit_roundtrip_float64(test_client: Client, table_context: Callable):
 def test_qbit_roundtrip_float32(test_client: Client, table_context: Callable):
     """Test QBit(Float32) round-trip accuracy"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("vectors_f32", ["id Int32", "vec QBit(Float32, 8)"]):
         test_data = [
             (1, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
@@ -78,8 +76,6 @@ def test_qbit_roundtrip_float32(test_client: Client, table_context: Callable):
 def test_qbit_roundtrip_bfloat16(test_client: Client, table_context: Callable):
     """Test QBit(BFloat16) round-trip with appropriate tolerance"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("vectors_bf16", ["id Int32", "vec QBit(BFloat16, 8)"]):
         test_data = [
             (1, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
@@ -99,8 +95,6 @@ def test_qbit_roundtrip_bfloat16(test_client: Client, table_context: Callable):
 
 def test_qbit_distance_search(test_client: Client, table_context: Callable):
     """Test L2DistanceTransposed with different precision levels"""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with table_context("fruit_animal", ["word String", "vec QBit(Float64, 5)"]):
         test_data = [
@@ -148,7 +142,6 @@ def test_qbit_distance_search(test_client: Client, table_context: Callable):
 def test_qbit_batch_insert(test_client: Client, table_context: Callable):
     """Test batch insert with multiple vectors"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
     dimension = 16
 
     with table_context("embeddings", ["id Int32", f"embedding QBit(Float32, {dimension})"]):
@@ -177,8 +170,6 @@ def test_qbit_batch_insert(test_client: Client, table_context: Callable):
 def test_qbit_null_handling(test_client: Client, table_context: Callable):
     """Test QBit with NULL values using Nullable wrapper"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("nullable_vecs", ["id Int32", "vec Nullable(QBit(Float32, 4))"]):
         test_data = [
             (1, [1.0, 2.0, 3.0, 4.0]),
@@ -197,8 +188,6 @@ def test_qbit_null_handling(test_client: Client, table_context: Callable):
 def test_qbit_dimension_mismatch_error(test_client: Client, table_context: Callable):
     """Test that inserting vectors with wrong dimensions raises an error"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("dim_test", ["id Int32", "vec QBit(Float32, 8)"]):
         wrong_data = [(1, [1.0, 2.0, 3.0, 4.0, 5.0])]
 
@@ -211,8 +200,6 @@ def test_qbit_dimension_mismatch_error(test_client: Client, table_context: Calla
 def test_qbit_empty_insert(test_client: Client, table_context: Callable):
     """Test inserting an empty list (no rows)"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("empty_test", ["id Int32", "vec QBit(Float32, 4)"]):
         test_client.insert("empty_test", [])
         result = test_client.query("SELECT COUNT(*) FROM empty_test")
@@ -221,8 +208,6 @@ def test_qbit_empty_insert(test_client: Client, table_context: Callable):
 
 def test_qbit_single_row(test_client: Client, table_context: Callable):
     """Test inserting a single row"""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with table_context("single_row", ["id Int32", "vec QBit(Float32, 4)"]):
         single_data = [(1, [1.0, 2.0, 3.0, 4.0])]
@@ -236,8 +221,6 @@ def test_qbit_single_row(test_client: Client, table_context: Callable):
 
 def test_qbit_special_float_values(test_client: Client, table_context: Callable):
     """Test QBit with special float values (inf, -inf, nan)"""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with table_context("special_floats", ["id Int32", "vec QBit(Float64, 4)"]):
         test_data = [
@@ -266,8 +249,6 @@ def test_qbit_special_float_values(test_client: Client, table_context: Callable)
 def test_qbit_edge_case_dimensions(test_client: Client, table_context: Callable):
     """Test QBit with edge case dimensions (1, not multiple of 8)"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("dim_one", ["id Int32", "vec QBit(Float32, 1)"]):
         test_data = [(1, [1.0]), (2, [3.14])]
         test_client.insert("dim_one", test_data)
@@ -286,8 +267,6 @@ def test_qbit_edge_case_dimensions(test_client: Client, table_context: Callable)
 
 def test_qbit_very_large_batch(test_client: Client, table_context: Callable):
     """Test inserting a very large batch of vectors (1000 rows)"""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with table_context("large_batch", ["id Int32", "vec QBit(Float32, 8)"]):
         random.seed(1)
@@ -308,8 +287,6 @@ def test_qbit_very_large_batch(test_client: Client, table_context: Callable):
 def test_qbit_all_nulls(test_client: Client, table_context: Callable):
     """Test QBit nullable column with all NULL values"""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with table_context("all_nulls", ["id Int32", "vec Nullable(QBit(Float32, 4))"]):
         test_data = [(1, None), (2, None), (3, None)]
         test_client.insert("all_nulls", test_data)
@@ -320,8 +297,6 @@ def test_qbit_all_nulls(test_client: Client, table_context: Callable):
 
 def test_qbit_all_zeros(test_client: Client, table_context: Callable):
     """Test QBit with all zero vectors"""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with table_context("all_zeros", ["id Int32", "vec QBit(Float32, 4)"]):
         test_data = [(1, [0.0, 0.0, 0.0, 0.0]), (2, [0.0, 0.0, 0.0, 0.0])]
@@ -335,8 +310,6 @@ def test_qbit_all_zeros(test_client: Client, table_context: Callable):
 def test_invalid_dimension(test_client: Client, table_context: Callable):
     """Try creating a column with a negative dimension."""
 
-    test_client.command("SET allow_experimental_qbit_type = 1")
-
     with pytest.raises(DatabaseError):
         with table_context("bad_dim", ["id Int32", "vec QBit(Float32, -8)"]):
             pass
@@ -344,8 +317,6 @@ def test_invalid_dimension(test_client: Client, table_context: Callable):
 
 def test_invalid_element_type(test_client: Client, table_context: Callable):
     """Try creating a column with an invalid element type."""
-
-    test_client.command("SET allow_experimental_qbit_type = 1")
 
     with pytest.raises(DatabaseError):
         with table_context("bad_el_type", ["id Int32", "vec QBit(Int32, 8)"]):
