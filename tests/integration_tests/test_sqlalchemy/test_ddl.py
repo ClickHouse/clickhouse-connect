@@ -183,10 +183,13 @@ def test_final_modifier_error_cases(test_engine: Engine, test_db: str):
         other_table.drop(conn)
 
 
-def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str):
+def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str, test_config: TestConfig):
     """Test QBit type DDL and basic operations"""
     common.set_setting('invalid_setting_action', 'drop')
     with test_engine.begin() as conn:
+        if test_config.cloud:
+            pytest.skip('QBit type requires allow_experimental_qbit_type setting, but settings are locked in cloud')
+
         if not conn.connection.driver_connection.client.min_version('25.10'):
             pytest.skip('QBit type requires ClickHouse version 25.10+')
 

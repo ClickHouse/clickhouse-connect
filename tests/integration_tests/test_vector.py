@@ -6,12 +6,28 @@ import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
+from tests.integration_tests.conftest import TestConfig
+
+
+@pytest.fixture(autouse=True, scope="module")
+def module_setup_and_checks(test_client: Client, test_config: TestConfig):
+    """
+    Performs all module-level setup:
+    - Skips if in a cloud environment where experimental settings are locked.
+    - Skips if the server version is too old for QBit types.
+    """
+    if test_config.cloud:
+        pytest.skip(
+            "QBit type requires allow_experimental_qbit_type setting, but settings are locked in cloud, skipping tests.",
+            allow_module_level=True,
+        )
+
+    if not test_client.min_version("25.10"):
+        pytest.skip("QBit type requires ClickHouse 25.10+", allow_module_level=True)
 
 
 def test_qbit_roundtrip_float64(test_client: Client, table_context: Callable):
     """Test QBit(Float64) round-trip accuracy with fruit_animal example data"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -38,8 +54,6 @@ def test_qbit_roundtrip_float64(test_client: Client, table_context: Callable):
 
 def test_qbit_roundtrip_float32(test_client: Client, table_context: Callable):
     """Test QBit(Float32) round-trip accuracy"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -63,8 +77,6 @@ def test_qbit_roundtrip_float32(test_client: Client, table_context: Callable):
 
 def test_qbit_roundtrip_bfloat16(test_client: Client, table_context: Callable):
     """Test QBit(BFloat16) round-trip with appropriate tolerance"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -87,8 +99,6 @@ def test_qbit_roundtrip_bfloat16(test_client: Client, table_context: Callable):
 
 def test_qbit_distance_search(test_client: Client, table_context: Callable):
     """Test L2DistanceTransposed with different precision levels"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -137,8 +147,6 @@ def test_qbit_distance_search(test_client: Client, table_context: Callable):
 
 def test_qbit_batch_insert(test_client: Client, table_context: Callable):
     """Test batch insert with multiple vectors"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
     dimension = 16
@@ -168,8 +176,6 @@ def test_qbit_batch_insert(test_client: Client, table_context: Callable):
 
 def test_qbit_null_handling(test_client: Client, table_context: Callable):
     """Test QBit with NULL values using Nullable wrapper"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -190,8 +196,6 @@ def test_qbit_null_handling(test_client: Client, table_context: Callable):
 
 def test_qbit_dimension_mismatch_error(test_client: Client, table_context: Callable):
     """Test that inserting vectors with wrong dimensions raises an error"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -206,8 +210,6 @@ def test_qbit_dimension_mismatch_error(test_client: Client, table_context: Calla
 
 def test_qbit_empty_insert(test_client: Client, table_context: Callable):
     """Test inserting an empty list (no rows)"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -219,8 +221,6 @@ def test_qbit_empty_insert(test_client: Client, table_context: Callable):
 
 def test_qbit_single_row(test_client: Client, table_context: Callable):
     """Test inserting a single row"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -236,8 +236,6 @@ def test_qbit_single_row(test_client: Client, table_context: Callable):
 
 def test_qbit_special_float_values(test_client: Client, table_context: Callable):
     """Test QBit with special float values (inf, -inf, nan)"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -267,8 +265,6 @@ def test_qbit_special_float_values(test_client: Client, table_context: Callable)
 
 def test_qbit_edge_case_dimensions(test_client: Client, table_context: Callable):
     """Test QBit with edge case dimensions (1, not multiple of 8)"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -290,8 +286,6 @@ def test_qbit_edge_case_dimensions(test_client: Client, table_context: Callable)
 
 def test_qbit_very_large_batch(test_client: Client, table_context: Callable):
     """Test inserting a very large batch of vectors (1000 rows)"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -313,8 +307,6 @@ def test_qbit_very_large_batch(test_client: Client, table_context: Callable):
 
 def test_qbit_all_nulls(test_client: Client, table_context: Callable):
     """Test QBit nullable column with all NULL values"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -328,8 +320,6 @@ def test_qbit_all_nulls(test_client: Client, table_context: Callable):
 
 def test_qbit_all_zeros(test_client: Client, table_context: Callable):
     """Test QBit with all zero vectors"""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -344,8 +334,6 @@ def test_qbit_all_zeros(test_client: Client, table_context: Callable):
 
 def test_invalid_dimension(test_client: Client, table_context: Callable):
     """Try creating a column with a negative dimension."""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
@@ -356,8 +344,6 @@ def test_invalid_dimension(test_client: Client, table_context: Callable):
 
 def test_invalid_element_type(test_client: Client, table_context: Callable):
     """Try creating a column with an invalid element type."""
-    if not test_client.min_version("25.10"):
-        pytest.skip("QBit type requires ClickHouse 25.10+")
 
     test_client.command("SET allow_experimental_qbit_type = 1")
 
