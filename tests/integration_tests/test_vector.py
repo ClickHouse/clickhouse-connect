@@ -11,11 +11,6 @@ from tests.integration_tests.conftest import TestConfig
 
 @pytest.fixture(autouse=True, scope="module")
 def module_setup_and_checks(test_client: Client, test_config: TestConfig):
-    """
-    Performs all module-level setup:
-    - Skips if in a cloud environment where experimental settings are locked.
-    - Skips if the server version is too old for QBit types.
-    """
     if test_config.cloud:
         pytest.skip(
             "QBit type requires allow_experimental_qbit_type setting, but settings are locked in cloud, skipping tests.",
@@ -307,7 +302,7 @@ def test_qbit_all_zeros(test_client: Client, table_context: Callable):
         assert result.result_set[1][0] == pytest.approx([0.0, 0.0, 0.0, 0.0])
 
 
-def test_invalid_dimension(test_client: Client, table_context: Callable):
+def test_invalid_dimension(table_context: Callable):
     """Try creating a column with a negative dimension."""
 
     with pytest.raises(DatabaseError):
@@ -315,7 +310,7 @@ def test_invalid_dimension(test_client: Client, table_context: Callable):
             pass
 
 
-def test_invalid_element_type(test_client: Client, table_context: Callable):
+def test_invalid_element_type(table_context: Callable):
     """Try creating a column with an invalid element type."""
 
     with pytest.raises(DatabaseError):

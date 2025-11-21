@@ -206,10 +206,9 @@ def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str, t
                         table_cls('id'))
         table.create(conn)
 
-        # Verify table was created
         result = conn.execute(text("SHOW CREATE TABLE qbit_test"))
         create_sql = result.fetchone()[0]
         assert 'QBit(Float32, 8)' in create_sql
         assert 'QBit(Float32, 128)' in create_sql
 
-        conn.execute(text('DROP TABLE qbit_test'))
+        conn.execute(text('DROP TABLE IF EXISTS qbit_test'))
