@@ -79,6 +79,7 @@ class HttpClient(Client):
                  utc_tz_aware: Optional[bool] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
+                 autogenerate_query_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
                  proxy_path: str = '',
                  form_encode_query_params: bool = False,
@@ -161,6 +162,11 @@ class HttpClient(Client):
         elif 'session_id' not in ch_settings and _autogenerate_session_id:
             ch_settings['session_id'] = str(uuid.uuid4())
 
+        # allow to override the global autogenerate_query_id setting via the constructor params
+        self._autogenerate_query_id = common.get_setting('autogenerate_query_id') \
+            if autogenerate_query_id is None \
+            else autogenerate_query_id
+
         if coerce_bool(compress):
             compression = ','.join(available_compression)
             self.write_compression = available_compression[0]
@@ -191,6 +197,18 @@ class HttpClient(Client):
                 self._setting_status('http_headers_progress_interval_ms').is_writable:
             self._progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
 
+    def _ensure_query_id(self, settings: Optional[dict]) -> Optional[dict]:
+        if not self._autogenerate_query_id:
+            return settings
+
+        if settings is None:
+            settings = {}
+
+        if "query_id" not in settings:
+            settings["query_id"] = str(uuid.uuid4())
+
+        return settings
+
     def set_client_setting(self, key, value):
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
         if str_value is not None:
@@ -215,6 +233,8 @@ class HttpClient(Client):
         return final_query + fmt
 
     def _query_with_context(self, context: QueryContext) -> QueryResult:
+        context.settings = self._ensure_query_id(context.settings)
+
         headers = {}
         params = {}
         if self.database:
@@ -307,6 +327,8 @@ class HttpClient(Client):
             logger.debug('No data included in insert, skipping')
             return QuerySummary()
 
+        context.settings = self._ensure_query_id(context.settings)
+
         def error_handler(resp: HTTPResponse):
             # If we actually had a local exception when building the insert, throw that instead
             if context.insert_exception:
@@ -342,6 +364,8 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
+        settings = self._ensure_query_id(settings)
+
         params = {}
         headers = {'Content-Type': 'application/octet-stream'}
         if compression:
@@ -385,6 +409,8 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
+        settings = self._ensure_query_id(settings)
+
         cmd, params = bind_query(cmd, parameters, self.server_tz)
         headers = {}
         payload = None

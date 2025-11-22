@@ -24,6 +24,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 ### Bug Fixes
 ### Improvements
+- Always generate query_id from the client side as a UUID4 if it not explicitly set. Closes [#596](https://github.com/ClickHouse/clickhouse-connect/issues/596)
 
 ## 0.10.0, 2025-11-14
 
