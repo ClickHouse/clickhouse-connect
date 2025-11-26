@@ -24,6 +24,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 ### Bug Fixes
 ### Improvements
+- Add the ability to create table from PyArrow objects. Addresses [#588](https://github.com/ClickHouse/clickhouse-connect/issues/588)
 
 ## 0.10.0, 2025-11-14
 
