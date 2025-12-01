@@ -14,7 +14,7 @@ from clickhouse_connect.driver.types import ByteSource
 logger = logging.getLogger(__name__)
 
 if np is None:
-    logger.info("NumPy not detected. Install NumPy to see 10-30x performance gains with QBit columns.")
+    logger.info("NumPy not detected. Install NumPy to see an order of magnitude performance gain with QBit columns.")
 
 
 class QBit(ClickHouseType):
