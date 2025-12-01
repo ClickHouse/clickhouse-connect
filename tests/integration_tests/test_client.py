@@ -234,7 +234,7 @@ def test_temporary_tables(test_client: Client):
     test_client.insert_df('temp_test_table', df, settings=session_settings)
     df = test_client.query_df('SELECT * FROM temp_test_table', settings=session_settings)
     assert len(df['field1']) == 4
-    test_client.command('DROP TABLE IF EXISTS temp_test_table', settings=session_settings)
+    test_client.command('DROP TABLE temp_test_table', settings=session_settings)
 
 
 def test_str_as_bytes(test_client: Client, table_context: Callable):
