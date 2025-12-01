@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 ### Bug Fixes
+- Fix issue with DROP table in client temp table test.
+
 ### Improvements
 
 ## 0.10.0, 2025-11-14
