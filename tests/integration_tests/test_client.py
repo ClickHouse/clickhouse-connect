@@ -215,7 +215,10 @@ def test_empty_result(test_client: Client):
     assert len(test_client.query("SELECT * FROM system.tables WHERE name = '_NOT_A THING'").result_rows) == 0
 
 
-def test_temporary_tables(test_client: Client):
+def test_temporary_tables(test_client: Client, test_config: TestConfig):
+    if test_config.cloud:
+        pytest.skip("Skipping temporary tables test in cloud env")
+
     session_id = test_client.get_client_setting("session_id")
     session_settings = {"session_id": session_id}
     test_client.command("""
