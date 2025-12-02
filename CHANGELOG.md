@@ -24,6 +24,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 
 ### Bug Fixes
+- Fix issue with DROP table in client temp table test.
 
 ### Improvements
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
