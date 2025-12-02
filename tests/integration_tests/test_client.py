@@ -5,7 +5,7 @@ from typing import Callable
 import pytest
 
 from clickhouse_connect import create_client
-from clickhouse_connect import datatypes
+from clickhouse_connect import datatypes, common
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
@@ -215,7 +215,13 @@ def test_empty_result(test_client: Client):
     assert len(test_client.query("SELECT * FROM system.tables WHERE name = '_NOT_A THING'").result_rows) == 0
 
 
-def test_temporary_tables(test_client: Client):
+def test_temporary_tables(test_create_client: Callable):
+    # Create a dedicated client for this test to ensure connection isolation
+    #  which hopefully helps prevent problems in cloud env.
+    old_max_age = common.get_setting('max_connection_age')
+    common.set_setting('max_connection_age', 0)
+    test_client = test_create_client()
+
     session_id = test_client.get_client_setting("session_id")
     session_settings = {"session_id": session_id}
     test_client.command("""
@@ -235,6 +241,9 @@ def test_temporary_tables(test_client: Client):
     df = test_client.query_df('SELECT * FROM temp_test_table', settings=session_settings)
     assert len(df['field1']) == 4
     test_client.command('DROP TABLE IF EXISTS temp_test_table', settings=session_settings)
+
+    test_client.close()
+    common.set_setting('max_connection_age', old_max_age)
 
 
 def test_str_as_bytes(test_client: Client, table_context: Callable):
