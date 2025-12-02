@@ -40,6 +40,11 @@ def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str:
     Covers core scalar types. For anything unknown, we raise so the
     caller is aware that the automatic mapping is not implemented for that Arrow type.
     """
+    if pa is None:
+        raise ImportError(
+            "PyArrow is required, but it is not installed."
+        )
+
     pat = pa.types
 
     # Signed ints
@@ -65,7 +70,7 @@ def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str:
     # Floats
     if pat.is_float16(arrow_type) or pat.is_float32(arrow_type):
         return 'Float32'
-    if pat.is_floating(arrow_type):
+    if pat.is_float64(arrow_type):
         return 'Float64'
 
     # Boolean
@@ -86,7 +91,7 @@ class _DDLType:
     Minimal helper used to satisfy TableColumnDef.ch_type.
 
     create_table() only needs ch_type.name when building the DDL string,
-    so gonna wrap the ClickHouse type name in this tiny object instead of
+    so we'll wrap the ClickHouse type name in this tiny object instead of
     constructing full ClickHouseType instances here.
     """
     def __init__(self, name: str):
@@ -97,6 +102,11 @@ def arrow_schema_to_column_defs(schema: "pa.Schema") -> list[TableColumnDef]:
     """
     Convert a PyArrow Schema into a list of TableColumnDef objects.
     """
+    if pa is None:
+        raise ImportError(
+            "PyArrow is required, but it is not installed."
+        )
+
     if not isinstance(schema, pa.Schema):
         raise TypeError(f'Expected pyarrow.Schema, got {type(schema)!r}')
 
