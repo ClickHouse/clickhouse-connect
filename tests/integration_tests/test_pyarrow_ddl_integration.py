@@ -1,16 +1,14 @@
 import pytest
-
-from clickhouse_connect.driver import Client
-
-pytest.importorskip("pyarrow")
-
 import pyarrow as pa
 
+from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.ddl import (
     arrow_schema_to_column_defs,
     create_table,
     create_table_from_arrow_schema,
 )
+
+pytest.importorskip("pyarrow")
 
 
 def test_arrow_create_table_and_insert(test_client: Client):
@@ -20,9 +18,9 @@ def test_arrow_create_table_and_insert(test_client: Client):
         )
 
     table_name = "test_arrow_basic_integration"
-    
+
     test_client.command(f"DROP TABLE IF EXISTS {table_name}")
-    
+
     schema = pa.schema(
         [
             ("id", pa.int64()),

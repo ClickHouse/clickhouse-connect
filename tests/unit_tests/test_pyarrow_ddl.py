@@ -1,7 +1,4 @@
 import pytest
-
-pytest.importorskip("pyarrow")
-
 import pyarrow as pa
 
 from clickhouse_connect.driver.ddl import (
@@ -9,6 +6,8 @@ from clickhouse_connect.driver.ddl import (
     create_table,
     create_table_from_arrow_schema,
 )
+
+pytest.importorskip("pyarrow")
 
 
 def test_arrow_schema_to_column_defs_basic_mappings():

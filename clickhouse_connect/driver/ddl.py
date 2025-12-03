@@ -29,7 +29,7 @@ def create_table(table_name: str, columns: Sequence[TableColumnDef], engine: str
     return stmt
 
 
-def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str:
+def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str: # pylint: disable=too-many-return-statements
     """
     Best-effort mapping from common PyArrow types to ClickHouse type names.
 
@@ -99,9 +99,10 @@ def arrow_schema_to_column_defs(schema: "pa.Schema") -> list[TableColumnDef]:
     non-nullable ClickHouse types, even though Arrow fields are nullable by
     default.
 
-    If the user later inserts an Arrow table that contains nulls, ClickHouse
-    will raise an error for that insert, and the user can adjust the DDL
-    (e.g. wrap specific types in Nullable(...)) to match their data.
+    Note that if the user inserts a table with nulls into a non-Nullable column,
+    ClickHouse will silently convert those nulls to default values due to the default
+    server setting input_format_null_as_default=1 and current lack of client-side
+    validation on arrow inserts.
     """
     pa = check_arrow()
 
