@@ -1,11 +1,7 @@
 from typing import NamedTuple, Sequence
 
 from clickhouse_connect.datatypes.base import ClickHouseType
-
-try:
-    import pyarrow as pa
-except Exception:
-    pa = None
+from clickhouse_connect.driver.options import check_arrow
 
 
 class TableColumnDef(NamedTuple):
@@ -40,10 +36,7 @@ def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str:
     Covers core scalar types. For anything unknown, we raise so the
     caller is aware that the automatic mapping is not implemented for that Arrow type.
     """
-    if pa is None:
-        raise ImportError(
-            "PyArrow is required, but it is not installed."
-        )
+    pa = check_arrow()
 
     pat = pa.types
 
@@ -101,11 +94,16 @@ class _DDLType:
 def arrow_schema_to_column_defs(schema: "pa.Schema") -> list[TableColumnDef]:
     """
     Convert a PyArrow Schema into a list of TableColumnDef objects.
+    
+    This helper uses an *optimistic non-null* strategy: it always produces
+    non-nullable ClickHouse types, even though Arrow fields are nullable by
+    default.
+
+    If the user later inserts an Arrow table that contains nulls, ClickHouse
+    will raise an error for that insert, and the user can adjust the DDL
+    (e.g. wrap specific types in Nullable(...)) to match their data.
     """
-    if pa is None:
-        raise ImportError(
-            "PyArrow is required, but it is not installed."
-        )
+    pa = check_arrow()
 
     if not isinstance(schema, pa.Schema):
         raise TypeError(f'Expected pyarrow.Schema, got {type(schema)!r}')
