@@ -1,3 +1,5 @@
+# pylint: disable=duplicate-code
+
 import pytest
 import pyarrow as pa
 
