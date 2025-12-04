@@ -473,9 +473,7 @@ class Client(ABC):
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
         :param parameters: Optional dictionary used to format the query
-        :param settings: Optional dictionary of ClickHouse settings (key/string values). This includes both
-          server settings (e.g., max_threads, max_memory_usage) and HTTP interface parameters (e.g., query_id,
-          session_id, database). All settings are sent as URL query parameters.
+        :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param query_formats: See QueryContext __init__ docstring
         :param column_formats: See QueryContext __init__ docstring
         :param encoding: See QueryContext __init__ docstring
@@ -502,9 +500,7 @@ class Client(ABC):
         :param use_extended_dtypes:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
           pandas.NA and pandas.NaT for ClickHouse NULL values, as well as extended Pandas dtypes such as IntegerArray
           and StringArray.  Defaulted to True for query_df methods
-        :param transport_settings: Optional dictionary of transport level settings sent as HTTP headers. Use this for
-          custom headers (e.g., X-Workload) for load balancers or proxies. ClickHouse parameters like query_id should
-          go in the settings dict, not here.
+        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable QueryContext
         """
         resolved_utc_tz_aware = self.utc_tz_aware if utc_tz_aware is None else utc_tz_aware
