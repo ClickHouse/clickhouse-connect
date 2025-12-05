@@ -448,7 +448,8 @@ def test_query_id_in_query_logs(test_client: Client, test_config: TestConfig):
         max_retries = 30
         for _ in range(max_retries):
             log_result = test_client.query(
-                f"SELECT query_id FROM system.query_log WHERE query_id = '{test_query_id}' AND " "event_time > now() - 30 LIMIT 1"
+                "SELECT query_id FROM system.query_log WHERE query_id = {query_id} AND event_time > now() - 30 LIMIT 1",
+                parameters={"query_id": test_query_id}
             )
 
             if len(log_result.result_set) > 0:
