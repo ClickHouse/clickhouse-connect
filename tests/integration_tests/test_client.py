@@ -1,6 +1,7 @@
 from pathlib import Path
 from time import sleep
 from typing import Callable
+import uuid
 
 import pytest
 
@@ -17,6 +18,15 @@ hij,1,1
 hij,1,
 klm,1,0
 klm,1,"""
+
+
+def _is_valid_uuid_v4(id_string: str) -> bool:
+    """Helper function to validate that a string is a valid UUID v4"""
+    try:
+        parsed_uuid = uuid.UUID(id_string)
+        return parsed_uuid.version == 4
+    except (ValueError, AttributeError):
+        return False
 
 
 def test_ping(test_client: Client):
@@ -385,3 +395,78 @@ def test_role_setting_works(test_client: Client, test_config: TestConfig):
     )
     res = role_client.query('SELECT currentRoles()')
     assert res.result_rows == [([role_limited],)]
+
+
+def test_query_id_autogeneration(test_client: Client, test_table_engine: str):
+    """Test that query_id is auto-generated for query(), command(), and insert() methods"""
+    result = test_client.query("SELECT 1")
+    assert _is_valid_uuid_v4(result.query_id)
+
+    summary = test_client.command("DROP TABLE IF EXISTS test_query_id_nonexistent")
+    assert _is_valid_uuid_v4(summary.query_id())
+
+    test_client.command("DROP TABLE IF EXISTS test_query_id_insert")
+    test_client.command(f"CREATE TABLE test_query_id_insert (id UInt32) ENGINE {test_table_engine} ORDER BY id")
+    summary = test_client.insert("test_query_id_insert", [[1], [2], [3]], column_names=["id"])
+    assert _is_valid_uuid_v4(summary.query_id())
+    test_client.command("DROP TABLE test_query_id_insert")
+
+
+def test_query_id_manual_override(test_client: Client):
+    """Test that manually specified query_id is respected and not overwritten"""
+    manual_query_id = "test_manual_query_id_override"
+    result = test_client.query("SELECT 1", settings={"query_id": manual_query_id})
+    assert result.query_id == manual_query_id
+
+
+# pylint: disable=protected-access
+def test_query_id_disabled(test_config: TestConfig):
+    """Test that autogenerate_query_id=False works correctly"""
+    client_no_autogen = create_client(
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        autogenerate_query_id=False,
+    )
+
+    assert client_no_autogen._autogenerate_query_id is False
+
+    # Even with autogen disabled, server generates a query_id
+    result = client_no_autogen.query("SELECT 1")
+    assert _is_valid_uuid_v4(result.query_id)
+
+    client_no_autogen.close()
+
+
+def test_query_id_in_query_logs(test_client: Client, test_config: TestConfig):
+    """Test that query_id appears in ClickHouse's system.query_log for observability"""
+    if test_config.cloud:
+        pytest.skip("Skipping query_log test in cloud environment")
+
+    def check_in_logs(test_query_id):
+        max_retries = 30
+        for _ in range(max_retries):
+            log_result = test_client.query(
+                "SELECT query_id FROM system.query_log WHERE query_id = {query_id:String} AND event_time > now() - 30 LIMIT 1",
+                parameters={"query_id": test_query_id}
+            )
+
+            if len(log_result.result_set) > 0:
+                assert log_result.result_set[0][0] == test_query_id
+                return
+
+            sleep(0.1)
+
+        # If we get here, query_id never appeared in logs
+        pytest.fail(f"query_id '{test_query_id}' did not appear in system.query_log after {max_retries * 0.1}s")
+
+    # Manual override check
+    test_query_id_manual = "test_query_id_in_logs"
+    test_client.query("SELECT 1 as num", settings={"query_id": test_query_id_manual})
+    check_in_logs(test_query_id_manual)
+
+    # Autogen check
+    result = test_client.query("SELECT 2 as num")
+    test_query_id_auto = result.query_id
+    check_in_logs(test_query_id_auto)

@@ -29,6 +29,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ### Improvements
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
 - Add the ability to create table from PyArrow objects. Addresses [#588](https://github.com/ClickHouse/clickhouse-connect/issues/588)
+- Always generate query_id from the client side as a UUID4 if it is not explicitly set. Closes [#596](https://github.com/ClickHouse/clickhouse-connect/issues/596)
 
 ## 0.10.0, 2025-11-14
 
