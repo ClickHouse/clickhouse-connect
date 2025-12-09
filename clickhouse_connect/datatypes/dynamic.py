@@ -1,10 +1,13 @@
 from collections import namedtuple
-from typing import List, Sequence, Collection, Any
+import logging
+from typing import List, Sequence, Collection, Any, Union
 from urllib.parse import unquote
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.common import unescape_identifier, first_value, write_uint64
+from clickhouse_connect.driver.bytesource import ByteArraySource
+from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.errors import handle_error
 from clickhouse_connect.driver.exceptions import DataError
@@ -18,6 +21,8 @@ STRING_DATA_TYPE: ClickHouseType
 _JSON_NULL = b'null'
 _JSON_NULL_STR = 'null'
 
+logger = logging.getLogger(__name__)
+
 json_serialization_format = 0x1
 
 VariantState = namedtuple('VariantState', 'discriminator_node element_states')
@@ -28,6 +33,11 @@ def _json_path_segments(path: str) -> List[str]:
     if '%' in path:
         return [unquote(segment) for segment in segments]
     return segments
+
+
+class SharedDataString(String):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
+        return source.read_str_col(num_rows, None)
 
 
 class Variant(ClickHouseType):
@@ -169,7 +179,59 @@ def write_str_values(ch_type: ClickHouseType, column: Sequence, dest: bytearray,
     handle_error(data_conv.write_str_col(col, False, encoding, dest), ctx)
 
 
-JSONState = namedtuple('JSONState', 'serialize_version dynamic_paths typed_states dynamic_states')
+JSONState = namedtuple("JSONState", "serialize_version dynamic_paths typed_states dynamic_states shared_state")
+
+# Standard discriminator to type mapping for shared data
+# From https://github.com/ClickHouse/ClickHouse/src/DataTypes/DataTypesBinaryEncoding.cpp
+STANDARD_DISCRIMINATOR_TYPES = {
+    0x00: "Nothing",
+    0x01: "UInt8",
+    0x02: "UInt16",
+    0x03: "UInt32",
+    0x04: "UInt64",
+    0x05: "UInt128",
+    0x06: "UInt256",
+    0x07: "Int8",
+    0x08: "Int16",
+    0x09: "Int32",
+    0x0A: "Int64",
+    0x0B: "Int128",
+    0x0C: "Int256",
+    0x0D: "Float32",
+    0x0E: "Float64",
+    0x15: "String",
+    0x2D: "Bool",
+}
+
+
+def decode_shared_data_value(binary_data: Union[bytes, str], ctx: QueryContext):
+    """Decode a variant-encoded value from JSON shared data using discriminator byte."""
+    if binary_data is None:
+        return None
+
+    if len(binary_data) < 1:
+        return binary_data
+
+    discriminator = binary_data[0]
+    if discriminator == 255:
+        return None
+
+    type_name = STANDARD_DISCRIMINATOR_TYPES.get(discriminator)
+    if type_name is None:
+        return binary_data
+
+    value_type = get_from_name(type_name)
+
+    try:
+        byte_source = ByteArraySource(binary_data[1:])
+        read_state = value_type.read_column_prefix(byte_source, ctx)
+        result = value_type.read_column_data(byte_source, 1, ctx, read_state)
+        return result[0] if result else None
+
+    # pylint: disable=broad-exception-caught
+    except Exception as e:
+        logger.debug("Shared data decode failed: %s", e)
+        return binary_data
 
 
 class JSON(ClickHouseType):
@@ -247,7 +309,8 @@ class JSON(ClickHouseType):
         dynamic_paths = [source.read_leb128_str() for _ in range(dynamic_path_cnt)]
         typed_states = [typed.read_column_prefix(source, ctx) for typed in self.typed_types]
         dynamic_states = [read_dynamic_prefix(self, source, ctx) for _ in range(dynamic_path_cnt)]
-        return JSONState(serialize_version, dynamic_paths, typed_states, dynamic_states)
+        shared_state = SHARED_DATA_TYPE.read_column_prefix(source, ctx)
+        return JSONState(serialize_version, dynamic_paths, typed_states, dynamic_states, shared_state)
 
     # pylint: disable=too-many-locals
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: JSONState):
@@ -256,7 +319,7 @@ class JSON(ClickHouseType):
         dynamic_columns = [
             read_variant_column(source, num_rows, ctx, dynamic_state.variant_types, dynamic_state.variant_states)
             for dynamic_state in read_state.dynamic_states]
-        SHARED_DATA_TYPE.read_column_data(source, num_rows, ctx, None)
+        shared_columns = SHARED_DATA_TYPE.read_column_data(source, num_rows, ctx, read_state.shared_state)
         col = []
         for row_num in range(num_rows):
             top = {}
@@ -284,6 +347,11 @@ class JSON(ClickHouseType):
                         item[key] = child
                     item = child
                 item[chain[-1]] = value
+            if shared_columns and row_num < len(shared_columns):
+                shared_data = shared_columns[row_num]
+                if shared_data:
+                    decoded_shared = {key: decode_shared_data_value(value, ctx) for key, value in shared_data.items()}
+                    top.update(decoded_shared)
             col.append(top)
         if self.read_format(ctx) == 'string':
             return [any_to_json(v) for v in col]

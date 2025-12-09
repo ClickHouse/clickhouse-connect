@@ -229,3 +229,157 @@ def test_json_str_time(test_client: Client, test_config: TestConfig):
     # The following query is broken -- looks like something to do with Nullable(String) in the Tuple
     # result = test_client.query("SELECT'{\"k\": [123, \"xyz\"]}'::JSON",
     #                           settings={'input_format_json_read_numbers_as_strings': 0}).result_set
+
+
+def test_json_with_many_paths(test_client: Client, table_context: Callable):
+    """Test JSON with many dynamic paths to exercise the shared data structure.
+    Validates that all keys (including those beyond max_dynamic_paths) are returned.
+    """
+    type_available(test_client, "json")
+    with table_context("json_many_paths", ["id Int32", "data JSON(max_dynamic_paths=5)"]):  # Low limit to force shared data usage
+        large_json = {f"key_{i}": f"value_{i}" for i in range(20)}
+        test_client.insert("json_many_paths", [[1, large_json]])
+        result = test_client.query("SELECT * FROM json_many_paths").result_set
+
+        assert result[0][0] == 1
+        returned_json = result[0][1]
+        assert isinstance(returned_json, dict)
+        assert len(returned_json) == 20
+        for i in range(20):
+            assert f"key_{i}" in returned_json
+            assert returned_json[f"key_{i}"] == f"value_{i}"
+
+
+def test_json_with_long_values(test_client: Client, table_context: Callable):
+    """Test JSON shared data with long string values (>127 chars) to verify VarInt decoding.
+    String values longer than 127 characters require multi-byte VarInt length encoding.
+    """
+    type_available(test_client, "json")
+    with table_context("json_long_values", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        short_val = "a" * 10
+        medium_val = "b" * 150
+        long_val = "c" * 300
+
+        test_json = {
+            "key_0": short_val,
+            "key_1": medium_val,
+            "key_2": long_val,
+        }
+        test_client.insert("json_long_values", [[1, test_json]])
+        result = test_client.query("SELECT * FROM json_long_values").result_set
+
+        assert result[0][0] == 1
+        returned_json = result[0][1]
+        assert isinstance(returned_json, dict)
+        assert returned_json["key_0"] == short_val
+        assert returned_json["key_1"] == medium_val
+        assert returned_json["key_2"] == long_val
+
+
+def test_json_shared_data_primitive_types(test_client: Client, table_context: Callable):
+    """
+    Tests round-trip encoding/decoding of integers, floats, booleans, strings, and NULL
+    when they exceed max_dynamic_paths and are stored in the shared data structure.
+    """
+    type_available(test_client, "json")
+
+    # Use small max_dynamic_paths=3 to force most values into shared data
+    with table_context("json_primitive_types", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        test_data = {
+            "int8_val": -100,
+            "int16_val": -30000,
+            "int32_val": -2000000000,
+            "int64_val": -9000000000000000000,
+            "uint8_val": 200,
+            "uint16_val": 60000,
+            "uint32_val": 4000000000,
+            "uint64_val": 18000000000000000000,
+            "float32_val": 3.14159,
+            "float64_val": 2.718281828459045,
+            "bool_true": True,
+            "bool_false": False,
+            "string_val": "Hello, shared data!",
+            "empty_string": "",
+            "long_string": "x" * 200,
+            "null_val": None,
+            "zero_int": 0,
+            "zero_float": 0.0,
+            "negative_float": -123.456,
+            "negative_int": -1,
+        }
+
+        test_client.insert("json_primitive_types", [[1, test_data]])
+        result = test_client.query("SELECT * FROM json_primitive_types").result_set
+
+        assert result[0][0] == 1
+        returned = result[0][1]
+        assert isinstance(returned, dict)
+
+        assert returned["int8_val"] == test_data["int8_val"]
+        assert returned["int16_val"] == test_data["int16_val"]
+        assert returned["int32_val"] == test_data["int32_val"]
+        assert returned["int64_val"] == test_data["int64_val"]
+        assert returned["uint8_val"] == test_data["uint8_val"]
+        assert returned["uint16_val"] == test_data["uint16_val"]
+        assert returned["uint32_val"] == test_data["uint32_val"]
+        assert returned["uint64_val"] == test_data["uint64_val"]
+        assert returned["float32_val"] == pytest.approx(test_data["float32_val"])
+        assert returned["float64_val"] == pytest.approx(test_data["float64_val"])
+        assert returned["bool_true"] is test_data["bool_true"]
+        assert returned["bool_false"] is test_data["bool_false"]
+        assert returned["string_val"] == test_data["string_val"]
+        assert returned["empty_string"] == test_data["empty_string"]
+        assert returned["long_string"] == test_data["long_string"]
+        assert "null_val" not in returned
+        assert returned["zero_int"] == test_data["zero_int"]
+        assert returned["zero_float"] == pytest.approx(test_data["zero_float"])
+        assert returned["negative_float"] == pytest.approx(test_data["negative_float"])
+        assert returned["negative_int"] == test_data["negative_int"]
+
+
+def test_json_shared_data_multiple_rows(test_client: Client, table_context: Callable):
+    """Test JSON shared data with multiple rows to ensure consistent decoding."""
+    type_available(test_client, "json")
+
+    with table_context("json_multirow", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        test_data = [
+            {"a": "string_val", "b": 100, "c": 3.14, "d": True, "e": "more"},
+            {"a": 42, "b": "different", "c": False, "d": 2.718, "e": -999},
+            {"a": 0, "b": 0.0, "c": "", "d": None, "e": False},
+        ]
+        rows = [[i + 1, data] for i, data in enumerate(test_data)]
+
+        test_client.insert("json_multirow", rows)
+        result = test_client.query("SELECT * FROM json_multirow ORDER BY id").result_set
+        print(result)
+
+        # Row 1
+        assert result[0][0] == 1
+        row1 = result[0][1]
+        assert row1["a"] == test_data[0]["a"]
+        assert row1["b"] == test_data[0]["b"]
+        assert row1["c"] == pytest.approx(test_data[0]["c"])
+        assert row1["d"] is test_data[0]["d"]
+        assert row1["e"] == test_data[0]["e"]
+
+        # Row 2
+        assert result[1][0] == 2
+        row2 = result[1][1]
+        assert row2["a"] == test_data[1]["a"]
+        assert row2["b"] == test_data[1]["b"]
+        assert row2["c"] is test_data[1]["c"]
+        assert row2["d"] == pytest.approx(test_data[1]["d"])
+        assert row2["e"] == test_data[1]["e"]
+
+        # Row 3
+        assert result[2][0] == 3
+        row3 = result[2][1]
+        assert row3["a"] == test_data[2]["a"]
+        assert row3["b"] == pytest.approx(test_data[2]["b"])
+        assert row3["c"] == test_data[2]["c"]
+        assert "d" not in row3
+        assert row3["e"] is test_data[2]["e"]
+
+        # Query column with nulls via dot notation
+        result_w_nulls = test_client.query("SELECT data.d FROM json_multirow ORDER BY id").result_set
+        assert [result[0] for result in result_w_nulls] == [item["d"] for item in test_data]

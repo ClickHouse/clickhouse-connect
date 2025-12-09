@@ -25,6 +25,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ### Bug Fixes
 - Fix issue with DROP table in client temp table test.
+- Fixed `StreamFailureError` when reading JSON columns with shared data by correctly decoding the binary variant values. Closes [#599](https://github.com/ClickHouse/clickhouse-connect/issues/599)
+- Fixed JSON column reconstruction to properly handle nested paths in shared data (keys beyond `max_dynamic_paths`).
+- Corrected the internal definition of `SHARED_DATA_TYPE` for JSON columns.
 
 ### Improvements
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)

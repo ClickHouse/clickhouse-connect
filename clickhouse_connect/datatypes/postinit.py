@@ -1,7 +1,8 @@
 from clickhouse_connect.datatypes import registry, dynamic, geometric
 
-dynamic.SHARED_DATA_TYPE = registry.get_from_name('Array(String, String)')
 dynamic.STRING_DATA_TYPE = registry.get_from_name('String')
+dynamic.SHARED_DATA_TYPE = registry.get_from_name('Map(String, String)')
+dynamic.SHARED_DATA_TYPE.value_type = dynamic.SharedDataString(dynamic.STRING_DATA_TYPE.type_def)
 
 point = 'Tuple(Float64, Float64)'
 ring = f'Array({point})'
