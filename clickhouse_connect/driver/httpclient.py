@@ -79,6 +79,7 @@ class HttpClient(Client):
                  utc_tz_aware: Optional[bool] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
+                 autogenerate_query_id: Optional[bool] = None,
                  tls_mode: Optional[str] = None,
                  proxy_path: str = '',
                  form_encode_query_params: bool = False,
@@ -160,6 +161,11 @@ class HttpClient(Client):
             ch_settings['session_id'] = session_id
         elif 'session_id' not in ch_settings and _autogenerate_session_id:
             ch_settings['session_id'] = str(uuid.uuid4())
+
+        # allow to override the global autogenerate_query_id setting via the constructor params
+        self._autogenerate_query_id = common.get_setting('autogenerate_query_id') \
+            if autogenerate_query_id is None \
+            else autogenerate_query_id
 
         if coerce_bool(compress):
             compression = ','.join(available_compression)
@@ -495,6 +501,10 @@ class HttpClient(Client):
             final_params['http_headers_progress_interval_ms'] = self._progress_interval
         final_params = dict_copy(self.params, final_params)
         final_params = dict_copy(final_params, params)
+
+        if self._autogenerate_query_id and "query_id" not in final_params:
+            final_params["query_id"] = str(uuid.uuid4())
+
         url = f'{self.url}?{urlencode(final_params)}'
         kwargs = {
             'headers': headers,
