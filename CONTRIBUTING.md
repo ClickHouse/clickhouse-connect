@@ -35,6 +35,7 @@ You could either use PyCharm for that, or follow [the instructions on the offici
 python -m pip install --upgrade pip
 pip install setuptools wheel
 pip install -r tests/test_requirements.txt
+pre-commit install
 ```
 
 ### Run the setup script
