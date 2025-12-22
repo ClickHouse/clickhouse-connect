@@ -71,10 +71,37 @@ def test_arrow_schema_to_column_defs_basic_mappings():
     ]
 
 
+def test_arrow_schema_to_column_defs_datetime_mappings():
+    schema = pa.schema(
+        [
+            ("d32", pa.date32()),
+            ("d64", pa.date64()),
+            ("ts_s", pa.timestamp("s")),
+            ("ts_ms", pa.timestamp("ms")),
+            ("ts_us", pa.timestamp("us")),
+            ("ts_ns", pa.timestamp("ns")),
+            ("ts_tz", pa.timestamp("ms", tz="UTC")),
+        ]
+    )
+
+    col_defs = arrow_schema_to_column_defs(schema)
+    type_names = [c.ch_type.name for c in col_defs]
+
+    assert type_names == [
+        "Date32",
+        "DateTime64(3)",
+        "DateTime",
+        "DateTime64(3)",
+        "DateTime64(6)",
+        "DateTime64(9)",
+        "DateTime64(3, 'UTC')",
+    ]
+
+
 def test_arrow_schema_to_column_defs_unsupported_type_raises():
     schema = pa.schema(
         [
-            ("ts", pa.timestamp("ms")),
+            ("lst", pa.list_(pa.int64())),
         ]
     )
 

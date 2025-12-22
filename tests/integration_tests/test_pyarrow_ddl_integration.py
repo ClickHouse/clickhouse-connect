@@ -1,3 +1,5 @@
+from datetime import datetime, date, timezone
+
 import pytest
 import pyarrow as pa
 
@@ -99,5 +101,65 @@ def test_arrow_schema_to_column_defs(test_client: Client):
         (10, "x"),
         (20, "y"),
     ]
+
+    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_arrow_datetime_create_and_insert(test_client: Client):
+    if not test_client.min_version("20"):
+        pytest.skip(
+            f"Not supported server version {test_client.server_version}"
+        )
+
+    table_name = "test_arrow_datetime_integration"
+
+    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("event_date", pa.date32()),
+            ("event_ts", pa.timestamp("ms")),
+            ("event_ts_tz", pa.timestamp("ms", tz="UTC")),
+        ]
+    )
+
+    ddl = create_table_from_arrow_schema(
+        table_name=table_name,
+        schema=schema,
+        engine="MergeTree",
+        engine_params={"ORDER BY": "id"},
+    )
+    test_client.command(ddl)
+
+    arrow_table = pa.table(
+        {
+            "id": [1, 2],
+            "event_date": [date(2025, 1, 1), date(2025, 1, 2)],
+            "event_ts": [
+                datetime(2025, 1, 1, 12, 0, 0, 123000),
+                datetime(2025, 1, 1, 13, 0, 0, 456000),
+            ],
+            "event_ts_tz": [
+                datetime(2025, 1, 1, 12, 0, 0, 123000, tzinfo=timezone.utc),
+                datetime(2025, 1, 1, 13, 0, 0, 456000, tzinfo=timezone.utc),
+            ],
+        },
+        schema=schema,
+    )
+
+    test_client.insert_arrow(table=table_name, arrow_table=arrow_table)
+
+    result = test_client.query(
+        f"SELECT id, event_date, event_ts, event_ts_tz "
+        f"FROM {table_name} ORDER BY id"
+    )
+    rows = result.result_rows
+
+    assert len(rows) == 2
+    assert rows[0][0] == 1
+    assert str(rows[0][1]) == "2025-01-01"
+    assert rows[1][0] == 2
+    assert str(rows[1][1]) == "2025-01-02"
 
     test_client.command(f"DROP TABLE IF EXISTS {table_name}")
