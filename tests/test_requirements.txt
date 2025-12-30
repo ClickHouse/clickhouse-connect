@@ -20,6 +20,6 @@ zstandard>=0.25.0; python_version >= "3.14"
 lz4; python_version < "3.14"
 lz4>=4.4.5; python_version >= "3.14"
 pyjwt[crypto]==2.10.1
-pre-commit==4.5.1
+pre-commit==4.3.0
 pylint==3.3.1
 astroid==3.3.5
