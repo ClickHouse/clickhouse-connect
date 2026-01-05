@@ -29,11 +29,11 @@ def create_table(table_name: str, columns: Sequence[TableColumnDef], engine: str
     return stmt
 
 
-def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str: # pylint: disable=too-many-return-statements
+def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str: # pylint: disable=too-many-return-statements,too-many-branches
     """
     Best-effort mapping from common PyArrow types to ClickHouse type names.
 
-    Covers core scalar types. For anything unknown, we raise so the
+    Covers core scalar and common date/time/timestamp types. For anything unknown, we raise, so the
     caller is aware that the automatic mapping is not implemented for that Arrow type.
     """
     pa = check_arrow()
@@ -69,6 +69,29 @@ def _arrow_type_to_ch(arrow_type: "pa.DataType") -> str: # pylint: disable=too-m
     # Boolean
     if pat.is_boolean(arrow_type):
         return 'Bool'
+
+    # Dates
+    if pat.is_date32(arrow_type):
+        return 'Date32'
+    if pat.is_date64(arrow_type):
+        return 'DateTime64(3)'
+
+    # Timestamps → DateTime / DateTime64
+    if pat.is_timestamp(arrow_type):
+        unit = getattr(arrow_type, 'unit', 's')
+        tz = getattr(arrow_type, 'tz', None)
+
+        if unit == 's':
+            base = 'DateTime'
+            if tz:
+                return f"DateTime('{tz}')"
+            return base
+
+        scale_map = {'ms': 3, 'us': 6, 'ns': 9}
+        scale = scale_map.get(unit, 3)
+        if tz:
+            return f"DateTime64({scale}, '{tz}')"
+        return f'DateTime64({scale})'
 
     # Strings (this covers pa.string(), pa.large_string())
     if pat.is_string(arrow_type) or pat.is_large_string(arrow_type):
