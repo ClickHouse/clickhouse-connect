@@ -84,7 +84,7 @@ class TestIPv6DataType(unittest.TestCase):
         final_ip = read_result[0]
 
         self.assertIsInstance(final_ip, IPv6Address)
-        self.assertEqual(str(final_ip), ip_string)
+        self.assertEqual(final_ip, IPv6Address(ip_string))
 
     def test_round_trip_standard_ipv6(self):
         """Ensures a standard IPv6 address can be written and read back correctly."""
