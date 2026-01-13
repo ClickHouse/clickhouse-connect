@@ -56,8 +56,10 @@ class NativeTransform:
                 if isinstance(ex, StreamCompleteException):
                     # We ran out of data before it was expected, this could be ClickHouse reporting an error
                     # in the response
-                    if source.last_message:
+                    if source.last_message and b'Code: ' in source.last_message:
                         raise StreamFailureError(extract_error_message(source.last_message)) from None
+                    # If there's no ClickHouse error in the buffer, raise generic stream failure
+                    raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
                 raise
             block_num += 1
             return result_block
