@@ -66,44 +66,67 @@ def test_row_block_stream(param_client, call, consume_stream):
     assert block_count > 1
 
 
-def test_stream_errors(param_client, call, client_mode, consume_stream):
-    query_result = call(param_client.query, 'SELECT number FROM numbers(100000)')
+def test_stream_errors_sync(test_client):
+    query_result = test_client.query('SELECT number FROM numbers(100000)')
 
     # 1. Test accessing without context manager raises error
-    if client_mode == 'sync':
-        with pytest.raises(ProgrammingError, match="context"):
-            for _ in query_result.row_block_stream:
-                pass
-    else:
-        async def try_iter():
-            async for _ in query_result.row_block_stream:
-                pass
-        with pytest.raises((ProgrammingError, TypeError)):
-            call(try_iter)
+    with pytest.raises(ProgrammingError, match="context"):
+        for _ in query_result.row_block_stream:
+            pass
 
     assert query_result.row_count == 100000
 
     # 2. Test that previous access consumed the generator, so next access raises StreamClosedError
     with pytest.raises(StreamClosedError):
-        # Note: query_result.rows_stream creates a NEW StreamContext, but its internal generator
-        # (self._block_gen) was consumed by the property access in step 1.
-        consume_stream(query_result.rows_stream)
+        with query_result.rows_stream as stream:
+            for _ in stream:
+                pass
 
 
-def test_stream_failure(param_client, call, consume_stream):
+@pytest.mark.asyncio
+async def test_stream_errors_async(test_native_async_client):
+    stream = await test_native_async_client.query_row_block_stream('SELECT number FROM numbers(100)')
+    async with stream:
+        async for _ in stream:
+            pass
+
+    # Try to reuse
+    with pytest.raises(StreamClosedError):
+        async with stream:
+            async for _ in stream:
+                pass
+
+
+def test_stream_failure_sync(test_client):
     query = ('SELECT toString(cityHash64(number)) FROM numbers(10000000)' +
              ' where intDiv(1,number-300000)>-100000000')
 
-    stream = call(param_client.query_row_block_stream, query)
-    blocks = 0
+    stream = test_client.query_row_block_stream(query)
     failed = False
 
-    def process(block):  # pylint: disable=unused-argument
-        nonlocal blocks
-        blocks += 1
+    try:
+        with stream:
+            for _ in stream:
+                pass
+    except StreamFailureError as ex:
+        failed = True
+        assert 'division by zero' in str(ex).lower()
+
+    assert failed
+
+
+@pytest.mark.asyncio
+async def test_stream_failure_async(test_native_async_client):
+    query = ('SELECT toString(cityHash64(number)) FROM numbers(10000000)' +
+             ' where intDiv(1,number-300000)>-100000000')
+
+    stream = await test_native_async_client.query_row_block_stream(query)
+    failed = False
 
     try:
-        consume_stream(stream, process)
+        async with stream:
+            async for _ in stream:
+                pass
     except StreamFailureError as ex:
         failed = True
         assert 'division by zero' in str(ex).lower()
