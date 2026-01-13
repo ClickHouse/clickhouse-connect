@@ -66,11 +66,6 @@ class StreamingResponseSource(Closable):
                 self._producer_completed = True
 
             except Exception as e:
-                if isinstance(e, ClientPayloadError):
-                    logger.warning("Payload error while streaming response: %s", e)
-                    # Don't send exception - let consumer discover incomplete stream naturally
-                    return  # Queue shutdown happens in finally block
-
                 logger.error("Producer error while streaming response: %s", e, exc_info=True)
                 self._producer_error = e
 

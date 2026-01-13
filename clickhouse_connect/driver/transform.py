@@ -60,6 +60,14 @@ class NativeTransform:
                         raise StreamFailureError(extract_error_message(source.last_message)) from None
                     # If there's no ClickHouse error in the buffer, raise generic stream failure
                     raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
+
+                # Handle async streaming errors (ClientPayloadError from aiohttp)
+                if ex.__class__.__name__ == 'ClientPayloadError':
+                    # Check if ClickHouse sent an error message before closing the connection
+                    if source.last_message and b'Code: ' in source.last_message:
+                        raise StreamFailureError(extract_error_message(source.last_message)) from None
+                    raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
+
                 raise
             block_num += 1
             return result_block
