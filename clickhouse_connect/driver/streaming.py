@@ -6,7 +6,6 @@ import threading
 import zlib
 from typing import Iterator, Optional
 
-from aiohttp.client_exceptions import ClientPayloadError
 import lz4.frame
 import zstandard
 
