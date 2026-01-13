@@ -6,6 +6,7 @@ import threading
 import zlib
 from typing import Iterator, Optional
 
+from aiohttp.client_exceptions import ClientPayloadError
 import lz4.frame
 import zstandard
 
@@ -65,6 +66,17 @@ class StreamingResponseSource(Closable):
                 self._producer_completed = True
 
             except Exception as e:
+                # Swallowing ClientPayloadError to match sync client behavior (which swallows incomplete read errors)
+                # and allow partial data to be processed (which might contain the error message from ClickHouse)
+                if isinstance(e, ClientPayloadError):
+                    logger.warning("Payload error while streaming response: %s", e)
+                    try:
+                        await self.queue.async_q.put(EOF_SENTINEL)
+                    except RuntimeError:
+                        pass
+                    self._producer_completed = True
+                    return
+
                 logger.error("Producer error while streaming response: %s", e, exc_info=True)
                 self._producer_error = e
 
