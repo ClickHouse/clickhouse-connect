@@ -1,19 +1,11 @@
 from typing import Callable
 
 from clickhouse_connect.driver import Client
-from tests.integration_tests.conftest import TestConfig
 
 
-def test_form_encode_query_basic(client_factory, call, test_config: TestConfig, table_context: Callable):
+def test_form_encode_query_basic(client_factory, call, table_context: Callable):
     """Test that form_encode_query sends parameters as form data"""
-    form_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=True
-    )
+    form_client = client_factory(form_encode_query_params=True)
 
     with table_context('test_form_encode', ['id UInt32', 'name String', 'value Float64']):
         call(form_client.insert, 'test_form_encode',
@@ -36,16 +28,9 @@ def test_form_encode_query_basic(client_factory, call, test_config: TestConfig, 
         assert result.first_row[0] == 3
 
 
-def test_form_encode_with_arrays(client_factory, call, test_config: TestConfig, table_context: Callable):
+def test_form_encode_with_arrays(client_factory, call, table_context: Callable):
     """Test form_encode_query with array parameters"""
-    form_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=True
-    )
+    form_client = client_factory(form_encode_query_params=True)
 
     with table_context('test_form_arrays', ['id UInt32', 'tags Array(String)']):
         call(form_client.insert, 'test_form_arrays',
@@ -68,16 +53,9 @@ def test_form_encode_with_arrays(client_factory, call, test_config: TestConfig, 
         assert sorted([row[0] for row in result.result_rows]) == [1, 3]
 
 
-def test_form_encode_raw_query(client_factory, call, test_config: TestConfig):
+def test_form_encode_raw_query(client_factory, call):
     """Test form_encode_query with raw_query method"""
-    form_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=True
-    )
+    form_client = client_factory(form_encode_query_params=True)
 
     result = call(form_client.raw_query,
         'SELECT {a:Int32} + {b:Int32} as sum',
@@ -87,25 +65,11 @@ def test_form_encode_raw_query(client_factory, call, test_config: TestConfig):
     assert b'30' in result
 
 
-def test_form_encode_vs_regular(client_factory, param_client: Client, call, test_config: TestConfig, table_context: Callable):
+def test_form_encode_vs_regular(client_factory, param_client: Client, call, table_context: Callable):
     """Verify that form_encode_query produces same results as regular parameter handling"""
-    regular_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=False
-    )
+    regular_client = client_factory(form_encode_query_params=False)
 
-    form_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=True
-    )
+    form_client = client_factory(form_encode_query_params=True)
 
     with table_context('test_comparison', ['id UInt32', 'text String', 'score Float64']):
         call(param_client.insert, 'test_comparison',
@@ -121,16 +85,9 @@ def test_form_encode_vs_regular(client_factory, param_client: Client, call, test
         assert regular_result.row_count == form_result.row_count
 
 
-def test_form_encode_nullable_params(client_factory, call, test_config: TestConfig):
+def test_form_encode_nullable_params(client_factory, call):
     """Test form_encode_query with nullable parameters"""
-    form_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=True
-    )
+    form_client = client_factory(form_encode_query_params=True)
 
     result = call(form_client.query,
         'SELECT {val:Nullable(String)} IS NULL as is_null',
@@ -145,16 +102,9 @@ def test_form_encode_nullable_params(client_factory, call, test_config: TestConf
     assert result.first_row[0] == 'test_value'
 
 
-def test_form_encode_schema_probe_query(client_factory, call, test_config: TestConfig, table_context: Callable):
+def test_form_encode_schema_probe_query(client_factory, call, table_context: Callable):
     """Test that schema-probe queries (LIMIT 0) work correctly with form_encode_query_params"""
-    form_client = client_factory(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        form_encode_query_params=True
-    )
+    form_client = client_factory(form_encode_query_params=True)
 
     # Test with a simple LIMIT 0 query
     result = call(form_client.query, 'SELECT name, database, NOW() as dt FROM system.tables LIMIT 0')

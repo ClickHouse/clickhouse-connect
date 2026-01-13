@@ -8,7 +8,7 @@ from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.options import arrow
 
 
-def test_arrow(param_client, call, table_context: Callable):
+def test_arrow(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip('PyArrow package not available')
     if not param_client.min_version('21'):
@@ -37,7 +37,7 @@ def test_arrow(param_client, call, table_context: Callable):
     assert arrow_table.num_rows == 500
 
 
-def test_arrow_stream(param_client, call, table_context, consume_stream):
+def test_arrow_stream(param_client: Client, call, table_context, consume_stream):
     if not arrow:
         pytest.skip('PyArrow package not available')
     if not param_client.min_version('21'):
@@ -72,7 +72,7 @@ def test_arrow_stream(param_client, call, table_context, consume_stream):
         assert total_rows == 1000000
 
 
-def test_arrow_map(param_client, call, table_context: Callable):
+def test_arrow_map(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip('PyArrow package not available')
     if not param_client.min_version('21'):

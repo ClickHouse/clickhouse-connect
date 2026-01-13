@@ -1,3 +1,5 @@
+# pylint: disable=duplicate-code
+
 import asyncio
 import sys
 import os
@@ -35,6 +37,19 @@ class TestConfig(NamedTuple):
 
 class TestException(BaseException):
     pass
+
+
+def make_client_config(test_config: TestConfig, **kwargs):
+    """Helper to build client config dict from test_config with optional overrides."""
+    return {
+        "host": test_config.host,
+        "port": test_config.port,
+        "username": test_config.username,
+        "password": test_config.password,
+        "database": test_config.test_database,
+        "compress": test_config.compress,
+        **kwargs,
+    }
 
 
 # pylint: disable=redefined-outer-name

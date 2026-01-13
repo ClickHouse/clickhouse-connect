@@ -6,6 +6,7 @@ import pytest
 
 from clickhouse_connect import get_async_client
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
+from tests.integration_tests.conftest import make_client_config
 
 # pylint: disable=protected-access
 
@@ -13,14 +14,7 @@ from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingEr
 @pytest.mark.asyncio
 async def test_concurrent_queries(test_config):
     """Verify multiple queries execute concurrently (not sequentially)."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        autogenerate_session_id=False,
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
         queries = [client.query(f"SELECT {i}, sleep(0.1)") for i in range(10)]
 
         start = time.time()
@@ -39,13 +33,7 @@ async def test_concurrent_queries(test_config):
 @pytest.mark.asyncio
 async def test_stream_cancellation(test_config):
     """Test that early exit from async iteration doesn't leak resources."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config)) as client:
         stream = await client.query_rows_stream("SELECT number FROM numbers(100000)", settings={"max_block_size": 1000})
 
         count = 0
@@ -64,14 +52,7 @@ async def test_stream_cancellation(test_config):
 @pytest.mark.asyncio
 async def test_concurrent_streams(test_config):
     """Verify multiple streams can run in parallel."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        autogenerate_session_id=False,
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
 
         async def consume_stream(stream_id: int):
             stream = await client.query_rows_stream(
@@ -95,13 +76,7 @@ async def test_concurrent_streams(test_config):
 @pytest.mark.asyncio
 async def test_context_manager_cleanup(test_config):
     """Test proper resource cleanup on context manager exit."""
-    client = await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-    )
+    client = await get_async_client(**make_client_config(test_config))
 
     assert client._initialized is True
     assert client._session is not None
@@ -119,14 +94,7 @@ async def test_context_manager_cleanup(test_config):
 @pytest.mark.asyncio
 async def test_session_concurrency_protection(test_config):
     """Test that concurrent queries in the same session are blocked."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        session_id="test_concurrent_session",
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config, session_id="test_concurrent_session")) as client:
 
         async def long_query():
             return await client.query("SELECT sleep(0.5), 1")
@@ -145,11 +113,7 @@ async def test_session_concurrency_protection(test_config):
 async def test_timeout_handling(test_config):
     """Test that async timeout exceptions propagate correctly."""
     async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
+        **make_client_config(test_config),
         send_receive_timeout=1,  # 1 second timeout
         autogenerate_session_id=False,  # No session to avoid session locking after timeout
     ) as client:
@@ -166,11 +130,7 @@ async def test_timeout_handling(test_config):
 async def test_connection_pool_reuse(test_config):
     """Verify connection pooling works correctly under load."""
     async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
+        **make_client_config(test_config),
         connector_limit=10,  # Limit pool size
         connector_limit_per_host=5,
         autogenerate_session_id=False,
@@ -193,14 +153,7 @@ async def test_connection_pool_reuse(test_config):
 async def test_concurrent_inserts(test_config, table_context: Callable):
     """Test multiple inserts can run in parallel."""
     with table_context("test_concurrent_inserts", ["id UInt32", "value String"]) as ctx:
-        async with await get_async_client(
-            host=test_config.host,
-            port=test_config.port,
-            username=test_config.username,
-            password=test_config.password,
-            database=test_config.test_database,
-            autogenerate_session_id=False,
-        ) as client:
+        async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
 
             async def insert_batch(start_id: int, count: int):
                 data = [[start_id + i, f"value_{start_id + i}"] for i in range(count)]
@@ -221,14 +174,7 @@ async def test_concurrent_inserts(test_config, table_context: Callable):
 @pytest.mark.asyncio
 async def test_error_isolation(test_config):
     """Test that one failing query doesn't break other concurrent queries."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        autogenerate_session_id=False,
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
 
         async def good_query(n: int):
             return await client.query(f"SELECT {n}")
@@ -249,19 +195,12 @@ async def test_error_isolation(test_config):
 @pytest.mark.asyncio
 async def test_streaming_early_termination(test_config):
     """Verify streaming can be terminated early without issues."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-        autogenerate_session_id=False,  # Don't use session to avoid locking
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
         stream = await client.query_rows_stream("SELECT number, repeat('x', 10000) FROM numbers(100000)", settings={"max_block_size": 1000})
 
         count = 0
         async with stream:
-            async for row in stream:
+            async for _ in stream:
                 count += 1
                 if count >= 1000:
                     break  # Early termination
@@ -276,7 +215,7 @@ async def test_streaming_early_termination(test_config):
 
         count2 = 0
         async with stream2:
-            async for row in stream2:
+            async for _ in stream2:
                 count2 += 1
 
         assert count2 == 100
@@ -285,13 +224,7 @@ async def test_streaming_early_termination(test_config):
 @pytest.mark.asyncio
 async def test_regular_query_streams_then_materializes(test_config):
     """Verify regular query() uses streaming internally but materializes result."""
-    async with await get_async_client(
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password,
-        database=test_config.test_database,
-    ) as client:
+    async with await get_async_client(**make_client_config(test_config)) as client:
         result = await client.query("SELECT number FROM numbers(10000)")
 
         assert len(result.result_rows) == 10000
