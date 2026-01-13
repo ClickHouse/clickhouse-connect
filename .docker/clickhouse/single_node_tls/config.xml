@@ -21,6 +21,8 @@
         <console>1</console>
     </logger>
 
+    <prepare_system_log_tables_on_startup>1</prepare_system_log_tables_on_startup>
+
     <openSSL>
         <server>
             <certificateFile>/etc/clickhouse-server/certs/server.crt</certificateFile>
