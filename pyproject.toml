@@ -12,13 +12,3 @@ log_cli_level = "INFO"
 env_files = ["test.env"]
 asyncio_default_fixture_loop_scope = "session"
 addopts = "-n 4"
-
-[tool.pylint.messages_control]
-disable = [
-    "duplicate-code",  # Expected duplication between async/sync implementations
-]
-
-[tool.pylint.typecheck]
-ignored-modules = [
-    "brotli",  # Optional compression library
-]

@@ -1,4 +1,4 @@
-# pylint: disable=too-many-lines
+# pylint: disable=too-many-lines,duplicate-code,import-error
 
 import asyncio
 import gzip
