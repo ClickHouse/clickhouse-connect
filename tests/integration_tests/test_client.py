@@ -75,16 +75,11 @@ def test_none_database(param_client, call):
         param_client.database = old_db
 
 
-def test_session_params(test_config: TestConfig):
+def test_session_params(test_config: TestConfig, client_factory, call):
     session_id = 'TEST_SESSION_ID_' + test_config.test_database
-    client = create_client(
-        session_id=session_id,
-        host=test_config.host,
-        port=test_config.port,
-        username=test_config.username,
-        password=test_config.password)
-    result = client.query('SELECT number FROM system.numbers LIMIT 5',
-                          settings={'query_id': 'test_session_params'}).result_set
+    client = client_factory(session_id=session_id)
+    result = call(client.query, 'SELECT number FROM system.numbers LIMIT 5',
+                  settings={'query_id': 'test_session_params'}).result_set
     assert len(result) == 5
 
     if client.min_version('21'):
@@ -94,7 +89,7 @@ def test_session_params(test_config: TestConfig):
         def check_session_in_log():
             max_retries = 100
             for _ in range(max_retries):
-                result = client.query(
+                result = call(client.query,
                     f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " +
                     'event_time > now() - 30').result_set
 
@@ -109,7 +104,7 @@ def test_session_params(test_config: TestConfig):
         def check_query_in_log():
             max_retries = 100
             for _ in range(max_retries):
-                result = client.query(
+                result = call(client.query,
                     "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " +
                     'event_time > now() - 30').result_set
 
