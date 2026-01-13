@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import ssl
+import sys
 import time
 import uuid
 import pytz
@@ -222,10 +223,13 @@ class AiohttpAsyncClient(Client):
             "limit": connector_limit,
             "limit_per_host": connector_limit_per_host,
             "keepalive_timeout": keepalive_timeout,
-            "enable_cleanup_closed": True,
             "force_close": False,
             "ssl": ssl_context,
         }
+        # enable_cleanup_closed is only needed for Python < 3.14 (cpython issue fixed in 3.14)
+        # https://github.com/python/cpython/pull/118960
+        if sys.version_info < (3, 13, 4):
+            self._connector_kwargs["enable_cleanup_closed"] = True
 
         self._session = None
         self._read_format = "Native"
