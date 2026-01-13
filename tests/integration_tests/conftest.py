@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 import random
@@ -8,6 +9,7 @@ from typing import Iterator, NamedTuple, Sequence, Optional, Callable, AsyncCont
 import pytest_asyncio
 from pytest import fixture
 
+from clickhouse_connect import get_async_client
 from clickhouse_connect import common
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
@@ -34,6 +36,8 @@ class TestConfig(NamedTuple):
 class TestException(BaseException):
     pass
 
+
+# pylint: disable=redefined-outer-name
 
 @fixture(scope='session', autouse=True, name='test_config')
 def test_config_fixture() -> Iterator[TestConfig]:
@@ -92,6 +96,142 @@ def test_table_engine_fixture() -> Iterator[str]:
     yield 'MergeTree'
 
 
+@fixture(scope="module")
+def shared_loop():
+    """Shared event loop for running async clients in sync test context."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@fixture(params=["sync", "async"])
+def client_mode(request):
+    return request.param
+
+
+@fixture
+def call(client_mode, shared_loop):
+    """Wrapper to call functions in appropriate sync/async context."""
+    if client_mode == "sync":
+        return lambda fn, *args, **kwargs: fn(*args, **kwargs)
+    return lambda fn, *args, **kwargs: shared_loop.run_until_complete(fn(*args, **kwargs))
+
+
+@fixture
+def consume_stream(client_mode, call):
+    """Fixture to consume a stream in either sync or async mode."""
+
+    def _consume(stream, callback=None):
+        if client_mode == "sync":
+            with stream:
+                for item in stream:
+                    if callback:
+                        callback(item)
+        else:
+
+            async def runner():
+                async with stream:
+                    async for item in stream:
+                        if callback:
+                            callback(item)
+
+            call(runner)
+
+    return _consume
+
+
+@fixture
+def client_factory(client_mode, test_config, shared_loop):
+    """Factory for creating clients with custom configuration in tests."""
+    clients = []
+
+    def factory(**kwargs):
+        config = {
+            "host": test_config.host,
+            "port": test_config.port,
+            "username": test_config.username,
+            "password": test_config.password,
+            "database": test_config.test_database,
+            "compress": test_config.compress,
+            **kwargs,
+        }
+
+        if client_mode == "sync":
+            client = create_client(**config)
+        else:
+            client = shared_loop.run_until_complete(get_async_client(**config))
+
+        clients.append(client)
+        return client
+
+    yield factory
+
+    for client in clients:
+        try:
+            if client_mode == "sync":
+                client.close()
+            else:
+                shared_loop.run_until_complete(client.close())
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
+@fixture
+def param_client(client_mode, test_config, shared_loop):
+    """Provides client based on client_mode parameter."""
+    if client_mode == "sync":
+        client = create_client(
+            host=test_config.host,
+            port=test_config.port,
+            username=test_config.username,
+            password=test_config.password,
+            database=test_config.test_database,
+            compress=test_config.compress,
+            settings={"allow_suspicious_low_cardinality_types": 1},
+            client_name="int_tests/param_sync",
+        )
+        if client.min_version("22.8"):
+            client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
+        if client.min_version("24.8") and (client.min_version("24.12") or not test_config.cloud):
+            client.set_client_setting("allow_experimental_json_type", 1)
+            client.set_client_setting("allow_experimental_dynamic_type", 1)
+            client.set_client_setting("allow_experimental_variant_type", 1)
+        if test_config.insert_quorum:
+            client.set_client_setting("insert_quorum", test_config.insert_quorum)
+        elif test_config.cloud:
+            client.set_client_setting("select_sequential_consistency", 1)
+
+        yield client
+        client.close()
+    else:
+        client = shared_loop.run_until_complete(
+            get_async_client(
+                host=test_config.host,
+                port=test_config.port,
+                username=test_config.username,
+                password=test_config.password,
+                database=test_config.test_database,
+                compress=test_config.compress,
+                settings={"allow_suspicious_low_cardinality_types": 1},
+                client_name="int_tests/param_async",
+            )
+        )
+
+        if client.min_version("22.8"):
+            client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
+        if client.min_version("24.8"):
+            client.set_client_setting("allow_experimental_json_type", "1")
+            client.set_client_setting("allow_experimental_dynamic_type", "1")
+            client.set_client_setting("allow_experimental_variant_type", "1")
+        if test_config.insert_quorum:
+            client.set_client_setting("insert_quorum", str(test_config.insert_quorum))
+        elif test_config.cloud:
+            client.set_client_setting("select_sequential_consistency", "1")
+
+        yield client
+        shared_loop.run_until_complete(client.close())
+
+
 # pylint: disable=too-many-branches
 @fixture(scope='session', autouse=True, name='test_client')
 def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -> Iterator[Client]:
@@ -142,9 +282,35 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
             sys.stderr.write('Successfully stopped docker compose')
 
 
-@pytest_asyncio.fixture(scope='session', autouse=True, name='test_async_client')
+@pytest_asyncio.fixture(scope='session', name='test_async_client')
 async def test_async_client_fixture(test_client: Client) -> AsyncContextManager[AsyncClient]:
     async with AsyncClient(client=test_client) as client:
+        yield client
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="function", name="test_native_async_client")
+async def test_native_async_client_fixture(test_config: TestConfig) -> AsyncContextManager:
+    """Function-scoped fixture for aiohttp async client"""
+    async with await get_async_client(
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        database=test_config.test_database,
+        compress=test_config.compress,
+        client_name="int_tests/aiohttp_async",
+    ) as client:
+        if client.min_version("22.8"):
+            client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
+        if client.min_version("24.8"):
+            client.set_client_setting("allow_experimental_json_type", "1")
+            client.set_client_setting("allow_experimental_dynamic_type", "1")
+            client.set_client_setting("allow_experimental_variant_type", "1")
+        if test_config.insert_quorum:
+            client.set_client_setting("insert_quorum", str(test_config.insert_quorum))
+        elif test_config.cloud:
+            client.set_client_setting("select_sequential_consistency", "1")
+
         yield client
 
 

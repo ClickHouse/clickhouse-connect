@@ -17,7 +17,7 @@ ClickHouse Connect currently uses the ClickHouse HTTP interface for maximum comp
 pip install clickhouse-connect
 ```
 
-ClickHouse Connect requires Python 3.9 or higher. We officially test against Python 3.9 through 3.13.
+ClickHouse Connect requires Python 3.9 or higher. We officially test against Python 3.9 through 3.14.
 
 ### Superset Connectivity
 
@@ -45,7 +45,13 @@ that rely on full ORM or advanced dialect functionality.
 
 ### Asyncio Support
 
-ClickHouse Connect provides an async wrapper, so that it is possible to use the client in an `asyncio` environment.
+ClickHouse Connect provides native async support using aiohttp. For the best performance with async applications,
+install the optional async dependency:
+
+```
+pip install clickhouse-connect[async]
+```
+
 See the [run_async example](./examples/run_async.py) for more details.
 
 ### Complete Documentation

@@ -185,7 +185,8 @@ class HttpClient(Client):
                          server_host_name=server_host_name,
                          apply_server_timezone=apply_server_timezone,
                          utc_tz_aware=utc_tz_aware,
-                         show_clickhouse_errors=show_clickhouse_errors)
+                         show_clickhouse_errors=show_clickhouse_errors,
+                         autoconnect=True)
         self.params = dict_copy(self.params, self._validate_settings(ch_settings))
         comp_setting = self._setting_status('enable_http_compression')
         self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
@@ -437,42 +438,31 @@ class HttpClient(Client):
         """
         try:
             body = ""
-            # Always try to read the response body for context.
             try:
-                # get_response_data reads body and decodes it for the error message
                 raw_body = get_response_data(response)
                 body = common.format_error(
                     raw_body.decode(errors="backslashreplace")
                 ).strip()
             except Exception:  # pylint: disable=broad-except
-                # If we can't read or decode the body, we'll proceed without it
                 logger.warning("Failed to read error response body", exc_info=True)
 
-            # Build the error message
             if self.show_clickhouse_errors:
                 err_code = response.headers.get(ex_header)
                 if err_code:
-                    # Prioritize the specific ClickHouse exception code if it exists.
                     err_str = f"Received ClickHouse exception, code: {err_code}"
                 else:
-                    # Otherwise, just use the generic HTTP status
                     err_str = f"HTTP driver received HTTP status {response.status}"
 
                 if body:
-                    # Always append the body if it exists
                     err_str = f"{err_str}, server response: {body}"
             else:
-                # Simple message for when detailed errors are disabled
                 err_str = "The ClickHouse server returned an error"
 
-            # Add the URL for additional context
             err_str = f"{err_str} (for url {self.url})"
 
         finally:
-            # Ensure closed response to prevent resource leaks
             response.close()
 
-        # Raise the appropriate exception class
         raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
 
     def _raw_request(self,

@@ -1,6 +1,7 @@
 import array
 import struct
 import sys
+import asyncio
 
 from typing import Sequence, MutableSequence, Dict, Optional, Union, Generator, Callable
 
@@ -190,7 +191,8 @@ class SliceView(Sequence):
 class StreamContext:
     """
     Wraps a generator and its "source" in a Context.  This ensures that the source will be "closed" even if the
-    generator is not fully consumed or there is an exception during consumption
+    generator is not fully consumed or there is an exception during consumption. Supports both synchronous and
+    asynchronous usage.
     """
     __slots__ = 'source', 'gen', '_in_context'
 
@@ -217,6 +219,58 @@ class StreamContext:
         self._in_context = False
         self.source.close()
         self.gen = None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._in_context:
+            raise ProgrammingError("Stream should be used within a context")
+        try:
+            if hasattr(self.gen, "__anext__"):
+                return await self.gen.__anext__()
+
+            def _next_wrapper():
+                try:
+                    return True, self.gen.__next__()
+                except StopIteration:
+                    return False, None
+
+            loop = asyncio.get_running_loop()
+            has_value, value = await loop.run_in_executor(None, _next_wrapper)
+            if not has_value:
+                raise StopAsyncIteration from None
+            return value
+        except (StopAsyncIteration, StopIteration):
+            raise StopAsyncIteration from None
+        except Exception as ex:
+            if not isinstance(ex, StreamClosedError):
+                self._in_context = False
+                if hasattr(self.source, "close"):
+                    if hasattr(self.source.close, "__await__"):
+                        await self.source.close()
+                    else:
+                        self.source.close()
+                self.gen = None
+            raise ex
+
+    async def __aenter__(self):
+        if not self.gen:
+            raise StreamClosedError
+        self._in_context = True
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._in_context = False
+        if hasattr(self.source, 'aclose'):
+            await self.source.aclose()
+        elif hasattr(self.source, 'close'):
+            if hasattr(self.source.close, '__await__'):
+                await self.source.close()
+            else:
+                self.source.close()
+        self.gen = None
+
 
 # pylint: disable=too-many-return-statements
 def get_rename_method(method: Optional[str]) -> Optional[Callable[[str], str]]:

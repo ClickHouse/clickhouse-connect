@@ -2,9 +2,18 @@ import asyncio
 import io
 import logging
 import os
+import warnings
+
 from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import tzinfo
 from typing import Optional, Union, Dict, Any, Sequence, Iterable, Generator, BinaryIO
+
+try:
+    from clickhouse_connect.driver.aiohttp_client import AiohttpAsyncClient
+    AIOHTTP_AVAILABLE = True
+except ImportError:
+    AiohttpAsyncClient = None
+    AIOHTTP_AVAILABLE = False
 
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import StreamContext
@@ -29,29 +38,53 @@ NEW_THREAD_POOL_EXECUTOR = DefaultThreadPoolExecutor()
 # pylint: disable=too-many-public-methods,too-many-instance-attributes,too-many-arguments,too-many-positional-arguments,too-many-locals
 class AsyncClient:
     """
-    AsyncClient is a wrapper around the ClickHouse Client object that allows for async calls to the ClickHouse server.
-    Internally, each of the methods that uses IO is wrapped in a call to EventLoop.run_in_executor.
+    Unified async client with backward compatibility.
+
+    This class maintains backward compatibility with the legacy executor-based async client
+    while also supporting direct instantiation for native async operations (though
+    get_async_client() is the recommended approach for new code).
     """
 
     def __init__(self,
                  *,
-                 client: Client,
+                 client: Optional[Client] = None,
                  executor_threads: int = 0,
-                 executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR):
-        if isinstance(client, HttpClient):
-            client.headers['User-Agent'] = client.headers['User-Agent'].replace('mode:sync;', 'mode:async;')
-        self.client = client
-        if executor_threads == 0:
-            executor_threads = min(32, (os.cpu_count() or 1) + 4)  # Mimic the default behavior
-        if executor is NEW_THREAD_POOL_EXECUTOR:
-            self.new_executor = True
-            self.executor = ThreadPoolExecutor(max_workers=executor_threads)
-        else:
-            if executor_threads != 0:
-                logger.warning('executor_threads parameter is ignored when passing an executor object')
+                 executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR,
+                 **kwargs):
+        """
+        Create async client.
 
-            self.new_executor = False
-            self.executor = executor
+        Args:
+            client: (LEGACY - DEPRECATED) Sync client to wrap with ThreadPoolExecutor
+            executor_threads: (LEGACY - DEPRECATED) Thread pool size for legacy mode
+            executor: (LEGACY - DEPRECATED) Custom ThreadPoolExecutor for legacy mode
+            **kwargs: Arguments passed to AiohttpAsyncClient (native mode)
+        """
+        if client is not None:
+            # LEGACY PATH: User passed sync client. use executor-based wrapper
+            warnings.warn(
+                "Passing 'client=' to AsyncClient is deprecated. "
+                "Use create_async_client(host=..., port=...) instead. "
+                "Legacy executor-based mode may be removed in the future.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            self._impl = _LegacyAsyncWrapper(client, executor_threads, executor)
+        else:
+            # NATIVE PATH: Create aiohttp client
+            if not AIOHTTP_AVAILABLE:
+                raise ImportError(
+                    "Native async support requires aiohttp. "
+                    "Install with: pip install clickhouse-connect[async]\n"
+                    "Alternatively, use the legacy executor-based async by passing a sync client to AsyncClient."
+                )
+            self._impl = AiohttpAsyncClient(**kwargs)
+
+    # Proxy all methods to implementation
+    # pylint: disable=protected-access
+    async def _initialize(self):
+        if hasattr(self._impl, '_initialize'):
+            await self._impl._initialize()
 
     def set_client_setting(self, key, value):
         """
@@ -61,21 +94,21 @@ class AsyncClient:
         :param key: ClickHouse setting name
         :param value: ClickHouse setting value
         """
-        self.client.set_client_setting(key=key, value=value)
+        self._impl.set_client_setting(key=key, value=value)
 
     def get_client_setting(self, key) -> Optional[str]:
         """
         :param key: The setting key
         :return: The string value of the setting, if it exists, or None
         """
-        return self.client.get_client_setting(key=key)
+        return self._impl.get_client_setting(key=key)
 
     def set_access_token(self, access_token: str):
         """
         Set the ClickHouse access token for the client
         :param access_token: Access token string
         """
-        self.client.set_access_token(access_token)
+        return self._impl.set_access_token(access_token)
 
     def min_version(self, version_str: str) -> bool:
         """
@@ -85,16 +118,13 @@ class AsyncClient:
         :param version_str: A version string consisting of up to 4 integers delimited by dots
         :return: True if version_str is greater than the server_version, False if less than
         """
-        return self.client.min_version(version_str)
+        return self._impl.min_version(version_str)
 
     async def close(self):
         """
         Subclass implementation to close the connection to the server/deallocate the client
         """
-        self.client.close()
-
-        if self.new_executor:
-            await asyncio.to_thread(self.executor.shutdown, True)
+        return await self._impl.close()
 
     async def query(self,
                     query: Optional[str] = None,
@@ -107,7 +137,7 @@ class AsyncClient:
                     column_oriented: Optional[bool] = None,
                     use_numpy: Optional[bool] = None,
                     max_str_len: Optional[int] = None,
-                    context: QueryContext = None,
+                    context: Optional[QueryContext] = None,
                     query_tz: Optional[Union[str, tzinfo]] = None,
                     column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                     utc_tz_aware: Optional[bool] = None,
@@ -118,18 +148,12 @@ class AsyncClient:
         For parameters, see the create_query_context method.
         :return: QueryResult -- data and metadata from response
         """
-
-        def _query():
-            return self.client.query(query=query, parameters=parameters, settings=settings, query_formats=query_formats,
-                                     column_formats=column_formats, encoding=encoding, use_none=use_none,
-                                     column_oriented=column_oriented, use_numpy=use_numpy, max_str_len=max_str_len,
-                                     context=context, query_tz=query_tz, column_tzs=column_tzs,
-                                     utc_tz_aware=utc_tz_aware,
-                                     external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query)
-        return result
+        return await self._impl.query(query=query, parameters=parameters, settings=settings,
+                                      query_formats=query_formats, column_formats=column_formats,
+                                      encoding=encoding, use_none=use_none, column_oriented=column_oriented,
+                                      use_numpy=use_numpy, max_str_len=max_str_len, context=context,
+                                      query_tz=query_tz, column_tzs=column_tzs, utc_tz_aware=utc_tz_aware,
+                                      external_data=external_data, transport_settings=transport_settings)
 
     async def query_column_block_stream(self,
                                         query: Optional[str] = None,
@@ -139,7 +163,7 @@ class AsyncClient:
                                         column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                                         encoding: Optional[str] = None,
                                         use_none: Optional[bool] = None,
-                                        context: QueryContext = None,
+                                        context: Optional[QueryContext] = None,
                                         query_tz: Optional[Union[str, tzinfo]] = None,
                                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                                         utc_tz_aware: Optional[bool] = None,
@@ -151,18 +175,12 @@ class AsyncClient:
         For parameters, see the create_query_context method.
         :return: StreamContext -- Iterable stream context that returns column oriented blocks
         """
-
-        def _query_column_block_stream():
-            return self.client.query_column_block_stream(query=query, parameters=parameters, settings=settings,
-                                                         query_formats=query_formats, column_formats=column_formats,
-                                                         encoding=encoding, use_none=use_none, context=context,
-                                                         query_tz=query_tz, column_tzs=column_tzs,
-                                                         utc_tz_aware=utc_tz_aware,
-                                                         external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_column_block_stream)
-        return result
+        return await self._impl.query_column_block_stream(query=query, parameters=parameters, settings=settings,
+                                                          query_formats=query_formats, column_formats=column_formats,
+                                                          encoding=encoding, use_none=use_none, context=context,
+                                                          query_tz=query_tz, column_tzs=column_tzs,
+                                                          utc_tz_aware=utc_tz_aware,
+                                                          external_data=external_data, transport_settings=transport_settings)
 
     async def query_row_block_stream(self,
                                      query: Optional[str] = None,
@@ -172,7 +190,7 @@ class AsyncClient:
                                      column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                                      encoding: Optional[str] = None,
                                      use_none: Optional[bool] = None,
-                                     context: QueryContext = None,
+                                     context: Optional[QueryContext] = None,
                                      query_tz: Optional[Union[str, tzinfo]] = None,
                                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                                      utc_tz_aware: Optional[bool] = None,
@@ -183,18 +201,12 @@ class AsyncClient:
         For parameters, see the create_query_context method.
         :return: StreamContext -- Iterable stream context that returns blocks of rows
         """
-
-        def _query_row_block_stream():
-            return self.client.query_row_block_stream(query=query, parameters=parameters, settings=settings,
-                                                      query_formats=query_formats, column_formats=column_formats,
-                                                      encoding=encoding, use_none=use_none, context=context,
-                                                      query_tz=query_tz, column_tzs=column_tzs,
-                                                      utc_tz_aware=utc_tz_aware,
-                                                      external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_row_block_stream)
-        return result
+        return await self._impl.query_row_block_stream(query=query, parameters=parameters, settings=settings,
+                                                       query_formats=query_formats, column_formats=column_formats,
+                                                       encoding=encoding, use_none=use_none, context=context,
+                                                       query_tz=query_tz, column_tzs=column_tzs,
+                                                       utc_tz_aware=utc_tz_aware,
+                                                       external_data=external_data, transport_settings=transport_settings)
 
     async def query_rows_stream(self,
                                 query: Optional[str] = None,
@@ -204,7 +216,7 @@ class AsyncClient:
                                 column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
                                 encoding: Optional[str] = None,
                                 use_none: Optional[bool] = None,
-                                context: QueryContext = None,
+                                context: Optional[QueryContext] = None,
                                 query_tz: Optional[Union[str, tzinfo]] = None,
                                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                                 utc_tz_aware: Optional[bool] = None,
@@ -215,24 +227,18 @@ class AsyncClient:
         For parameters, see the create_query_context method.
         :return: StreamContext -- Iterable stream context that returns blocks of rows
         """
-
-        def _query_rows_stream():
-            return self.client.query_rows_stream(query=query, parameters=parameters, settings=settings,
-                                                 query_formats=query_formats, column_formats=column_formats,
-                                                 encoding=encoding, use_none=use_none, context=context,
-                                                 query_tz=query_tz, column_tzs=column_tzs,
-                                                 utc_tz_aware=utc_tz_aware,
-                                                 external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_rows_stream)
-        return result
+        return await self._impl.query_rows_stream(query=query, parameters=parameters, settings=settings,
+                                                  query_formats=query_formats, column_formats=column_formats,
+                                                  encoding=encoding, use_none=use_none, context=context,
+                                                  query_tz=query_tz, column_tzs=column_tzs,
+                                                  utc_tz_aware=utc_tz_aware,
+                                                  external_data=external_data, transport_settings=transport_settings)
 
     async def raw_query(self,
                         query: str,
                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                         settings: Optional[Dict[str, Any]] = None,
-                        fmt: str = None,
+                        fmt: Optional[str] = None,
                         use_database: bool = True,
                         external_data: Optional[ExternalData] = None,
                         transport_settings: Optional[Dict[str, str]] = None) -> bytes:
@@ -248,20 +254,15 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: bytes representing raw ClickHouse return value based on format
         """
+        return await self._impl.raw_query(query=query, parameters=parameters, settings=settings, fmt=fmt,
+                                          use_database=use_database, external_data=external_data,
+                                          transport_settings=transport_settings)
 
-        def _raw_query():
-            return self.client.raw_query(query=query, parameters=parameters, settings=settings, fmt=fmt,
-                                         use_database=use_database, external_data=external_data,
-                                         transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _raw_query)
-        return result
-
-    async def raw_stream(self, query: str,
+    async def raw_stream(self,
+                         query: str,
                          parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                          settings: Optional[Dict[str, Any]] = None,
-                         fmt: str = None,
+                         fmt: Optional[str] = None,
                          use_database: bool = True,
                          external_data: Optional[ExternalData] = None,
                          transport_settings: Optional[Dict[str, str]] = None) -> io.IOBase:
@@ -277,14 +278,9 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: io.IOBase stream/iterator for the result
         """
-
-        def _raw_stream():
-            return self.client.raw_stream(query=query, parameters=parameters, settings=settings, fmt=fmt,
-                                          use_database=use_database, external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _raw_stream)
-        return result
+        return await self._impl.raw_stream(query=query, parameters=parameters, settings=settings, fmt=fmt,
+                                           use_database=use_database, external_data=external_data,
+                                           transport_settings=transport_settings)
 
     async def query_np(self,
                        query: Optional[str] = None,
@@ -295,7 +291,7 @@ class AsyncClient:
                        encoding: Optional[str] = None,
                        use_none: Optional[bool] = None,
                        max_str_len: Optional[int] = None,
-                       context: QueryContext = None,
+                       context: Optional[QueryContext] = None,
                        external_data: Optional[ExternalData] = None,
                        transport_settings: Optional[Dict[str, str]] = None):
         """
@@ -303,16 +299,11 @@ class AsyncClient:
         For parameter values, see the create_query_context method.
         :return: Numpy array representing the result set
         """
-
-        def _query_np():
-            return self.client.query_np(query=query, parameters=parameters, settings=settings,
-                                        query_formats=query_formats, column_formats=column_formats, encoding=encoding,
-                                        use_none=use_none, max_str_len=max_str_len, context=context,
-                                        external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_np)
-        return result
+        return await self._impl.query_np(query=query, parameters=parameters, settings=settings,
+                                         query_formats=query_formats, column_formats=column_formats,
+                                         encoding=encoding, use_none=use_none, max_str_len=max_str_len,
+                                         context=context, external_data=external_data,
+                                         transport_settings=transport_settings)
 
     async def query_np_stream(self,
                               query: Optional[str] = None,
@@ -323,24 +314,19 @@ class AsyncClient:
                               encoding: Optional[str] = None,
                               use_none: Optional[bool] = None,
                               max_str_len: Optional[int] = None,
-                              context: QueryContext = None,
+                              context: Optional[QueryContext] = None,
                               external_data: Optional[ExternalData] = None,
                               transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
         Query method that returns the results as a stream of numpy arrays.
         For parameter values, see the create_query_context method.
-        :return: Generator that yield a numpy array per block representing the result set
+        :return: Numpy array representing the result set
         """
-
-        def _query_np_stream():
-            return self.client.query_np_stream(query=query, parameters=parameters, settings=settings,
-                                               query_formats=query_formats, column_formats=column_formats,
-                                               encoding=encoding, use_none=use_none, max_str_len=max_str_len,
-                                               context=context, external_data=external_data, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_np_stream)
-        return result
+        return await self._impl.query_np_stream(query=query, parameters=parameters, settings=settings,
+                                                query_formats=query_formats, column_formats=column_formats,
+                                                encoding=encoding, use_none=use_none, max_str_len=max_str_len,
+                                                context=context, external_data=external_data,
+                                                transport_settings=transport_settings)
 
     async def query_df(self,
                        query: Optional[str] = None,
@@ -355,7 +341,7 @@ class AsyncClient:
                        query_tz: Optional[str] = None,
                        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                        utc_tz_aware: Optional[bool] = None,
-                       context: QueryContext = None,
+                       context: Optional[QueryContext] = None,
                        external_data: Optional[ExternalData] = None,
                        use_extended_dtypes: Optional[bool] = None,
                        transport_settings: Optional[Dict[str, str]] = None):
@@ -364,29 +350,22 @@ class AsyncClient:
         For parameter values, see the create_query_context method.
         :return: Pandas dataframe representing the result set
         """
-
-        def _query_df():
-            return self.client.query_df(query=query, parameters=parameters, settings=settings,
-                                        query_formats=query_formats, column_formats=column_formats, encoding=encoding,
-                                        use_none=use_none, max_str_len=max_str_len, use_na_values=use_na_values,
-                                        query_tz=query_tz, column_tzs=column_tzs, utc_tz_aware=utc_tz_aware,
-                                        context=context,
-                                        external_data=external_data, use_extended_dtypes=use_extended_dtypes,
-                                        transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_df)
-        return result
+        return await self._impl.query_df(query=query, parameters=parameters, settings=settings,
+                                         query_formats=query_formats, column_formats=column_formats,
+                                         encoding=encoding, use_none=use_none, max_str_len=max_str_len,
+                                         use_na_values=use_na_values, query_tz=query_tz, column_tzs=column_tzs,
+                                         utc_tz_aware=utc_tz_aware, context=context, external_data=external_data,
+                                         use_extended_dtypes=use_extended_dtypes, transport_settings=transport_settings)
 
     async def query_df_arrow(
-        self,
-        query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        use_strings: Optional[bool] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        dataframe_library: str = "pandas",
+            self,
+            query: str,
+            parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+            settings: Optional[Dict[str, Any]] = None,
+            use_strings: Optional[bool] = None,
+            external_data: Optional[ExternalData] = None,
+            transport_settings: Optional[Dict[str, str]] = None,
+            dataframe_library: str = "pandas",
     ) -> Union["pd.DataFrame", "pl.DataFrame"]:
         """
         Query method using the ClickHouse Arrow format to return a DataFrame
@@ -402,21 +381,10 @@ class AsyncClient:
         :param dataframe_library: Library to use for DataFrame creation ("pandas" or "polars")
         :return: DataFrame (pandas or polars based on dataframe_library parameter)
         """
-
-        def _query_df_arrow():
-            return self.client.query_df_arrow(
-                query=query,
-                parameters=parameters,
-                settings=settings,
-                use_strings=use_strings,
-                external_data=external_data,
-                transport_settings=transport_settings,
-                dataframe_library=dataframe_library
-            )
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_df_arrow)
-        return result
+        return await self._impl.query_df_arrow(query=query, parameters=parameters, settings=settings,
+                                               use_strings=use_strings, external_data=external_data,
+                                               transport_settings=transport_settings,
+                                               dataframe_library=dataframe_library)
 
     async def query_df_stream(self,
                               query: Optional[str] = None,
@@ -431,7 +399,7 @@ class AsyncClient:
                               query_tz: Optional[str] = None,
                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                               utc_tz_aware: Optional[bool] = None,
-                              context: QueryContext = None,
+                              context: Optional[QueryContext] = None,
                               external_data: Optional[ExternalData] = None,
                               use_extended_dtypes: Optional[bool] = None,
                               transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
@@ -440,31 +408,21 @@ class AsyncClient:
         For parameter values, see the create_query_context method.
         :return: Generator that yields a Pandas dataframe per block representing the result set
         """
+        return await self._impl.query_df_stream(query=query, parameters=parameters, settings=settings,
+                                                query_formats=query_formats, column_formats=column_formats,
+                                                encoding=encoding, use_none=use_none, max_str_len=max_str_len,
+                                                use_na_values=use_na_values, query_tz=query_tz, column_tzs=column_tzs,
+                                                utc_tz_aware=utc_tz_aware, context=context, external_data=external_data,
+                                                use_extended_dtypes=use_extended_dtypes, transport_settings=transport_settings)
 
-        def _query_df_stream():
-            return self.client.query_df_stream(query=query, parameters=parameters, settings=settings,
-                                               query_formats=query_formats, column_formats=column_formats,
-                                               encoding=encoding,
-                                               use_none=use_none, max_str_len=max_str_len, use_na_values=use_na_values,
-                                               query_tz=query_tz, column_tzs=column_tzs,
-                                               utc_tz_aware=utc_tz_aware, context=context,
-                                               external_data=external_data, use_extended_dtypes=use_extended_dtypes,
-                                               transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_df_stream)
-        return result
-
-    async def query_df_arrow_stream(
-        self,
-        query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        use_strings: Optional[bool] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        dataframe_library: str = "pandas"
-    ) -> StreamContext:
+    async def query_df_arrow_stream(self,
+                                    query: str,
+                                    parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+                                    settings: Optional[Dict[str, Any]] = None,
+                                    use_strings: Optional[bool] = None,
+                                    external_data: Optional[ExternalData] = None,
+                                    transport_settings: Optional[Dict[str, str]] = None,
+                                    dataframe_library: str = 'pandas') -> StreamContext:
         """
         Query method that returns the results as a stream of DataFrames with PyArrow dtype backend.
         Each DataFrame represents a block from the ClickHouse response.
@@ -478,42 +436,12 @@ class AsyncClient:
         :param dataframe_library: Library to use for DataFrame creation ("pandas" or "polars")
         :return: StreamContext that yields DataFrames (pandas or polars based on dataframe_library parameter)
         """
+        return await self._impl.query_df_arrow_stream(query=query, parameters=parameters, settings=settings,
+                                                      use_strings=use_strings, external_data=external_data,
+                                                      transport_settings=transport_settings,
+                                                      dataframe_library=dataframe_library)
 
-        def _query_df_arrow_stream():
-            return self.client.query_df_arrow_stream(
-                query=query,
-                parameters=parameters,
-                settings=settings,
-                use_strings=use_strings,
-                external_data=external_data,
-                transport_settings=transport_settings,
-                dataframe_library=dataframe_library
-            )
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_df_arrow_stream)
-        return result
-
-    def create_query_context(self,
-                             query: Optional[Union[str, bytes]] = None,
-                             parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-                             settings: Optional[Dict[str, Any]] = None,
-                             query_formats: Optional[Dict[str, str]] = None,
-                             column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-                             encoding: Optional[str] = None,
-                             use_none: Optional[bool] = None,
-                             column_oriented: Optional[bool] = None,
-                             use_numpy: Optional[bool] = False,
-                             max_str_len: Optional[int] = 0,
-                             context: Optional[QueryContext] = None,
-                             query_tz: Optional[Union[str, tzinfo]] = None,
-                             column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                             use_na_values: Optional[bool] = None,
-                             streaming: bool = False,
-                             as_pandas: bool = False,
-                             external_data: Optional[ExternalData] = None,
-                             use_extended_dtypes: Optional[bool] = None,
-                             transport_settings: Optional[Dict[str, str]] = None) -> QueryContext:
+    def create_query_context(self, *args, **kwargs) -> QueryContext:
         """
         Creates or updates a reusable QueryContext object
         :param query: Query statement/format string
@@ -546,18 +474,7 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable QueryContext
         """
-
-        return self.client.create_query_context(query=query, parameters=parameters, settings=settings,
-                                                query_formats=query_formats, column_formats=column_formats,
-                                                encoding=encoding, use_none=use_none,
-                                                column_oriented=column_oriented,
-                                                use_numpy=use_numpy, max_str_len=max_str_len, context=context,
-                                                query_tz=query_tz, column_tzs=column_tzs,
-                                                use_na_values=use_na_values,
-                                                streaming=streaming, as_pandas=as_pandas,
-                                                external_data=external_data,
-                                                use_extended_dtypes=use_extended_dtypes,
-                                                transport_settings=transport_settings)
+        return self._impl.create_query_context(*args, **kwargs)
 
     async def query_arrow(self,
                           query: str,
@@ -576,15 +493,9 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: PyArrow.Table
         """
-
-        def _query_arrow():
-            return self.client.query_arrow(query=query, parameters=parameters, settings=settings,
-                                           use_strings=use_strings, external_data=external_data,
-                                           transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_arrow)
-        return result
+        return await self._impl.query_arrow(query=query, parameters=parameters, settings=settings,
+                                            use_strings=use_strings, external_data=external_data,
+                                            transport_settings=transport_settings)
 
     async def query_arrow_stream(self,
                                  query: str,
@@ -603,21 +514,15 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Generator that yields a PyArrow.Table for per block representing the result set
         """
-
-        def _query_arrow_stream():
-            return self.client.query_arrow_stream(query=query, parameters=parameters, settings=settings,
-                                                  use_strings=use_strings, external_data=external_data,
-                                                  transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _query_arrow_stream)
-        return result
+        return await self._impl.query_arrow_stream(query=query, parameters=parameters, settings=settings,
+                                                   use_strings=use_strings, external_data=external_data,
+                                                   transport_settings=transport_settings)
 
     async def command(self,
-                      cmd: str,
+                      cmd,
                       parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-                      data: Union[str, bytes] = None,
-                      settings: Optional[Dict[str, Any]] = None,
+                      data: Optional[Union[str, bytes]] = None,
+                      settings: Optional[Dict] = None,
                       use_database: bool = True,
                       external_data: Optional[ExternalData] = None,
                       transport_settings: Optional[Dict[str, str]] = None) -> Union[str, int, Sequence[str], QuerySummary]:
@@ -635,39 +540,27 @@ class AsyncClient:
         :return: Decoded response from ClickHouse as either a string, int, or sequence of strings, or QuerySummary
         if no data returned
         """
-
-        def _command():
-            return self.client.command(cmd=cmd, parameters=parameters, data=data, settings=settings,
-                                       use_database=use_database, external_data=external_data,
-                                       transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _command)
-        return result
+        return await self._impl.command(cmd=cmd, parameters=parameters, data=data, settings=settings,
+                                        use_database=use_database, external_data=external_data,
+                                        transport_settings=transport_settings)
 
     async def ping(self) -> bool:
         """
         Validate the connection, does not throw an Exception (see debug logs)
         :return: ClickHouse server is up and reachable
         """
-
-        def _ping():
-            return self.client.ping()
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _ping)
-        return result
+        return await self._impl.ping()
 
     async def insert(self,
                      table: Optional[str] = None,
-                     data: Sequence[Sequence[Any]] = None,
+                     data: Optional[Sequence[Sequence[Any]]] = None,
                      column_names: Union[str, Iterable[str]] = '*',
                      database: Optional[str] = None,
-                     column_types: Sequence[ClickHouseType] = None,
-                     column_type_names: Sequence[str] = None,
+                     column_types: Optional[Sequence[ClickHouseType]] = None,
+                     column_type_names: Optional[Sequence[str]] = None,
                      column_oriented: bool = False,
                      settings: Optional[Dict[str, Any]] = None,
-                     context: InsertContext = None,
+                     context: Optional[InsertContext] = None,
                      transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
         """
         Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
@@ -688,25 +581,20 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: QuerySummary with summary information, throws exception if insert fails
         """
+        return await self._impl.insert(table=table, data=data, column_names=column_names, database=database,
+                                       column_types=column_types, column_type_names=column_type_names,
+                                       column_oriented=column_oriented, settings=settings, context=context,
+                                       transport_settings=transport_settings)
 
-        def _insert():
-            return self.client.insert(table=table, data=data, column_names=column_names, database=database,
-                                      column_types=column_types, column_type_names=column_type_names,
-                                      column_oriented=column_oriented, settings=settings, context=context,
-                                      transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _insert)
-        return result
-
-    async def insert_df(self, table: str = None,
-                        df=None,
+    async def insert_df(self,
+                        table: Optional[str] = None,
+                        df = None,
                         database: Optional[str] = None,
                         settings: Optional[Dict] = None,
                         column_names: Optional[Sequence[str]] = None,
-                        column_types: Sequence[ClickHouseType] = None,
-                        column_type_names: Sequence[str] = None,
-                        context: InsertContext = None,
+                        column_types: Optional[Sequence[ClickHouseType]] = None,
+                        column_type_names: Optional[Sequence[str]] = None,
+                        context: Optional[InsertContext] = None,
                         transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
@@ -725,19 +613,15 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: QuerySummary with summary information, throws exception if insert fails
         """
+        return await self._impl.insert_df(table=table, df=df, database=database, settings=settings,
+                                          column_names=column_names, column_types=column_types,
+                                          column_type_names=column_type_names, context=context,
+                                          transport_settings=transport_settings)
 
-        def _insert_df():
-            return self.client.insert_df(table=table, df=df, database=database, settings=settings,
-                                         column_names=column_names,
-                                         column_types=column_types, column_type_names=column_type_names,
-                                         context=context, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _insert_df)
-        return result
-
-    async def insert_arrow(self, table: str,
-                           arrow_table, database: str = None,
+    async def insert_arrow(self,
+                           table: str,
+                           arrow_table,
+                           database: Optional[str] = None,
                            settings: Optional[Dict] = None,
                            transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
         """
@@ -749,31 +633,23 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: QuerySummary with summary information, throws exception if insert fails
         """
+        return await self._impl.insert_arrow(table=table, arrow_table=arrow_table, database=database,
+                                             settings=settings, transport_settings=transport_settings)
 
-        def _insert_arrow():
-            return self.client.insert_arrow(table=table, arrow_table=arrow_table, database=database,
-                                            settings=settings, transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _insert_arrow)
-        return result
-
-    async def insert_df_arrow(
-        self,
-        table: str,
-        df: Union["pd.DataFrame", "pl.DataFrame"],
-        database: Optional[str] = None,
-        settings: Optional[Dict] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-    ) -> QuerySummary:
+    async def insert_df_arrow(self,
+                              table: str,
+                              df,
+                              database: Optional[str] = None,
+                              settings: Optional[Dict] = None,
+                              transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
         """
         Insert a pandas DataFrame with PyArrow backend or a polars DataFrame into ClickHouse using Arrow format.
         This method is optimized for DataFrames that already use Arrow format, providing
         better performance than the standard insert_df method.
-        
+
         Validation is performed and an exception will be raised if this requirement is not met.
         Polars DataFrames are natively Arrow-based and don't require additional validation.
-        
+
         :param table: ClickHouse table name
         :param df: Pandas DataFrame with PyArrow dtype backend or Polars DataFrame
         :param database: Optional ClickHouse database name
@@ -781,26 +657,15 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: QuerySummary with summary information, throws exception if insert fails
         """
-
-        def _insert_df_arrow():
-            return self.client.insert_df_arrow(
-                table=table,
-                df=df,
-                database=database,
-                settings=settings,
-                transport_settings=transport_settings,
-            )
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _insert_df_arrow)
-        return result
+        return await self._impl.insert_df_arrow(table=table, df=df, database=database, settings=settings,
+                                                transport_settings=transport_settings)
 
     async def create_insert_context(self,
                                     table: str,
                                     column_names: Optional[Union[str, Sequence[str]]] = None,
                                     database: Optional[str] = None,
-                                    column_types: Sequence[ClickHouseType] = None,
-                                    column_type_names: Sequence[str] = None,
+                                    column_types: Optional[Sequence[ClickHouseType]] = None,
+                                    column_type_names: Optional[Sequence[str]] = None,
                                     column_oriented: bool = False,
                                     settings: Optional[Dict[str, Any]] = None,
                                     data: Optional[Sequence[Sequence[Any]]] = None,
@@ -821,16 +686,10 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable insert context
         """
-
-        def _create_insert_context():
-            return self.client.create_insert_context(table=table, column_names=column_names, database=database,
-                                                     column_types=column_types, column_type_names=column_type_names,
-                                                     column_oriented=column_oriented, settings=settings, data=data,
-                                                     transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _create_insert_context)
-        return result
+        return await self._impl.create_insert_context(table=table, column_names=column_names, database=database,
+                                                      column_types=column_types, column_type_names=column_type_names,
+                                                      column_oriented=column_oriented, settings=settings, data=data,
+                                                      transport_settings=transport_settings)
 
     async def data_insert(self, context: InsertContext) -> QuerySummary:
         """
@@ -838,17 +697,12 @@ class AsyncClient:
         :context: InsertContext parameter object
         :return: No return, throws an exception if the insert fails
         """
+        return await self._impl.data_insert(context)
 
-        def _data_insert():
-            return self.client.data_insert(context=context)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _data_insert)
-        return result
-
-    async def raw_insert(self, table: str,
+    async def raw_insert(self,
+                         table: Optional[str] = None,
                          column_names: Optional[Sequence[str]] = None,
-                         insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
+                         insert_block: Optional[Union[str, bytes, Generator[bytes, None, None], BinaryIO]] = None,
                          settings: Optional[Dict] = None,
                          fmt: Optional[str] = None,
                          compression: Optional[str] = None,
@@ -863,18 +717,173 @@ class AsyncClient:
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :param fmt: Valid clickhouse format
         """
-
-        def _raw_insert():
-            return self.client.raw_insert(table=table, column_names=column_names, insert_block=insert_block,
-                                          settings=settings, fmt=fmt, compression=compression,
-                                          transport_settings=transport_settings)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, _raw_insert)
-        return result
+        return await self._impl.raw_insert(table=table, column_names=column_names, insert_block=insert_block,
+                                           settings=settings, fmt=fmt, compression=compression,
+                                           transport_settings=transport_settings)
 
     async def __aenter__(self) -> "AsyncClient":
+        if hasattr(self._impl, '_initialize'):
+            await self._impl._initialize()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close()
+
+    def __getattr__(self, name):
+        return getattr(self._impl, name)
+
+    def __setattr__(self, name, value):
+        if name in ("_impl",) or "_impl" not in self.__dict__:
+            super().__setattr__(name, value)
+            return
+        if hasattr(self._impl, name):
+            setattr(self._impl, name, value)
+        else:
+            super().__setattr__(name, value)
+
+
+class _LegacyAsyncWrapper:
+    """
+    Legacy executor-based async wrapper (DEPRECATED).
+
+    This wraps a sync HttpClient and runs all operations in a ThreadPoolExecutor.
+    Maintained for backward compatibility but may be removed in the future.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        executor_threads: int = 0,
+        executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR,
+    ):
+        if isinstance(client, HttpClient):
+            client.headers["User-Agent"] = client.headers["User-Agent"].replace("mode:sync;", "mode:async;")
+        self.client = client
+        if executor_threads == 0:
+            executor_threads = min(32, (os.cpu_count() or 1) + 4)
+        if executor is NEW_THREAD_POOL_EXECUTOR:
+            self.new_executor = True
+            self.executor = ThreadPoolExecutor(max_workers=executor_threads)
+        else:
+            if executor_threads != 0:
+                logger.warning("executor_threads parameter is ignored when passing an executor object")
+            self.new_executor = False
+            self.executor = executor
+
+        if not AIOHTTP_AVAILABLE:
+            logger.info(
+                "Using executor-based async (legacy mode). "
+                "For better performance with true native async, install: pip install clickhouse-connect[async]"
+            )
+
+    def set_client_setting(self, key, value):
+        self.client.set_client_setting(key=key, value=value)
+
+    def get_client_setting(self, key) -> Optional[str]:
+        return self.client.get_client_setting(key=key)
+
+    def set_access_token(self, access_token: str):
+        self.client.set_access_token(access_token)
+
+    def min_version(self, version_str: str) -> bool:
+        return self.client.min_version(version_str)
+
+    async def close(self):
+        self.client.close()
+        if self.new_executor:
+            await asyncio.to_thread(self.executor.shutdown, True)
+
+    async def query(self, *args, **kwargs) -> QueryResult:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query(*args, **kwargs))
+
+    async def query_column_block_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_column_block_stream(*args, **kwargs))
+
+    async def query_row_block_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_row_block_stream(*args, **kwargs))
+
+    async def query_rows_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_rows_stream(*args, **kwargs))
+
+    async def raw_query(self, *args, **kwargs) -> bytes:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.raw_query(*args, **kwargs))
+
+    async def raw_stream(self, *args, **kwargs) -> io.IOBase:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.raw_stream(*args, **kwargs))
+
+    async def query_np(self, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_np(*args, **kwargs))
+
+    async def query_np_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_np_stream(*args, **kwargs))
+
+    async def query_df(self, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_df(*args, **kwargs))
+
+    async def query_df_arrow(self, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_df_arrow(*args, **kwargs))
+
+    async def query_df_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_df_stream(*args, **kwargs))
+
+    async def query_df_arrow_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_df_arrow_stream(*args, **kwargs))
+
+    def create_query_context(self, *args, **kwargs) -> QueryContext:
+        return self.client.create_query_context(*args, **kwargs)
+
+    async def query_arrow(self, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_arrow(*args, **kwargs))
+
+    async def query_arrow_stream(self, *args, **kwargs) -> StreamContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.query_arrow_stream(*args, **kwargs))
+
+    async def command(self, *args, **kwargs) -> Union[str, int, Sequence[str], QuerySummary]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.command(*args, **kwargs))
+
+    async def ping(self) -> bool:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.ping())  # pylint: disable=unnecessary-lambda
+
+    async def insert(self, *args, **kwargs) -> QuerySummary:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.insert(*args, **kwargs))
+
+    async def insert_df(self, *args, **kwargs) -> QuerySummary:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.insert_df(*args, **kwargs))
+
+    async def insert_arrow(self, *args, **kwargs) -> QuerySummary:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.insert_arrow(*args, **kwargs))
+
+    async def insert_df_arrow(self, *args, **kwargs) -> QuerySummary:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.insert_df_arrow(*args, **kwargs))
+
+    async def create_insert_context(self, *args, **kwargs) -> InsertContext:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.create_insert_context(*args, **kwargs))
+
+    async def data_insert(self, context: InsertContext) -> QuerySummary:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.data_insert(context))
+
+    async def raw_insert(self, *args, **kwargs) -> QuerySummary:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, lambda: self.client.raw_insert(*args, **kwargs))

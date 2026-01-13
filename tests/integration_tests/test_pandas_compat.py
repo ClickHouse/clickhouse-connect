@@ -14,7 +14,7 @@ SETTING_NAME = "preserve_pandas_datetime_resolution"
 pytestmark = pytest.mark.skipif(pd is None, reason="Pandas package not installed")
 
 
-def test_pandas_date_compat(test_client: Client, table_context: Callable):
+def test_pandas_date_compat(param_client: Client, call, table_context: Callable):
     table_name = "test_date"
     with table_context(
         table_name,
@@ -32,15 +32,15 @@ def test_pandas_date_compat(test_client: Client, table_context: Callable):
             ],
             columns=["key", "dt", "ndt"],
         )
-        test_client.insert_df(table_name, df)
+        call(param_client.insert_df, table_name, df)
         set_setting(SETTING_NAME, False)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
         set_setting(SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
             res = "[s]"
@@ -51,7 +51,7 @@ def test_pandas_date_compat(test_client: Client, table_context: Callable):
             assert res in str(dt)
 
 
-def test_pandas_date32_compat(test_client: Client, table_context: Callable):
+def test_pandas_date32_compat(param_client: Client, call, table_context: Callable):
     table_name = "test_date32"
     with table_context(
         table_name,
@@ -69,15 +69,15 @@ def test_pandas_date32_compat(test_client: Client, table_context: Callable):
             ],
             columns=["key", "dt", "ndt"],
         )
-        test_client.insert_df(table_name, df)
+        call(param_client.insert_df, table_name, df)
         set_setting(SETTING_NAME, False)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
         set_setting(SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
             res = "[s]"
@@ -88,7 +88,7 @@ def test_pandas_date32_compat(test_client: Client, table_context: Callable):
             assert res in str(dt)
 
 
-def test_pandas_datetime_compat(test_client: Client, table_context: Callable):
+def test_pandas_datetime_compat(param_client: Client, call, table_context: Callable):
     table_name = "test_datetime"
     with table_context(
         table_name,
@@ -106,15 +106,15 @@ def test_pandas_datetime_compat(test_client: Client, table_context: Callable):
             ],
             columns=["key", "dt", "ndt"],
         )
-        test_client.insert_df(table_name, df)
+        call(param_client.insert_df, table_name, df)
         set_setting(SETTING_NAME, False)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
         set_setting(SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
             res = "[s]"
@@ -125,7 +125,7 @@ def test_pandas_datetime_compat(test_client: Client, table_context: Callable):
             assert res in str(dt)
 
 
-def test_pandas_datetime64_compat(test_client: Client, table_context: Callable):
+def test_pandas_datetime64_compat(param_client: Client, call, table_context: Callable):
     table_name = "test_datetime64"
     with table_context(
         table_name,
@@ -162,15 +162,15 @@ def test_pandas_datetime64_compat(test_client: Client, table_context: Callable):
             ],
             columns=["key", "dt3", "null_dt3", "dt6", "null_dt6", "dt9", "null_dt9"],
         )
-        test_client.insert_df(table_name, df)
+        call(param_client.insert_df, table_name, df)
         set_setting(SETTING_NAME, False)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
         set_setting(SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
             dts = list(result_df.dtypes)[1:]
@@ -183,18 +183,13 @@ def test_pandas_datetime64_compat(test_client: Client, table_context: Callable):
                 assert res in str(dt)
 
 
-def test_pandas_time_compat(
-    test_config: TestConfig,
-    test_client: Client,
-    table_context: Callable,
-):
-    if not test_client.min_version("25.6"):
+def test_pandas_time_compat(test_config: TestConfig, param_client: Client, call, table_context: Callable):
+    if not param_client.min_version("25.6"):
         pytest.skip("Time types require ClickHouse 25.6+")
 
     if test_config.cloud:
         pytest.skip("Time types require settings change, but settings are locked in cloud, skipping tests.")
 
-    test_client.command("SET enable_time_time64_type = 1")
     table_name = "test_time"
     with table_context(
         table_name,
@@ -202,7 +197,7 @@ def test_pandas_time_compat(
             "key UInt8",
             "t Time",
             "null_t Nullable(Time)",
-        ],
+        ], settings={"enable_time_time64_type": 1}
     ):
         data = (
             [1, datetime.timedelta(hours=5), 500],
@@ -210,15 +205,15 @@ def test_pandas_time_compat(
             [3, -datetime.timedelta(minutes=45), 600],
         )
 
-        test_client.insert(table_name, data)
+        call(param_client.insert, table_name, data)
         set_setting(SETTING_NAME, False)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
         set_setting(SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
             res = "[s]"
@@ -229,18 +224,13 @@ def test_pandas_time_compat(
             assert res in str(dt)
 
 
-def test_pandas_time64_compat(
-    test_config: TestConfig,
-    test_client: Client,
-    table_context: Callable,
-):
-    if not test_client.min_version("25.6"):
+def test_pandas_time64_compat(test_config: TestConfig, param_client: Client, call, table_context: Callable):
+    if not param_client.min_version("25.6"):
         pytest.skip("Time64 types require ClickHouse 25.6+")
 
     if test_config.cloud:
         pytest.skip("Time types require settings change, but settings are locked in cloud, skipping tests.")
 
-    test_client.command("SET enable_time_time64_type = 1")
     table_name = "test_time64"
     with table_context(
         table_name,
@@ -252,22 +242,22 @@ def test_pandas_time64_compat(
             "null_t6 Nullable(Time64(6))",
             "t9 Time64(9)",
             "null_t9 Nullable(Time64(9))",
-        ],
+        ], settings={"enable_time_time64_type": 1}
     ):
         data = (
             [1, 1, 2, 3, 4, 5, 6],
             [2, 10, None, 30, None, 50, None],
             [3, 100, 200, 300, 400, 500, 600],
         )
-        test_client.insert(table_name, data)
+        call(param_client.insert, table_name, data)
         set_setting(SETTING_NAME, False)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         for dt in list(result_df.dtypes)[1:]:
             assert "[ns]" in str(dt)
 
         set_setting(SETTING_NAME, True)
-        result_df = test_client.query_df(f"SELECT * FROM {table_name}")
+        result_df = call(param_client.query_df, f"SELECT * FROM {table_name}")
 
         if IS_PANDAS_2:
             dts = list(result_df.dtypes)[1:]
@@ -280,7 +270,7 @@ def test_pandas_time64_compat(
                 assert res in str(dt)
 
 
-def test_pandas_query_df_arrow(test_client: Client, table_context: Callable):
+def test_pandas_query_df_arrow(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")
 
@@ -304,17 +294,17 @@ def test_pandas_query_df_arrow(test_client: Client, table_context: Callable):
             [2, pd.Timestamp(2023, 5, 5), None, -45678912, 8.5555588888, "string 2", None, 1],
             [3, pd.Timestamp(2023, 5, 6), 30, 789123456, 3.14159, "string 3", None, 1],
         )
-        test_client.insert(table_name, data)
+        call(param_client.insert, table_name, data)
         if IS_PANDAS_2:
-            result_df = test_client.query_df_arrow(f"SELECT * FROM {table_name}")
+            result_df = call(param_client.query_df_arrow, f"SELECT * FROM {table_name}")
             for dt in list(result_df.dtypes):
                 assert isinstance(dt, pd.ArrowDtype)
         else:
             with pytest.raises(ProgrammingError):
-                result_df = test_client.query_df_arrow(f"SELECT * FROM {table_name}")
+                result_df = call(param_client.query_df_arrow, f"SELECT * FROM {table_name}")
 
 
-def test_pandas_insert_df_arrow(test_client: Client, table_context: Callable):
+def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")
 
@@ -332,12 +322,12 @@ def test_pandas_insert_df_arrow(test_client: Client, table_context: Callable):
     ):
         if IS_PANDAS_2:
             df = df.convert_dtypes(dtype_backend="pyarrow")
-            test_client.insert_df_arrow(table_name, df)
-            res_df = test_client.query(f"SELECT * from {table_name} ORDER BY i64")
+            call(param_client.insert_df_arrow, table_name, df)
+            res_df = call(param_client.query, f"SELECT * from {table_name} ORDER BY i64")
             assert res_df.result_rows == [(51, 421, "b"), (78, None, "a")]
         else:
             with pytest.raises(ProgrammingError, match="pandas 2.x"):
-                test_client.insert_df_arrow(table_name, df)
+                call(param_client.insert_df_arrow, table_name, df)
 
     with table_context(
         table_name,
@@ -351,7 +341,7 @@ def test_pandas_insert_df_arrow(test_client: Client, table_context: Callable):
             df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
             df["i64"] = df["i64"].astype(pd.ArrowDtype(arrow.int64()))
             with pytest.raises(ProgrammingError, match="Non-Arrow columns found"):
-                test_client.insert_df_arrow(table_name, df)
+                call(param_client.insert_df_arrow, table_name, df)
         else:
             with pytest.raises(ProgrammingError, match="pandas 2.x"):
-                test_client.insert_df_arrow(table_name, df)
+                call(param_client.insert_df_arrow, table_name, df)
