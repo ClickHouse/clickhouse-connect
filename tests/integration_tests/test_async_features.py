@@ -157,7 +157,7 @@ async def test_concurrent_inserts(test_config, table_context: Callable):
 
             async def insert_batch(start_id: int, count: int):
                 data = [[start_id + i, f"value_{start_id + i}"] for i in range(count)]
-                await client.insert(ctx.table, data)
+                await client.insert(ctx.table, data, settings={"wait_for_async_insert": 1})
 
             await asyncio.gather(
                 insert_batch(0, 10),
