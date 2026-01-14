@@ -23,7 +23,7 @@ def test_jwt_auth_client(test_config: TestConfig, client_factory, call):
         pytest.skip("Skipping JWT test in non-Cloud mode")
 
     access_token = make_access_token()
-    client = client_factory(access_token=access_token)
+    client = client_factory(username=None, password="", access_token=access_token)
     result = call(client.query, CHECK_CLOUD_MODE_QUERY).result_set
     assert result == [(True,)]
 
@@ -34,7 +34,7 @@ def test_jwt_auth_client_set_access_token(test_config: TestConfig, client_factor
         pytest.skip("Skipping JWT test in non-Cloud mode")
 
     access_token = make_access_token()
-    client = client_factory(access_token=access_token)
+    client = client_factory(username=None, password="", access_token=access_token)
 
     access_token = make_access_token()
     client.set_access_token(access_token)

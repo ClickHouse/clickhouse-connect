@@ -171,11 +171,6 @@ def client_factory(client_mode, test_config, shared_loop):
             **kwargs,
         }
 
-        # Clear username/password if access_token is provided
-        if "access_token" in kwargs:
-            config["username"] = None
-            config["password"] = ""
-
         if client_mode == "sync":
             client = create_client(**config)
         else:
