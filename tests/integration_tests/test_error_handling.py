@@ -51,6 +51,7 @@ def test_connection_refused_error(client_factory, test_config: TestConfig, caplo
             "Connection refused" in error_message
             or "Failed to establish a new connection" in error_message
             or "Cannot connect to host" in error_message
+            or "Connection aborted" in error_message  # Port occasionally occupied in CI, apparently
         )
     finally:
         # Restore the original logging level
