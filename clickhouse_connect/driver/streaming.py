@@ -27,7 +27,7 @@ else:
 class StreamingResponseSource(Closable):
     """Streaming source that feeds chunks from async producer to sync consumer."""
 
-    READ_BUFFER_SIZE = 512 * 1024
+    READ_BUFFER_SIZE = 1024 * 1024
 
     def __init__(self, response, encoding: Optional[str] = None):
         self.response = response
