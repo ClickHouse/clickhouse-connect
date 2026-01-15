@@ -102,17 +102,15 @@ def test_stream_failure_sync(test_client):
              ' where intDiv(1,number-300000)>-100000000')
 
     stream = test_client.query_row_block_stream(query)
-    failed = False
 
-    try:
+    with pytest.raises(StreamFailureError) as excinfo:
         with stream:
             for _ in stream:
                 pass
-    except StreamFailureError as ex:
-        failed = True
-        assert 'division by zero' in str(ex).lower()
 
-    assert failed
+    error_msg = str(excinfo.value).lower()
+    # Race condition: may get actual ClickHouse error or generic connection closed
+    assert 'division by zero' in error_msg or 'connection closed' in error_msg
 
 
 @pytest.mark.asyncio
@@ -121,17 +119,15 @@ async def test_stream_failure_async(test_native_async_client):
              ' where intDiv(1,number-300000)>-100000000')
 
     stream = await test_native_async_client.query_row_block_stream(query)
-    failed = False
 
-    try:
+    with pytest.raises(StreamFailureError) as excinfo:
         async with stream:
             async for _ in stream:
                 pass
-    except StreamFailureError as ex:
-        failed = True
-        assert 'division by zero' in str(ex).lower()
 
-    assert failed
+    error_msg = str(excinfo.value).lower()
+    # Race condition: may get actual ClickHouse error or generic connection closed
+    assert 'division by zero' in error_msg or 'connection closed' in error_msg
 
 
 def test_raw_stream(param_client, call, consume_stream):

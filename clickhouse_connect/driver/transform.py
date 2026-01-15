@@ -62,6 +62,8 @@ class NativeTransform:
                     raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
 
                 # Handle async streaming errors (ClientPayloadError from aiohttp)
+                # Note: Error message extraction is best-effort here. aiohttp's HTTP parser may detect
+                # protocol errors before the error message is buffered, due to streaming race conditions
                 if ex.__class__.__name__ == 'ClientPayloadError':
                     # Check if ClickHouse sent an error message before closing the connection
                     if source.last_message and b'Code: ' in source.last_message:
