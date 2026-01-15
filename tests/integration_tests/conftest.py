@@ -41,6 +41,12 @@ class TestException(BaseException):
 
 def make_client_config(test_config: TestConfig, **kwargs):
     """Helper to build client config dict from test_config with optional overrides."""
+    settings = kwargs.pop("settings", {}).copy()
+    if test_config.insert_quorum:
+        settings["insert_quorum"] = test_config.insert_quorum
+    elif test_config.cloud:
+        settings["select_sequential_consistency"] = 1
+
     return {
         "host": test_config.host,
         "port": test_config.port,
@@ -48,6 +54,7 @@ def make_client_config(test_config: TestConfig, **kwargs):
         "password": test_config.password,
         "database": test_config.test_database,
         "compress": test_config.compress,
+        "settings": settings,
         **kwargs,
     }
 
