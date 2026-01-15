@@ -226,9 +226,10 @@ class AiohttpAsyncClient(Client):
             "force_close": False,
             "ssl": ssl_context,
         }
-        # enable_cleanup_closed is only needed for Python < 3.14 (cpython issue fixed in 3.14)
+        # enable_cleanup_closed is only needed for Python < 3.12.7 or == 3.13.0
+        # The underlying SSL connection leak was fixed in 3.12.7 and 3.13.1+
         # https://github.com/python/cpython/pull/118960
-        if sys.version_info < (3, 13, 4):
+        if sys.version_info < (3, 12, 7) or sys.version_info[:3] == (3, 13, 0):
             self._connector_kwargs["enable_cleanup_closed"] = True
 
         self._session = None
