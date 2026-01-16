@@ -3,6 +3,8 @@ import threading
 from collections import deque
 from typing import Deque, Generic, Optional, TypeVar
 
+from clickhouse_connect.driver.exceptions import ProgrammingError
+
 __all__ = ["AsyncSyncQueue", "Empty", "Full", "EOF_SENTINEL"]
 
 T = TypeVar("T")
@@ -38,6 +40,22 @@ class AsyncSyncQueue(Generic[T]):
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
                 pass
+
+    def _check_deadlock(self):
+        """Check if blocking would cause a deadlock on the event loop."""
+        if self._loop is None:
+            return
+
+        try:
+            current_loop = asyncio.get_running_loop()
+            if current_loop is self._loop:
+                raise ProgrammingError(
+                    "Deadlock detected: Synchronous blocking operation called on event loop thread. "
+                    "This usually happens when iterating a stream synchronously (e.g., 'for row in result') "
+                    "instead of asynchronously ('async for row in result') inside an async function."
+                )
+        except RuntimeError:
+            pass
 
     def _wakeup_async_waiter(self, waiter_queue: Deque[asyncio.Future]):
         """Helper: Wake up the next async waiter in the queue safely."""
@@ -82,6 +100,7 @@ class _SyncQueueInterface(Generic[T]):
                 if not block:
                     raise Empty()
 
+                self._p._check_deadlock()
                 if not self._p._sync_not_empty.wait(timeout):
                     raise Empty()
 
@@ -102,6 +121,8 @@ class _SyncQueueInterface(Generic[T]):
             while self._p._maxsize > 0 and len(self._p._queue) >= self._p._maxsize:
                 if not block:
                     raise Full()
+
+                self._p._check_deadlock()
                 if not self._p._sync_not_full.wait(timeout):
                     raise Full()
                 if self._p._shutdown:

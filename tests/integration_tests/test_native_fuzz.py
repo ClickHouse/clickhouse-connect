@@ -1,3 +1,4 @@
+import asyncio
 import os
 import random
 
@@ -13,7 +14,7 @@ MAX_DATA_ROWS = 40
 
 
 # pylint: disable=duplicate-code
-def test_query_fuzz(param_client: Client, call, test_table_engine: str):
+def test_query_fuzz(param_client: Client, call, test_table_engine: str, client_mode: str):
     if not param_client.min_version('21'):
         pytest.skip(f'flatten_nested setting not supported in this server version {param_client.server_version}')
     test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250'))
@@ -32,9 +33,20 @@ def test_query_fuzz(param_client: Client, call, test_table_engine: str):
             call(param_client.command, create_stmt, settings={'flatten_nested': 0})
             call(param_client.insert, 'fuzz_test', data, col_names)
 
-            data_result = call(param_client.query, 'SELECT * FROM fuzz_test')
+            if client_mode == 'async':
+                async def get_results():
+                    result = await param_client.query('SELECT * FROM fuzz_test')
+                    loop = asyncio.get_running_loop()
+                    rows = await loop.run_in_executor(None, lambda: list(result.result_set))
+                    return rows, result.column_names
+                result_rows, result_cols = call(get_results)
+            else:
+                data_result = call(param_client.query, 'SELECT * FROM fuzz_test')
+                result_rows = data_result.result_set
+                result_cols = data_result.column_names
+
             if data_rows:
-                assert data_result.column_names == col_names
-                assert data_result.result_set == data
+                assert result_cols == col_names
+                assert result_rows == data
     finally:
         param_client.apply_server_timezone = False

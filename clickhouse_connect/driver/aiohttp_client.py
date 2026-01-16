@@ -545,18 +545,15 @@ class AiohttpAsyncClient(Client):
             context.set_response_tz(self._check_tz_change(tz_header))
             result = self._transform.parse_response(byte_source, context)
 
-            # CRITICAL: For non-streaming queries, force full materialization while still in executor thread.
-            #  This prevents the event loop from ever calling blocking queue.sync_q.get() operations
-            #  which would deadlock the entire event loop when backpressure occurs
+            # For Pandas/Numpy, we must materialize in the executor because the resulting objects
+            # (DataFrame, Array) are fully in-memory structures.
+            # For standard queries, we return a lazy QueryResult. Accessing .result_set on the event loop
+            # will raise a ProgrammingError (deadlock check), encouraging usage of .rows_stream.
             if not context.streaming:
                 if context.as_pandas and hasattr(result, 'df_result'):
                     _ = result.df_result
                 elif context.use_numpy and hasattr(result, 'np_result'):
                     _ = result.np_result
-                elif hasattr(result, 'result_set'):
-                    # Materialize rows (closes the stream)
-                    # Avoid pre-populating result_columns. User can access later if needed
-                    _ = result.result_set
 
             return result
 
