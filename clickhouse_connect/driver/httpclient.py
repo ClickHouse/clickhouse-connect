@@ -333,10 +333,12 @@ class HttpClient(Client):
             params['database'] = self.database
         params.update(self._validate_settings(context.settings))
         headers = dict_copy(headers, context.transport_settings)
-        response = self._raw_request(block_gen, params, headers, error_handler=error_handler, server_wait=False)
-        logger.debug('Context insert response code: %d, content: %s', response.status, response.data)
-        context.data = None
-        return QuerySummary(self._summary(response))
+        try:
+            response = self._raw_request(block_gen, params, headers, error_handler=error_handler, server_wait=False)
+            logger.debug('Context insert response code: %d, content: %s', response.status, response.data)
+            return QuerySummary(self._summary(response))
+        finally:
+            context.data = None
 
     def raw_insert(self, table: str = None,
                    column_names: Optional[Sequence[str]] = None,
