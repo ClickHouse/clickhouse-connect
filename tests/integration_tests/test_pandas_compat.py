@@ -323,7 +323,7 @@ def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Calla
         if IS_PANDAS_2:
             df = df.convert_dtypes(dtype_backend="pyarrow")
             call(param_client.insert_df_arrow, table_name, df)
-            
+
             if client_mode == 'async':
                 async def get_rows():
                     result = await param_client.query(f"SELECT * from {table_name} ORDER BY i64")
@@ -336,7 +336,7 @@ def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Calla
             else:
                 res_df = call(param_client.query, f"SELECT * from {table_name} ORDER BY i64")
                 rows = res_df.result_rows
-            
+
             assert rows == [(51, 421, "b"), (78, None, "a")]
         else:
             with pytest.raises(ProgrammingError, match="pandas 2.x"):
