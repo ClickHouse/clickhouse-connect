@@ -304,7 +304,7 @@ def test_pandas_query_df_arrow(param_client: Client, call, table_context: Callab
                 result_df = call(param_client.query_df_arrow, f"SELECT * FROM {table_name}")
 
 
-def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Callable, client_mode: str):
+def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")
 
@@ -323,21 +323,8 @@ def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Calla
         if IS_PANDAS_2:
             df = df.convert_dtypes(dtype_backend="pyarrow")
             call(param_client.insert_df_arrow, table_name, df)
-
-            if client_mode == 'async':
-                async def get_rows():
-                    result = await param_client.query(f"SELECT * from {table_name} ORDER BY i64")
-                    rows = []
-                    async with result.rows_stream as stream:
-                        async for row in stream:
-                            rows.append(row)
-                    return rows
-                rows = call(get_rows)
-            else:
-                res_df = call(param_client.query, f"SELECT * from {table_name} ORDER BY i64")
-                rows = res_df.result_rows
-
-            assert rows == [(51, 421, "b"), (78, None, "a")]
+            res_df = call(param_client.query, f"SELECT * from {table_name} ORDER BY i64")
+            assert res_df.result_rows == [(51, 421, "b"), (78, None, "a")]
         else:
             with pytest.raises(ProgrammingError, match="pandas 2.x"):
                 call(param_client.insert_df_arrow, table_name, df)

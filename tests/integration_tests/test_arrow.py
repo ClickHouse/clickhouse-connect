@@ -30,7 +30,7 @@ def test_arrow(param_client: Client, call, table_context: Callable):
         assert len(result_table.columns) == 2
 
     arrow_table = call(param_client.query_arrow, 'SELECT number from system.numbers LIMIT 500',
-                       settings={'max_block_size': 50})
+                                          settings={'max_block_size': 50})
     arrow_schema = arrow_table.schema
     assert arrow_schema.field(0).name == 'number'
     assert arrow_schema.field(0).type.id == 8
@@ -83,9 +83,9 @@ def test_arrow_map(param_client: Client, call, table_context: Callable):
         data = [[date(2023, 10, 15), 'C1', {'k': 2.5, 'd': 0, 'j': 0}],
                 [date(2023, 10, 16), 'C2', {'k': 3.5, 'd': 0, 'j': -.372}]]
         call(param_client.insert, 'test_arrow_map', data, column_names=('trade_date', 'code', 'kdj'),
-             settings={'insert_deduplication_token': '10381'})
+                           settings={'insert_deduplication_token': '10381'})
         arrow_table = call(param_client.query_arrow, 'SELECT * FROM test_arrow_map ORDER BY trade_date',
-                           use_strings=True)
+                                              use_strings=True)
         assert isinstance(arrow_table.schema, arrow.Schema)
         call(param_client.insert_arrow, 'test_arrow_map', arrow_table, settings={'insert_deduplication_token': '10382'})
         assert 4 == call(param_client.command, 'SELECT count() FROM test_arrow_map')

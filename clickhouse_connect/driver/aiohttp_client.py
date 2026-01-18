@@ -310,12 +310,7 @@ class AiohttpAsyncClient(Client):
                 readonly = common.get_setting("readonly")
 
             server_settings = await self.query(f"SELECT name, value, {readonly} as readonly FROM system.settings LIMIT 10000")
-            settings_map = {}
-            async with server_settings.rows_stream as stream:
-                async for row in stream:
-                    row_dict = dict(zip(server_settings.column_names, row))
-                    settings_map[row_dict["name"]] = SettingDef(**row_dict)
-            self.server_settings = settings_map
+            self.server_settings = {row["name"]: SettingDef(**row) for row in server_settings.named_results()}
 
             if self.min_version(CH_VERSION_WITH_PROTOCOL) and common.get_setting("use_protocol_version"):
                 try:
@@ -559,6 +554,8 @@ class AiohttpAsyncClient(Client):
                     _ = result.df_result
                 elif context.use_numpy and hasattr(result, 'np_result'):
                     _ = result.np_result
+                elif isinstance(result, QueryResult):
+                    _ = result.result_set
 
             return result
 
@@ -1383,11 +1380,9 @@ class AiohttpAsyncClient(Client):
         column_defs = []
         if column_types is None and column_type_names is None:
             describe_result = await self.query(f"DESCRIBE TABLE {full_table}", settings=settings)
-            async with describe_result.rows_stream as stream:
-                async for row in stream:
-                    row_dict = dict(zip(describe_result.column_names, row))
-                    if row_dict["default_type"] not in ("ALIAS", "MATERIALIZED"):
-                        column_defs.append(ColumnDef(**row_dict))
+            column_defs = [
+                ColumnDef(**row) for row in describe_result.named_results() if row["default_type"] not in ("ALIAS", "MATERIALIZED")
+            ]
         if column_names is None or isinstance(column_names, str) and column_names == "*":
             column_names = [cd.name for cd in column_defs]
             column_types = [cd.ch_type for cd in column_defs]
