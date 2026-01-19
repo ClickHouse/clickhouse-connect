@@ -5,7 +5,7 @@ from typing import Callable
 import pytest
 
 from clickhouse_connect import get_async_client
-from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
+from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from tests.integration_tests.conftest import make_client_config
 
 # pylint: disable=protected-access
@@ -103,10 +103,17 @@ async def test_session_concurrency_protection(test_config):
             await asyncio.sleep(0.1)
             return await client.query("SELECT 1")
 
-        with pytest.raises(ProgrammingError) as exc_info:
+        # This can raise either:
+        #  - ProgrammingError (client-side detection - best effort)
+        #  - DatabaseError code 373 (server-side SESSION_IS_LOCKED - when client check is too slow)
+        # Both are valid ways to detect the concurrent session violation.
+        with pytest.raises((ProgrammingError, DatabaseError)) as exc_info:
             await asyncio.gather(long_query(), quick_query())
 
-        assert "concurrent" in str(exc_info.value).lower() or "session" in str(exc_info.value).lower()
+        # Verify it's the right kind of error (concurrent session access)
+        error_msg = str(exc_info.value).lower()
+        assert ("concurrent" in error_msg or "session" in error_msg or "locked" in error_msg), \
+            f"Expected session concurrency error, got: {exc_info.value}"
 
 
 @pytest.mark.asyncio
