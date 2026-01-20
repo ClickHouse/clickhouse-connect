@@ -25,6 +25,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ### Bug Fixes
 - Fix issue with DROP table in client temp table test.
+- Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.
 
 ### Improvements
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
