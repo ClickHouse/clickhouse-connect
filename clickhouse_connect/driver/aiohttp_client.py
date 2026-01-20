@@ -1460,8 +1460,8 @@ class AiohttpAsyncClient(Client):
             raise
         finally:
             await streaming_source.close()
+            context.data = None
 
-        context.data = None
         return QuerySummary(self._summary(response))
 
     async def insert_df(  # type: ignore[override]

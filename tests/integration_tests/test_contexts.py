@@ -29,14 +29,14 @@ def test_contexts(param_client: Client, call, table_context: Callable):
         call(param_client.insert, context=insert_context)
         assert call(param_client.command, f'SELECT count() FROM {ctx.table}') == 6
 
-def test_insert_context_data_cleared_on_failure(test_client: Client, table_context: Callable):
+def test_insert_context_data_cleared_on_failure(param_client: Client, call, table_context: Callable):
     with table_context('test_contexts', ['key Int32', 'value1 String', 'value2 String']) as ctx:
         data = [[1, "v1", "v2"], [2, "v3", "v4"]]
-        insert_context = test_client.create_insert_context(table=ctx.table, data=data)
+        insert_context = call(param_client.create_insert_context, table=ctx.table, data=data)
 
         insert_context.table = f"{ctx.table}__does_not_exist"
 
         with pytest.raises(Exception):
-            test_client.insert(context=insert_context)
+            call(param_client.insert, context=insert_context)
 
         assert insert_context.data is None
