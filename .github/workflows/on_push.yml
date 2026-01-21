@@ -104,7 +104,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest tests
+        run: pytest -n 4 tests
 
   pandas-1x-compat-test:
     runs-on: ubuntu-latest
@@ -142,7 +142,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest tests/integration_tests/test_pandas_compat.py tests/integration_tests/test_pandas.py
+        run: pytest -n 4 tests/integration_tests/test_pandas_compat.py tests/integration_tests/test_pandas.py
 
   sqlalchemy-1x-compat-test:
     runs-on: ubuntu-latest
@@ -180,7 +180,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest tests/integration_tests/test_sqlalchemy
+        run: pytest -n 4 tests/integration_tests/test_sqlalchemy
 
   check-secret:
     runs-on: ubuntu-latest
@@ -234,4 +234,4 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD_SMT }}
           CLICKHOUSE_CONNECT_TEST_JWT_SECRET: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_JWT_DESERT_VM_43 }}
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest tests/integration_tests
+        run: pytest -n 4 tests/integration_tests

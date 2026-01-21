@@ -11,8 +11,8 @@ from clickhouse_connect.driver import Client, tzutil
 chicago_tz = pytz.timezone('America/Chicago').localize(datetime(2020, 8, 8, 10, 5, 5)).tzinfo
 
 
-def test_basic_timezones(test_client: Client):
-    row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
+def test_basic_timezones(param_client: Client, call):
+    row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                             "toDateTime('2023-07-05 15:10:40') as utc",
                             query_tz='America/Chicago').first_row
 
@@ -24,8 +24,8 @@ def test_basic_timezones(test_client: Client):
     assert row[1].hour == 10
     assert row[1].day == 5
 
-    if test_client.min_version('20'):
-        row = test_client.query("SELECT toDateTime64('2022-10-25 10:55:22.789123', 6, 'America/Chicago')",
+    if param_client.min_version('20'):
+        row = call(param_client.query, "SELECT toDateTime64('2022-10-25 10:55:22.789123', 6, 'America/Chicago')",
                                 query_tz='America/Chicago').first_row
         assert row[0].tzinfo == chicago_tz
         assert row[0].hour == 10
@@ -33,14 +33,14 @@ def test_basic_timezones(test_client: Client):
         assert row[0].microsecond == 789123
 
 
-def test_server_timezone(test_client: Client):
+def test_server_timezone(param_client: Client, call):
     #  This test is really for manual testing since changing the timezone on the test ClickHouse server
     #  still requires a restart.  Other tests will depend on https://github.com/ClickHouse/ClickHouse/pull/44149
-    test_client.apply_server_timezone = True
+    param_client.apply_server_timezone = True
     test_datetime = datetime(2023, 3, 18, 16, 4, 25)
     try:
-        date = test_client.query('SELECT toDateTime(%s) as st', parameters=[test_datetime]).first_row[0]
-        if test_client.server_tz == pytz.UTC:
+        date = call(param_client.query, 'SELECT toDateTime(%s) as st', parameters=[test_datetime]).first_row[0]
+        if param_client.server_tz == pytz.UTC:
             assert date.tzinfo is None
             assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=None)
             assert date.timestamp() == 1679155465
@@ -50,15 +50,15 @@ def test_server_timezone(test_client: Client):
             assert date.tzinfo == den_tz
             assert date.timestamp() == 1679177065
     finally:
-        test_client.apply_server_timezone = False
+        param_client.apply_server_timezone = False
 
 
-def test_column_timezones(test_client: Client):
+def test_column_timezones(param_client: Client, call):
     date_tz64 = "toDateTime64('2023-01-02 15:44:22.7832', 6, 'Asia/Shanghai')"
-    if not test_client.min_version('20'):
+    if not param_client.min_version('20'):
         date_tz64 = "toDateTime('2023-01-02 15:44:22', 'Asia/Shanghai')"
     column_tzs = {'chicago': 'America/Chicago', 'china': 'Asia/Shanghai'}
-    row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
+    row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                             f'{date_tz64} as china,' +
                             "toDateTime('2023-07-05 15:10:40') as utc",
                             column_tzs=column_tzs).first_row
@@ -67,27 +67,27 @@ def test_column_timezones(test_client: Client):
     assert row[1].tzinfo == china_tz
     assert row[2].tzinfo is None
 
-    if test_client.min_version('20'):
-        row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
+    if param_client.min_version('20'):
+        row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                                 "toDateTime64('2023-01-02 15:44:22.7832', 6, 'Asia/Shanghai') as china").first_row
-        if test_client.protocol_version:
+        if param_client.protocol_version:
             assert row[0].tzinfo == chicago_tz
         else:
             assert row[0].tzinfo is None
         assert row[1].tzinfo == china_tz  # DateTime64 columns work correctly
 
 
-def test_local_timezones(test_client: Client):
+def test_local_timezones(param_client: Client, call):
     denver_tz = pytz.timezone('America/Denver')
     tzutil.local_tz = denver_tz
-    test_client.apply_server_timezone = False
+    param_client.apply_server_timezone = False
     try:
-        row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22'," +
+        row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22'," +
                                 "'America/Chicago') as chicago," +
                                 "toDateTime('2023-07-05 15:10:40') as raw_utc_dst," +
                                 "toDateTime('2023-07-05 12:44:22', 'UTC') as forced_utc," +
                                 "toDateTime('2023-12-31 17:00:55') as raw_utc_std").first_row
-        if test_client.protocol_version:
+        if param_client.protocol_version:
             assert row[0].tzinfo.tzname(None) == chicago_tz.tzname(None)
         else:
             assert row[0].tzinfo.tzname(None) == denver_tz.tzname(None)
@@ -96,98 +96,98 @@ def test_local_timezones(test_client: Client):
         assert row[3].tzinfo.tzname(None) == denver_tz.tzname(None)
     finally:
         tzutil.local_tz = pytz.UTC
-        test_client.apply_server_timezone = True
+        param_client.apply_server_timezone = True
 
 
-def test_naive_timezones(test_client: Client):
-    row = test_client.query("SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
+def test_naive_timezones(param_client: Client, call):
+    row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
                             "toDateTime('2023-07-05 15:10:40') as utc").first_row
 
-    if test_client.protocol_version:
+    if param_client.protocol_version:
         assert row[0].tzinfo == chicago_tz
     else:
         assert row[0].tzinfo is None
     assert row[1].tzinfo is None
 
 
-def test_timezone_binding_client(test_client: Client):
+def test_timezone_binding_client(param_client: Client, call):
     os.environ['TZ'] = 'America/Denver'
     time.tzset()
     denver_tz = pytz.timezone('America/Denver')
     tzutil.local_tz = denver_tz
-    test_client.apply_server_timezone = False
+    param_client.apply_server_timezone = False
     denver_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=denver_tz)
     try:
-        server_time = test_client.query(
+        server_time = call(param_client.query,
             'SELECT toDateTime(%(dt)s) as dt', parameters={'dt': denver_time}).first_row[0]
         assert server_time == denver_time
     finally:
         os.environ['TZ'] = 'UTC'
         tzutil.local_tz = pytz.UTC
         time.tzset()
-        test_client.apply_server_timezone = True
+        param_client.apply_server_timezone = True
 
     naive_time = datetime(2023, 3, 18, 16, 4, 25)
-    server_time = test_client.query(
+    server_time = call(param_client.query,
         'SELECT toDateTime(%(dt)s) as dt', parameters={'dt': naive_time}).first_row[0]
     assert server_time.astimezone(pytz.UTC) == naive_time.astimezone(pytz.UTC)
 
     utc_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=pytz.UTC)
-    server_time = test_client.query(
+    server_time = call(param_client.query,
         'SELECT toDateTime(%(dt)s) as dt', parameters={'dt': utc_time}).first_row[0]
     assert server_time.astimezone(pytz.UTC) == utc_time
 
 
-def test_timezone_binding_server(test_client: Client):
+def test_timezone_binding_server(param_client: Client, call):
     os.environ['TZ'] = 'America/Denver'
     time.tzset()
     denver_tz = pytz.timezone('America/Denver')
     tzutil.local_tz = denver_tz
-    test_client.apply_server_timezone = False
+    param_client.apply_server_timezone = False
     denver_time = datetime(2022, 3, 18, 16, 4, 25, tzinfo=denver_tz)
     try:
-        server_time = test_client.query(
+        server_time = call(param_client.query,
             'SELECT toDateTime({dt:DateTime}) as dt', parameters={'dt': denver_time}).first_row[0]
         assert server_time == denver_time
     finally:
         os.environ['TZ'] = 'UTC'
         time.tzset()
         tzutil.local_tz = pytz.UTC
-        test_client.apply_server_timezone = True
+        param_client.apply_server_timezone = True
 
     naive_time = datetime(2022, 3, 18, 16, 4, 25)
-    server_time = test_client.query(
+    server_time = call(param_client.query,
         'SELECT toDateTime({dt:DateTime}) as dt', parameters={'dt': naive_time}).first_row[0]
     assert naive_time.astimezone(pytz.UTC) == server_time.astimezone(pytz.UTC)
 
     utc_time = datetime(2020, 3, 18, 16, 4, 25, tzinfo=pytz.UTC)
-    server_time = test_client.query(
+    server_time = call(param_client.query,
         'SELECT toDateTime({dt:DateTime}) as dt', parameters={'dt': utc_time}).first_row[0]
     assert server_time.astimezone(pytz.UTC) == utc_time
 
 
-def test_utc_tz_aware(test_client: Client):
-    row = test_client.query("SELECT toDateTime('2023-07-05 15:10:40') as dt," +
+def test_utc_tz_aware(param_client: Client, call):
+    row = call(param_client.query, "SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC').first_row
     assert row[0].tzinfo is None
     assert row[1].tzinfo is None
 
-    row = test_client.query("SELECT toDateTime('2023-07-05 15:10:40') as dt," +
+    row = call(param_client.query, "SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC', utc_tz_aware=True).first_row
     assert row[0].tzinfo == pytz.UTC
     assert row[1].tzinfo == pytz.UTC
 
-    if test_client.min_version('20'):
-        row = test_client.query("SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
+    if param_client.min_version('20'):
+        row = call(param_client.query, "SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
                                 "toDateTime64('2023-07-05 15:10:40.123456', 6, 'UTC') as dt64_utc",
                                 query_tz='UTC').first_row
         assert row[0].tzinfo is None
         assert row[1].tzinfo is None
         assert row[0].microsecond == 123456
 
-        row = test_client.query("SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
+        row = call(param_client.query, "SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
                                 "toDateTime64('2023-07-05 15:10:40.123456', 6, 'UTC') as dt64_utc",
                                 query_tz='UTC', utc_tz_aware=True).first_row
         assert row[0].tzinfo == pytz.UTC
