@@ -120,7 +120,7 @@ class AsyncClient:
         """
         return self._impl.min_version(version_str)
 
-    async def close(self):
+    async def close(self) -> None:
         """
         Subclass implementation to close the connection to the server/deallocate the client
         """
