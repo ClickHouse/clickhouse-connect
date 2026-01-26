@@ -2,6 +2,7 @@ import io
 import logging
 from datetime import tzinfo
 
+import pyarrow as pa
 import pytz
 
 from abc import ABC, abstractmethod
@@ -28,6 +29,25 @@ from clickhouse_connect.driver.binding import quote_identifier
 io.DEFAULT_BUFFER_SIZE = 1024 * 256
 logger = logging.getLogger(__name__)
 arrow_str_setting = 'output_format_arrow_string_as_string'
+
+
+def _strip_utc_timezone_from_arrow(table: pa.Table) -> pa.Table:
+    """Strip UTC timezone from timestamp columns in Arrow table.
+
+    This ensures naive datetimes are returned when the server timezone is UTC
+    and utc_tz_aware is False (the default).
+    """
+    new_fields = []
+    needs_cast = False
+    for field in table.schema:
+        if pa.types.is_timestamp(field.type) and field.type.tz in ('UTC', 'Etc/UTC'):
+            new_fields.append(pa.field(field.name, pa.timestamp(field.type.unit)))
+            needs_cast = True
+        else:
+            new_fields.append(field)
+    if needs_cast:
+        return table.cast(pa.schema(new_fields))
+    return table
 
 
 # pylint: disable=too-many-lines
@@ -637,6 +657,8 @@ class Client(ABC):
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: arrow.Table) -> pd.DataFrame:
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
 
         elif dataframe_library == "polars":
@@ -644,6 +666,8 @@ class Client(ABC):
             self._add_integration_tag("polars")
 
             def converter(table: arrow.Table) -> pl.DataFrame:
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return pl.from_arrow(table)
 
         else:
@@ -689,12 +713,16 @@ class Client(ABC):
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "arrow.Table") -> "pd.DataFrame":
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
         elif dataframe_library == "polars":
             check_polars()
             self._add_integration_tag("polars")
 
             def converter(table: arrow.Table) -> pl.DataFrame:
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return pl.from_arrow(table)
         else:
             raise ValueError(f"dataframe_library must be 'pandas' or 'polars', got '{dataframe_library}'")

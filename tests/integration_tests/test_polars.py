@@ -113,3 +113,21 @@ def test_polars_arrow_stream(test_client: Client, table_context: Callable):
             assert df["letter"].equals(expected_letter)
             total_rows += len(df)
         assert total_rows == 1000000
+
+
+def test_polars_utc_timestamp_naive(test_client: Client, table_context: Callable):
+    """Test that polars DataFrames get naive timestamps when server is UTC.
+
+    This test reproduces the bug where Arrow format preserves UTC timezone
+    in timestamp columns instead of returning naive datetimes.
+    """
+    with table_context('test_polars_utc_tz', ['ts DateTime']) as ctx:
+        test_client.command(f"INSERT INTO {ctx.table} VALUES (now())")
+        df = test_client.query_df_arrow(
+            f"SELECT * FROM {ctx.table}",
+            dataframe_library="polars"
+        )
+        # BUG: Previously returned Datetime('us', 'UTC') instead of Datetime('us')
+        # The timezone should be stripped for naive datetime output
+        ts_dtype = df.schema['ts']
+        assert ts_dtype.time_zone is None, f"Expected naive datetime, got timezone: {ts_dtype.time_zone}"

@@ -1,6 +1,6 @@
 import os
-from datetime import datetime
-from typing import Tuple
+from datetime import datetime, tzinfo
+from typing import Optional, Tuple
 
 import pytz
 
@@ -31,6 +31,19 @@ def normalize_timezone(timezone: pytz.timezone) -> Tuple[pytz.timezone, bool]:
             return pytz.timezone(local_name), True
 
     return timezone, False
+
+
+def is_utc_timezone(tz: Optional[tzinfo]) -> bool:
+    """Check if timezone is UTC or an equivalent (Etc/UTC, GMT, etc.).
+
+    This handles the issue where pytz.timezone('Etc/UTC') != pytz.UTC despite
+    being semantically equivalent.
+    """
+    if tz is None:
+        return False
+    if tz == pytz.UTC:
+        return True
+    return tz.tzname(None) in ('UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich')
 
 
 def utcfromtimestamp(ts: float) -> datetime:
