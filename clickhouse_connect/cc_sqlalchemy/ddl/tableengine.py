@@ -43,6 +43,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         Visitable.__init__(self)
         self.name = self.__class__.__name__
         te_name = f'{self.name} Table Engine'
+        self._orig_kwargs = kwargs.copy()
         engine_args = []
         for arg_name in self.arg_names:
             v = kwargs.pop(arg_name, None)
@@ -67,6 +68,20 @@ class TableEngine(SchemaEventTarget, Visitable):
             self.full_engine += f'({", ".join(engine_args)})'
         if params:
             self.full_engine += ' ' + ' '.join(params)
+
+    def __repr__(self):
+        """Produce Python code representation of the engine for Alembic autogeneration."""
+        args = []
+        for k, v in self._orig_kwargs.items():
+            if k in {"self", "__class__"}:
+                continue
+            if v is None:
+                continue
+            if isinstance(v, str):
+                args.append(f"{k}='{v}'")
+            else:
+                args.append(f"{k}={v}")
+        return f"{self.name}({', '.join(args)})"
 
     def compile(self):
         return self.full_engine
