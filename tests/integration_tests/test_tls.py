@@ -1,9 +1,7 @@
 import os
 
 import pytest
-from urllib3.exceptions import SSLError
 
-from clickhouse_connect import get_client
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from tests.helpers import PROJECT_ROOT_DIR
@@ -13,39 +11,41 @@ cert_dir = f'{PROJECT_ROOT_DIR}/.docker/clickhouse/single_node_tls/certificates/
 host = 'server1.clickhouse.test'
 
 
-def test_basic_tls():
+def test_basic_tls(client_factory, call):
     if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_TLS', 'False')):
         pytest.skip('TLS tests not enabled')
-    client = get_client(interface='https', host=host, port=10843, verify=False)
-    assert client.command("SELECT 'insecure'") == 'insecure'
-    client.close_connections()
+    client = client_factory(interface='https', host=host, port=10843, verify=False, database='default')
+    assert call(client.command, "SELECT 'insecure'") == 'insecure'
 
-    client = get_client(interface='https', host=host, port=10843, ca_cert=f'{cert_dir}ca.crt')
-    assert client.command("SELECT 'verify_server'") == 'verify_server'
-    client.close_connections()
+    client = client_factory(interface='https', host=host, port=10843, ca_cert=f'{cert_dir}ca.crt', database='default')
+    assert call(client.command, "SELECT 'verify_server'") == 'verify_server'
 
     try:
-        get_client(interface='https', host='localhost', port=10843, ca_cert=f'{cert_dir}ca.crt')
+        client_factory(interface='https', host='localhost', port=10843, ca_cert=f'{cert_dir}ca.crt', database='default')
         pytest.fail('Expected TLS exception with a different hostname')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
-    client.close_connections()
+        # For sync (urllib3): ex.__cause__.reason is SSLError
+        # For async (aiohttp): ex.__cause__ is ClientConnectorCertificateError
+        assert ex.__cause__ is not None
+        assert 'SSL' in str(ex.__cause__) or 'certificate' in str(ex.__cause__).lower()
 
     try:
-        get_client(interface='https', host='localhost', port=10843)
+        client_factory(interface='https', host='localhost', port=10843, database='default')
         pytest.fail('Expected TLS exception with a self-signed cert')
     except OperationalError as ex:
-        assert isinstance(ex.__cause__.reason, SSLError) # pylint: disable=no-member
+        assert ex.__cause__ is not None
+        assert 'SSL' in str(ex.__cause__) or 'certificate' in str(ex.__cause__).lower()
 
 
-def test_mutual_tls():
+def test_mutual_tls(client_factory, call):
     if not coerce_bool(os.environ.get('CLICKHOUSE_CONNECT_TEST_TLS', 'False')):
         pytest.skip('TLS tests not enabled')
-    client = get_client(interface='https',
+    client = client_factory(interface='https',
                         username='cert_user',
                         host=host,
                         port=10843,
                         ca_cert=f'{cert_dir}ca.crt',
                         client_cert=f'{cert_dir}client.crt',
-                        client_cert_key=f'{cert_dir}client.key')
-    assert client.command('SELECT user()') == 'cert_user'
+                        client_cert_key=f'{cert_dir}client.key',
+                        database='default')
+    assert call(client.command, 'SELECT user()') == 'cert_user'

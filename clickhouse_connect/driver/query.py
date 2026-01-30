@@ -280,12 +280,20 @@ class QueryResult(Closable):
     @property
     def result_columns(self) -> Matrix:
         if self._result_columns is None:
-            result = [[] for _ in range(len(self.column_names))]
-            with self.column_block_stream as stream:
-                for block in stream:
-                    for base, added in zip(result, block):
-                        base.extend(added)
-            self._result_columns = result
+            # If rows are already materialized and stream is closed, transpose from rows
+            # This happens when async client eagerly materializes result_rows
+            if self._result_rows is not None and self._block_gen is None:
+                if self._result_rows:
+                    self._result_columns = list(map(list, zip(*self._result_rows)))
+                else:
+                    self._result_columns = [[] for _ in range(len(self.column_names))]
+            else:
+                result = [[] for _ in range(len(self.column_names))]
+                with self.column_block_stream as stream:
+                    for block in stream:
+                        for base, added in zip(result, block):
+                            base.extend(added)
+                self._result_columns = result
         return self._result_columns
 
     @property
