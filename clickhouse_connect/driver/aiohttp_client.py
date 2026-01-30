@@ -38,8 +38,9 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.options import IS_PANDAS_2, arrow, check_arrow, check_numpy, check_pandas, check_polars, pd, pl
-from clickhouse_connect.driver.query import QueryContext, QueryResult, arrow_buffer, to_arrow
+from clickhouse_connect.driver.query import QueryContext, QueryResult, arrow_buffer
 from clickhouse_connect.driver.summary import QuerySummary
+from clickhouse_connect.driver.asyncqueue import AsyncSyncQueue, EOF_SENTINEL
 from clickhouse_connect.driver.streaming import StreamingInsertSource
 from clickhouse_connect.driver.transform import NativeTransform
 from clickhouse_connect.driver.streaming import StreamingResponseSource, StreamingFileAdapter
@@ -1044,16 +1045,33 @@ class AiohttpAsyncClient(Client):
         check_arrow()
         self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
-        return to_arrow(
-            await self.raw_query(
-                query,
-                parameters,
-                settings,
-                fmt="Arrow",
-                external_data=external_data,
-                transport_settings=transport_settings,
-            )
+
+        body, params, headers, files = self._prep_raw_query(
+            query, parameters, settings, fmt="ArrowStream",
+            use_database=True, external_data=external_data
         )
+        if transport_settings:
+            headers = dict_copy(headers, transport_settings)
+
+        response = await self._raw_request(
+            body, params, headers=headers, files=files,
+            stream=True, server_wait=False, retries=self.query_retries
+        )
+        encoding = response.headers.get("Content-Encoding")
+
+        loop = asyncio.get_running_loop()
+        streaming_source = StreamingResponseSource(response, encoding=encoding)
+        await streaming_source.start_producer(loop)
+
+        def parse_arrow_stream():
+            file_adapter = StreamingFileAdapter(streaming_source)
+            reader = arrow.ipc.open_stream(file_adapter)
+            return reader.read_all()
+
+        try:
+            return await loop.run_in_executor(None, parse_arrow_stream)
+        finally:
+            await streaming_source.aclose()
 
     async def query_arrow_stream(  # type: ignore[override]
         self,
@@ -1096,26 +1114,58 @@ class AiohttpAsyncClient(Client):
         streaming_source = StreamingResponseSource(response, encoding=encoding)
         await streaming_source.start_producer(loop)
 
+        queue = AsyncSyncQueue(maxsize=10)
+
+        class _ArrowStreamSource:
+            def __init__(self, source, q):
+                self._source = source
+                self._queue = q
+
+            async def aclose(self):
+                self._queue.shutdown()
+                await self._source.aclose()
+
+            def close(self):
+                self._queue.shutdown()
+                self._source.close()
+
         def parse_arrow_streaming():
             """Parse Arrow stream incrementally in executor (off event loop)."""
-            # Wrap streaming source with file-like adapter for PyArrow
-            file_adapter = StreamingFileAdapter(streaming_source)
-            reader = arrow.ipc.open_stream(file_adapter)
+            try:
+                file_adapter = StreamingFileAdapter(streaming_source)
+                reader = arrow.ipc.open_stream(file_adapter)
 
-            batches = []
-            for batch in reader:
-                batches.append(batch)
+                for batch in reader:
+                    try:
+                        queue.sync_q.put(batch)
+                    except RuntimeError:
+                        return
 
-            return batches
+                try:
+                    queue.sync_q.put(EOF_SENTINEL)
+                except RuntimeError:
+                    return
+            except Exception as e:
+                try:
+                    queue.sync_q.put(e)
+                except Exception:
+                    pass
+            finally:
+                queue.shutdown()
 
-        batches = await loop.run_in_executor(None, parse_arrow_streaming)
+        loop.run_in_executor(None, parse_arrow_streaming)
 
         async def arrow_batch_generator():
             """Async generator that yields record batches without blocking event loop."""
-            for batch in batches:
-                yield batch
+            while True:
+                item = await queue.async_q.get()
+                if item is EOF_SENTINEL:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
 
-        return StreamContext(None, arrow_batch_generator())
+        return StreamContext(_ArrowStreamSource(streaming_source, queue), arrow_batch_generator())
 
     async def query_df_arrow(
         self,
@@ -1234,27 +1284,60 @@ class AiohttpAsyncClient(Client):
         streaming_source = StreamingResponseSource(response, encoding=encoding)
         await streaming_source.start_producer(loop)
 
+        queue = AsyncSyncQueue(maxsize=10)
+
+        class _ArrowDFStreamSource:
+            def __init__(self, source, q):
+                self._source = source
+                self._queue = q
+
+            async def aclose(self):
+                self._queue.shutdown()
+                await self._source.aclose()
+
+            def close(self):
+                self._queue.shutdown()
+                self._source.close()
+
         def parse_and_convert_streaming():
             """Parse Arrow stream and convert to DataFrames in executor (off event loop)."""
-            file_adapter = StreamingFileAdapter(streaming_source)
+            try:
+                file_adapter = StreamingFileAdapter(streaming_source)
 
-            # PyArrow reads incrementally from adapter (which pulls from queue)
-            reader = arrow.ipc.open_stream(file_adapter)
+                # PyArrow reads incrementally from adapter (which pulls from queue)
+                reader = arrow.ipc.open_stream(file_adapter)
 
-            dataframes = []
-            for batch in reader:
-                dataframes.append(converter(batch))
+                for batch in reader:
+                    try:
+                        queue.sync_q.put(converter(batch))
+                    except RuntimeError:
+                        return
 
-            return dataframes
+                try:
+                    queue.sync_q.put(EOF_SENTINEL)
+                except RuntimeError:
+                    return
+            except Exception as e:
+                try:
+                    queue.sync_q.put(e)
+                except Exception:
+                    pass
+            finally:
+                queue.shutdown()
 
-        dataframes = await loop.run_in_executor(None, parse_and_convert_streaming)
+        loop.run_in_executor(None, parse_and_convert_streaming)
 
         async def df_generator():
             """Async generator that yields DataFrames without blocking event loop."""
-            for df in dataframes:
-                yield df
+            while True:
+                item = await queue.async_q.get()
+                if item is EOF_SENTINEL:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
 
-        return StreamContext(None, df_generator())
+        return StreamContext(_ArrowDFStreamSource(streaming_source, queue), df_generator())
 
     async def insert_arrow(  # type: ignore[override]
         self,
