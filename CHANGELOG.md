@@ -28,6 +28,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.
 
 ### Improvements
+- Add support for mid-stream exceptions. Closes [#626](https://github.com/ClickHouse/clickhouse-connect/issues/626)
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
 - Add the ability to create table from PyArrow objects. Addresses [#588](https://github.com/ClickHouse/clickhouse-connect/issues/588)
 - Always generate query_id from the client side as a UUID4 if it is not explicitly set. Closes [#596](https://github.com/ClickHouse/clickhouse-connect/issues/596)

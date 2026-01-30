@@ -8,6 +8,7 @@ from clickhouse_connect.driver.types import ByteSource
 must_swap = sys.byteorder == 'big'
 
 
+# pylint: disable=too-many-instance-attributes
 class ResponseBuffer(ByteSource):
     slots = 'slice_sz', 'buf_loc', 'end', 'gen', 'buffer', 'slice'
 
@@ -18,6 +19,24 @@ class ResponseBuffer(ByteSource):
         self.source = source
         self.gen = source.gen
         self.buffer = bytes()
+        self.exception_tag = getattr(source, 'exception_tag', None)
+        self._exception_window = bytearray()
+        self._exception_window_size = 8192  # Keep last 8KB to detect exception marker
+
+    def _check_for_exception(self, new_chunk: bytes) -> None:
+        """Check if the recent data contains an exception marker with our tag."""
+        if not self.exception_tag:
+            return
+
+        self._exception_window.extend(new_chunk)
+        if len(self._exception_window) > self._exception_window_size:
+            self._exception_window = self._exception_window[-self._exception_window_size:]
+
+        marker = b'__exception__'
+        marker_pos = self._exception_window.find(marker)
+        if marker_pos != -1:
+            self.buffer = bytes(self._exception_window[marker_pos:])
+            raise StreamCompleteException
 
     def read_bytes(self, sz: int):
         if self.buf_loc + sz <= self.buf_sz:
@@ -31,6 +50,7 @@ class ResponseBuffer(ByteSource):
             chunk = next(self.gen, None)
             if not chunk:
                 raise StreamCompleteException
+            self._check_for_exception(chunk)
             x = len(chunk)
             if len(bridge) + x <= sz:
                 bridge.extend(chunk)
@@ -51,6 +71,7 @@ class ResponseBuffer(ByteSource):
         chunk = next(self.gen, None)
         if not chunk:
             raise StreamCompleteException
+        self._check_for_exception(chunk)
         x = len(chunk)
         if x > 1:
             self.buffer = chunk
