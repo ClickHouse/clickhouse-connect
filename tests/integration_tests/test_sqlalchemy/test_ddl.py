@@ -21,10 +21,6 @@ def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: 
     if test_db:
         common.set_setting('invalid_setting_action', 'drop')
         with test_engine.begin() as conn:
-            # For cloud, use async DDL to avoid distributed timeout issues
-            if test_config.cloud:
-                conn.execute(text("SET distributed_ddl_task_timeout = 0"))
-
             create_db = f'create_db_{test_db}'
             if not test_engine.dialect.has_database(conn, create_db):
                 if test_config.host == 'localhost' and conn.connection.driver_connection.client.min_version('20'):
