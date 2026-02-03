@@ -19,7 +19,7 @@ local_tz_dst_safe: bool = False
 
 
 def normalize_timezone(timezone: pytz.timezone) -> Tuple[pytz.timezone, bool]:
-    if timezone.tzname(None) in ('UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich'):
+    if timezone.tzname(None) in ('UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich', 'UCT'):
         return pytz.UTC, True
 
     if timezone.tzname(None) in pytz.common_timezones:
