@@ -119,11 +119,7 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
             if tries > 10:
                 raise TestException('Failed to connect to ClickHouse server after 30 seconds') from ex
             time.sleep(3)
-
-    ddl_settings = {"distributed_ddl_output_mode": "none_only_active"} if test_config.cloud else {}
-    client.command(f'CREATE DATABASE IF NOT EXISTS {test_config.test_database}',
-                   use_database=False,
-                   settings=ddl_settings)
+    client.command(f'CREATE DATABASE IF NOT EXISTS {test_config.test_database}', use_database=False)
 
     # In cloud env, there seems to be some issues with creating a db and then immediately using it.
     # This ensures it's visible before yielding it back to the test.
