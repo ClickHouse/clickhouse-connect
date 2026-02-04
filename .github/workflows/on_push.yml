@@ -14,11 +14,7 @@ on:
       - '.github/workflows/on_push.yml'
   workflow_dispatch:
   push:
-    branches-ignore:
-      - '*_test'
-      - '*_dev'
-      - '*_build'
-      - 'release_*'
+    branches:
       - main
     paths-ignore:
       - 'VERSION'
