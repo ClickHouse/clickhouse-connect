@@ -2,15 +2,11 @@ import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import StreamFailureError
+from clickhouse_connect.driver.httpclient import HttpClient, ex_tag_header
 
 
 def test_mid_stream_exception(test_client: Client):
-    """Test that mid-stream exceptions are properly detected and raised.
-
-    This test works with both old (pre-25.11) and new (25.11+) ClickHouse servers:
-    - Old servers: Exception text sent in response body, detected via fallback path
-    - New servers: Exception sent with X-ClickHouse-Exception-Tag header and structured format
-    """
+    """Test that mid-stream exceptions are properly detected and raised."""
     query = "SELECT sleepEachRow(0.01), throwIf(number=100) FROM numbers(200)"
 
     # We expect a StreamFailureError, which is a subclass of DatabaseError
@@ -27,10 +23,7 @@ def test_mid_stream_exception(test_client: Client):
 
 
 def test_mid_stream_exception_streaming(test_client: Client):
-    """Test that mid-stream exceptions are properly detected in streaming mode.
-
-    Works with both old and new server versions (see test_mid_stream_exception).
-    """
+    """Test that mid-stream exceptions are properly detected in streaming mode."""
     query = "SELECT sleepEachRow(0.01), throwIf(number=100) FROM numbers(200)"
 
     with pytest.raises(StreamFailureError) as exc_info:
@@ -40,4 +33,45 @@ def test_mid_stream_exception_streaming(test_client: Client):
 
     error_msg = str(exc_info.value)
     assert "Value passed to 'throwIf' function is non-zero" in error_msg
+    assert test_client.command("SELECT 1") == 1
+
+
+# pylint: disable=protected-access
+def test_new_exception_format_on_25_11_plus(test_client: HttpClient):
+    """Test that the new exception format is used on ClickHouse 25.11+."""
+    if not test_client.min_version("25.11"):
+        pytest.skip("Test requires ClickHouse 25.11+ for new exception format")
+
+    query = "SELECT sleepEachRow(0.01), throwIf(number=100) FROM numbers(200)"
+    exception_tag_seen = []
+    original_raw_request = test_client._raw_request
+
+    def capture_exception_tag(*args, **kwargs):
+        response = original_raw_request(*args, **kwargs)
+        tag = response.headers.get(ex_tag_header)
+        if tag:
+            exception_tag_seen.append(tag)
+        return response
+
+    test_client._raw_request = capture_exception_tag
+
+    try:
+        with pytest.raises(StreamFailureError) as exc_info:
+            result = test_client.query(query, settings={"max_block_size": 1, "wait_end_of_query": 0})
+            _ = result.result_set
+
+        assert len(exception_tag_seen) > 0, "Expected X-ClickHouse-Exception-Tag header to be present on 25.11+"
+        exception_tag = exception_tag_seen[0]
+
+        assert len(exception_tag) == 16
+        assert exception_tag.isalnum()
+        assert exception_tag.islower()
+
+        error_msg = str(exc_info.value)
+        assert "Value passed to 'throwIf' function is non-zero" in error_msg
+        assert "Code: 395" in error_msg
+
+    finally:
+        test_client._raw_request = original_raw_request
+
     assert test_client.command("SELECT 1") == 1
