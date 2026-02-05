@@ -18,7 +18,7 @@ local_tz: pytz.timezone
 local_tz_dst_safe: bool = False
 
 # Timezone names that are equivalent to UTC
-UTC_EQUIVALENTS = ('UTC', 'Etc/UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich')
+UTC_EQUIVALENTS = ('UTC', 'Etc/UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich', 'UCT')
 
 
 def normalize_timezone(timezone: pytz.timezone) -> Tuple[pytz.timezone, bool]:
