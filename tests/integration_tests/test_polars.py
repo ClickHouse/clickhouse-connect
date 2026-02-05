@@ -121,7 +121,7 @@ def test_polars_utc_timestamp_naive(test_client: Client, table_context: Callable
     This test reproduces the bug where Arrow format preserves UTC timezone
     in timestamp columns instead of returning naive datetimes.
     """
-    with table_context('test_polars_utc_tz', ['ts DateTime']) as ctx:
+    with table_context('test_polars_utc_tz', ['ts DateTime64']) as ctx:
         test_client.command(f"INSERT INTO {ctx.table} VALUES (now())")
         df = test_client.query_df_arrow(
             f"SELECT * FROM {ctx.table}",
