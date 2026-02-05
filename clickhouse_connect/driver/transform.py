@@ -33,7 +33,6 @@ class NativeTransform:
                         source.read_bytes(8)
                     num_cols = source.read_leb128()
                 except StreamCompleteException:
-                    # Stream ended but check if it's due to a mid-stream exception
                     if source.last_message:
                         error_msg = None
                         exception_tag = getattr(source, "exception_tag", None)
@@ -41,7 +40,6 @@ class NativeTransform:
                             error_msg = extract_exception_with_tag(source.last_message, exception_tag)
                         if error_msg:
                             raise StreamFailureError(error_msg) from None
-                    # Normal end of stream
                     return None
                 num_rows = source.read_leb128()
                 for col_num in range(num_cols):
@@ -66,7 +64,6 @@ class NativeTransform:
                     # We ran out of data before it was expected, this could be ClickHouse reporting an error
                     # in the response
                     if source.last_message:
-                        # Try new format with exception tag first (v25.11+), then fall back to old format
                         error_msg = None
                         exception_tag = getattr(source, "exception_tag", None)
                         if exception_tag:

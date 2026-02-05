@@ -9,10 +9,6 @@ def test_mid_stream_exception(test_client: Client):
     """Test that mid-stream exceptions are properly detected and raised."""
     query = "SELECT sleepEachRow(0.01), throwIf(number=100) FROM numbers(200)"
 
-    # We expect a StreamFailureError, which is a subclass of DatabaseError
-    # specifically for errors that happen after the response status code is 200.
-    # We force max_block_size=1 to ensure data is sent in small chunks
-    # and wait_end_of_query=0 to ensure headers are sent immediately
     with pytest.raises(StreamFailureError) as exc_info:
         result = test_client.query(query, settings={"max_block_size": 1, "wait_end_of_query": 0})
         _ = result.result_set
