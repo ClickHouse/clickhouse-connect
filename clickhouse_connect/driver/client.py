@@ -35,6 +35,10 @@ def _strip_utc_timezone_from_arrow(table: "arrow.Table") -> "arrow.Table":
 
     This ensures naive datetimes are returned when the server timezone is UTC
     and utc_tz_aware is False (the default).
+
+    Only UTC-equivalent timezones (UTC, Etc/UTC, GMT, etc.) are stripped.
+    Non-UTC timezones carry important offset information and are always
+    preserved regardless of utc_tz_aware setting.
     """
     new_fields = []
     needs_cast = False
