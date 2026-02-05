@@ -1,5 +1,6 @@
-import pyarrow as pa
 import pytz
+
+import pyarrow as pa
 
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
