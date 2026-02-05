@@ -23,9 +23,16 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Python 3.9 Deprecation
+Python 3.9 EOL'd Oct 2025. Support for Python 3.9 is now softly deprecated and has been removed from our CI test matrix but
+distribution wheels will continue to be built until the 1.0 release or until the builds naturally fail, whichever comes first.
+A `DeprecationWarning` will now be displayed when initializing the client on Python 3.9. Users should plan to upgrade to
+Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
+
 ### Bug Fixes
 - Fix issue with DROP table in client temp table test.
 - Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.
+- Fixed UTC-equivalent timezone recognition issue where servers returning `Etc/UCT`, `GMT`, or other UTC-equivalent timezone names caused inconsistent behavior with `utc_tz_aware=False`. DateTime columns with explicit UTC timezones now correctly return naive datetimes when `utc_tz_aware=False` regardless of the specific UTC-equivalent timezone name returned by the server. Closes [#629](https://github.com/ClickHouse/clickhouse-connect/issues/629)
 
 ### Improvements
 - Add support for mid-stream exceptions. Closes [#626](https://github.com/ClickHouse/clickhouse-connect/issues/626)
