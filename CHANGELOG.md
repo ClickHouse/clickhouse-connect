@@ -30,6 +30,7 @@ A `DeprecationWarning` will now be displayed when initializing the client on Pyt
 Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 
 ### Bug Fixes
+- Fix issue where settings matching server defaults were not stored on client during initialization. Explicitly setting a default value is now respected (e.g., to prevent ClickHouse from auto-enabling optimizations). Closes [#638](https://github.com/ClickHouse/clickhouse-connect/issues/638)
 - Fix issue with DROP table in client temp table test.
 - Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.
 - Fixed UTC-equivalent timezone recognition issue where servers returning `Etc/UCT`, `GMT`, or other UTC-equivalent timezone names caused inconsistent behavior with `utc_tz_aware=False`. DateTime columns with explicit UTC timezones now correctly return naive datetimes when `utc_tz_aware=False` regardless of the specific UTC-equivalent timezone name returned by the server. Closes [#629](https://github.com/ClickHouse/clickhouse-connect/issues/629)
