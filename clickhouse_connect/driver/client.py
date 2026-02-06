@@ -137,7 +137,8 @@ class Client(ABC):
         if key not in self.valid_transport_settings:
             setting_def = self.server_settings.get(key)
             current_setting = self.get_client_setting(key)
-            if setting_def and setting_def.value == str_value and (current_setting is None or current_setting == setting_def.value):
+            # Only skip if the setting is already explicitly set on the client to this value
+            if setting_def and setting_def.value == str_value and current_setting is not None and current_setting == setting_def.value:
                 return None  # don't send settings that are already the expected value
             if setting_def is None or setting_def.readonly:
                 if key in self.optional_transport_settings:
