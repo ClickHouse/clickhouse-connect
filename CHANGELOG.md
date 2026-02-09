@@ -42,6 +42,7 @@ Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 - Extend support for creating tables from PyArrow objects to include datetime/timestamp types. Closes [#605](https://github.com/ClickHouse/clickhouse-connect/issues/605)
 - Add pre-commit hooks for auto-linting contributions at commit time. Addresses [#607](https://github.com/ClickHouse/clickhouse-connect/issues/607)
 - Add missing type annotation. Closes [#567](https://github.com/ClickHouse/clickhouse-connect/issues/567)
+- Auto-enable `cancel_http_readonly_queries_on_client_close` setting for HTTP clients to ensure SELECT queries are cancelled on the server when the client disconnects. Closes [#641](https://github.com/ClickHouse/clickhouse-connect/issues/641)
 
 ## 0.10.0, 2025-11-14
 
