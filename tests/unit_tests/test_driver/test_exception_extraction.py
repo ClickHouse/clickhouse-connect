@@ -13,14 +13,12 @@ class TestExceptionExtraction:
         exception_tag = "PU1FNUFH98"
         error_msg = "Big bam occurred right while reading the data"
 
-        # Format: __exception__\r\n<TAG>\r\n<error message>\r\n<message_length> <TAG>\r\n__exception__\r\n
+        # Format: __exception__<TAG>\r\n<error message>\r\n<message_length> <TAG>__exception__\r\n
         response_body = (
             b"bodybodybodybody\r\n"
-            b"__exception__\r\n"
-            b"PU1FNUFH98\r\n"
+            b"__exception__PU1FNUFH98\r\n"
             b"Big bam occurred right while reading the data\r\n"
-            b"46 PU1FNUFH98\r\n"
-            b"__exception__\r\n"
+            b"46 PU1FNUFH98__exception__\r\n"
         )
 
         result = extract_exception_with_tag(response_body, exception_tag)
@@ -34,7 +32,10 @@ class TestExceptionExtraction:
         error_msg_part2 = "Error on line 2"
 
         response_body = (
-            b"__exception__\r\n" b"ABC1234567\r\n" b"Error on line 1\n" b"Error on line 2\r\n" b"99 ABC1234567\r\n" b"__exception__\r\n"
+            b"__exception__ABC1234567\r\n"
+            b"Error on line 1\n"
+            b"Error on line 2\r\n"
+            b"99 ABC1234567__exception__\r\n"
         )
 
         result = extract_exception_with_tag(response_body, exception_tag)
