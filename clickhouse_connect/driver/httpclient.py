@@ -187,6 +187,10 @@ class HttpClient(Client):
                          utc_tz_aware=utc_tz_aware,
                          show_clickhouse_errors=show_clickhouse_errors)
         self.params = dict_copy(self.params, self._validate_settings(ch_settings))
+        cancel_setting = self._setting_status("cancel_http_readonly_queries_on_client_close")
+        if cancel_setting.is_writable and not cancel_setting.is_set and \
+                "cancel_http_readonly_queries_on_client_close" not in (settings or {}):
+            self.params["cancel_http_readonly_queries_on_client_close"] = "1"
         comp_setting = self._setting_status('enable_http_compression')
         self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
         if comp_setting.is_set or comp_setting.is_writable:
