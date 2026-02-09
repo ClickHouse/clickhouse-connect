@@ -19,24 +19,39 @@ class ResponseBuffer(ByteSource):
         self.source = source
         self.gen = source.gen
         self.buffer = bytes()
-        self.exception_tag = getattr(source, 'exception_tag', None)
-        self._exception_window = bytearray()
-        self._exception_window_size = 8192  # Keep last 8KB to detect exception marker
+        self.exception_tag = getattr(source, "exception_tag", None)
+        if self.exception_tag:
+            tag_bytes = self.exception_tag.encode()
+            self._open_marker = b"__exception__" + tag_bytes
+            self._close_marker = tag_bytes + b"__exception__"
+            self._carryover = b""
+            self._exception_buf = None
 
     def _check_for_exception(self, new_chunk: bytes) -> None:
-        """Check if the recent data contains an exception marker with our tag."""
+        """Check if the stream contains a complete exception block matching our tag."""
         if not self.exception_tag:
             return
 
-        self._exception_window.extend(new_chunk)
-        if len(self._exception_window) > self._exception_window_size:
-            self._exception_window = self._exception_window[-self._exception_window_size:]
+        if self._exception_buf is not None:
+            self._exception_buf += new_chunk
+            if self._close_marker in self._exception_buf:
+                self.buffer = bytes(self._exception_buf)
+                raise StreamCompleteException
+            return
 
-        marker = b'__exception__'
-        marker_pos = self._exception_window.find(marker)
+        search_data = self._carryover + new_chunk
+        marker_pos = search_data.find(self._open_marker)
         if marker_pos != -1:
-            self.buffer = bytes(self._exception_window[marker_pos:])
-            raise StreamCompleteException
+            self._exception_buf = bytearray(search_data[marker_pos:])
+            if self._close_marker in self._exception_buf:
+                self.buffer = bytes(self._exception_buf)
+                raise StreamCompleteException
+        else:
+            carry_size = len(self._open_marker) - 1
+            if len(search_data) >= carry_size:
+                self._carryover = search_data[-carry_size:]
+            else:
+                self._carryover = search_data
 
     def read_bytes(self, sz: int):
         if self.buf_loc + sz <= self.buf_sz:

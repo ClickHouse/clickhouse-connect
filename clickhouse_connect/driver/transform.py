@@ -134,7 +134,7 @@ class NativeTransform:
 def extract_exception_with_tag(message: bytes, exception_tag: str) -> Union[str, None]:
     """Extract exception message from the new format with exception tag. Server v25.11+.
 
-    Format: __exception__\\r\\n<TAG>\\r\\n<error message>\\r\\n<message_length> <TAG>\\r\\n__exception__\\r\\n
+    Format: __exception__<TAG>\\r\\n<error message>\\r\\n<message_length> <TAG>__exception__\\r\\n
     """
     if not exception_tag:
         return None
