@@ -185,15 +185,8 @@ class QueryContext(BaseQueryContext):
             active_tz = self.server_tz
         else:
             active_tz = tzutil.local_tz
-        if not self.utc_tz_aware:
-            if active_tz == pytz.UTC:
-                return None
-            try:
-                test_tz, _ = tzutil.normalize_timezone(active_tz)
-                if test_tz == pytz.UTC:
-                    return None
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
+        if tzutil.is_utc_timezone(active_tz) and not self.utc_tz_aware:
+            return None
         return active_tz
 
     # pylint disable=too-many-positional-arguments

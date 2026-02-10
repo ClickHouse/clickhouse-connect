@@ -191,8 +191,9 @@ def default_pool_manager():
 
 # pylint: disable=too-many-statements
 class ResponseSource:
-    def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024):
+    def __init__(self, response: HTTPResponse, chunk_size: int = 1024 * 1024, exception_tag: Optional[str] = None):
         self.response = response
+        self.exception_tag = exception_tag
         compression = response.headers.get('content-encoding')
         decompress:Optional[Callable] = None
         if compression == 'zstd':
