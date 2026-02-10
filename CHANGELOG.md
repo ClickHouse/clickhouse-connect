@@ -30,17 +30,20 @@ A `DeprecationWarning` will now be displayed when initializing the client on Pyt
 Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 
 ### Bug Fixes
+- Raise OperationalError when ResponseSource hits network failure before any data is received. Previously, empty result would be returned. Closes [#620](https://github.com/ClickHouse/clickhouse-connect/issues/620)
 - Fix issue with DROP table in client temp table test.
 - Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.
 - Fixed UTC-equivalent timezone recognition issue where servers returning `Etc/UCT`, `GMT`, or other UTC-equivalent timezone names caused inconsistent behavior with `utc_tz_aware=False`. DateTime columns with explicit UTC timezones now correctly return naive datetimes when `utc_tz_aware=False` regardless of the specific UTC-equivalent timezone name returned by the server. Closes [#629](https://github.com/ClickHouse/clickhouse-connect/issues/629)
 
 ### Improvements
+- Add support for mid-stream exceptions. Closes [#626](https://github.com/ClickHouse/clickhouse-connect/issues/626)
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
 - Add the ability to create table from PyArrow objects. Addresses [#588](https://github.com/ClickHouse/clickhouse-connect/issues/588)
 - Always generate query_id from the client side as a UUID4 if it is not explicitly set. Closes [#596](https://github.com/ClickHouse/clickhouse-connect/issues/596)
 - Extend support for creating tables from PyArrow objects to include datetime/timestamp types. Closes [#605](https://github.com/ClickHouse/clickhouse-connect/issues/605)
 - Add pre-commit hooks for auto-linting contributions at commit time. Addresses [#607](https://github.com/ClickHouse/clickhouse-connect/issues/607)
 - Add missing type annotation. Closes [#567](https://github.com/ClickHouse/clickhouse-connect/issues/567)
+- Auto-enable `cancel_http_readonly_queries_on_client_close` setting for HTTP clients to ensure SELECT queries are cancelled on the server when the client disconnects. Closes [#641](https://github.com/ClickHouse/clickhouse-connect/issues/641)
 
 ## 0.10.0, 2025-11-14
 
