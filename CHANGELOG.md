@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+## 0.11.0, 2026-02-10
+
 ### Python 3.9 Deprecation
 Python 3.9 EOL'd Oct 2025. Support for Python 3.9 is now softly deprecated and has been removed from our CI test matrix but
 distribution wheels will continue to be built until the 1.0 release or until the builds naturally fail, whichever comes first.
