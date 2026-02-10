@@ -14,11 +14,7 @@ on:
       - '.github/workflows/on_push.yml'
   workflow_dispatch:
   push:
-    branches-ignore:
-      - '*_test'
-      - '*_dev'
-      - '*_build'
-      - 'release_*'
+    branches:
       - main
     paths-ignore:
       - 'VERSION'
@@ -59,7 +55,6 @@ jobs:
     strategy:
       matrix:
         python-version:
-          - '3.9'
           - '3.10'
           - '3.11'
           - '3.12'
@@ -68,9 +63,9 @@ jobs:
         clickhouse-version:
           - '25.3' # LTS
           - '25.8' # LTS
-          - '25.9' # Stable
-          - '25.10' # Stable
-          - latest
+          - '25.11' # Stable
+          - '25.12' # Stable
+          - '26.1' # Stable
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
     steps:
@@ -203,7 +198,6 @@ jobs:
     strategy:
       matrix:
         python-version:
-          - '3.9'
           - '3.10'
           - '3.11'
           - '3.12'

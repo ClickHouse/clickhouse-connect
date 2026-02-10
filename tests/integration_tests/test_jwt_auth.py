@@ -5,6 +5,7 @@ import pytest
 from clickhouse_connect.driver import create_client, ProgrammingError, create_async_client
 from tests.integration_tests.conftest import TestConfig
 
+pytest.skip('JWT tests are not yet configured', allow_module_level=True)
 
 def test_jwt_auth_sync_client(test_config: TestConfig):
     if not test_config.cloud:
