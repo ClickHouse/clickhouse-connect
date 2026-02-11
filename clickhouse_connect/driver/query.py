@@ -19,7 +19,7 @@ from clickhouse_connect.driver.context import BaseQueryContext
 
 logger = logging.getLogger(__name__)
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|ATTACH|DROP|DELETE|KILL|' + \
-           'OPTIMIZE|SET|RENAME|TRUNCATE|USE'
+           'OPTIMIZE|SET|RENAME|TRUNCATE|USE|UPDATE'
 
 limit_re = re.compile(r'\s+LIMIT($|\s)', re.IGNORECASE)
 select_re = re.compile(r'(^|\s)SELECT\s', re.IGNORECASE)
