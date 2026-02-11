@@ -11,6 +11,7 @@ import zstandard
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
 from clickhouse_connect.driver.compression import available_compression
+from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
@@ -29,9 +30,10 @@ class StreamingResponseSource(Closable):
 
     READ_BUFFER_SIZE = 1024 * 1024
 
-    def __init__(self, response, encoding: Optional[str] = None):
+    def __init__(self, response, encoding: Optional[str] = None, exception_tag: Optional[str] = None):
         self.response = response
         self.encoding = encoding
+        self.exception_tag = exception_tag
 
         # maxsize=10 means max ~10 socket reads buffered
         self.queue = AsyncSyncQueue(maxsize=10)
@@ -54,11 +56,13 @@ class StreamingResponseSource(Closable):
 
         async def producer():
             """Async producer: reads chunks from response, feeds queue."""
+            data_sent = False
             try:
                 while True:
                     chunk = await self.response.content.read(self.READ_BUFFER_SIZE)
                     if not chunk:
                         break
+                    data_sent = True
                     await self.queue.async_q.put(chunk)
 
                 await self.queue.async_q.put(EOF_SENTINEL)
@@ -66,6 +70,8 @@ class StreamingResponseSource(Closable):
 
             except Exception as e:
                 logger.error("Producer error while streaming response: %s", e, exc_info=True)
+                if not data_sent:
+                    e = OperationalError("Failed to read response data from server")
                 self._producer_error = e
 
                 try:

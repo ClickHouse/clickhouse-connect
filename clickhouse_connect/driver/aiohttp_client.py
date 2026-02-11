@@ -28,7 +28,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, tzutil
 from clickhouse_connect.driver.binding import bind_query, quote_identifier
-from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.client import Client, _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver.common import StreamContext, coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
@@ -48,6 +48,7 @@ from clickhouse_connect.driver.streaming import StreamingResponseSource, Streami
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
 ex_header = "X-ClickHouse-Exception-Code"
+ex_tag_header = "X-ClickHouse-Exception-Tag"
 
 if "br" in available_compression:
     import brotli
@@ -323,6 +324,11 @@ class AiohttpAsyncClient(Client):
                 except Exception:
                     pass
 
+            cancel_setting = self._setting_status("cancel_http_readonly_queries_on_client_close")
+            if cancel_setting.is_writable and not cancel_setting.is_set and \
+                    "cancel_http_readonly_queries_on_client_close" not in (self._initial_settings or {}):
+                self._client_settings["cancel_http_readonly_queries_on_client_close"] = "1"
+
             if self._initial_settings:
                 for key, value in self._initial_settings.items():
                     self.set_client_setting(key, value)
@@ -533,9 +539,10 @@ class AiohttpAsyncClient(Client):
                                           stream=True, retries=self.query_retries)
         encoding = response.headers.get("Content-Encoding")
         tz_header = response.headers.get("X-ClickHouse-Timezone")
+        exception_tag = response.headers.get(ex_tag_header)
 
         loop = asyncio.get_running_loop()
-        streaming_source = StreamingResponseSource(response, encoding=encoding)
+        streaming_source = StreamingResponseSource(response, encoding=encoding, exception_tag=exception_tag)
         await streaming_source.start_producer(loop)
 
         def parse_streaming():
@@ -1058,9 +1065,10 @@ class AiohttpAsyncClient(Client):
             stream=True, server_wait=False, retries=self.query_retries
         )
         encoding = response.headers.get("Content-Encoding")
+        exception_tag = response.headers.get(ex_tag_header)
 
         loop = asyncio.get_running_loop()
-        streaming_source = StreamingResponseSource(response, encoding=encoding)
+        streaming_source = StreamingResponseSource(response, encoding=encoding, exception_tag=exception_tag)
         await streaming_source.start_producer(loop)
 
         def parse_arrow_stream():
@@ -1109,9 +1117,10 @@ class AiohttpAsyncClient(Client):
             stream=True, server_wait=False, retries=self.query_retries
         )
         encoding = response.headers.get("Content-Encoding")
+        exception_tag = response.headers.get(ex_tag_header)
 
         loop = asyncio.get_running_loop()
-        streaming_source = StreamingResponseSource(response, encoding=encoding)
+        streaming_source = StreamingResponseSource(response, encoding=encoding, exception_tag=exception_tag)
         await streaming_source.start_producer(loop)
 
         queue = AsyncSyncQueue(maxsize=10)
@@ -1200,6 +1209,8 @@ class AiohttpAsyncClient(Client):
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "arrow.Table") -> "pd.DataFrame":
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
 
         elif dataframe_library == "polars":
@@ -1207,6 +1218,8 @@ class AiohttpAsyncClient(Client):
             self._add_integration_tag("polars")
 
             def converter(table: "arrow.Table") -> "pl.DataFrame":
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return pl.from_arrow(table)
 
         else:
@@ -1254,6 +1267,8 @@ class AiohttpAsyncClient(Client):
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "arrow.Table") -> "pd.DataFrame":
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
 
         elif dataframe_library == "polars":
@@ -1261,6 +1276,8 @@ class AiohttpAsyncClient(Client):
             self._add_integration_tag("polars")
 
             def converter(table: "arrow.Table") -> "pl.DataFrame":
+                if not self.utc_tz_aware:
+                    table = _strip_utc_timezone_from_arrow(table)
                 return pl.from_arrow(table)
 
         else:
@@ -1279,9 +1296,10 @@ class AiohttpAsyncClient(Client):
             stream=True, server_wait=False, retries=self.query_retries
         )
         encoding = response.headers.get("Content-Encoding")
+        exception_tag = response.headers.get(ex_tag_header)
 
         loop = asyncio.get_running_loop()
-        streaming_source = StreamingResponseSource(response, encoding=encoding)
+        streaming_source = StreamingResponseSource(response, encoding=encoding, exception_tag=exception_tag)
         await streaming_source.start_producer(loop)
 
         queue = AsyncSyncQueue(maxsize=10)

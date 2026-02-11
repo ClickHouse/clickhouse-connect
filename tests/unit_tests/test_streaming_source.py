@@ -8,6 +8,7 @@ import lz4.frame
 import pytest
 import zstandard
 
+from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.streaming import (
     StreamingInsertSource,
     StreamingResponseSource,
@@ -288,13 +289,13 @@ async def test_producer_error_propagation():
         try:
             for _ in source.gen:
                 pass
-        except ValueError as e:
+        except OperationalError as e:
             return str(e)
         return "No error raised!"
 
     error_msg = await loop.run_in_executor(None, consume)
 
-    assert error_msg == "Producer error!"
+    assert error_msg == "Failed to read response data from server"
 
 
 @pytest.mark.asyncio
