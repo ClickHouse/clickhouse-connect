@@ -34,6 +34,7 @@ from clickhouse_connect.driver.transform import NativeTransform
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r'LIMIT 0\s*$', re.IGNORECASE)
 ex_header = 'X-ClickHouse-Exception-Code'
+ex_tag_header = 'X-ClickHouse-Exception-Tag'
 
 
 # pylint: disable=too-many-instance-attributes
@@ -188,6 +189,10 @@ class HttpClient(Client):
                          show_clickhouse_errors=show_clickhouse_errors,
                          autoconnect=True)
         self.params = dict_copy(self.params, self._validate_settings(ch_settings))
+        cancel_setting = self._setting_status("cancel_http_readonly_queries_on_client_close")
+        if cancel_setting.is_writable and not cancel_setting.is_set and \
+                "cancel_http_readonly_queries_on_client_close" not in (settings or {}):
+            self.params["cancel_http_readonly_queries_on_client_close"] = "1"
         comp_setting = self._setting_status('enable_http_compression')
         self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
         if comp_setting.is_set or comp_setting.is_writable:
@@ -300,7 +305,8 @@ class HttpClient(Client):
                                      retries=self.query_retries,
                                      fields=fields,
                                      server_wait=not context.streaming)
-        byte_source = RespBuffCls(ResponseSource(response))  # pylint: disable=not-callable
+        exception_tag = response.headers.get(ex_tag_header)
+        byte_source = RespBuffCls(ResponseSource(response, exception_tag=exception_tag))  # pylint: disable=not-callable
         context.set_response_tz(self._check_tz_change(response.headers.get('X-ClickHouse-Timezone')))
         query_result = self._transform.parse_response(byte_source, context)
         query_result.summary = self._summary(response)

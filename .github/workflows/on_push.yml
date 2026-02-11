@@ -14,11 +14,7 @@ on:
       - '.github/workflows/on_push.yml'
   workflow_dispatch:
   push:
-    branches-ignore:
-      - '*_test'
-      - '*_dev'
-      - '*_build'
-      - 'release_*'
+    branches:
       - main
     paths-ignore:
       - 'VERSION'
@@ -228,8 +224,8 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_FUZZ: 10
           CLICKHOUSE_CONNECT_TEST_CLOUD: 'True'
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
-          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST_SMT }}
-          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD_SMT }}
+          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST_SMT_PROD }}
+          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD_SMT_PROD }}
           CLICKHOUSE_CONNECT_TEST_JWT_SECRET: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_JWT_DESERT_VM_43 }}
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest -n 4 tests/integration_tests
