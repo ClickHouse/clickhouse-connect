@@ -211,3 +211,59 @@ def test_empty_result_set():
     assert cursor.fetchone() is None
     assert cursor.fetchall() == []
     assert cursor.fetchmany(5) == []
+
+
+def test_execute_unescapes_double_percents_without_parameters():
+    """Test that cursor.execute unescapes %% to % when no parameters are given.
+
+    This is required by the PEP 249 pyformat paramstyle contract: callers
+    (e.g. SQLAlchemy) escape literal percent signs as %% in the operation
+    string.  When there are no parameters, the cursor must unescape them.
+    See https://github.com/ClickHouse/clickhouse-connect/issues/297
+    """
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    # Simulate what SQLAlchemy sends for:
+    #   text("SELECT formatDateTime(toDate('2010-01-04'), '%g')")
+    # with _double_percents=True (pyformat paramstyle)
+    cursor.execute("SELECT formatDateTime(toDate('2010-01-04'), '%%g')")
+
+    # The query passed to client.query should have %% unescaped to %
+    actual_query = client.query.call_args[0][0]
+    assert actual_query == "SELECT formatDateTime(toDate('2010-01-04'), '%g')"
+    assert '%%' not in actual_query
+
+
+def test_execute_preserves_percent_with_parameters():
+    """Test that cursor.execute does NOT manually unescape %% when parameters
+    are provided, since finalize_query handles it via Python's % operator.
+    """
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    # Simulate what SQLAlchemy sends for:
+    #   text("SELECT formatDateTime(toDate(:d), '%g')")
+    # with _double_percents=True and bound parameter d
+    cursor.execute(
+        "SELECT formatDateTime(toDate(%(d)s), '%%g')",
+        {'d': '2010-01-04'}
+    )
+
+    # Parameters are passed through to client.query; finalize_query handles
+    # the %% -> % unescaping via the % operator during parameter substitution.
+    actual_query = client.query.call_args[0][0]
+    actual_params = client.query.call_args[0][1]
+    assert actual_query == "SELECT formatDateTime(toDate(%(d)s), '%%g')"
+    assert actual_params == {'d': '2010-01-04'}
+
+
+def test_execute_unescapes_multiple_percents():
+    """Test unescaping multiple %% occurrences in a single query."""
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    cursor.execute("SELECT formatDateTime(now(), '%%Y-%%m-%%d %%H:%%M:%%S')")
+
+    actual_query = client.query.call_args[0][0]
+    assert actual_query == "SELECT formatDateTime(now(), '%Y-%m-%d %H:%M:%S')"
