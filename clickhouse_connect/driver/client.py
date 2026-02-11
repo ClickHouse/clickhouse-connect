@@ -5,7 +5,7 @@ from datetime import tzinfo
 import pytz
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Literal, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO
+from typing import Iterable, Literal, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO, TYPE_CHECKING
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
@@ -24,6 +24,11 @@ from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer
 from clickhouse_connect.driver.binding import quote_identifier
+
+if TYPE_CHECKING:
+    import numpy
+    import pandas
+    import pyarrow
 
 io.DEFAULT_BUFFER_SIZE = 1024 * 256
 logger = logging.getLogger(__name__)
@@ -225,11 +230,11 @@ class Client(ABC):
         return None
 
     @abstractmethod
-    def _query_with_context(self, context: QueryContext):
+    def _query_with_context(self, context: QueryContext) -> QueryResult:
         pass
 
     @abstractmethod
-    def set_client_setting(self, key, value):
+    def set_client_setting(self, key: str, value: Any) -> None:
         """
         Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
         or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
@@ -239,14 +244,14 @@ class Client(ABC):
         """
 
     @abstractmethod
-    def get_client_setting(self, key) -> Optional[str]:
+    def get_client_setting(self, key: str) -> Optional[str]:
         """
         :param key: The setting key
         :return: The string value of the setting, if it exists, or None
         """
 
     @abstractmethod
-    def set_access_token(self, access_token: str):
+    def set_access_token(self, access_token: str) -> None:
         """
         Set the ClickHouse access token for the client
         :param access_token: Access token string
@@ -409,7 +414,7 @@ class Client(ABC):
                  max_str_len: Optional[int] = None,
                  context: QueryContext = None,
                  external_data: Optional[ExternalData] = None,
-                 transport_settings: Optional[Dict[str, str]] = None):
+                 transport_settings: Optional[Dict[str, str]] = None) -> 'numpy.ndarray':
         """
         Query method that returns the results as a numpy array.  For parameter values, see the
         create_query_context method
@@ -458,7 +463,7 @@ class Client(ABC):
                  context: QueryContext = None,
                  external_data: Optional[ExternalData] = None,
                  use_extended_dtypes: Optional[bool] = None,
-                 transport_settings: Optional[Dict[str, str]] = None):
+                 transport_settings: Optional[Dict[str, str]] = None) -> 'pandas.DataFrame':
         """
         Query method that results the results as a pandas dataframe.  For parameter values, see the
         create_query_context method
@@ -607,7 +612,7 @@ class Client(ABC):
                     settings: Optional[Dict[str, Any]] = None,
                     use_strings: Optional[bool] = None,
                     external_data: Optional[ExternalData] = None,
-                    transport_settings: Optional[Dict[str, str]] = None):
+                    transport_settings: Optional[Dict[str, str]] = None) -> 'pyarrow.Table':
         """
         Query method using the ClickHouse Arrow format to return a PyArrow table
         :param query: Query statement/format string
@@ -1101,13 +1106,13 @@ class Client(ABC):
         """
 
     @abstractmethod
-    def close(self):
+    def close(self) -> None:
         """
         Subclass implementation to close the connection to the server/deallocate the client
         """
 
     @abstractmethod
-    def close_connections(self):
+    def close_connections(self) -> None:
         """
         Subclass implementation to disconnect all "re-used" client connections
         """
@@ -1118,8 +1123,8 @@ class Client(ABC):
         kwargs.update(overrides)
         return self._query_with_context((self.create_query_context(**kwargs)))
 
-    def __enter__(self):
+    def __enter__(self) -> 'Client':
         return self
 
-    def __exit__(self, exc_type, exc_value, exc_traceback):
+    def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
         self.close()
