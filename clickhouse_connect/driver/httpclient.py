@@ -202,7 +202,7 @@ class HttpClient(Client):
                 self._setting_status('http_headers_progress_interval_ms').is_writable:
             self._progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
 
-    def set_client_setting(self, key, value):
+    def set_client_setting(self, key: str, value: Any) -> None:
         str_value = self._validate_setting(key, value, common.get_setting('invalid_setting_action'))
         if str_value is not None:
             self.params[key] = str_value
@@ -389,11 +389,11 @@ class HttpClient(Client):
         return summary
 
     def command(self,
-                cmd,
+                cmd: str,
                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
                 data: Union[str, bytes] = None,
                 settings: Optional[Dict] = None,
-                use_database: int = True,
+                use_database: bool = True,
                 external_data: Optional[ExternalData] = None,
                 transport_settings: Optional[Dict[str, str]] = None) -> Union[str, int, Sequence[str], QuerySummary]:
         """
@@ -674,7 +674,7 @@ class HttpClient(Client):
         except Exception as e:
             logger.debug("Problem adding '%s' to User-Agent: %s", name, e)
 
-    def ping(self):
+    def ping(self) -> bool:
         """
         See BaseClient doc_string for this method
         """
@@ -685,10 +685,10 @@ class HttpClient(Client):
             logger.debug('ping failed', exc_info=True)
             return False
 
-    def close_connections(self):
+    def close_connections(self) -> None:
         self.http.clear()
 
-    def close(self):
+    def close(self) -> None:
         if self._owns_pool_manager:
             self.http.clear()
             all_managers.pop(self.http, None)
