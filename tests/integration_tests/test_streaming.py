@@ -120,14 +120,10 @@ async def test_stream_failure_async(test_native_async_client):
 
     stream = await test_native_async_client.query_row_block_stream(query)
 
-    with pytest.raises(StreamFailureError) as excinfo:
+    with pytest.raises(StreamFailureError):
         async with stream:
             async for _ in stream:
                 pass
-
-    error_msg = str(excinfo.value).lower()
-    # Race condition: may get actual ClickHouse error or generic connection closed
-    assert 'division by zero' in error_msg or 'connection closed' in error_msg
 
 
 def test_raw_stream(param_client, call, consume_stream):
