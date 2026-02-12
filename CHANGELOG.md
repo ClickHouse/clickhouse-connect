@@ -23,6 +23,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+## 0.12.0rc1, 2026-02-11
+- Implement a native async client. Closes [#141](https://github.com/ClickHouse/clickhouse-connect/issues/141)
+
 ## 0.11.0, 2026-02-10
 
 ### Python 3.9 Deprecation

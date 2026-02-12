@@ -73,6 +73,7 @@ def run_setup(try_c: bool = True):
             'arrow': ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             'orjson': ['orjson'],
             'tzlocal': ['tzlocal>=4.0'],
+            'async': ['aiohttp>=3.8.0'],
         },
         tests_require=['pytest'],
         entry_points={

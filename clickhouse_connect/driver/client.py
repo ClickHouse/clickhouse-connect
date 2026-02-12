@@ -59,8 +59,8 @@ class Client(ABC):
     """
     Base ClickHouse Connect client
     """
-    compression: str = None
-    write_compression: str = None
+    compression: Optional[str] = None
+    write_compression: Optional[str] = None
     protocol_version = 0
     valid_transport_settings = set()
     optional_transport_settings = set()
@@ -71,14 +71,15 @@ class Client(ABC):
     show_clickhouse_errors = True
 
     def __init__(self,
-                 database: str,
+                 database: Optional[str],
                  query_limit: int,
                  uri: str,
                  query_retries: int,
                  server_host_name: Optional[str],
                  apply_server_timezone: Optional[Union[str, bool]],
                  utc_tz_aware: Optional[bool],
-                 show_clickhouse_errors: Optional[bool]):
+                 show_clickhouse_errors: Optional[bool],
+                 autoconnect: bool = True):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
@@ -86,6 +87,8 @@ class Client(ABC):
         :param uri: uri for error messages
         :param utc_tz_aware: Default timezone behavior when the active timezone resolves to UTC.  If True,
           timezone-aware UTC datetimes are returned; otherwise legacy naive datetimes are used.
+        :param autoconnect: If True, immediately connect to server and fetch settings. If False,
+          defer connection to _connect() method. Used by async clients to avoid blocking I/O in __init__.
         """
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
@@ -96,7 +99,17 @@ class Client(ABC):
         self.server_host_name = server_host_name
         self.uri = uri
         self.utc_tz_aware = bool(utc_tz_aware)
-        self._init_common_settings(apply_server_timezone)
+
+        # Initialize attributes that will be set during connection
+        self.server_version = None
+        self.server_tz = pytz.UTC
+        self.server_settings = {}
+
+        if autoconnect:
+            self._init_common_settings(apply_server_timezone)
+        else:
+            # Store for deferred connection
+            self._deferred_apply_server_timezone = apply_server_timezone
 
     def _init_common_settings(self, apply_server_timezone: Optional[Union[str, bool]]):
         self.server_tz, dst_safe = pytz.UTC, True
@@ -357,9 +370,9 @@ class Client(ABC):
                    fmt: str = None,
                    use_database: bool = True,
                    external_data: Optional[ExternalData] = None,
-                   transport_settings: Optional[Dict[str, str]] = None) -> io.IOBase:
+                   transport_settings: Optional[Dict[str, str]] = None) -> Union[io.IOBase, StreamContext]:
         """
-       Query method that returns the result as an io.IOBase iterator
+       Query method that returns the result as a stream iterator.
        :param query: Query statement/format string
        :param parameters: Optional dictionary used to format the query
        :param settings: Optional dictionary of ClickHouse settings (key/string values)
@@ -368,7 +381,7 @@ class Client(ABC):
         database context.
        :param external_data: External data to send with the query.
        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
-       :return: io.IOBase stream/iterator for the result
+       :return: io.IOBase (sync) or StreamContext (async) - both support iteration over raw bytes
        """
 
     # pylint: disable=duplicate-code,unused-argument
