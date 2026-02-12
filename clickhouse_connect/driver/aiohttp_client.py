@@ -568,7 +568,11 @@ class AiohttpAsyncClient(Client):
             return result
 
         # Run parser in executor (pulls from queue, decompresses & parses)
-        query_result = await loop.run_in_executor(None, parse_streaming)
+        try:
+            query_result = await loop.run_in_executor(None, parse_streaming)
+        except Exception:
+            await streaming_source.aclose()
+            raise
         query_result.summary = self._summary(response)
 
         # Attach streaming_source to query_result.source to ensure it gets closed
