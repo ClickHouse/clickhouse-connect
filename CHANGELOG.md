@@ -24,6 +24,16 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 
 ### Improvements
+- BREAKING CHANGE: Implement native write path for `Variant` data type with type-aware dispatching.
+Previously, all values inserted into a `Variant` column were stringified and sent to the server, which
+would store them in the `String` member if present, or attempt server-side conversion otherwise. Values
+are now serialized using their native ClickHouse types client-side (e.g. inserting `100` into
+`Variant(Int64, String)` stores `Int64(100)` instead of `String("100")`). Key changes:
+  - Values that don't match any variant member now raise `DataError` instead of being stringified and
+  delegated to the server.
+  - A `typed_variant(value, 'TypeName')` helper is provided for cases where automatic dispatch
+  cannot resolve the target type, such as when multiple variant members map to the same Python
+  type (e.g. `Array(UInt32)` vs `Array(String)`).
 - Added `utc_tz_aware="schema"` mode which returns timezone-aware datetimes only when the server's column schema explicitly defines a timezone (e.g. `DateTime('UTC')`), and naive datetimes for bare `DateTime` columns. This matches the ClickHouse schema definition exactly. Not yet supported for Arrow-based query methods. Closes [#645](https://github.com/ClickHouse/clickhouse-connect/issues/645)
 
 ### Bug Fixes
