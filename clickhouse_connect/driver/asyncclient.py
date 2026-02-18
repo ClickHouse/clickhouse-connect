@@ -110,7 +110,7 @@ class AsyncClient:
                     context: QueryContext = None,
                     query_tz: Optional[Union[str, tzinfo]] = None,
                     column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                    utc_tz_aware: Optional[bool] = None,
+                    utc_tz_aware: Optional[Union[bool, str]] = None,
                     external_data: Optional[ExternalData] = None,
                     transport_settings: Optional[Dict[str, str]] = None) -> QueryResult:
         """
@@ -142,7 +142,7 @@ class AsyncClient:
                                         context: QueryContext = None,
                                         query_tz: Optional[Union[str, tzinfo]] = None,
                                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                        utc_tz_aware: Optional[bool] = None,
+                                        utc_tz_aware: Optional[Union[bool, str]] = None,
                                         external_data: Optional[ExternalData] = None,
                                         transport_settings: Optional[Dict[str, str]] = None,
                                         ) -> StreamContext:
@@ -175,7 +175,7 @@ class AsyncClient:
                                      context: QueryContext = None,
                                      query_tz: Optional[Union[str, tzinfo]] = None,
                                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                     utc_tz_aware: Optional[bool] = None,
+                                     utc_tz_aware: Optional[Union[bool, str]] = None,
                                      external_data: Optional[ExternalData] = None,
                                      transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -207,7 +207,7 @@ class AsyncClient:
                                 context: QueryContext = None,
                                 query_tz: Optional[Union[str, tzinfo]] = None,
                                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                utc_tz_aware: Optional[bool] = None,
+                                utc_tz_aware: Optional[Union[bool, str]] = None,
                                 external_data: Optional[ExternalData] = None,
                                 transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -354,7 +354,7 @@ class AsyncClient:
                        use_na_values: Optional[bool] = None,
                        query_tz: Optional[str] = None,
                        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                       utc_tz_aware: Optional[bool] = None,
+                       utc_tz_aware: Optional[Union[bool, str]] = None,
                        context: QueryContext = None,
                        external_data: Optional[ExternalData] = None,
                        use_extended_dtypes: Optional[bool] = None,
@@ -430,7 +430,7 @@ class AsyncClient:
                               use_na_values: Optional[bool] = None,
                               query_tz: Optional[str] = None,
                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                              utc_tz_aware: Optional[bool] = None,
+                              utc_tz_aware: Optional[Union[bool, str]] = None,
                               context: QueryContext = None,
                               external_data: Optional[ExternalData] = None,
                               use_extended_dtypes: Optional[bool] = None,

@@ -77,7 +77,7 @@ class HttpClient(Client):
                  https_proxy: Optional[str] = None,
                  server_host_name: Optional[str] = None,
                  apply_server_timezone: Optional[Union[str, bool]] = None,
-                 utc_tz_aware: Optional[bool] = None,
+                 utc_tz_aware: Optional[Union[bool, str]] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  autogenerate_query_id: Optional[bool] = None,
