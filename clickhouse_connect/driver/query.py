@@ -3,7 +3,7 @@ import re
 import pytz
 
 from io import IOBase
-from typing import Any, Tuple, Dict, Sequence, Optional, Union, Generator, BinaryIO
+from typing import Any, Literal, Tuple, Dict, Sequence, Optional, Union, Generator, BinaryIO
 from datetime import tzinfo
 
 from pytz.exceptions import UnknownTimeZoneError
@@ -48,7 +48,7 @@ class QueryContext(BaseQueryContext):
                  max_str_len: Optional[int] = 0,
                  query_tz: Optional[Union[str, tzinfo]] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                 utc_tz_aware: Union[bool, str] = False,
+                 utc_tz_aware: Union[bool, Literal["schema"]] = False,
                  use_extended_dtypes: Optional[bool] = None,
                  as_pandas: bool = False,
                  streaming: bool = False,
@@ -210,7 +210,7 @@ class QueryContext(BaseQueryContext):
                      max_str_len: Optional[int] = None,
                      query_tz: Optional[Union[str, tzinfo]] = None,
                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                     utc_tz_aware: Optional[Union[bool, str]] = None,
+                     utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                      use_extended_dtypes: Optional[bool] = None,
                      as_pandas: bool = False,
                      streaming: bool = False,

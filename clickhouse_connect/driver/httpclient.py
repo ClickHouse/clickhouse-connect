@@ -6,7 +6,7 @@ import uuid
 from importlib import import_module
 from importlib.metadata import version as dist_version
 from base64 import b64encode
-from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
+from typing import Literal, Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
 
 from urllib3 import Timeout
@@ -77,7 +77,7 @@ class HttpClient(Client):
                  https_proxy: Optional[str] = None,
                  server_host_name: Optional[str] = None,
                  apply_server_timezone: Optional[Union[str, bool]] = None,
-                 utc_tz_aware: Optional[Union[bool, str]] = None,
+                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  autogenerate_query_id: Optional[bool] = None,

@@ -5,7 +5,7 @@ from datetime import tzinfo
 import pytz
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO
+from typing import Iterable, Literal, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
@@ -53,7 +53,7 @@ def _strip_utc_timezone_from_arrow(table: "arrow.Table") -> "arrow.Table":
     return table
 
 
-def _apply_arrow_tz_policy(table: "arrow.Table", utc_tz_aware: Union[bool, str]) -> "arrow.Table":
+def _apply_arrow_tz_policy(table: "arrow.Table", utc_tz_aware: Union[bool, Literal["schema"]]) -> "arrow.Table":
     """Apply the utc_tz_aware policy to an Arrow table before conversion.
 
     Handles UTC stripping when utc_tz_aware is False and warns when
@@ -86,7 +86,7 @@ class Client(ABC):
     database = None
     max_error_message = 0
     apply_server_timezone = False
-    utc_tz_aware = False
+    utc_tz_aware: Union[bool, Literal["schema"]] = False
     show_clickhouse_errors = True
 
     def __init__(self,
@@ -96,7 +96,7 @@ class Client(ABC):
                  query_retries: int,
                  server_host_name: Optional[str],
                  apply_server_timezone: Optional[Union[str, bool]],
-                 utc_tz_aware: Optional[Union[bool, str]],
+                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]],
                  show_clickhouse_errors: Optional[bool]):
         """
         Shared initialization of ClickHouse Connect client
@@ -267,7 +267,7 @@ class Client(ABC):
               context: QueryContext = None,
               query_tz: Optional[Union[str, tzinfo]] = None,
               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-              utc_tz_aware: Optional[Union[bool, str]] = None,
+              utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
               external_data: Optional[ExternalData] = None,
               transport_settings: Optional[Dict[str, str]] = None) -> QueryResult:
         """
@@ -303,7 +303,7 @@ class Client(ABC):
                                   context: QueryContext = None,
                                   query_tz: Optional[Union[str, tzinfo]] = None,
                                   column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                  utc_tz_aware: Optional[Union[bool, str]] = None,
+                                  utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                                   external_data: Optional[ExternalData] = None,
                                   transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -324,7 +324,7 @@ class Client(ABC):
                                context: QueryContext = None,
                                query_tz: Optional[Union[str, tzinfo]] = None,
                                column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                               utc_tz_aware: Optional[Union[bool, str]] = None,
+                               utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                                external_data: Optional[ExternalData] = None,
                                transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -345,7 +345,7 @@ class Client(ABC):
                           context: QueryContext = None,
                           query_tz: Optional[Union[str, tzinfo]] = None,
                           column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                          utc_tz_aware: Optional[Union[bool, str]] = None,
+                          utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                           external_data: Optional[ExternalData] = None,
                           transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
         """
@@ -454,7 +454,7 @@ class Client(ABC):
                  use_na_values: Optional[bool] = None,
                  query_tz: Optional[str] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                 utc_tz_aware: Optional[Union[bool, str]] = None,
+                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                  context: QueryContext = None,
                  external_data: Optional[ExternalData] = None,
                  use_extended_dtypes: Optional[bool] = None,
@@ -481,7 +481,7 @@ class Client(ABC):
                         use_na_values: Optional[bool] = None,
                         query_tz: Optional[str] = None,
                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                        utc_tz_aware: Optional[Union[bool, str]] = None,
+                        utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                         context: QueryContext = None,
                         external_data: Optional[ExternalData] = None,
                         use_extended_dtypes: Optional[bool] = None,
@@ -511,7 +511,7 @@ class Client(ABC):
                              context: Optional[QueryContext] = None,
                              query_tz: Optional[Union[str, tzinfo]] = None,
                              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                             utc_tz_aware: Optional[Union[bool, str]] = None,
+                             utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                              use_na_values: Optional[bool] = None,
                              streaming: bool = False,
                              as_pandas: bool = False,
