@@ -1,7 +1,9 @@
 import pytz
+import pytest
 
 import pyarrow as pa
 
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver import tzutil
@@ -179,3 +181,63 @@ def test_etc_uct_returns_naive_when_utc_tz_aware_false():
 
     result2 = ctx.active_tz(datatype_tz=None)
     assert result2 is None
+
+
+def test_schema_mode_with_schema_tz():
+    """DateTime('UTC') should return tz-aware in schema mode."""
+    ctx = QueryContext(utc_tz_aware="schema")
+    result = ctx.active_tz(datatype_tz=pytz.UTC)
+    assert result == pytz.UTC
+
+
+def test_schema_mode_bare_datetime():
+    """Bare DateTime (no schema tz) should return naive in schema mode."""
+    ctx = QueryContext(utc_tz_aware="schema", server_tz=pytz.UTC, apply_server_tz=True)
+    result = ctx.active_tz(datatype_tz=None)
+    assert result is None
+
+
+def test_schema_mode_non_utc_tz():
+    """DateTime('America/Denver') should return tz-aware in schema mode."""
+    denver = pytz.timezone("America/Denver")
+    ctx = QueryContext(utc_tz_aware="schema")
+    result = ctx.active_tz(datatype_tz=denver)
+    assert result == denver
+
+
+def test_schema_mode_with_column_tz_override():
+    """Per-column tz override should still work in schema mode."""
+    denver = pytz.timezone("America/Denver")
+    ctx = QueryContext(utc_tz_aware="schema", column_tzs={"ts": denver})
+    ctx.start_column("ts")
+    result = ctx.active_tz(datatype_tz=None)
+    assert result == denver
+
+
+def test_schema_mode_ignores_query_tz():
+    """query_tz should not apply to bare DateTime in schema mode."""
+    ctx = QueryContext(utc_tz_aware="schema", query_tz=pytz.UTC)
+    result = ctx.active_tz(datatype_tz=None)
+    assert result is None
+
+
+def test_schema_mode_ignores_server_tz():
+    """Server tz should not apply to bare DateTime in schema mode."""
+    denver = pytz.timezone("America/Denver")
+    ctx = QueryContext(utc_tz_aware="schema", server_tz=denver, apply_server_tz=True)
+    result = ctx.active_tz(datatype_tz=None)
+    assert result is None
+
+
+def test_schema_mode_etc_utc_schema():
+    """DateTime('Etc/UTC') should return tz-aware in schema mode."""
+    etc_utc = pytz.timezone("Etc/UTC")
+    ctx = QueryContext(utc_tz_aware="schema")
+    result = ctx.active_tz(datatype_tz=etc_utc)
+    assert result == etc_utc
+
+
+def test_schema_mode_invalid_string_raises():
+    """Invalid string value for utc_tz_aware should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="utc_tz_aware must be"):
+        QueryContext(utc_tz_aware="invalid")
