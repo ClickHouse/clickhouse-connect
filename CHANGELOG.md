@@ -23,6 +23,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Bug Fixes
+- Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
+
 ## 0.11.0, 2026-02-10
 
 ### Python 3.9 Deprecation
