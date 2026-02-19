@@ -26,6 +26,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ### Improvements
 - Added `utc_tz_aware="schema"` mode which returns timezone-aware datetimes only when the server's column schema explicitly defines a timezone (e.g. `DateTime('UTC')`), and naive datetimes for bare `DateTime` columns. This matches the ClickHouse schema definition exactly. Not yet supported for Arrow-based query methods. Closes [#645](https://github.com/ClickHouse/clickhouse-connect/issues/645)
 
+### Bug Fixes
+- Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
+
 ## 0.11.0, 2026-02-10
 
 ### Python 3.9 Deprecation
