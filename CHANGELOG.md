@@ -38,6 +38,7 @@ are now serialized using their native ClickHouse types client-side (e.g. inserti
 
 ### Bug Fixes
 - Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
+- SQLAlchemy: `GROUP BY` now renders label aliases instead of full expressions which avoids circular reference errors when an alias shadows a source column name in ClickHouse.
 
 ## 0.11.0, 2026-02-10
 
