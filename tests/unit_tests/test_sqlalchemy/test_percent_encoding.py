@@ -101,4 +101,4 @@ def test_preparer_double_percents_enabled():
     (the default for pyformat paramstyle), rather than disabling it."""
     dialect = _make_dialect()
     preparer = dialect.preparer(dialect)
-    assert preparer._double_percents is True
+    assert preparer._double_percents is True  # pylint: disable=protected-access
