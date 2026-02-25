@@ -39,7 +39,9 @@ def final(select_stmt: Select, table: Optional[FromClause] = None) -> Select:
         if not froms:
             raise ValueError("final() requires a table to apply the FINAL modifier.")
         if len(froms) > 1:
-            raise ValueError("final() is ambiguous for statements with multiple FROM clauses. Specify the table explicitly.")
+            raise ValueError(
+                "final() is ambiguous for statements with multiple FROM clauses. Specify the table explicitly."
+            )
         target = froms[0]
 
     if not isinstance(target, FromClause):
@@ -55,5 +57,42 @@ def _select_final(self: Select, table: Optional[FromClause] = None) -> Select:
     return final(self, table=table)
 
 
-# Monkey-patch the Select class to add the .final() convenience method
+def sample(self: Select, sample_value: str, table: Optional[FromClause] = None) -> Select:
+    """
+    Apply ClickHouse SAMPLE clause to a select statement.
+    Reference: https://clickhouse.com/docs/sql-reference/statements/select/sample
+    Args:
+        self: The SQLAlchemy Select statement to modify.
+        sample_value: The sample value (e.g., "0.1" for 10% sample, "1000" for 1000 rows)
+    Returns:
+        A new Select that renders the SAMPLE clause.
+    """
+    if not isinstance(self, Select):
+        raise TypeError("sample() expects a SQLAlchemy Select instance")
+
+    target_table = table
+    if target_table is None:
+        froms = self.get_final_froms()
+        if not froms:
+            raise ValueError("sample() requires a FROM clause to apply the SAMPLE modifier.")
+        if len(froms) > 1:
+            raise ValueError(
+                "sample() is ambiguous for statements with multiple FROM clauses. Specify the table explicitly")
+        target_table = froms[0]
+
+    if not isinstance(target_table, FromClause):
+        raise TypeError("table must be a SQLAlchemy FromClause when provided")
+
+    return self.with_hint(target_table, f"SAMPLE {sample_value}")
+
+
+def _select_sample(self: Select, sample_value: str, table: Optional[FromClause] = None) -> Select:
+    """
+    Wrapper around the module-level sample() helper.
+    """
+    return sample(self, sample_value=sample_value, table=table)
+
+
+# Monkey-patch the select class to add final and sample methods
+Select.sample = _select_sample
 Select.final = _select_final
