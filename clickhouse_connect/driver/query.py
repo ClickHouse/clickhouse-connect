@@ -3,7 +3,7 @@ import re
 import pytz
 
 from io import IOBase
-from typing import Any, Literal, Tuple, Dict, Sequence, Optional, Union, Generator, BinaryIO
+from typing import Any, Literal, Tuple, Dict, Sequence, Optional, Union, Generator, BinaryIO, TYPE_CHECKING
 from datetime import tzinfo
 
 from pytz.exceptions import UnknownTimeZoneError
@@ -16,6 +16,9 @@ from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
 from clickhouse_connect.driver.options import check_arrow, pd_extended_dtypes
 from clickhouse_connect.driver.context import BaseQueryContext
+
+if TYPE_CHECKING:
+    from clickhouse_connect.datatypes.base import ClickHouseType
 
 logger = logging.getLogger(__name__)
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|ATTACH|DROP|DELETE|KILL|' + \
@@ -260,8 +263,8 @@ class QueryResult(Closable):
     def __init__(self,
                  result_set: Matrix = None,
                  block_gen: Generator[Matrix, None, None] = None,
-                 column_names: Tuple = (),
-                 column_types: Tuple = (),
+                 column_names: Tuple[str, ...] = (),
+                 column_types: Tuple['ClickHouseType', ...] = (),
                  column_oriented: bool = False,
                  source: Closable = None,
                  query_id: str = None,
@@ -327,7 +330,7 @@ class QueryResult(Closable):
         return StreamContext(self, self._column_block_stream())
 
     @property
-    def row_block_stream(self):
+    def row_block_stream(self) -> StreamContext:
         return StreamContext(self, self._row_block_stream())
 
     @property
@@ -349,18 +352,18 @@ class QueryResult(Closable):
         return len(self.result_set)
 
     @property
-    def first_item(self):
+    def first_item(self) -> Dict[str, Any]:
         if self.column_oriented:
             return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
         return dict(zip(self.column_names, self.result_set[0]))
 
     @property
-    def first_row(self):
+    def first_row(self) -> Sequence[Any]:
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
 
-    def close(self):
+    def close(self) -> None:
         if self.source:
             self.source.close()
             self.source = None

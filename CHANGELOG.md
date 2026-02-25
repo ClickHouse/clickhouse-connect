@@ -35,8 +35,10 @@ are now serialized using their native ClickHouse types client-side (e.g. inserti
   cannot resolve the target type, such as when multiple variant members map to the same Python
   type (e.g. `Array(UInt32)` vs `Array(String)`).
 - Added `utc_tz_aware="schema"` mode which returns timezone-aware datetimes only when the server's column schema explicitly defines a timezone (e.g. `DateTime('UTC')`), and naive datetimes for bare `DateTime` columns. This matches the ClickHouse schema definition exactly. Not yet supported for Arrow-based query methods. Closes [#645](https://github.com/ClickHouse/clickhouse-connect/issues/645)
+- Add type annotations to public API methods in `Client`, `AsyncClient`, `HttpClient`, and `QueryResult`. Ref [#567](https://github.com/ClickHouse/clickhouse-connect/issues/567)
 
 ### Bug Fixes
+- Fix `dict_add` parameter typed as builtin `any` instead of `typing.Any`.
 - Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
 
 ## 0.11.0, 2026-02-10
