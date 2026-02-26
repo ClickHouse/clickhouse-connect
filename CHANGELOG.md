@@ -21,7 +21,7 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
-## UNRELEASED
+## 0.13.0, 2026-02-26
 
 ### Improvements
 - BREAKING CHANGE: Implement native write path for `Variant` data type with type-aware dispatching.
