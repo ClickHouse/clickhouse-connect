@@ -1,4 +1,5 @@
 import datetime
+import decimal
 from ipaddress import IPv4Address
 from typing import Callable
 from uuid import UUID
@@ -7,7 +8,9 @@ import json
 import pytest
 
 from clickhouse_connect.datatypes.format import set_write_format
+from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import DataError
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -22,27 +25,27 @@ def type_available(test_client: Client, data_type: str):
 
 
 def test_variant(test_client: Client, table_context: Callable):
-    pytest.skip('Variant string inserts broken')
     type_available(test_client, 'variant')
     with table_context('basic_variants', [
         'key Int32',
         'v1 Variant(UInt64, String, Array(UInt64), UUID)',
         'v2 Variant(IPv4, Decimal(10, 2))']):
         data = [[1, 58322, None],
-                [2, 'a string', 55.2],
-                [3, 'bef56f14-0870-4f82-a35e-9a47eff45a5b', 777.25],
-                [4, [120, 250], 88.2]
+                [2, 'a string', decimal.Decimal('55.20')],
+                [3, UUID('bef56f14-0870-4f82-a35e-9a47eff45a5b'), decimal.Decimal('777.25')],
+                [4, [120, 250], IPv4Address('243.12.55.44')]
                 ]
         test_client.insert('basic_variants', data)
         result = test_client.query('SELECT * FROM basic_variants ORDER BY key').result_set
+        assert result[0][1] == 58322
+        assert result[1][1] == 'a string'
         assert result[2][1] == UUID('bef56f14-0870-4f82-a35e-9a47eff45a5b')
-        assert result[2][2] == 777.25
+        assert result[2][2] == decimal.Decimal('777.25')
         assert result[3][1] == [120, 250]
         assert result[3][2] == IPv4Address('243.12.55.44')
 
 
 def test_nested_variant(test_client: Client, table_context: Callable):
-    pytest.skip('Variant string inserts broken')
     type_available(test_client, 'variant')
     with table_context('nested_variants', [
         'key Int32',
@@ -68,6 +71,104 @@ def test_nested_variant(test_client: Client, table_context: Callable):
         assert result[0][2] == (-40, True)
         assert result[0][3][0][1] == 53.732
         assert result[1][1]['k3'] == 100
+
+
+def test_variant_bool_int_ordering(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_bool_int', [
+        'key Int32',
+        'v1 Variant(Bool, Int32)']):
+        data = [[1, True], [2, 42], [3, False], [4, -7]]
+        test_client.insert('variant_bool_int', data)
+        result = test_client.query('SELECT * FROM variant_bool_int ORDER BY key').result_set
+        assert result[0][1] is True
+        assert result[1][1] == 42
+        assert result[2][1] is False
+        assert result[3][1] == -7
+
+
+def test_variant_no_string_error(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_no_string', [
+        'key Int32',
+        'v1 Variant(Int64, Float64)']):
+        with pytest.raises(DataError):
+            test_client.insert('variant_no_string', [[1, 'hello']])
+
+
+def test_variant_ambiguous_arrays(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_arrays', [
+        'key Int32',
+        'v1 Variant(Array(UInt32), Array(String))']):
+        data = [[1, typed_variant([1, 2, 3], 'Array(UInt32)')],
+                [2, typed_variant(['a', 'b'], 'Array(String)')]]
+        test_client.insert('variant_arrays', data)
+        result = test_client.query('SELECT * FROM variant_arrays ORDER BY key').result_set
+        assert result[0][1] == [1, 2, 3]
+        assert result[1][1] == ['a', 'b']
+
+
+def test_variant_empty_array_fallback(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_empty_array', [
+        'key Int32',
+        'v1 Variant(Array(UInt32), Array(String))']):
+        data = [[1, typed_variant([], 'Array(UInt32)')]]
+        test_client.insert('variant_empty_array', data)
+        result = test_client.query('SELECT * FROM variant_empty_array ORDER BY key').result_set
+        assert result[0][1] == []
+
+
+def test_variant_uuid_dispatch(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_uuid', [
+        'key Int32',
+        'v1 Variant(UUID, String)']):
+        test_uuid = UUID('bef56f14-0870-4f82-a35e-9a47eff45a5b')
+        data = [[1, test_uuid], [2, 'just a string']]
+        test_client.insert('variant_uuid', data)
+        result = test_client.query('SELECT * FROM variant_uuid ORDER BY key').result_set
+        assert result[0][1] == test_uuid
+        assert result[1][1] == 'just a string'
+
+
+def test_variant_no_implicit_coercion(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_no_coerce', [
+        'key Int32',
+        'v1 Variant(Int32, String)']):
+        test_uuid = UUID('bef56f14-0870-4f82-a35e-9a47eff45a5b')
+        with pytest.raises(DataError):
+            test_client.insert('variant_no_coerce', [[1, test_uuid]])
+
+
+def test_variant_all_null(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_all_null', [
+        'key Int32',
+        'v1 Variant(Int32, String)']):
+        data = [[1, None], [2, None], [3, None]]
+        test_client.insert('variant_all_null', data)
+        result = test_client.query('SELECT * FROM variant_all_null ORDER BY key').result_set
+        assert result[0][1] is None
+        assert result[1][1] is None
+        assert result[2][1] is None
+
+
+def test_variant_leading_nulls(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_leading_nulls', [
+        'key Int32',
+        'v1 Variant(Int32, String)']):
+        data = [[1, None], [2, None], [3, 42], [4, 'hello'], [5, None]]
+        test_client.insert('variant_leading_nulls', data)
+        result = test_client.query('SELECT * FROM variant_leading_nulls ORDER BY key').result_set
+        assert result[0][1] is None
+        assert result[1][1] is None
+        assert result[2][1] == 42
+        assert result[3][1] == 'hello'
+        assert result[4][1] is None
 
 
 def test_dynamic_nested(test_client: Client, table_context: Callable):
@@ -229,3 +330,77 @@ def test_json_str_time(test_client: Client, test_config: TestConfig):
     # The following query is broken -- looks like something to do with Nullable(String) in the Tuple
     # result = test_client.query("SELECT'{\"k\": [123, \"xyz\"]}'::JSON",
     #                           settings={'input_format_json_read_numbers_as_strings': 0}).result_set
+
+
+def test_typed_variant_ambiguous_scalars(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_ambig_scalars', [
+        'key Int32',
+        'v1 Variant(Int64, Float64)']):
+        data = [[1, typed_variant(42, 'Int64')],
+                [2, typed_variant(42, 'Float64')],
+                [3, None]]
+        test_client.insert('variant_ambig_scalars', data)
+        result = test_client.query('SELECT * FROM variant_ambig_scalars ORDER BY key').result_set
+        assert result[0][1] == 42
+        assert result[1][1] == 42
+        assert result[2][1] is None
+
+
+def test_typed_variant_mixed_with_inference(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_mixed_infer', [
+        'key Int32',
+        'v1 Variant(Int64, String, Float64)']):
+        data = [[1, typed_variant(42, 'Int64')],
+                [2, 'hello'],
+                [3, 3.14]]
+        test_client.insert('variant_mixed_infer', data)
+        result = test_client.query('SELECT * FROM variant_mixed_infer ORDER BY key').result_set
+        assert result[0][1] == 42
+        assert result[1][1] == 'hello'
+        assert result[2][1] == 3.14
+
+
+def test_typed_variant_validation():
+    with pytest.raises(DataError):
+        typed_variant(42, 'Itn32')
+    with pytest.raises(DataError):
+        typed_variant(42, 'NotAType')
+    with pytest.raises(DataError):
+        typed_variant(None, 'Int32')
+
+
+def test_typed_variant_member_mismatch(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_mismatch', [
+        'key Int32',
+        'v1 Variant(Int32, String)']):
+        with pytest.raises(DataError):
+            test_client.insert('variant_mismatch', [[1, typed_variant(42, 'Float64')]])
+
+
+def test_variant_in_tuple(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_in_tuple', [
+        'key Int32',
+        't1 Tuple(Int64, Variant(Bool, String, Int32))']):
+        data = [[1, (-40, True)],
+                [2, (340283, 'str')],
+                [3, (0, 55)]]
+        test_client.insert('variant_in_tuple', data)
+        result = test_client.query('SELECT * FROM variant_in_tuple ORDER BY key').result_set
+        assert result[0][1] == (-40, True)
+        assert result[1][1] == (340283, 'str')
+        assert result[2][1] == (0, 55)
+
+
+def test_typed_variant_name_normalization(test_client: Client, table_context: Callable):
+    type_available(test_client, 'variant')
+    with table_context('variant_norm', [
+        'key Int32',
+        'v1 Variant(Decimal(10, 2), String)']):
+        data = [[1, typed_variant(decimal.Decimal('1.50'), 'Decimal(10,2)')]]
+        test_client.insert('variant_norm', data)
+        result = test_client.query('SELECT * FROM variant_norm ORDER BY key').result_set
+        assert result[0][1] == decimal.Decimal('1.50')

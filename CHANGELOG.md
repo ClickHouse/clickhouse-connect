@@ -23,6 +23,32 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Improvements
+- Added support for the `SAMPLE` clause in SQLAlchemy statements. Note: Due to a SQLAlchemy limitation, only one hint (SAMPLE or FINAL) can be applied per table; chaining both will silently ignore one. For now, this change enables use of sample(), but chaining with final() is not yet supported.  Closes [#634](https://github.com/ClickHouse/clickhouse-connect/issues/634)
+
+## 0.13.0, 2026-02-26
+
+### Improvements
+- BREAKING CHANGE: Implement native write path for `Variant` data type with type-aware dispatching.
+Previously, all values inserted into a `Variant` column were stringified and sent to the server, which
+would store them in the `String` member if present, or attempt server-side conversion otherwise. Values
+are now serialized using their native ClickHouse types client-side (e.g. inserting `100` into
+`Variant(Int64, String)` stores `Int64(100)` instead of `String("100")`). Key changes:
+  - Values that don't match any variant member now raise `DataError` instead of being stringified and
+  delegated to the server.
+  - A `typed_variant(value, 'TypeName')` helper is provided for cases where automatic dispatch
+  cannot resolve the target type, such as when multiple variant members map to the same Python
+  type (e.g. `Array(UInt32)` vs `Array(String)`).
+- Added `utc_tz_aware="schema"` mode which returns timezone-aware datetimes only when the server's column schema explicitly defines a timezone (e.g. `DateTime('UTC')`), and naive datetimes for bare `DateTime` columns. This matches the ClickHouse schema definition exactly. Not yet supported for Arrow-based query methods. Closes [#645](https://github.com/ClickHouse/clickhouse-connect/issues/645)
+- Add type annotations to public API methods in `Client`, `AsyncClient`, `HttpClient`, and `QueryResult`. Ref [#567](https://github.com/ClickHouse/clickhouse-connect/issues/567)
+
+### Bug Fixes
+- Fix `dict_add` parameter typed as builtin `any` instead of `typing.Any`.
+- Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
+- SQLAlchemy: `GROUP BY` now renders label aliases instead of full expressions which avoids circular reference errors when an alias shadows a source column name in ClickHouse.
+
+## 0.11.0, 2026-02-10
+
 ### Python 3.9 Deprecation
 Python 3.9 EOL'd Oct 2025. Support for Python 3.9 is now softly deprecated and has been removed from our CI test matrix but
 distribution wheels will continue to be built until the 1.0 release or until the builds naturally fail, whichever comes first.
@@ -31,17 +57,21 @@ Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 
 ### Bug Fixes
 - Fix issue where settings matching server defaults were not stored on client during initialization. Explicitly setting a default value is now respected (e.g., to prevent ClickHouse from auto-enabling optimizations). Closes [#638](https://github.com/ClickHouse/clickhouse-connect/issues/638)
+- Raise OperationalError when ResponseSource hits network failure before any data is received. Previously, empty result would be returned. Closes [#620](https://github.com/ClickHouse/clickhouse-connect/issues/620)
 - Fix issue with DROP table in client temp table test.
 - Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.
 - Fixed UTC-equivalent timezone recognition issue where servers returning `Etc/UCT`, `GMT`, or other UTC-equivalent timezone names caused inconsistent behavior with `utc_tz_aware=False`. DateTime columns with explicit UTC timezones now correctly return naive datetimes when `utc_tz_aware=False` regardless of the specific UTC-equivalent timezone name returned by the server. Closes [#629](https://github.com/ClickHouse/clickhouse-connect/issues/629)
+- Fixed percent sign (`%`) double encoding in SQLAlchemy string literals when using `text()` queries with `formatDateTime` and similar functions. The cursor now correctly unescapes `%%` back to `%` for non-parameterized queries. Closes [#297](https://github.com/ClickHouse/clickhouse-connect/issues/297)
 
 ### Improvements
+- Add support for mid-stream exceptions. Closes [#626](https://github.com/ClickHouse/clickhouse-connect/issues/626)
 - Add support for QBit data type. Closes [#570](https://github.com/ClickHouse/clickhouse-connect/issues/570)
 - Add the ability to create table from PyArrow objects. Addresses [#588](https://github.com/ClickHouse/clickhouse-connect/issues/588)
 - Always generate query_id from the client side as a UUID4 if it is not explicitly set. Closes [#596](https://github.com/ClickHouse/clickhouse-connect/issues/596)
 - Extend support for creating tables from PyArrow objects to include datetime/timestamp types. Closes [#605](https://github.com/ClickHouse/clickhouse-connect/issues/605)
 - Add pre-commit hooks for auto-linting contributions at commit time. Addresses [#607](https://github.com/ClickHouse/clickhouse-connect/issues/607)
 - Add missing type annotation. Closes [#567](https://github.com/ClickHouse/clickhouse-connect/issues/567)
+- Auto-enable `cancel_http_readonly_queries_on_client_close` setting for HTTP clients to ensure SELECT queries are cancelled on the server when the client disconnects. Closes [#641](https://github.com/ClickHouse/clickhouse-connect/issues/641)
 
 ## 0.10.0, 2025-11-14
 
