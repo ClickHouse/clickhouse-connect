@@ -26,7 +26,7 @@ def test_tables(test_engine: Engine, test_db: str):
                 id UInt32,
                 name String,
                 created_at DateTime64(3)
-            ) ENGINE MergeTree() ORDER BY tuple()
+            ) ENGINE MergeTree() ORDER BY (id, name) SAMPLE by id
         """
             )
         )
@@ -152,6 +152,33 @@ def test_select_all_columns(test_engine: Engine, test_db: str):
         assert hasattr(rows[0], "id")
         assert hasattr(rows[0], "name")
         assert hasattr(rows[0], "created_at")
+
+
+def test_basic_select_with_sample(test_engine: Engine, test_db: str):
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+    query = select(users).sample("1")
+    compiled = query.compile(dialect=test_engine.dialect)
+    compiled_str = str(compiled)
+    assert compiled_str.endswith("SAMPLE 1")
+
+
+def test_select_with_where_with_sample(test_engine: Engine, test_db: str):
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name).sample(1).where(users.c.id == 2)
+        compiled = query.compile(dialect=test_engine.dialect)
+        compiled_str = str(compiled)
+        assert "SAMPLE 1" in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+
+        assert len(rows) == 1
+        assert rows[0].id == 2
+        assert rows[0].name == "Bob"
 
 
 def test_inner_join(test_engine: Engine, test_db: str):
