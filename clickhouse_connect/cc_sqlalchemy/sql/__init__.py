@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 from sqlalchemy import Table
 from sqlalchemy.sql.selectable import FromClause, Select
@@ -57,22 +57,22 @@ def _select_final(self: Select, table: Optional[FromClause] = None) -> Select:
     return final(self, table=table)
 
 
-def sample(self: Select, sample_value: str, table: Optional[FromClause] = None) -> Select:
+def sample(select_stmt: Select, sample_value: str, table: Optional[FromClause] = None) -> Select:
     """
     Apply ClickHouse SAMPLE clause to a select statement.
     Reference: https://clickhouse.com/docs/sql-reference/statements/select/sample
     Args:
-        self: The SQLAlchemy Select statement to modify.
+        select_stmt: The SQLAlchemy Select statement to modify.
         sample_value: The sample value (e.g., "0.1" for 10% sample, "1000" for 1000 rows)
     Returns:
         A new Select that renders the SAMPLE clause.
     """
-    if not isinstance(self, Select):
+    if not isinstance(select_stmt, Select):
         raise TypeError("sample() expects a SQLAlchemy Select instance")
 
     target_table = table
     if target_table is None:
-        froms = self.get_final_froms()
+        froms = select_stmt.get_final_froms()
         if not froms:
             raise ValueError("sample() requires a FROM clause to apply the SAMPLE modifier.")
         if len(froms) > 1:
@@ -83,10 +83,10 @@ def sample(self: Select, sample_value: str, table: Optional[FromClause] = None) 
     if not isinstance(target_table, FromClause):
         raise TypeError("table must be a SQLAlchemy FromClause when provided")
 
-    return self.with_hint(target_table, f"SAMPLE {sample_value}")
+    return select_stmt.with_hint(target_table, f"SAMPLE {sample_value}")
 
 
-def _select_sample(self: Select, sample_value: str, table: Optional[FromClause] = None) -> Select:
+def _select_sample(self: Select, sample_value: Union[str, int, float], table: Optional[FromClause] = None) -> Select:
     """
     Wrapper around the module-level sample() helper.
     """
