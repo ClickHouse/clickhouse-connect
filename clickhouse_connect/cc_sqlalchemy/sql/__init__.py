@@ -57,15 +57,23 @@ def _select_final(self: Select, table: Optional[FromClause] = None) -> Select:
     return final(self, table=table)
 
 
-def sample(select_stmt: Select, sample_value: str, table: Optional[FromClause] = None) -> Select:
+def sample(select_stmt: Select, sample_value: Union[str, int, float], table: Optional[FromClause] = None) -> Select:
     """
     Apply ClickHouse SAMPLE clause to a select statement.
     Reference: https://clickhouse.com/docs/sql-reference/statements/select/sample
     Args:
         select_stmt: The SQLAlchemy Select statement to modify.
-        sample_value: The sample value (e.g., "0.1" for 10% sample, "1000" for 1000 rows)
+        sample_value: Controls the sampling behavior. Accepts three forms:
+            - A float in (0, 1) for proportional sampling (e.g., 0.1 for ~10% of data).
+            - A positive integer for row-count sampling (e.g., 10000000 for ~10M rows).
+            - A string for fraction or offset notation (e.g., "1/10" or "1/10 OFFSET 1/2").
+        table: Optional explicit table to apply SAMPLE to. When omitted the
+            method will use the single FROM element present on the select. A
+            ValueError is raised if the statement has no FROMs or more than one
+            FROM element and table is not provided.
+
     Returns:
-        A new Select that renders the SAMPLE clause.
+        A new Select that renders the SAMPLE clause for the target table.
     """
     if not isinstance(select_stmt, Select):
         raise TypeError("sample() expects a SQLAlchemy Select instance")
@@ -76,8 +84,7 @@ def sample(select_stmt: Select, sample_value: str, table: Optional[FromClause] =
         if not froms:
             raise ValueError("sample() requires a FROM clause to apply the SAMPLE modifier.")
         if len(froms) > 1:
-            raise ValueError(
-                "sample() is ambiguous for statements with multiple FROM clauses. Specify the table explicitly")
+            raise ValueError("sample() is ambiguous for statements with multiple FROM clauses. Specify the table explicitly.")
         target_table = froms[0]
 
     if not isinstance(target_table, FromClause):
@@ -88,7 +95,7 @@ def sample(select_stmt: Select, sample_value: str, table: Optional[FromClause] =
 
 def _select_sample(self: Select, sample_value: Union[str, int, float], table: Optional[FromClause] = None) -> Select:
     """
-    Wrapper around the module-level sample() helper.
+    Select.sample() convenience wrapper around the module-level sample() helper.
     """
     return sample(self, sample_value=sample_value, table=table)
 
