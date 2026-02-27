@@ -21,6 +21,11 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## UNRELEASED
+
+### Improvements
+- Added support for the `SAMPLE` clause in SQLAlchemy statements. Note: Due to a SQLAlchemy limitation, only one hint (SAMPLE or FINAL) can be applied per table; chaining both will silently ignore one. For now, this change enables use of sample(), but chaining with final() is not yet supported.  Closes [#634](https://github.com/ClickHouse/clickhouse-connect/issues/634)
+
 ## 0.13.0, 2026-02-26
 
 ### Improvements
