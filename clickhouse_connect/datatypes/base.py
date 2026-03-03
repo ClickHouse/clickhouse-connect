@@ -41,7 +41,6 @@ class ClickHouseType(ABC):
     encoding = 'utf8'
     np_type = 'O'  # Default to Numpy Object type
     nano_divisor = 0  # Only relevant for date like objects
-    pd_datetime_res = "ns"  # Default date-like resolution for pd
     byte_size = 0
     valid_formats = 'native'
 
@@ -98,6 +97,11 @@ class ClickHouseType(ABC):
     @property
     def insert_name(self):
         return self.name
+
+    @property
+    def _null_time_unit(self):
+        """Extract time unit from np_type, e.g. 'datetime64[s]' -> 's'."""
+        return np.datetime_data(np.dtype(self.np_type))[0]
 
     def data_size(self, sample: Sequence) -> int:
         if self.low_card:

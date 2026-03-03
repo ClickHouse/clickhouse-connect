@@ -8,7 +8,6 @@ from abc import abstractmethod
 import re
 
 from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
-from clickhouse_connect.common import get_setting
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import write_array, np_date_types, int_size, first_value
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -16,7 +15,7 @@ from clickhouse_connect.driver.ctypes import data_conv, numpy_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver.options import np, pd, IS_PANDAS_2
+from clickhouse_connect.driver.options import np, pd
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
@@ -32,9 +31,7 @@ class Date(ClickHouseType):
 
     @property
     def pandas_dtype(self):
-        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
-            return "datetime64[s]"
-        return f"datetime64[{self.pd_datetime_res}]"
+        return "datetime64[s]"
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state:Any):
         if self.read_format(ctx) == 'int':
@@ -68,7 +65,7 @@ class Date(ClickHouseType):
         if fmt == 'int':
             return 0
         if ctx.use_numpy:
-            return np.datetime64(0, self.pd_datetime_res)
+            return np.datetime64(0, self._null_time_unit)
         return epoch_start_date
 
     # pylint: disable=too-many-return-statements
@@ -123,10 +120,7 @@ class DateTimeBase(ClickHouseType, registered=False):
 
     @property
     def pandas_dtype(self):
-        """Sets dtype for pandas datetime objects"""
-        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
-            return "datetime64[s]"
-        return f"datetime64[{self.pd_datetime_res}]"
+        return "datetime64[s]"
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
@@ -137,11 +131,10 @@ class DateTimeBase(ClickHouseType, registered=False):
         if self.read_format(ctx) == 'int':
             return 0
         if ctx.use_numpy:
-            return np.datetime64(0, self.pd_datetime_res)
+            return np.datetime64(0, self._null_time_unit)
         return epoch_start_datetime
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        """Ensure every datetime-like column is at nanosecond resolution, preserving any tz."""
         if ctx.use_extended_dtypes:
             if isinstance(column, np.ndarray) and np.issubdtype(
                 column.dtype, np.datetime64
@@ -227,10 +220,7 @@ class DateTime64(DateTimeBase):
 
     @property
     def pandas_dtype(self):
-        """Sets dtype for pandas datetime objects"""
-        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
-            return f"datetime64{self.unit}"
-        return f"datetime64[{self.pd_datetime_res}]"
+        return f"datetime64{self.unit}"
 
     @property
     def np_type(self):
@@ -493,10 +483,7 @@ class TimeBase(ClickHouseType, registered=False):
 
     @property
     def pandas_dtype(self):
-        """Sets dtype for pandas datetime objects"""
-        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
-            return "timedelta64[s]"
-        return f"timedelta64[{self.pd_datetime_res}]"
+        return "timedelta64[s]"
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         """Finalize column data based on context requirements."""
@@ -672,10 +659,7 @@ class Time64(TimeBase):
 
     @property
     def pandas_dtype(self):
-        """Sets dtype for pandas datetime objects"""
-        if IS_PANDAS_2 and get_setting("preserve_pandas_datetime_resolution"):
-            return f"timedelta64{self.unit}"
-        return f"timedelta64[{self.pd_datetime_res}]"
+        return f"timedelta64{self.unit}"
 
     @property
     def max_time_ticks(self) -> int:
