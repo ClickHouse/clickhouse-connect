@@ -19,7 +19,7 @@ from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOC
 from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError, DataError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.options import check_arrow, check_pandas, check_numpy, check_polars, pd, arrow, pl, IS_PANDAS_2
+from clickhouse_connect.driver.options import check_arrow, check_pandas, check_numpy, check_polars, pd, arrow, pl
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer
@@ -691,8 +691,6 @@ class Client(ABC):
         if dataframe_library == "pandas":
             check_pandas()
             self._add_integration_tag("pandas")
-            if not IS_PANDAS_2:
-                raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: arrow.Table) -> pd.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.utc_tz_aware)
@@ -745,8 +743,6 @@ class Client(ABC):
         if dataframe_library == "pandas":
             check_pandas()
             self._add_integration_tag("pandas")
-            if not IS_PANDAS_2:
-                raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "arrow.Table") -> "pd.DataFrame":
                 table = _apply_arrow_tz_policy(table, self.utc_tz_aware)
@@ -962,9 +958,6 @@ class Client(ABC):
             raise TypeError(f"df must be either a pandas DataFrame or polars DataFrame, got {type(df).__name__}")
 
         if df_lib == "pandas":
-            if not IS_PANDAS_2:
-                raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
-
             non_arrow_cols = [col for col, dtype in df.dtypes.items() if not isinstance(dtype, pd.ArrowDtype)]
             if non_arrow_cols:
                 raise ProgrammingError(

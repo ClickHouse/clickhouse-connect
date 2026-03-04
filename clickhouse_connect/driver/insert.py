@@ -145,6 +145,20 @@ class InsertContext(BaseQueryContext):
     def _row_block_data(self, block_start, block_end):
         return data_conv.pivot(self._block_rows, block_start, block_end)
 
+    @staticmethod
+    def _convert_datetime_col(df_col, ch_type):
+        """Convert a pandas datetime column to integer values in the ClickHouse type's
+        native resolution (e.g. datetime64[s], datetime64[ms], datetime64[D])."""
+        np_arr = df_col.to_numpy(dtype=ch_type.np_type)
+        int_vals = np_arr.view("i8")
+        nat_mask = np.isnat(np_arr)
+        if nat_mask.any():
+            result = int_vals.tolist()
+            for i in np.flatnonzero(nat_mask):
+                result[i] = None
+            return result
+        return int_vals.tolist()
+
     def _convert_pandas(self, df):
         data = []
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
@@ -152,13 +166,12 @@ class InsertContext(BaseQueryContext):
             d_type_kind = df_col.dtype.kind
             if ch_type.python_type == int:
                 if d_type_kind == 'f':
-                    df_col = df_col.round().astype(ch_type.base_type, copy=False)
+                    df_col = df_col.round().astype(ch_type.base_type)
                 elif d_type_kind in ('i', 'u') and not df_col.hasnans:
                     data.append(df_col.to_list())
                     continue
-            elif 'datetime' in ch_type.np_type and (pd_time_test(df_col) or 'datetime64[ns' in str(df_col.dtype)):
-                div = ch_type.nano_divisor
-                data.append([None if pd.isnull(x) else x.value // div for x in df_col])
+            elif 'datetime' in ch_type.np_type and pd_time_test(df_col):
+                data.append(self._convert_datetime_col(df_col, ch_type))
                 self.column_formats[col_name] = 'int'
                 continue
             if ch_type.nullable:
@@ -171,7 +184,10 @@ class InsertContext(BaseQueryContext):
                     continue
                 else:
                     df_col = df_col.replace({np.nan: None})
-            data.append(df_col.to_numpy(copy=False))
+            if d_type_kind == "O":
+                data.append(df_col.to_numpy(dtype=object, na_value=None))
+            else:
+                data.append(df_col.to_numpy())
         return data
 
     def _convert_numpy(self, np_array):

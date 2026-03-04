@@ -1,9 +1,12 @@
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
+
+def _pd_time_test(arr_or_dtype):
+    kind = getattr(getattr(arr_or_dtype, "dtype", arr_or_dtype), "kind", None)
+    return kind in ("M", "m")
+
+
 pd_time_test = None
-pd_extended_dtypes = False
-PANDAS_VERSION = None
-IS_PANDAS_2 = None
 
 try:
     import numpy as np
@@ -12,23 +15,14 @@ except ImportError:
 
 try:
     import pandas as pd
-    PANDAS_VERSION = tuple(map(int, pd.__version__.split(".")[:2]))
-    IS_PANDAS_2 = PANDAS_VERSION >= (2, 0)
-    pd_extended_dtypes = not pd.__version__.startswith('0')
-    try:
-        from pandas.core.dtypes.common import is_datetime64_dtype
-        from pandas.core.dtypes.common import is_timedelta64_dtype
 
-        def combined_test(arr_or_dtype):
-            return is_datetime64_dtype(arr_or_dtype) or is_timedelta64_dtype(arr_or_dtype)
+    _pandas_version = tuple(int(x) for x in pd.__version__.split(".")[:2])
+    if _pandas_version < (2, 0):
+        pd = None
 
-        pd_time_test = combined_test
-    except ImportError:
-        try:
-            from pandas.core.dtypes.common import is_datetime_or_timedelta_dtype
-            pd_time_test = is_datetime_or_timedelta_dtype
-        except ImportError as ex:
-            raise NotSupportedError('pandas version does not contain expected test for temporal types') from ex
+    else:
+        pd_time_test = _pd_time_test
+
 except ImportError:
     pd = None
 
@@ -51,7 +45,14 @@ def check_numpy():
 def check_pandas():
     if pd:
         return pd
-    raise NotSupportedError('Pandas package is not installed')
+    try:
+        import pandas as _pd  # pylint: disable=import-outside-toplevel
+        raise NotSupportedError(
+            f"pandas >= 2.0 is required, found {_pd.__version__}. "
+            "Please upgrade: pip install 'pandas>=2'"
+        )
+    except ImportError as exc:
+        raise NotSupportedError("Pandas package is not installed") from exc
 
 
 def check_arrow():

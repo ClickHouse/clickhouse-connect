@@ -27,7 +27,7 @@ class String(ClickHouseType):
             return 0
         total = 0
         for x in sample:
-            if x:
+            if isinstance(x, (str, bytes)):
                 total += len(x)
         return total // len(sample) + 1
 
