@@ -23,6 +23,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Breaking Changes
+- Removed the deprecated `Object('json')` type. This was the legacy experimental JSON type that has been superseded by the new `JSON` type in ClickHouse. Closes [#556](https://github.com/ClickHouse/clickhouse-connect/issues/556)
+
 ### Improvements
 - Added support for the `SAMPLE` clause in SQLAlchemy statements. Note: Due to a SQLAlchemy limitation, only one hint (SAMPLE or FINAL) can be applied per table; chaining both will silently ignore one. For now, this change enables use of sample(), but chaining with final() is not yet supported.  Closes [#634](https://github.com/ClickHouse/clickhouse-connect/issues/634)
 - **Experimental:** Added Python 3.14 free-threading (cp314t) wheel builds for all platforms. The full test suite currently (as of 2 MAR, 2026) passes under free-threaded Python, but is not added to the CI test matrix at this time nor has it been otherwise tested to any degree. Free-threading support should be considered experimental with no guarantees of correctness at this time. Closes [#573](https://github.com/ClickHouse/clickhouse-connect/issues/573)
