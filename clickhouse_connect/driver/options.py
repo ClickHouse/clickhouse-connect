@@ -1,5 +1,11 @@
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
+
+def _pd_time_test(arr_or_dtype):
+    kind = getattr(getattr(arr_or_dtype, "dtype", arr_or_dtype), "kind", None)
+    return kind in ("M", "m")
+
+
 pd_time_test = None
 
 try:
@@ -15,9 +21,7 @@ try:
         pd = None
 
     else:
-        def pd_time_test(arr_or_dtype):
-            kind = getattr(getattr(arr_or_dtype, "dtype", arr_or_dtype), "kind", None)
-            return kind in ("M", "m")
+        pd_time_test = _pd_time_test
 
 except ImportError:
     pd = None
@@ -42,13 +46,13 @@ def check_pandas():
     if pd:
         return pd
     try:
-        import pandas as _pd
+        import pandas as _pd  # pylint: disable=import-outside-toplevel
         raise NotSupportedError(
             f"pandas >= 2.0 is required, found {_pd.__version__}. "
             "Please upgrade: pip install 'pandas>=2'"
         )
-    except ImportError:
-        raise NotSupportedError("Pandas package is not installed")
+    except ImportError as exc:
+        raise NotSupportedError("Pandas package is not installed") from exc
 
 
 def check_arrow():

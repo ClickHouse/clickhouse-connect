@@ -145,6 +145,20 @@ class InsertContext(BaseQueryContext):
     def _row_block_data(self, block_start, block_end):
         return data_conv.pivot(self._block_rows, block_start, block_end)
 
+    @staticmethod
+    def _convert_datetime_col(df_col, ch_type):
+        """Convert a pandas datetime column to integer values in the ClickHouse type's
+        native resolution (e.g. datetime64[s], datetime64[ms], datetime64[D])."""
+        np_arr = df_col.to_numpy(dtype=ch_type.np_type)
+        int_vals = np_arr.view("i8")
+        nat_mask = np.isnat(np_arr)
+        if nat_mask.any():
+            result = int_vals.tolist()
+            for i in np.flatnonzero(nat_mask):
+                result[i] = None
+            return result
+        return int_vals.tolist()
+
     def _convert_pandas(self, df):
         data = []
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
@@ -157,19 +171,7 @@ class InsertContext(BaseQueryContext):
                     data.append(df_col.to_list())
                     continue
             elif 'datetime' in ch_type.np_type and pd_time_test(df_col):
-                # Convert the column to the ClickHouse type's native numpy resolution
-                # (e.g. datetime64[s], datetime64[ms], datetime64[D]) then extract integer
-                # values.
-                np_arr = df_col.to_numpy(dtype=ch_type.np_type)
-                int_vals = np_arr.view("i8")
-                nat_mask = np.isnat(np_arr)
-                if nat_mask.any():
-                    result = int_vals.tolist()
-                    for i in np.flatnonzero(nat_mask):
-                        result[i] = None
-                    data.append(result)
-                else:
-                    data.append(int_vals.tolist())
+                data.append(self._convert_datetime_col(df_col, ch_type))
                 self.column_formats[col_name] = 'int'
                 continue
             if ch_type.nullable:
