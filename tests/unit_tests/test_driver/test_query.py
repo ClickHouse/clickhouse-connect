@@ -241,5 +241,3 @@ def test_tz_mode_invalid_string_raises():
     """Invalid string value for tz_mode should raise ProgrammingError."""
     with pytest.raises(ProgrammingError, match='tz_mode must be'):
         QueryContext(tz_mode="invalid")
-
-
