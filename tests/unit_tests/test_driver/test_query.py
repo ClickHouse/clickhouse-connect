@@ -1,12 +1,10 @@
-import warnings
-
 import pytz
 import pytest
 
 import pyarrow as pa
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.query import QueryContext, _resolve_tz_mode
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver import tzutil
 
@@ -245,81 +243,3 @@ def test_tz_mode_invalid_string_raises():
         QueryContext(tz_mode="invalid")
 
 
-def test_utc_tz_aware_false_maps_to_naive_utc():
-    """utc_tz_aware=False should map to tz_mode='naive_utc' with a DeprecationWarning."""
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        ctx = QueryContext(utc_tz_aware=False)
-        assert ctx.tz_mode == "naive_utc"
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "utc_tz_aware is deprecated" in str(w[0].message)
-
-
-def test_utc_tz_aware_true_maps_to_aware():
-    """utc_tz_aware=True should map to tz_mode='aware' with a DeprecationWarning."""
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        ctx = QueryContext(utc_tz_aware=True)
-        assert ctx.tz_mode == "aware"
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-
-
-def test_utc_tz_aware_schema_maps_to_schema():
-    """utc_tz_aware='schema' should map to tz_mode='schema' with a DeprecationWarning."""
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        ctx = QueryContext(utc_tz_aware="schema")
-        assert ctx.tz_mode == "schema"
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-
-
-def test_both_tz_mode_and_utc_tz_aware_raises():
-    """Providing both tz_mode and utc_tz_aware should raise ProgrammingError."""
-    with pytest.raises(ProgrammingError, match='Cannot specify both'):
-        QueryContext(tz_mode="aware", utc_tz_aware=True)
-
-
-def test_utc_tz_aware_invalid_string_raises():
-    """Invalid string value for utc_tz_aware should raise ProgrammingError."""
-    with pytest.raises(ProgrammingError, match='utc_tz_aware must be'):
-        QueryContext(utc_tz_aware="invalid")
-
-
-def test_resolve_tz_mode_defaults():
-    """No arguments should return 'naive_utc'."""
-    assert _resolve_tz_mode() == "naive_utc"
-
-
-def test_resolve_tz_mode_string_bool_coercion():
-    """String booleans from URL params should be coerced correctly."""
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        assert _resolve_tz_mode(utc_tz_aware="true") == "aware"
-        assert _resolve_tz_mode(utc_tz_aware="false") == "naive_utc"
-        assert _resolve_tz_mode(utc_tz_aware="True") == "aware"
-        assert _resolve_tz_mode(utc_tz_aware="False") == "naive_utc"
-        assert _resolve_tz_mode(utc_tz_aware="1") == "aware"
-        assert _resolve_tz_mode(utc_tz_aware="0") == "naive_utc"
-
-
-def test_utc_tz_aware_property_returns_legacy_value():
-    """Accessing ctx.utc_tz_aware should return the legacy equivalent with a DeprecationWarning."""
-    ctx = QueryContext(tz_mode="naive_utc")
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        assert ctx.utc_tz_aware is False
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-
-    ctx2 = QueryContext(tz_mode="aware")
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        assert ctx2.utc_tz_aware is True
-
-    ctx3 = QueryContext(tz_mode="schema")
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        assert ctx3.utc_tz_aware == "schema"
