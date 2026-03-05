@@ -1,6 +1,6 @@
 import logging
 import re
-import warnings
+
 import pytz
 
 from io import IOBase
@@ -25,64 +25,7 @@ logger = logging.getLogger(__name__)
 
 TzMode = Literal["naive_utc", "aware", "schema"]
 
-_UTC_TZ_AWARE_TO_TZ_MODE: Dict[Union[bool, str], TzMode] = {
-    False: "naive_utc",
-    True: "aware",
-    "schema": "schema",
-}
-
 _VALID_TZ_MODES = {"naive_utc", "aware", "schema"}
-
-_TZ_MODE_TO_UTC_TZ_AWARE: Dict[str, Union[bool, Literal["schema"]]] = {
-    "naive_utc": False,
-    "aware": True,
-    "schema": "schema",
-}
-
-# Mapping for string booleans that may arrive via URL params
-_STR_BOOL_MAP = {"true": True, "false": False, "1": True, "0": False}
-
-
-def _resolve_tz_mode(
-    tz_mode: Optional[TzMode] = None,
-    utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
-) -> TzMode:
-    """Resolve tz_mode from either the new ``tz_mode`` or deprecated ``utc_tz_aware`` parameter.
-
-    Returns the canonical TzMode string.  Raises ``ProgrammingError`` on conflicts or
-    invalid values.
-    """
-    if tz_mode is not None and utc_tz_aware is not None:
-        raise ProgrammingError(
-            "Cannot specify both 'tz_mode' and 'utc_tz_aware'. "
-            "Use 'tz_mode' only; 'utc_tz_aware' is deprecated."
-        )
-
-    if utc_tz_aware is not None:
-        # Coerce string booleans from URL params (e.g. "true" -> True)
-        if isinstance(utc_tz_aware, str) and utc_tz_aware.lower() in _STR_BOOL_MAP:
-            utc_tz_aware = _STR_BOOL_MAP[utc_tz_aware.lower()]
-
-        if utc_tz_aware not in _UTC_TZ_AWARE_TO_TZ_MODE:
-            raise ProgrammingError(
-                f'utc_tz_aware must be True, False, or "schema", got "{utc_tz_aware}"'
-            )
-        warnings.warn(
-            "utc_tz_aware is deprecated and will be removed in 1.0. "
-            "Use tz_mode='naive_utc' | 'aware' | 'schema' instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return _UTC_TZ_AWARE_TO_TZ_MODE[utc_tz_aware]
-
-    if tz_mode is not None:
-        if tz_mode not in _VALID_TZ_MODES:
-            raise ProgrammingError(
-                f'tz_mode must be "naive_utc", "aware", or "schema", got "{tz_mode}"'
-            )
-        return tz_mode
-
-    return "naive_utc"
 
 
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|ATTACH|DROP|DELETE|KILL|' + \
@@ -115,7 +58,6 @@ class QueryContext(BaseQueryContext):
                  max_str_len: Optional[int] = 0,
                  query_tz: Optional[Union[str, tzinfo]] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                  use_extended_dtypes: Optional[bool] = None,
                  as_pandas: bool = False,
                  streaming: bool = False,
@@ -154,7 +96,6 @@ class QueryContext(BaseQueryContext):
           naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column schema defines a timezone
           (e.g. DateTime('UTC')) and naive for bare DateTime columns.
-        :param utc_tz_aware Deprecated. Use tz_mode instead.
         """
         super().__init__(settings,
                          query_formats,
@@ -172,7 +113,9 @@ class QueryContext(BaseQueryContext):
         self.server_tz = server_tz
         self.apply_server_tz = apply_server_tz
         self.external_data = external_data
-        self.tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
+        self.tz_mode = tz_mode if tz_mode is not None else "naive_utc"
+        if self.tz_mode not in _VALID_TZ_MODES:
+            raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
         if isinstance(query_tz, str):
             try:
                 query_tz = pytz.timezone(query_tz)
@@ -222,17 +165,6 @@ class QueryContext(BaseQueryContext):
     @property
     def is_command(self) -> bool:
         return command_re.search(self.uncommented_query) is not None
-
-    @property
-    def utc_tz_aware(self) -> Union[bool, Literal["schema"]]:
-        """Deprecated: use tz_mode instead."""
-        warnings.warn(
-            "utc_tz_aware is deprecated and will be removed in 1.0. "
-            "Use tz_mode instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _TZ_MODE_TO_UTC_TZ_AWARE[self.tz_mode]
 
     def set_parameters(self, parameters: Dict[str, Any]):
         self.parameters = parameters
@@ -288,7 +220,6 @@ class QueryContext(BaseQueryContext):
                      max_str_len: Optional[int] = None,
                      query_tz: Optional[Union[str, tzinfo]] = None,
                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                     utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                      use_extended_dtypes: Optional[bool] = None,
                      as_pandas: bool = False,
                      streaming: bool = False,
@@ -299,10 +230,7 @@ class QueryContext(BaseQueryContext):
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
-        if tz_mode is not None or utc_tz_aware is not None:
-            resolved_tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
-        else:
-            resolved_tz_mode = self.tz_mode
+        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         return QueryContext(
             query=query or self.query,
             parameters=dict_copy(self.parameters, parameters),

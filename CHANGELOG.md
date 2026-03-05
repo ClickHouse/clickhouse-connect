@@ -21,6 +21,11 @@ release (0.9.0), unrecognized arguments/keywords for these methods of creating a
 instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
+## 1.0.0
+
+### Breaking Changes
+- Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
+
 ## UNRELEASED
 
 ### Breaking Changes

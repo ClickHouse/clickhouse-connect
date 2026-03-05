@@ -82,7 +82,6 @@ def create_client(*,
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
-    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
@@ -212,7 +211,6 @@ async def create_async_client(*,
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
-    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
