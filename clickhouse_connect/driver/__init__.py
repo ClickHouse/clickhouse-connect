@@ -78,10 +78,11 @@ def create_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
-    :param utc_tz_aware Controls timezone-aware behavior for UTC DateTime columns. False (default) returns
-      naive UTC timestamps. True forces timezone-aware UTC datetimes. "schema" returns datetimes that
+    :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+      naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
+    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
@@ -207,10 +208,11 @@ async def create_async_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
-    :param utc_tz_aware Controls timezone-aware behavior for UTC DateTime columns. False (default) returns
-      naive UTC timestamps. True forces timezone-aware UTC datetimes. "schema" returns datetimes that
+    :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+      naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
+    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
