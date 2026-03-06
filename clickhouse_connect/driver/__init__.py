@@ -78,6 +78,10 @@ def create_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
+    :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
+      explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
+      uses the server timezone. "local" always uses the local timezone.
+    :param apply_server_timezone Deprecated. Use tz_source instead.
     :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
@@ -208,6 +212,10 @@ async def create_async_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
+    :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
+      explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
+      uses the server timezone. "local" always uses the local timezone.
+    :param apply_server_timezone Deprecated. Use tz_source instead.
     :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive

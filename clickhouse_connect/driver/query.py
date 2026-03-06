@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TzMode = Literal["naive_utc", "aware", "schema"]
+TzSource = Literal["auto", "server", "local"]
 
 _UTC_TZ_AWARE_TO_TZ_MODE: Dict[Union[bool, str], TzMode] = {
     False: "naive_utc",
@@ -38,6 +39,21 @@ _TZ_MODE_TO_UTC_TZ_AWARE: Dict[str, Union[bool, Literal["schema"]]] = {
     "aware": True,
     "schema": "schema",
 }
+
+_APPLY_SERVER_TZ_TO_TZ_SOURCE: Dict[Union[bool, str, None], TzSource] = {
+    None: "auto",
+    True: "server",
+    False: "local",
+    "always": "server",
+}
+
+_TZ_SOURCE_TO_APPLY_SERVER_TZ: Dict[str, Optional[Union[bool, str]]] = {
+    "auto": None,
+    "server": True,
+    "local": False,
+}
+
+_VALID_TZ_SOURCES = {"auto", "server", "local"}
 
 # Mapping for string booleans that may arrive via URL params
 _STR_BOOL_MAP = {"true": True, "false": False, "1": True, "0": False}
@@ -83,6 +99,49 @@ def _resolve_tz_mode(
         return tz_mode
 
     return "naive_utc"
+
+
+def _resolve_tz_source(
+    tz_source: Optional[TzSource] = None,
+    apply_server_timezone: Optional[Union[str, bool]] = None,
+) -> TzSource:
+    """Resolve tz_source from either the new ``tz_source`` or deprecated ``apply_server_timezone`` parameter.
+
+    Returns the canonical TzSource string.  Raises ``ProgrammingError`` on conflicts or
+    invalid values.
+    """
+    if tz_source is not None and apply_server_timezone is not None:
+        raise ProgrammingError(
+            "Cannot specify both 'tz_source' and 'apply_server_timezone'. "
+            "Use 'tz_source' only; 'apply_server_timezone' is deprecated."
+        )
+
+    if apply_server_timezone is not None:
+        # Coerce string booleans from URL params (e.g. "true" -> True)
+        if isinstance(apply_server_timezone, str) and apply_server_timezone.lower() in _STR_BOOL_MAP:
+            apply_server_timezone = _STR_BOOL_MAP[apply_server_timezone.lower()]
+
+        if apply_server_timezone not in _APPLY_SERVER_TZ_TO_TZ_SOURCE:
+            raise ProgrammingError(
+                f"apply_server_timezone must be None, True, False, or 'always', "
+                f'got "{apply_server_timezone}"'
+            )
+        warnings.warn(
+            "apply_server_timezone is deprecated and will be removed in 1.0. "
+            "Use tz_source='auto' | 'server' | 'local' instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return _APPLY_SERVER_TZ_TO_TZ_SOURCE[apply_server_timezone]
+
+    if tz_source is not None:
+        if tz_source not in _VALID_TZ_SOURCES:
+            raise ProgrammingError(
+                f'tz_source must be "auto", "server", or "local", got "{tz_source}"'
+            )
+        return tz_source
+
+    return "auto"
 
 
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|ATTACH|DROP|DELETE|KILL|' + \
