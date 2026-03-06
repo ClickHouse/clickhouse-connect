@@ -49,6 +49,32 @@ jobs:
           pylint tests
           pylint examples
 
+  bare-import-test:
+    runs-on: ubuntu-latest
+    needs: lint
+    name: Bare Install Test (no extras)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Start ClickHouse (latest) in Docker
+        uses: hoverkraft-tech/compose-action@v2.0.0
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
+        with:
+          compose-file: 'docker-compose.yml'
+          down-flags: '--volumes'
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only core dependencies (no extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . --no-deps
+          pip install certifi urllib3 pytz zstandard lz4
+      - name: Bare import test and basic query
+        run: python tests/test_bare_install.py
+
   tests:
     runs-on: ubuntu-latest
     needs: lint
@@ -63,9 +89,9 @@ jobs:
         clickhouse-version:
           - '25.3' # LTS
           - '25.8' # LTS
-          - '25.11' # Stable
           - '25.12' # Stable
           - '26.1' # Stable
+          - '26.2' # Stable
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
     steps:
@@ -179,7 +205,7 @@ jobs:
 
   check-secret:
     runs-on: ubuntu-latest
-    needs: [tests, pandas-1x-compat-test, sqlalchemy-1x-compat-test]
+    needs: [bare-import-smoke-test, tests, pandas-1x-compat-test, sqlalchemy-1x-compat-test]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:
