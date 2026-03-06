@@ -24,7 +24,8 @@ from clickhouse_connect.driver.options import check_arrow, check_pandas, check_n
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
 from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer, \
-    TzMode, _resolve_tz_mode, _TZ_MODE_TO_UTC_TZ_AWARE
+    TzMode, TzSource, _resolve_tz_mode, _resolve_tz_source, _TZ_MODE_TO_UTC_TZ_AWARE, \
+    _VALID_TZ_SOURCES, _APPLY_SERVER_TZ_TO_TZ_SOURCE
 from clickhouse_connect.driver.binding import quote_identifier
 
 if TYPE_CHECKING:
@@ -92,9 +93,52 @@ class Client(ABC):
     optional_transport_settings = set()
     database = None
     max_error_message = 0
-    apply_server_timezone = False
+    _tz_source: TzSource = "auto"
+    _apply_server_tz = False
     tz_mode: TzMode = "naive_utc"
     show_clickhouse_errors = True
+
+    @property
+    def tz_source(self) -> TzSource:
+        return self._tz_source
+
+    @tz_source.setter
+    def tz_source(self, value: TzSource):
+        if value not in _VALID_TZ_SOURCES:
+            raise ProgrammingError(
+                f'tz_source must be "auto", "server", or "local", got "{value}"'
+            )
+        self._tz_source = value
+        if value == "auto":
+            self._apply_server_tz = self._dst_safe
+        else:
+            self._apply_server_tz = value == "server"
+
+    @property
+    def apply_server_timezone(self) -> bool:
+        """Deprecated: use tz_source instead."""
+        warnings.warn(
+            "apply_server_timezone is deprecated and will be removed in 1.0. "
+            "Use tz_source instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._apply_server_tz
+
+    @apply_server_timezone.setter
+    def apply_server_timezone(self, value: Union[bool, str]):
+        """Deprecated: use tz_source instead."""
+        warnings.warn(
+            "apply_server_timezone is deprecated and will be removed in 1.0. "
+            "Use tz_source instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if value not in _APPLY_SERVER_TZ_TO_TZ_SOURCE:
+            raise ProgrammingError(
+                f"apply_server_timezone must be True, False, or 'always', got \"{value}\""
+            )
+        self.tz_source = _APPLY_SERVER_TZ_TO_TZ_SOURCE[value]
 
     @property
     def utc_tz_aware(self) -> Union[bool, Literal["schema"]]:
@@ -113,20 +157,25 @@ class Client(ABC):
                  uri: str,
                  query_retries: int,
                  server_host_name: Optional[str],
-                 apply_server_timezone: Optional[Union[str, bool]],
+                 tz_source: Optional[TzSource] = None,
                  tz_mode: Optional[TzMode] = None,
                  show_clickhouse_errors: Optional[bool] = None,
-                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None):
+                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+                 apply_server_timezone: Optional[Union[str, bool]] = None):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
         :param query_limit: default LIMIT for queries
         :param uri: uri for error messages
+        :param tz_source: Controls how the client determines the fallback timezone for DateTime columns without an
+          explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
+          uses the server timezone. "local" always uses the local timezone.
         :param tz_mode: Controls timezone-aware behavior for UTC DateTime columns.  "naive_utc" (default) returns
           naive UTC timestamps.  "aware" forces timezone-aware UTC datetimes.  "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column defines a timezone and naive
           for bare DateTime columns.
         :param utc_tz_aware: Deprecated. Use tz_mode instead.
+        :param apply_server_timezone: Deprecated. Use tz_source instead.
         """
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
@@ -137,23 +186,26 @@ class Client(ABC):
         self.server_host_name = server_host_name
         self.uri = uri
         self.tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
-        self._init_common_settings(apply_server_timezone)
+        resolved_tz_source = _resolve_tz_source(tz_source, apply_server_timezone)
+        self._tz_source = resolved_tz_source
+        self._init_common_settings(resolved_tz_source)
 
-    def _init_common_settings(self, apply_server_timezone: Optional[Union[str, bool]]):
-        self.server_tz, dst_safe = pytz.UTC, True
+    def _init_common_settings(self, tz_source: TzSource):
+        self.server_tz, self._dst_safe = pytz.UTC, True
         self.server_version, server_tz = \
             tuple(self.command('SELECT version(), timezone()', use_database=False))
         try:
             server_tz = pytz.timezone(server_tz)
-            server_tz, dst_safe = tzutil.normalize_timezone(server_tz)
-            if apply_server_timezone is None:
-                apply_server_timezone = dst_safe
-            self.apply_server_timezone = apply_server_timezone == 'always' or coerce_bool(apply_server_timezone)
+            server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
+            if tz_source == "auto":
+                self._apply_server_tz = self._dst_safe
+            else:
+                self._apply_server_tz = tz_source == "server"
             self.server_tz = server_tz
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
 
-        if not self.apply_server_timezone and not tzutil.local_tz_dst_safe:
+        if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
             logger.warning('local timezone %s may return unexpected times due to Daylight Savings Time/' +
                            'Summer Time differences', tzutil.local_tz.tzname(None))
         readonly = 'readonly'
@@ -626,7 +678,7 @@ class Client(ABC):
                             use_extended_dtypes=use_extended_dtypes,
                             as_pandas=as_pandas,
                             streaming=streaming,
-                            apply_server_tz=self.apply_server_timezone,
+                            apply_server_tz=self._apply_server_tz,
                             external_data=external_data,
                             transport_settings=transport_settings)
 

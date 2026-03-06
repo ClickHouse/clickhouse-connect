@@ -6,7 +6,7 @@ import pytest
 import pyarrow as pa
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.query import QueryContext, _resolve_tz_mode
+from clickhouse_connect.driver.query import QueryContext, _resolve_tz_mode, _resolve_tz_source
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver import tzutil
 
@@ -323,3 +323,75 @@ def test_utc_tz_aware_property_returns_legacy_value():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         assert ctx3.utc_tz_aware == "schema"
+
+
+def test_resolve_tz_source_defaults():
+    """No arguments should return 'auto'."""
+    assert _resolve_tz_source() == "auto"
+
+
+def test_resolve_tz_source_valid_values():
+    """Each literal value should be accepted."""
+    assert _resolve_tz_source(tz_source="auto") == "auto"
+    assert _resolve_tz_source(tz_source="server") == "server"
+    assert _resolve_tz_source(tz_source="local") == "local"
+
+
+def test_resolve_tz_source_invalid_raises():
+    """Invalid string value should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match='tz_source must be'):
+        _resolve_tz_source(tz_source="invalid")
+
+
+def test_apply_server_timezone_none_maps_to_auto():
+    """apply_server_timezone=None (default) should return 'auto' without a warning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone=None) == "auto"
+        # None means "not provided" so no deprecation warning
+        assert len(w) == 0
+
+
+def test_apply_server_timezone_true_maps_to_server():
+    """apply_server_timezone=True should map to 'server' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone=True) == "server"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_apply_server_timezone_false_maps_to_local():
+    """apply_server_timezone=False should map to 'local' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone=False) == "local"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_apply_server_timezone_always_maps_to_server():
+    """apply_server_timezone='always' should map to 'server' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone="always") == "server"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_both_tz_source_and_apply_server_timezone_raises():
+    """Providing both tz_source and apply_server_timezone should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="Cannot specify both"):
+        _resolve_tz_source(tz_source="server", apply_server_timezone=True)
+
+
+def test_apply_server_timezone_string_bool_coercion():
+    """String booleans from URL params should be coerced correctly."""
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone="true") == "server"
+        assert _resolve_tz_source(apply_server_timezone="false") == "local"
+        assert _resolve_tz_source(apply_server_timezone="True") == "server"
+        assert _resolve_tz_source(apply_server_timezone="False") == "local"
+        assert _resolve_tz_source(apply_server_timezone="1") == "server"
+        assert _resolve_tz_source(apply_server_timezone="0") == "local"
