@@ -233,7 +233,7 @@ async def create_async_client(*,
         "The current async client is a thread-pool wrapper around the sync client. "
         "A fully native async client is available for testing as a prerelease: "
         "pip install 'clickhouse-connect[async]==0.12.0rc1'. "
-        "This prerelease branch (based on 0.11.0) is gathering feedback ahead of 1.0.0, "
+        "This prerelease branch is based on 0.11.0 and is gathering feedback ahead of 1.0.0, "
         "where it will become the default async implementation. It is a drop-in replacement "
         "with the same API surface. The main line includes additional updates that the native "
         "client will receive when merged into 1.0.0.",
