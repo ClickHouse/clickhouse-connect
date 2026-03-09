@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+## 0.14.0, 2026-03-09
+
 ### Breaking Changes
 - Renamed `apply_server_timezone` parameter to `tz_source` across Client and HttpClient. The new `tz_source` parameter accepts string values: `"auto"` (default, was `None`), `"server"` (was `True` or `"always"`), and `"local"` (was `False`). The old `apply_server_timezone` parameter is still accepted but emits a `DeprecationWarning` and will be removed in 1.0. Passing both `tz_source` and `apply_server_timezone` raises `ProgrammingError`. The `"always"` value (which had no distinct runtime behavior from `True`) maps to `"server"`.
 - Renamed `utc_tz_aware` parameter to `tz_mode` across Client, QueryContext, and all query methods. The new `tz_mode` parameter accepts string values: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), and `"schema"` (unchanged). The old `utc_tz_aware` parameter is still accepted but emits a `DeprecationWarning` and will be removed in 1.0. Passing both `tz_mode` and `utc_tz_aware` raises `ProgrammingError`. Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654)
