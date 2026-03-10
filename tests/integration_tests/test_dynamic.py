@@ -579,7 +579,7 @@ def test_json_shared_data_nested_keys(test_client: Client, table_context: Callab
             "top_a": "stays_dynamic",
             "top_b": "stays_dynamic_too",
             "nested.level1.level2": "deep_value",
-            "nested.level1.other": 42,
+            "nested.level1.other": 79,
             "nested.sibling": "sibling_value",
             "flat_overflow": "flat_value",
         }
@@ -589,6 +589,59 @@ def test_json_shared_data_nested_keys(test_client: Client, table_context: Callab
         returned = result[0][1]
         assert isinstance(returned, dict)
         assert returned["nested"]["level1"]["level2"] == "deep_value"
-        assert returned["nested"]["level1"]["other"] == 42
+        assert returned["nested"]["level1"]["other"] == 79
         assert returned["nested"]["sibling"] == "sibling_value"
         assert returned["flat_overflow"] == "flat_value"
+
+
+def test_json_dynamic_variant_decoding(test_client: Client, table_context: Callable):
+    """Test with one nested JSON path changing type across rows."""
+    type_available(test_client, "json")
+    with table_context("json_dyn_variant", ["id Int32", "attributes JSON"]):
+        rows = [
+            [1, {"agent.value": "computer-use", "meta.region": "us-west-2"}],
+            [2, {"agent.value": 2164330, "meta.region": "us-east-1"}],
+            [3, {"agent.value": True, "meta.region": "eu-central-1"}],
+            [4, {"agent.value": 2.81, "meta.region": "ap-southeast-1"}],
+        ]
+        test_client.insert("json_dyn_variant", rows)
+        result = test_client.query("SELECT * FROM json_dyn_variant ORDER BY id").result_set
+
+        assert result[0][1]["agent"]["value"] == "computer-use"
+        assert result[1][1]["agent"]["value"] == 2164330
+        assert result[2][1]["agent"]["value"] is True
+        assert result[3][1]["agent"]["value"] == pytest.approx(2.81)
+        assert result[0][1]["meta"]["region"] == "us-west-2"
+        assert result[1][1]["meta"]["region"] == "us-east-1"
+        assert result[2][1]["meta"]["region"] == "eu-central-1"
+        assert result[3][1]["meta"]["region"] == "ap-southeast-1"
+
+
+def test_json_dynamic_variant_multiple_rows(test_client: Client, table_context: Callable):
+    """Test with top-level JSON keys changing type across rows."""
+    type_available(test_client, "json")
+    with table_context("json_dyn_multi", ["id Int32", "data JSON"]):
+        rows = [
+            [1, {"value": 95, "status": "user_1"}],
+            [2, {"value": "user_2", "status": False}],
+            [3, {"value": True, "status": 4.5}],
+            [4, {"value": 0.0, "status": -10}],
+        ]
+        test_client.insert("json_dyn_multi", rows)
+        result = test_client.query("SELECT * FROM json_dyn_multi ORDER BY id").result_set
+
+        r1 = result[0][1]
+        assert r1["value"] == 95
+        assert r1["status"] == "user_1"
+
+        r2 = result[1][1]
+        assert r2["value"] == "user_2"
+        assert r2["status"] is False
+
+        r3 = result[2][1]
+        assert r3["value"] is True
+        assert r3["status"] == pytest.approx(4.5)
+
+        r4 = result[3][1]
+        assert r4["value"] == pytest.approx(0.0)
+        assert r4["status"] == -10
