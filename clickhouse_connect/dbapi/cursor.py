@@ -74,6 +74,13 @@ class Cursor:
         elif self.data:
             self.names = [f'col_{x}' for x in range(len(self.data[0]))]
             self.types = [x.__class__ for x in self.data[0]]
+        else:
+            stripped = operation.strip().rstrip(";").strip()
+            if stripped.upper().startswith(("SELECT", "WITH")):
+                meta_result = self.client.query(f"SELECT * FROM ({stripped}) LIMIT 0", parameters)
+                if meta_result.column_names:
+                    self.names = meta_result.column_names
+                    self.types = [x.name for x in meta_result.column_types]
 
     def _try_bulk_insert(self, operation: str, data):
         match = insert_re.match(remove_sql_comments(operation))
@@ -90,7 +97,7 @@ class Cursor:
         if 'VALUES' not in temp.upper():
             return False
         col_names = list(data[0].keys())
-        if op_columns and {unescape_identifier(x) for x in op_columns} != set(col_names):
+        if op_columns and {unescape_identifier(str(x)) for x in op_columns} != set(col_names):
             return False  # Data sent in doesn't match the columns in the insert statement
         data_values = [list(row.values()) for row in data]
         self.client.insert(table, data_values, col_names)
@@ -122,12 +129,14 @@ class Cursor:
 
     def fetchall(self):
         self.check_valid()
+        assert self.data is not None
         ret = self.data[self._ix:]
         self._ix = self._rowcount
         return ret
 
     def fetchone(self):
         self.check_valid()
+        assert self.data is not None
         if self._ix >= self._rowcount:
             return None
         val = self.data[self._ix]
@@ -136,6 +145,7 @@ class Cursor:
 
     def fetchmany(self, size: int = -1):
         self.check_valid()
+        assert self.data is not None
 
         if size < 0:
             # Fetch all remaining rows
