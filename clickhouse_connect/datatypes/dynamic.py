@@ -384,11 +384,9 @@ def _decode_variant(binary_data: bytes, ctx: QueryContext, validate_length: bool
 
     type_name = STANDARD_DISCRIMINATOR_TYPES.get(discriminator)
     if type_name is None:
-        # If unsupported discriminator like Date, DateTime, Array, etc. just return raw bytes
         return binary_data
 
     if validate_length and not _validate_variant_length(binary_data, discriminator):
-        # Length doesn't match expected payload, it's not actually variant-encoded
         return None
 
     value_type = get_from_name(type_name)
@@ -482,7 +480,7 @@ class SharedVariant(String):
 
 
 class JSON(ClickHouseType):
-    __slots__ = 'typed_paths', 'typed_types'
+    __slots__ = "typed_paths", "typed_types", "skips"
     python_type = dict
     valid_formats = 'string', 'native'
     _data_size = json_sample_size
@@ -490,12 +488,12 @@ class JSON(ClickHouseType):
     shared_data_type: ClickHouseType
     max_dynamic_paths = 0
     max_dynamic_types = 0
-    typed_paths = []
-    typed_types = []
-    skips = []
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
+        self.typed_paths = []
+        self.typed_types = []
+        self.skips = []
         typed_paths = []
         typed_types = []
         skips = []
