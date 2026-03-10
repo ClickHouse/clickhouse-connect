@@ -97,7 +97,7 @@ class Cursor:
         if 'VALUES' not in temp.upper():
             return False
         col_names = list(data[0].keys())
-        if op_columns and {unescape_identifier(str(x)) for x in op_columns} != set(col_names):
+        if op_columns and {unescape_identifier(x) for x in op_columns} != set(col_names):
             return False  # Data sent in doesn't match the columns in the insert statement
         data_values = [list(row.values()) for row in data]
         self.client.insert(table, data_values, col_names)
