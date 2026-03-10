@@ -129,14 +129,12 @@ class Cursor:
 
     def fetchall(self):
         self.check_valid()
-        assert self.data is not None
         ret = self.data[self._ix:]
         self._ix = self._rowcount
         return ret
 
     def fetchone(self):
         self.check_valid()
-        assert self.data is not None
         if self._ix >= self._rowcount:
             return None
         val = self.data[self._ix]
@@ -145,7 +143,6 @@ class Cursor:
 
     def fetchmany(self, size: int = -1):
         self.check_valid()
-        assert self.data is not None
 
         if size < 0:
             # Fetch all remaining rows
