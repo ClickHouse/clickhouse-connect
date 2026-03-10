@@ -17,7 +17,7 @@ from tests.integration_tests.conftest import TestConfig
 def type_available(test_client: Client, data_type: str):
     if test_client.get_client_setting(f'allow_experimental_{data_type}_type') is None:
         return
-    setting_def = test_client.server_settings.get(f'allow_experimental_{data_type}_value', None)
+    setting_def = test_client.server_settings.get(f'allow_experimental_{data_type}_type', None)
     if setting_def is not None and setting_def.value == '1':
         return
     pytest.skip(f'New {data_type.upper()} type not available in this version: {test_client.server_version}')
@@ -198,6 +198,25 @@ def test_dynamic(test_client: Client, table_context: Callable):
         assert result[2][1] == 'bef56f14-0870-4f82-a35e-9a47eff45a5b'
         assert result[3][1] == '[120, 250]'
         assert result[2][2] == '777.25'
+
+
+def test_dynamic_shared_variant_unsupported_types(test_client: Client, table_context: Callable):
+    type_available(test_client, "dynamic")
+    with table_context("dynamic_shared_variant", [
+        "id UInt8",
+        "d Dynamic(max_types=0)",
+    ]):
+        test_client.command("INSERT INTO dynamic_shared_variant SELECT 1, toDate('2024-01-02')")
+        test_client.command("INSERT INTO dynamic_shared_variant SELECT 2, toDateTime('2024-01-02 03:04:05')")
+        test_client.command("INSERT INTO dynamic_shared_variant SELECT 3, [1, 2, 3]")
+        test_client.command("INSERT INTO dynamic_shared_variant SELECT 4, 'hello'")
+
+        result = test_client.query("SELECT * FROM dynamic_shared_variant ORDER BY id").result_set
+
+        assert result[0][1] == b"\x0f\x0cM"
+        assert result[1][1] == b"\x11%}\x93e"
+        assert result[2][1] == b"\x1e\x01\x03\x01\x02\x03"
+        assert result[3][1] == "hello"
 
 
 def test_basic_json(test_client: Client, table_context: Callable):
@@ -404,3 +423,225 @@ def test_typed_variant_name_normalization(test_client: Client, table_context: Ca
         test_client.insert('variant_norm', data)
         result = test_client.query('SELECT * FROM variant_norm ORDER BY key').result_set
         assert result[0][1] == decimal.Decimal('1.50')
+
+
+def test_json_with_many_paths(test_client: Client, table_context: Callable):
+    """Test JSON with many dynamic paths to exercise the shared data structure."""
+    type_available(test_client, "json")
+    with table_context("json_many_paths", ["id Int32", "data JSON(max_dynamic_paths=5)"]):
+        large_json = {f"key_{i}": f"value_{i}" for i in range(20)}
+        test_client.insert("json_many_paths", [[1, large_json]])
+        result = test_client.query("SELECT * FROM json_many_paths").result_set
+
+        assert result[0][0] == 1
+        returned_json = result[0][1]
+        assert isinstance(returned_json, dict)
+        assert len(returned_json) == 20
+        for i in range(20):
+            assert f"key_{i}" in returned_json
+            assert returned_json[f"key_{i}"] == f"value_{i}"
+
+
+def test_json_with_long_values(test_client: Client, table_context: Callable):
+    """Test JSON shared data with long string values (>127 chars) to verify VarInt decoding."""
+    type_available(test_client, "json")
+    with table_context("json_long_values", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        short_val = "a" * 10
+        medium_val = "b" * 150
+        long_val = "c" * 300
+
+        test_json = {
+            "key_0": short_val,
+            "key_1": medium_val,
+            "key_2": long_val,
+        }
+        test_client.insert("json_long_values", [[1, test_json]])
+        result = test_client.query("SELECT * FROM json_long_values").result_set
+
+        assert result[0][0] == 1
+        returned_json = result[0][1]
+        assert isinstance(returned_json, dict)
+        assert returned_json["key_0"] == short_val
+        assert returned_json["key_1"] == medium_val
+        assert returned_json["key_2"] == long_val
+
+
+def test_json_shared_data_primitive_types(test_client: Client, table_context: Callable):
+    """Tests round-trip of integers, floats, booleans, strings, and NULL in shared data."""
+    type_available(test_client, "json")
+
+    with table_context("json_primitive_types", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        test_data = {
+            "int8_val": -100,
+            "int16_val": -30000,
+            "int32_val": -2000000000,
+            "int64_val": -9000000000000000000,
+            "uint8_val": 200,
+            "uint16_val": 60000,
+            "uint32_val": 4000000000,
+            "uint64_val": 18000000000000000000,
+            "float32_val": 3.14159,
+            "float64_val": 2.718281828459045,
+            "bool_true": True,
+            "bool_false": False,
+            "string_val": "Hello, shared data!",
+            "empty_string": "",
+            "long_string": "x" * 200,
+            "null_val": None,
+            "zero_int": 0,
+            "zero_float": 0.0,
+            "negative_float": -123.456,
+            "negative_int": -1,
+        }
+
+        test_client.insert("json_primitive_types", [[1, test_data]])
+        result = test_client.query("SELECT * FROM json_primitive_types").result_set
+
+        assert result[0][0] == 1
+        returned = result[0][1]
+        assert isinstance(returned, dict)
+
+        assert returned["int8_val"] == test_data["int8_val"]
+        assert returned["int16_val"] == test_data["int16_val"]
+        assert returned["int32_val"] == test_data["int32_val"]
+        assert returned["int64_val"] == test_data["int64_val"]
+        assert returned["uint8_val"] == test_data["uint8_val"]
+        assert returned["uint16_val"] == test_data["uint16_val"]
+        assert returned["uint32_val"] == test_data["uint32_val"]
+        assert returned["uint64_val"] == test_data["uint64_val"]
+        assert returned["float32_val"] == pytest.approx(test_data["float32_val"])
+        assert returned["float64_val"] == pytest.approx(test_data["float64_val"])
+        assert returned["bool_true"] is test_data["bool_true"]
+        assert returned["bool_false"] is test_data["bool_false"]
+        assert returned["string_val"] == test_data["string_val"]
+        assert returned["empty_string"] == test_data["empty_string"]
+        assert returned["long_string"] == test_data["long_string"]
+        assert "null_val" not in returned
+        assert returned["zero_int"] == test_data["zero_int"]
+        assert returned["zero_float"] == pytest.approx(test_data["zero_float"])
+        assert returned["negative_float"] == pytest.approx(test_data["negative_float"])
+        assert returned["negative_int"] == test_data["negative_int"]
+
+
+def test_json_shared_data_multiple_rows(test_client: Client, table_context: Callable):
+    """Test JSON shared data with multiple rows to ensure consistent decoding."""
+    type_available(test_client, "json")
+
+    with table_context("json_multirow", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        test_data = [
+            {"a": "string_val", "b": 100, "c": 3.14, "d": True, "e": "more"},
+            {"a": 42, "b": "different", "c": False, "d": 2.718, "e": -999},
+            {"a": 0, "b": 0.0, "c": "", "d": None, "e": False},
+        ]
+        rows = [[i + 1, data] for i, data in enumerate(test_data)]
+
+        test_client.insert("json_multirow", rows)
+        result = test_client.query("SELECT * FROM json_multirow ORDER BY id").result_set
+
+        # Row 1
+        assert result[0][0] == 1
+        row1 = result[0][1]
+        assert row1["a"] == test_data[0]["a"]
+        assert row1["b"] == test_data[0]["b"]
+        assert row1["c"] == pytest.approx(test_data[0]["c"])
+        assert row1["d"] is test_data[0]["d"]
+        assert row1["e"] == test_data[0]["e"]
+
+        # Row 2
+        assert result[1][0] == 2
+        row2 = result[1][1]
+        assert row2["a"] == test_data[1]["a"]
+        assert row2["b"] == test_data[1]["b"]
+        assert row2["c"] is test_data[1]["c"]
+        assert row2["d"] == pytest.approx(test_data[1]["d"])
+        assert row2["e"] == test_data[1]["e"]
+
+        # Row 3
+        assert result[2][0] == 3
+        row3 = result[2][1]
+        assert row3["a"] == test_data[2]["a"]
+        assert row3["b"] == pytest.approx(test_data[2]["b"])
+        assert row3["c"] == test_data[2]["c"]
+        assert "d" not in row3
+        assert row3["e"] is test_data[2]["e"]
+
+        # Query column with nulls via dot notation
+        result_w_nulls = test_client.query("SELECT data.d FROM json_multirow ORDER BY id").result_set
+        assert [result[0] for result in result_w_nulls] == [item["d"] for item in test_data]
+
+
+def test_json_shared_data_nested_keys(test_client: Client, table_context: Callable):
+    """Test that dotted keys in shared data are properly nested into dicts."""
+    type_available(test_client, "json")
+
+    with table_context("json_shared_nested", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
+        test_data = {
+            "top_a": "stays_dynamic",
+            "top_b": "stays_dynamic_too",
+            "nested.level1.level2": "deep_value",
+            "nested.level1.other": 79,
+            "nested.sibling": "sibling_value",
+            "flat_overflow": "flat_value",
+        }
+        test_client.insert("json_shared_nested", [[1, test_data]])
+        result = test_client.query("SELECT * FROM json_shared_nested").result_set
+
+        returned = result[0][1]
+        assert isinstance(returned, dict)
+        assert returned["nested"]["level1"]["level2"] == "deep_value"
+        assert returned["nested"]["level1"]["other"] == 79
+        assert returned["nested"]["sibling"] == "sibling_value"
+        assert returned["flat_overflow"] == "flat_value"
+
+
+def test_json_dynamic_variant_decoding(test_client: Client, table_context: Callable):
+    """Test with one nested JSON path changing type across rows."""
+    type_available(test_client, "json")
+    with table_context("json_dyn_variant", ["id Int32", "attributes JSON"]):
+        rows = [
+            [1, {"agent.value": "computer-use", "meta.region": "us-west-2"}],
+            [2, {"agent.value": 2164330, "meta.region": "us-east-1"}],
+            [3, {"agent.value": True, "meta.region": "eu-central-1"}],
+            [4, {"agent.value": 2.81, "meta.region": "ap-southeast-1"}],
+        ]
+        test_client.insert("json_dyn_variant", rows)
+        result = test_client.query("SELECT * FROM json_dyn_variant ORDER BY id").result_set
+
+        assert result[0][1]["agent"]["value"] == "computer-use"
+        assert result[1][1]["agent"]["value"] == 2164330
+        assert result[2][1]["agent"]["value"] is True
+        assert result[3][1]["agent"]["value"] == pytest.approx(2.81)
+        assert result[0][1]["meta"]["region"] == "us-west-2"
+        assert result[1][1]["meta"]["region"] == "us-east-1"
+        assert result[2][1]["meta"]["region"] == "eu-central-1"
+        assert result[3][1]["meta"]["region"] == "ap-southeast-1"
+
+
+def test_json_dynamic_variant_multiple_rows(test_client: Client, table_context: Callable):
+    """Test with top-level JSON keys changing type across rows."""
+    type_available(test_client, "json")
+    with table_context("json_dyn_multi", ["id Int32", "data JSON"]):
+        rows = [
+            [1, {"value": 95, "status": "user_1"}],
+            [2, {"value": "user_2", "status": False}],
+            [3, {"value": True, "status": 4.5}],
+            [4, {"value": 0.0, "status": -10}],
+        ]
+        test_client.insert("json_dyn_multi", rows)
+        result = test_client.query("SELECT * FROM json_dyn_multi ORDER BY id").result_set
+
+        r1 = result[0][1]
+        assert r1["value"] == 95
+        assert r1["status"] == "user_1"
+
+        r2 = result[1][1]
+        assert r2["value"] == "user_2"
+        assert r2["status"] is False
+
+        r3 = result[2][1]
+        assert r3["value"] is True
+        assert r3["status"] == pytest.approx(4.5)
+
+        r4 = result[3][1]
+        assert r4["value"] == pytest.approx(0.0)
+        assert r4["status"] == -10
