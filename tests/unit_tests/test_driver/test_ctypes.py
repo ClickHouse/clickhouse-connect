@@ -13,9 +13,7 @@ def runtime_state(use_c: str | None = None):
     result = subprocess.run(
         [sys.executable, "-c", """
 import json
-from clickhouse_connect.driver.httpclient import RespBuffCls
-from clickhouse_connect.datatypes.numeric import data_conv
-from clickhouse_connect.datatypes.temporal import numpy_conv
+from clickhouse_connect.driver.ctypes import RespBuffCls, data_conv, numpy_conv
 print(json.dumps({
     "buffer": RespBuffCls.__module__,
     "data_conv": data_conv.__name__,
