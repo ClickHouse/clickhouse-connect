@@ -25,6 +25,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ### Bug Fixes
 - Fix JSON and Dynamic column read paths to properly decode shared variant data instead of returning raw binary with discriminator byte prefixes. Shared data values, used when paths exceed `max_dynamic_paths` or types exceed `max_dynamic_types` are now decoded from ClickHouse's binary variant encoding. Scalar types like integers, floats, strings, booleans, and nulls as well as nested objects are now fully decoded. Compound types like Array, Tuple, Map, DateTime, Date, Decimal, and UUID are not yet decoded and will be returned as raw bytes. Fixes [#599](https://github.com/ClickHouse/clickhouse-connect/issues/599), [#615](https://github.com/ClickHouse/clickhouse-connect/issues/615), and [#674](https://github.com/ClickHouse/clickhouse-connect/issues/674)
+- Restore the default Cython runtime path so compiled `driverc` modules are used again unless `CLICKHOUSE_CONNECT_USE_C=0` is set. Fix C/Python parity issues in streaming exception handling, `FixedString` string reads, nullable array helpers, and numpy conversion helpers, and expand CI and unit parity coverage to keep the optimized and pure-Python paths in sync. Addresses [#676](https://github.com/ClickHouse/clickhouse-connect/issues/676)
 
 ## 0.14.0, 2026-03-09
 
