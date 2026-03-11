@@ -28,8 +28,8 @@ def _make_cursor():
     client = Mock()
     query_result = Mock()
     query_result.result_set = []
-    query_result.column_names = []
-    query_result.column_types = []
+    query_result.column_names = ["formatted"]
+    query_result.column_types = [Mock(name="String")]
     query_result.summary = {}
     client.query.return_value = query_result
     return Cursor(client), client

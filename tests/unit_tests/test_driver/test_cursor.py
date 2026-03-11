@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 
@@ -16,6 +17,16 @@ def create_mock_client(result_data):
     query_result.summary = {"rows": len(result_data)}
     client.query.return_value = query_result
     return client
+
+
+def create_mock_query_result(result_data, column_names=None, column_types=None):
+    """Create a mock query result with optional metadata."""
+    query_result = Mock()
+    query_result.result_set = result_data
+    query_result.column_names = column_names or []
+    query_result.column_types = column_types or []
+    query_result.summary = {"rows": len(result_data)}
+    return query_result
 
 
 def test_fetchall_respects_cursor_position():
@@ -267,3 +278,50 @@ def test_execute_unescapes_multiple_percents():
 
     actual_query = client.query.call_args[0][0]
     assert actual_query == "SELECT formatDateTime(now(), '%Y-%m-%d %H:%M:%S')"
+
+
+def test_execute_empty_result_fetches_metadata_with_parameters():
+    """Empty SELECT results should still populate description metadata."""
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute(
+        "SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s",
+        {"value_1": 13, "param_1": 1},
+    )
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s) LIMIT 0",
+        {"value_1": 13, "param_1": 1},
+    )
+
+
+def test_execute_empty_with_query_fetches_metadata():
+    """CTE queries should use the same metadata fallback."""
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute("WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79")
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
+        None,
+    )
