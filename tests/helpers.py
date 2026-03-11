@@ -15,6 +15,14 @@ from clickhouse_connect.driverc.buffer import ResponseBuffer  # pylint: disable=
 
 PROJECT_ROOT_DIR = Path(__file__).parent.parent
 
+TAGGED_EXCEPTION_TAG = "PU1FNUFH98"
+TAGGED_EXCEPTION_BODY = (
+    b"bodybodybodybody\r\n"
+    b"__exception__PU1FNUFH98\r\n"
+    b"Big bam occurred right while reading the data\r\n"
+    b"46 PU1FNUFH98__exception__\r\n"
+)
+
 LOW_CARD_PERC = 0.4
 NULLABLE_PERC = 0.2
 TUPLE_MAX = 5

@@ -5,7 +5,7 @@ from clickhouse_connect.driver.exceptions import StreamFailureError
 from clickhouse_connect.driver.exceptions import StreamCompleteException
 from clickhouse_connect.driver.transform import NativeTransform
 from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer  # pylint: disable=no-name-in-module
-from tests.helpers import bytes_source, to_bytes
+from tests.helpers import bytes_source, to_bytes, TAGGED_EXCEPTION_TAG, TAGGED_EXCEPTION_BODY
 
 
 def test_read_ints():
@@ -52,18 +52,10 @@ def test_fixed_string_strips_padding():
 
 
 def test_tagged_exception_extracts_clean_message():
-    exception_tag = "PU1FNUFH98"
-    response_body = (
-        b"bodybodybodybody\r\n"
-        b"__exception__PU1FNUFH98\r\n"
-        b"Big bam occurred right while reading the data\r\n"
-        b"46 PU1FNUFH98__exception__\r\n"
-    )
-
     class TaggedSource:
         def __init__(self):
-            self.gen = iter([response_body])
-            self.exception_tag = exception_tag
+            self.gen = iter([TAGGED_EXCEPTION_BODY])
+            self.exception_tag = TAGGED_EXCEPTION_TAG
 
         def close(self, ex: Exception | None = None):
             pass
