@@ -92,8 +92,17 @@ jobs:
           - '25.12' # Stable
           - '26.1' # Stable
           - '26.2' # Stable
+        use-c:
+          - '1'
+        include:
+          - python-version: '3.10'
+            clickhouse-version: '25.3'
+            use-c: '0'
+          - python-version: '3.14'
+            clickhouse-version: '26.2'
+            use-c: '0'
 
-    name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
+    name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -121,6 +130,7 @@ jobs:
           sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
       - name: Run tests
         env:
+          CLICKHOUSE_CONNECT_USE_C: ${{ matrix.use-c }}
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
