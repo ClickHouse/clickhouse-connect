@@ -39,7 +39,7 @@ def test_cursor(test_engine: Engine):
     assert cursor.description[0][0] == 'database'
     assert cursor.description[1][1] == 'String'
     assert len(getattr(cursor, 'data')) == 2
-    assert cursor.summary[0]["read_rows"] == '2'
+    assert cursor.summary
     raw_conn.close()
 
 

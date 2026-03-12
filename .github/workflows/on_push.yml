@@ -49,9 +49,35 @@ jobs:
           pylint tests
           pylint examples
 
-  tests:
+  bare-import-test:
     runs-on: ubuntu-latest
     needs: lint
+    name: Bare Install Test (no extras)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Start ClickHouse (latest) in Docker
+        uses: hoverkraft-tech/compose-action@v2.0.0
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
+        with:
+          compose-file: 'docker-compose.yml'
+          down-flags: '--volumes'
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only core dependencies (no extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . --no-deps
+          pip install certifi urllib3 pytz zstandard lz4
+      - name: Bare import test and basic query
+        run: python tests/test_bare_install.py
+
+  tests:
+    runs-on: ubuntu-latest
+    needs: bare-import-test
     strategy:
       matrix:
         python-version:
@@ -63,11 +89,20 @@ jobs:
         clickhouse-version:
           - '25.3' # LTS
           - '25.8' # LTS
-          - '25.11' # Stable
           - '25.12' # Stable
           - '26.1' # Stable
+          - '26.2' # Stable
+        use-c:
+          - '1'
+        include:
+          - python-version: '3.10'
+            clickhouse-version: '25.3'
+            use-c: '0'
+          - python-version: '3.14'
+            clickhouse-version: '26.2'
+            use-c: '0'
 
-    name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }}
+    name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,6 +130,7 @@ jobs:
           sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
       - name: Run tests
         env:
+          CLICKHOUSE_CONNECT_USE_C: ${{ matrix.use-c }}
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
@@ -103,7 +139,7 @@ jobs:
 
   pandas-1x-compat-test:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: bare-import-test
     name: Pandas 1.x Compatibility Tests
     steps:
       - name: Checkout
@@ -141,7 +177,7 @@ jobs:
 
   sqlalchemy-1x-compat-test:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: bare-import-test
     name: SQLAlchemy 1.x Compatibility Tests
     steps:
       - name: Checkout
@@ -179,7 +215,7 @@ jobs:
 
   check-secret:
     runs-on: ubuntu-latest
-    needs: [tests, pandas-1x-compat-test, sqlalchemy-1x-compat-test]
+    needs: [bare-import-test, tests, pandas-1x-compat-test, sqlalchemy-1x-compat-test]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:
@@ -224,8 +260,8 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_FUZZ: 10
           CLICKHOUSE_CONNECT_TEST_CLOUD: 'True'
           CLICKHOUSE_CONNECT_TEST_PORT: 8443
-          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST_SMT }}
-          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD_SMT }}
+          CLICKHOUSE_CONNECT_TEST_HOST: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST_SMT_PROD }}
+          CLICKHOUSE_CONNECT_TEST_PASSWORD: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_PASSWORD_SMT_PROD }}
           CLICKHOUSE_CONNECT_TEST_JWT_SECRET: ${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_JWT_DESERT_VM_43 }}
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest tests/integration_tests

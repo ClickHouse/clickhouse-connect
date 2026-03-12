@@ -1,8 +1,12 @@
+import warnings
+
 import pytz
+import pytest
 
 import pyarrow as pa
 
-from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.query import QueryContext, _resolve_tz_mode, _resolve_tz_source
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver import tzutil
 
@@ -34,13 +38,13 @@ def test_copy_context():
 
 def test_active_tz_utc_defaults_to_naive():
     ctx = QueryContext(query_tz=pytz.UTC)
-    assert ctx.utc_tz_aware is False
+    assert ctx.tz_mode == "naive_utc"
     assert ctx.active_tz(None) is None
 
 
 def test_active_tz_utc_opt_in_timezone():
-    ctx = QueryContext(query_tz=pytz.UTC, utc_tz_aware=True)
-    assert ctx.utc_tz_aware is True
+    ctx = QueryContext(query_tz=pytz.UTC, tz_mode="aware")
+    assert ctx.tz_mode == "aware"
     assert ctx.active_tz(None) == pytz.UTC
 
 
@@ -52,16 +56,16 @@ def test_active_tz_etc_utc_defaults_to_naive():
     """
     etc_utc = pytz.timezone('Etc/UTC')
     ctx = QueryContext(query_tz=etc_utc)
-    assert ctx.utc_tz_aware is False
+    assert ctx.tz_mode == "naive_utc"
     # BUG: Previously returned etc_utc instead of None
     assert ctx.active_tz(None) is None  # Should return None for naive datetime
 
 
 def test_active_tz_etc_utc_opt_in_timezone():
-    """Test that Etc/UTC with utc_tz_aware=True returns timezone."""
+    """Test that Etc/UTC with tz_mode='aware' returns timezone."""
     etc_utc = pytz.timezone('Etc/UTC')
-    ctx = QueryContext(query_tz=etc_utc, utc_tz_aware=True)
-    assert ctx.utc_tz_aware is True
+    ctx = QueryContext(query_tz=etc_utc, tz_mode="aware")
+    assert ctx.tz_mode == "aware"
     assert ctx.active_tz(None) is not None  # Should return the timezone
 
 
@@ -133,18 +137,18 @@ def test_utc_equivalent_timezones_normalize_to_naive():
 
     for tz_name in utc_equivalents:
         tz = pytz.timezone(tz_name)
-        ctx = QueryContext(utc_tz_aware=False)
+        ctx = QueryContext(tz_mode="naive_utc")
         result = ctx.active_tz(datatype_tz=tz)
         assert result is None
 
 
-def test_utc_equivalent_timezones_with_utc_tz_aware():
-    """Test that UTC-equivalent timezones return timezone-aware when utc_tz_aware=True"""
+def test_utc_equivalent_timezones_with_tz_mode_aware():
+    """Test that UTC-equivalent timezones return timezone-aware when tz_mode='aware'"""
     utc_equivalents = ['Etc/UCT', 'GMT', 'Etc/GMT']
 
     for tz_name in utc_equivalents:
         tz = pytz.timezone(tz_name)
-        ctx = QueryContext(utc_tz_aware=True)
+        ctx = QueryContext(tz_mode="aware")
         result = ctx.active_tz(datatype_tz=tz)
         assert result == tz
 
@@ -165,17 +169,229 @@ def test_tzutil_normalize_utc_equivalents():
         assert is_valid is True
 
 
-def test_etc_uct_returns_naive_when_utc_tz_aware_false():
+def test_etc_uct_returns_naive_when_tz_mode_naive_utc():
     """
     Regression test for the issue where DateTime('UTC') columns with Etc/UCT
     returned timezone-aware while DateTime columns returned naive
     """
     column_with_explicit_utc = pytz.timezone('Etc/UCT')
     server_tz = pytz.timezone('Etc/UCT')
-    ctx = QueryContext(utc_tz_aware=False, server_tz=server_tz, apply_server_tz=True)
+    ctx = QueryContext(tz_mode="naive_utc", server_tz=server_tz, apply_server_tz=True)
     result1 = ctx.active_tz(datatype_tz=column_with_explicit_utc)
 
     assert result1 is None
 
     result2 = ctx.active_tz(datatype_tz=None)
     assert result2 is None
+
+
+def test_schema_mode_with_schema_tz():
+    """DateTime('UTC') should return tz-aware in schema mode."""
+    ctx = QueryContext(tz_mode="schema")
+    result = ctx.active_tz(datatype_tz=pytz.UTC)
+    assert result == pytz.UTC
+
+
+def test_schema_mode_bare_datetime():
+    """Bare DateTime (no schema tz) should return naive in schema mode."""
+    ctx = QueryContext(tz_mode="schema", server_tz=pytz.UTC, apply_server_tz=True)
+    result = ctx.active_tz(datatype_tz=None)
+    assert result is None
+
+
+def test_schema_mode_non_utc_tz():
+    """DateTime('America/Denver') should return tz-aware in schema mode."""
+    denver = pytz.timezone('America/Denver')
+    ctx = QueryContext(tz_mode="schema")
+    result = ctx.active_tz(datatype_tz=denver)
+    assert result == denver
+
+
+def test_schema_mode_with_column_tz_override():
+    """Per-column tz override should still work in schema mode."""
+    denver = pytz.timezone('America/Denver')
+    ctx = QueryContext(tz_mode="schema", column_tzs={'ts': denver})
+    ctx.start_column('ts')
+    result = ctx.active_tz(datatype_tz=None)
+    assert result == denver
+
+
+def test_schema_mode_ignores_query_tz():
+    """query_tz should not apply to bare DateTime in schema mode."""
+    ctx = QueryContext(tz_mode="schema", query_tz=pytz.UTC)
+    result = ctx.active_tz(datatype_tz=None)
+    assert result is None
+
+
+def test_schema_mode_ignores_server_tz():
+    """Server tz should not apply to bare DateTime in schema mode."""
+    denver = pytz.timezone('America/Denver')
+    ctx = QueryContext(tz_mode="schema", server_tz=denver, apply_server_tz=True)
+    result = ctx.active_tz(datatype_tz=None)
+    assert result is None
+
+
+def test_schema_mode_etc_utc_schema():
+    """DateTime('Etc/UTC') should return tz-aware in schema mode."""
+    etc_utc = pytz.timezone('Etc/UTC')
+    ctx = QueryContext(tz_mode="schema")
+    result = ctx.active_tz(datatype_tz=etc_utc)
+    assert result == etc_utc
+
+
+def test_tz_mode_invalid_string_raises():
+    """Invalid string value for tz_mode should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match='tz_mode must be'):
+        QueryContext(tz_mode="invalid")
+
+
+def test_utc_tz_aware_false_maps_to_naive_utc():
+    """utc_tz_aware=False should map to tz_mode='naive_utc' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        ctx = QueryContext(utc_tz_aware=False)
+        assert ctx.tz_mode == "naive_utc"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+        assert "utc_tz_aware is deprecated" in str(w[0].message)
+
+
+def test_utc_tz_aware_true_maps_to_aware():
+    """utc_tz_aware=True should map to tz_mode='aware' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        ctx = QueryContext(utc_tz_aware=True)
+        assert ctx.tz_mode == "aware"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_utc_tz_aware_schema_maps_to_schema():
+    """utc_tz_aware='schema' should map to tz_mode='schema' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        ctx = QueryContext(utc_tz_aware="schema")
+        assert ctx.tz_mode == "schema"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_both_tz_mode_and_utc_tz_aware_raises():
+    """Providing both tz_mode and utc_tz_aware should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match='Cannot specify both'):
+        QueryContext(tz_mode="aware", utc_tz_aware=True)
+
+
+def test_utc_tz_aware_invalid_string_raises():
+    """Invalid string value for utc_tz_aware should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match='utc_tz_aware must be'):
+        QueryContext(utc_tz_aware="invalid")
+
+
+def test_resolve_tz_mode_defaults():
+    """No arguments should return 'naive_utc'."""
+    assert _resolve_tz_mode() == "naive_utc"
+
+
+def test_resolve_tz_mode_string_bool_coercion():
+    """String booleans from URL params should be coerced correctly."""
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        assert _resolve_tz_mode(utc_tz_aware="true") == "aware"
+        assert _resolve_tz_mode(utc_tz_aware="false") == "naive_utc"
+        assert _resolve_tz_mode(utc_tz_aware="True") == "aware"
+        assert _resolve_tz_mode(utc_tz_aware="False") == "naive_utc"
+        assert _resolve_tz_mode(utc_tz_aware="1") == "aware"
+        assert _resolve_tz_mode(utc_tz_aware="0") == "naive_utc"
+
+
+def test_utc_tz_aware_property_returns_legacy_value():
+    """Accessing ctx.utc_tz_aware should return the legacy equivalent with a DeprecationWarning."""
+    ctx = QueryContext(tz_mode="naive_utc")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert ctx.utc_tz_aware is False
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+    ctx2 = QueryContext(tz_mode="aware")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert ctx2.utc_tz_aware is True
+
+    ctx3 = QueryContext(tz_mode="schema")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert ctx3.utc_tz_aware == "schema"
+
+
+def test_resolve_tz_source_defaults():
+    """No arguments should return 'auto'."""
+    assert _resolve_tz_source() == "auto"
+
+
+def test_resolve_tz_source_valid_values():
+    """Each literal value should be accepted."""
+    assert _resolve_tz_source(tz_source="auto") == "auto"
+    assert _resolve_tz_source(tz_source="server") == "server"
+    assert _resolve_tz_source(tz_source="local") == "local"
+
+
+def test_resolve_tz_source_invalid_raises():
+    """Invalid string value should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match='tz_source must be'):
+        _resolve_tz_source(tz_source="invalid")
+
+
+def test_apply_server_timezone_none_maps_to_auto():
+    """apply_server_timezone=None (default) should return 'auto' without a warning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone=None) == "auto"
+        # None means "not provided" so no deprecation warning
+        assert len(w) == 0
+
+
+def test_apply_server_timezone_true_maps_to_server():
+    """apply_server_timezone=True should map to 'server' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone=True) == "server"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_apply_server_timezone_false_maps_to_local():
+    """apply_server_timezone=False should map to 'local' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone=False) == "local"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_apply_server_timezone_always_maps_to_server():
+    """apply_server_timezone='always' should map to 'server' with a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone="always") == "server"
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_both_tz_source_and_apply_server_timezone_raises():
+    """Providing both tz_source and apply_server_timezone should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="Cannot specify both"):
+        _resolve_tz_source(tz_source="server", apply_server_timezone=True)
+
+
+def test_apply_server_timezone_string_bool_coercion():
+    """String booleans from URL params should be coerced correctly."""
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        assert _resolve_tz_source(apply_server_timezone="true") == "server"
+        assert _resolve_tz_source(apply_server_timezone="false") == "local"
+        assert _resolve_tz_source(apply_server_timezone="True") == "server"
+        assert _resolve_tz_source(apply_server_timezone="False") == "local"
+        assert _resolve_tz_source(apply_server_timezone="1") == "server"
+        assert _resolve_tz_source(apply_server_timezone="0") == "local"
