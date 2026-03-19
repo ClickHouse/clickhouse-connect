@@ -458,3 +458,6 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
     engine._orig_kwargs = _parse_engine_params(full_engine, engine_cls)
     engine.settings = {}
     return engine
+
+
+__all__ = sorted(engine_map) + ["build_engine", "engine_map"]
