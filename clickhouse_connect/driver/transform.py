@@ -39,6 +39,8 @@ class NativeTransform:
                         if exception_tag:
                             error_msg = extract_exception_with_tag(source.last_message, exception_tag)
                         if error_msg:
+                            if "Code: " not in error_msg and b"\t" in (source.last_message or b""):
+                                return None
                             raise StreamFailureError(error_msg) from None
                     return None
                 num_rows = source.read_leb128()
@@ -70,7 +72,10 @@ class NativeTransform:
                             error_msg = extract_exception_with_tag(source.last_message, exception_tag)
                         if not error_msg:
                             error_msg = extract_error_message(source.last_message)
-                        raise StreamFailureError(error_msg) from None
+                        if error_msg:
+                            if "Code: " not in error_msg and b"\t" in (source.last_message or b""):
+                                return None
+                            raise StreamFailureError(error_msg) from None
                 raise
             block_num += 1
             return result_block
