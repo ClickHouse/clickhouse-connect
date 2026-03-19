@@ -73,7 +73,7 @@ class Float64(ChSqlaType, Float):
 
 
 class Bool(ChSqlaType, SqlaBoolean):
-    def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF):
+    def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF, **_kwargs):
         ChSqlaType.__init__(self, type_def)
         SqlaBoolean.__init__(self)
 
@@ -353,8 +353,6 @@ class Nullable:
         """
         if callable(element):
             return element(type_def=NULLABLE_TYPE_DEF)
-        if element.low_card:
-            raise ArgumentError('Low Cardinality type cannot be Nullable')
         orig = element.type_def
         wrappers = orig if 'Nullable' in orig.wrappers else orig.wrappers + ('Nullable',)
         return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))

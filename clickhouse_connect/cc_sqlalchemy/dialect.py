@@ -1,5 +1,7 @@
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
+from sqlalchemy.exc import NoSuchTableError
+import sqlalchemy.schema as sa_schema
 
 from clickhouse_connect import dbapi
 
@@ -24,6 +26,7 @@ class ClickHouseDialect(DefaultDialect):
     supports_native_decimal = True
     supports_native_boolean = True
     supports_statement_cache = False
+    supports_comments = True
     returns_unicode_strings = True
     postfetch_lastrowid = False
     ddl_compiler = ChDDLCompiler
@@ -33,6 +36,30 @@ class ClickHouseDialect(DefaultDialect):
     max_identifier_length = 127
     ischema_names = ischema_names
     inspector = ChInspector
+    construct_arguments = [
+        (
+            sa_schema.Table,
+            {
+                "engine": None,
+                "table_type": None,
+                "dictionary_source": None,
+                "dictionary_layout": None,
+                "dictionary_lifetime": None,
+                "dictionary_primary_key": None,
+            },
+        ),
+        (
+            sa_schema.Column,
+            {
+                "materialized": None,
+                "alias": None,
+                "codec": None,
+                "ttl": None,
+                "after": None,
+                "settings": None,
+            },
+        ),
+    ]
 
     # SQA 1 compatibility
     # pylint: disable=method-hidden
@@ -46,11 +73,11 @@ class ClickHouseDialect(DefaultDialect):
     def import_dbapi(cls):
         return dbapi
 
-    def initialize(self, connection):
-        pass
+    def _get_default_schema_name(self, connection):
+        return connection.execute(text("SELECT currentDatabase()")).scalar()
 
     def get_schema_names(self, connection, **_):
-        return [row.name for row in connection.execute('SHOW DATABASES')]
+        return [row.name for row in connection.exec_driver_sql('SHOW DATABASES')]
 
     @staticmethod
     def has_database(connection, db_name):
@@ -61,14 +88,14 @@ class ClickHouseDialect(DefaultDialect):
         cmd = 'SHOW TABLES'
         if schema:
             cmd += ' FROM ' + quote_identifier(schema)
-        return [row.name for row in connection.execute(cmd)]
+        return [row.name for row in connection.exec_driver_sql(cmd)]
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
 
     #  pylint: disable=arguments-renamed
     def get_pk_constraint(self, connection, table_name, schema=None, **kw):
-        return []
+        return {"constrained_columns": [], "name": None}
 
     def get_foreign_keys(self, connection, table_name, schema=None, **kw):
         return []
@@ -83,7 +110,10 @@ class ClickHouseDialect(DefaultDialect):
         return []
 
     def get_view_definition(self, connection, view_name, schema=None, **kw):
-        pass
+        raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
+
+    def get_table_comment(self, connection, table_name, schema=None, **kw):
+        return {"text": None}
 
     def get_indexes(self, connection, table_name, schema=None, **kw):
         return []
@@ -122,4 +152,4 @@ class ClickHouseDialect(DefaultDialect):
         pass
 
     def get_isolation_level(self, dbapi_conn):
-        return None
+        return "AUTOCOMMIT"
