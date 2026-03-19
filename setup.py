@@ -67,6 +67,7 @@ def run_setup(try_c: bool = True):
         ],
         extras_require={
             'sqlalchemy': ['sqlalchemy>=1.4.40,<3.0'],
+            'alembic': ['sqlalchemy>=1.4.40,<3.0', 'alembic>=1.9'],
             'numpy': ['numpy'],
             'pandas': ['pandas<3'],
             'polars': ['polars>=1.0'],
