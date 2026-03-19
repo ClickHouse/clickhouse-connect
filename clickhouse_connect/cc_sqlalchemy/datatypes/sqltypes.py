@@ -6,7 +6,7 @@ from sqlalchemy.types import Integer, Float, Numeric, Boolean as SqlaBoolean, \
     UserDefinedType, String as SqlaString, DateTime as SqlaDateTime, Date as SqlaDate, Interval
 from sqlalchemy.exc import ArgumentError
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, schema_types
 from clickhouse_connect.datatypes.base import TypeDef, NULLABLE_TYPE_DEF, LC_TYPE_DEF, EMPTY_TYPE_DEF
 from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8, Enum16 as ChEnum16
 from clickhouse_connect.driver.common import decimal_prec
@@ -501,3 +501,6 @@ class QBit(ChSqlaType, UserDefinedType):
                 raise ArgumentError("QBit requires element_type and dimension parameters")
             type_def = TypeDef(values=(element_type, dimension))
         super().__init__(type_def)
+
+
+__all__ = sorted(schema_types) + ["LowCardinality", "Nullable"]
