@@ -38,10 +38,19 @@ Supported features include:
 - Basic query execution via SQLAlchemy Core
 - `SELECT` queries with `JOIN`s, `ARRAY JOIN`, and `FINAL` modifier
 - Lightweight `DELETE` statements
+- **Alembic** schema migrations (autogenerate, upgrade/downgrade, ClickHouse engine support)
 
 The implementation does not include ORM support and is not intended as a full SQLAlchemy dialect. While it can support
 a range of Core-based applications beyond Superset, it may not be suitable for more complex SQLAlchemy applications
 that rely on full ORM or advanced dialect functionality.
+
+#### Alembic Migrations
+
+ClickHouse Connect supports [Alembic](https://alembic.sqlalchemy.org/) for schema migrations, including
+autogeneration of migration scripts from SQLAlchemy metadata. ClickHouse table engines (`MergeTree`,
+`ReplacingMergeTree`, etc.) are preserved through the migration lifecycle.
+
+See the [Alembic README](clickhouse_connect/cc_sqlalchemy/alembic/README.md) for full setup and configuration details.
 
 ### Asyncio Support
 
