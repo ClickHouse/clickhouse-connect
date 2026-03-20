@@ -101,6 +101,19 @@ def test_engine_repr():
     assert "ver=" not in legacy_alias_repr
 
 
+def test_shared_engine_maps_to_base():
+    """ClickHouse Cloud returns SharedMergeTree — build_engine should strip the Shared prefix."""
+    engine = build_engine("SharedMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}') ORDER BY id")
+    assert engine is not None
+    assert engine.name == "MergeTree"
+    assert repr(engine) == "MergeTree(order_by='id')"
+
+    rmt = build_engine("SharedReplacingMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}', ver) ORDER BY id")
+    assert rmt is not None
+    assert rmt.name == "ReplacingMergeTree"
+    assert "version='ver'" in repr(rmt)
+
+
 def test_reflected_engine_repr_is_safe():
     engine = build_engine("MergeTree ORDER BY id")
     assert engine is not None

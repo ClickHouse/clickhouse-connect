@@ -1,9 +1,9 @@
 import logging
-from typing import Any, Type, Sequence, Optional, Dict, Union
+from typing import Any, Dict, Optional, Sequence, Type, Union
 
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
-from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.base import SchemaEventTarget
+from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.visitors import Visitable
 
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
@@ -399,9 +399,12 @@ def _parse_engine_params(full_engine: str, engine_cls: Type['TableEngine']) -> D
 # pylint: disable=protected-access
 def build_engine(full_engine: str) -> Optional[TableEngine]:
     """
-    Factory function to create TableEngine class from ClickHouse full_engine expression
-    :param full_engine
-    :return: TableEngine DDL element
+    Factory function to create TableEngine class from ClickHouse full_engine expression.
+
+    ClickHouse Cloud transparently rewrites user-facing engines (e.g. MergeTree)
+    to Shared* variants (e.g. SharedMergeTree) with Cloud-internal positional
+    args for replication paths. When reflecting, we map back to the base engine
+    class and drop those args so that repr() produces valid user-level DDL.
     """
     if not full_engine:
         return None
@@ -412,8 +415,24 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
         if not name.startswith('System'):
             logger.warning('Engine %s not found', name)
         return None
+
+    # Map Shared* back to the base engine and discard Cloud-internal positional args.
+    # Cloud prepends replication path args (zk_path, replica) before the base engine's
+    # own positional args, e.g. SharedReplacingMergeTree('/path', '{replica}', ver).
+    base_name = name
+    if name.startswith("Shared"):
+        base_name = name[len("Shared"):]
+        base_cls = engine_map.get(base_name)
+        if base_cls is not None:
+            engine_cls = base_cls
+            _, all_args, clause_tail = parse_callable(full_engine)
+            # Cloud prepends exactly 2 args (zk_path, replica) — skip them
+            base_args = all_args[2:] if len(all_args) > 2 else ()
+            args_str = f"({','.join(str(a) for a in base_args)})" if base_args else ""
+            full_engine = base_name + args_str + (" " + clause_tail if clause_tail.strip() else "")
+
     engine = engine_cls.__new__(engine_cls)
-    engine.name = name
+    engine.name = base_name
     engine.full_engine = full_engine
     engine._orig_kwargs = _parse_engine_params(full_engine, engine_cls)
     engine.settings = {}

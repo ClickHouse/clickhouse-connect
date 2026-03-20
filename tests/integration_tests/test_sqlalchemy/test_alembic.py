@@ -173,7 +173,8 @@ def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name):
             text("SELECT engine_full FROM system.tables WHERE database = :database AND name = :table_name"),
             {"database": test_db, "table_name": version_table},
         ).scalar()
-        assert engine_full == "MergeTree ORDER BY version_num SETTINGS index_granularity = 8192"
+        assert "ORDER BY version_num" in engine_full
+        assert "index_granularity = 8192" in engine_full
 
         version = context._version
         context.impl._exec(version.insert().values(version_num=literal_column("'base'")))
@@ -279,7 +280,8 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
             text("SELECT engine_full FROM system.tables WHERE database = :database AND name = :table_name"),
             {"database": test_db, "table_name": table_name},
         ).scalar()
-        assert engine_full == "MergeTree ORDER BY id SETTINGS index_granularity = 1024"
+        assert "ORDER BY id" in engine_full
+        assert "index_granularity = 1024" in engine_full
         rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`alembic_version`")).fetchall()
         assert rows
 
@@ -336,7 +338,9 @@ def test_alembic_autogenerate_text_expression_ttl_round_trip_live(test_engine: E
         assert "ORDER BY (toStartOfDay(timestamp), resource_type, workload_identity, id)" in create_sql
 
 
-def test_alembic_autogenerate_dictionary_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+def test_alembic_autogenerate_dictionary_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name, test_config):
+    if test_config.cloud:
+        pytest.skip("Dictionary SOURCE references cross-database tables not accessible on Cloud")
     dictionary_name = ch_name("alembic_dictionary")
     metadata = MetaData(schema=test_db)
     Dictionary(
@@ -376,7 +380,9 @@ def test_alembic_autogenerate_dictionary_round_trip_live(test_engine: Engine, te
         assert "LAYOUT(FLAT())" in create_sql
 
 
-def test_alembic_dictionary_downgrade_uses_drop_dictionary_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+def test_alembic_dictionary_downgrade_uses_drop_dictionary_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name, test_config):
+    if test_config.cloud:
+        pytest.skip("Dictionary SOURCE references cross-database tables not accessible on Cloud")
     dictionary_name = ch_name("alembic_dictionary")
     metadata = MetaData(schema=test_db)
     Dictionary(
