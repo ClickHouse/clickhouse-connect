@@ -48,9 +48,21 @@ that rely on full ORM or advanced dialect functionality.
 
 ClickHouse Connect supports [Alembic](https://alembic.sqlalchemy.org/) for schema migrations, including
 autogeneration of migration scripts from SQLAlchemy metadata. ClickHouse table engines (`MergeTree`,
-`ReplacingMergeTree`, etc.) are preserved through the migration lifecycle.
+`ReplacingMergeTree`, etc.) and dictionaries are preserved through the migration lifecycle.
 
-See the [Alembic README](clickhouse_connect/cc_sqlalchemy/alembic/README.md) for full setup and configuration details.
+Supported operations include create/drop table, add/alter/drop/rename column, type and nullability
+changes, defaults, comments, and ClickHouse-specific features like `IF EXISTS` guards, column
+placement with `AFTER`, and operation-level `clickhouse_settings`.
+
+To get started, install the Alembic extra:
+
+```bash
+pip install clickhouse-connect[alembic]
+```
+
+See the [Alembic worked example](clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for a
+full end-to-end walkthrough covering setup, autogeneration, upgrades, downgrades, and manual
+migration operations.
 
 ### Asyncio Support
 
