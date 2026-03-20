@@ -23,6 +23,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Improvements
+- **SQLAlchemy: Alembic migration support.** Added a full Alembic integration for ClickHouse schema migrations, including autogeneration of migration scripts, upgrade/downgrade lifecycle, and round-tripping of ClickHouse-specific DDL. Includes compatibility shims (`cc_sqlalchemy.types`, `cc_sqlalchemy.engines`) for users migrating from `clickhouse-sqlalchemy`.
+
 ## 0.14.1, 2026-03-11
 
 ### Bug Fixes
