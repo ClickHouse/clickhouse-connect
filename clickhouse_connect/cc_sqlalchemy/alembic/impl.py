@@ -62,7 +62,7 @@ class ClickHouseImpl(DefaultImpl):
             construct,
             execution_options=execution_options,
             multiparams=multiparams,
-            params=params,
+            params=params or {},
         )
 
     def add_column(
