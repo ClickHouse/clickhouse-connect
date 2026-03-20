@@ -3,7 +3,7 @@ from typing import Any, Callable, FrozenSet, Optional
 from alembic.operations.ops import MigrationScript
 from alembic.runtime.migration import MigrationContext
 
-from clickhouse_connect.cc_sqlalchemy.alembic import (
+from clickhouse_connect.cc_sqlalchemy.alembic.adapter import (
     include_object as base_include_object,
 )
 

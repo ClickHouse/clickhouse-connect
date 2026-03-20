@@ -11,6 +11,11 @@ from sqlalchemy.exc import NoResultFound
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
+from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
+    extract_parenthesized_block,
+    find_top_level_clause,
+    split_top_level,
+)
 
 
 def _database_name(connection, schema: Optional[str]) -> str:
@@ -40,67 +45,6 @@ def get_dictionary_create_sql(connection, table_name: str, schema: Optional[str]
     return create_sql or ""
 
 
-def _walk_sql(sql: str, start: int = 0):
-    """Yield (index, char, depth) for unquoted chars, tracking paren depth."""
-    depth = 0
-    quote_char = None
-    escape = False
-    for i in range(start, len(sql)):
-        char = sql[i]
-        if escape:
-            escape = False
-            continue
-        if quote_char:
-            if char == "\\" and quote_char == "'":
-                escape = True
-            elif char == quote_char:
-                quote_char = None
-            continue
-        if char in {"'", '"', "`"}:
-            quote_char = char
-            continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        yield i, char, depth
-
-
-def _extract_parenthesized_block(sql: str, start: int) -> tuple[str, int]:
-    block_start = -1
-    for i, char, depth in _walk_sql(sql, start):
-        if char == "(" and depth == 1 and block_start == -1:
-            block_start = i + 1
-        elif char == ")" and depth == 0 and block_start != -1:
-            return sql[block_start:i], i
-    raise ValueError("Could not parse parenthesized SQL block")
-
-
-def _split_top_level_sql(sql: str, delimiter: str = ",") -> list[str]:
-    parts = []
-    part_start = 0
-    for i, char, depth in _walk_sql(sql):
-        if char == delimiter and depth == 0:
-            part = sql[part_start:i].strip()
-            if part:
-                parts.append(part)
-            part_start = i + 1
-    tail = sql[part_start:].strip()
-    if tail:
-        parts.append(tail)
-    return parts
-
-
-def _find_top_level_clause(sql: str, clauses: tuple[str, ...]) -> tuple[int, Optional[str]]:
-    upper_sql = sql.upper()
-    for i, _char, depth in _walk_sql(sql):
-        if depth == 0:
-            for clause in clauses:
-                if upper_sql.startswith(clause, i):
-                    return i, clause
-    return -1, None
-
-
 def _parse_dictionary_column(definition: str) -> dict[str, Any]:
     match = re.match(r"^`(?P<name>[^`]+)`\s+(?P<rest>.+)$", definition, flags=re.DOTALL)
     if not match:
@@ -110,7 +54,7 @@ def _parse_dictionary_column(definition: str) -> dict[str, Any]:
 
     name = match.group("name")
     remainder = match.group("rest").strip()
-    type_index, _ = _find_top_level_clause(
+    type_index, _ = find_top_level_clause(
         remainder,
         (" DEFAULT ", " MATERIALIZED ", " ALIAS ", " TTL ", " COMMENT ", " CODEC("),
     )
@@ -123,13 +67,13 @@ def _parse_dictionary_column(definition: str) -> dict[str, Any]:
         "autoincrement": False,
     }
 
-    comment_index, comment_clause = _find_top_level_clause(remainder, (" COMMENT ",))
+    comment_index, comment_clause = find_top_level_clause(remainder, (" COMMENT ",))
     if comment_clause:
         comment_sql = remainder[comment_index + len(comment_clause) :].strip()
         column["comment"] = ast.literal_eval(comment_sql)
         remainder = remainder[:comment_index].rstrip()
 
-    default_index, default_clause = _find_top_level_clause(remainder, (" DEFAULT ", " MATERIALIZED ", " ALIAS "))
+    default_index, default_clause = find_top_level_clause(remainder, (" DEFAULT ", " MATERIALIZED ", " ALIAS "))
     if default_clause:
         default_sql = remainder[default_index + len(default_clause) :].strip()
         if default_clause == " DEFAULT ":
@@ -148,8 +92,8 @@ def get_dictionary_columns(connection, table_name: str, schema: Optional[str] = 
     start = create_sql.find("(")
     if start == -1:
         return []
-    column_block, _ = _extract_parenthesized_block(create_sql, start)
-    return [_parse_dictionary_column(column_sql) for column_sql in _split_top_level_sql(column_block)]
+    column_block, _ = extract_parenthesized_block(create_sql, start)
+    return [_parse_dictionary_column(column_sql) for column_sql in split_top_level(column_block)]
 
 
 def get_dictionary_metadata(connection, table_name: str, schema: Optional[str] = None) -> dict[str, Any]:

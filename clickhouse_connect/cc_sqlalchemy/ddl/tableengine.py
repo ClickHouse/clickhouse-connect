@@ -6,6 +6,7 @@ from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.visitors import Visitable
 
+from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
 from clickhouse_connect.driver.parser import parse_callable
 
 logger = logging.getLogger(__name__)
@@ -318,47 +319,6 @@ class SharedGraphiteMergeTree(GraphiteMergeTree):
     pass
 
 
-def _walk_sql(sql: str, start: int = 0):
-    """Yield unquoted characters while tracking nested parenthesis depth."""
-    depth = 0
-    quote_char = None
-    escape = False
-    for i in range(start, len(sql)):
-        char = sql[i]
-        if escape:
-            escape = False
-            continue
-        if quote_char:
-            if char == "\\" and quote_char == "'":
-                escape = True
-            elif char == quote_char:
-                quote_char = None
-            continue
-        if char in {"'", "\"", "`"}:
-            quote_char = char
-            continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        yield i, char, depth
-
-
-def _split_top_level_sql(sql: str, delimiter: str = ",") -> list[str]:
-    parts = []
-    part_start = 0
-    for i, char, depth in _walk_sql(sql):
-        if char == delimiter and depth == 0:
-            part = sql[part_start:i].strip()
-            if part:
-                parts.append(part)
-            part_start = i + 1
-    tail = sql[part_start:].strip()
-    if tail:
-        parts.append(tail)
-    return parts
-
-
 def _strip_string_quotes(value: Any) -> Any:
     if isinstance(value, str) and len(value) > 1 and value[0] == value[-1] == "'":
         return value[1:-1]
@@ -379,7 +339,7 @@ def _parse_positional_engine_args(full_engine: str, engine_cls: Type['TableEngin
 def _find_clause_markers(sql: str) -> list[tuple[int, str]]:
     markers = []
     upper_sql = sql.upper()
-    for i, _char, depth in _walk_sql(sql):
+    for i, _char, depth in walk_sql(sql):
         if depth != 0 or (i > 0 and not sql[i - 1].isspace()):
             continue
         for clause in ENGINE_CLAUSES:
@@ -391,7 +351,7 @@ def _find_clause_markers(sql: str) -> list[tuple[int, str]]:
 
 def _parse_settings_clause(raw_settings: str) -> Dict[str, Any]:
     settings: Dict[str, Any] = {}
-    for pair in _split_top_level_sql(raw_settings):
+    for pair in split_top_level(raw_settings):
         if "=" not in pair:
             continue
         key, value = pair.split("=", 1)
