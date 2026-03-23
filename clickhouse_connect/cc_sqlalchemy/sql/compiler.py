@@ -43,18 +43,30 @@ class ChStatementCompiler(SQLCompiler):
         right = self.process(join.right, **kw)
         onclause = join.onclause
 
+        is_cross = getattr(join, "_is_cross", False) or onclause is None
         if getattr(join, "full", False):
-            join_kw = " FULL OUTER JOIN "
-        elif onclause is None:
-            join_kw = " CROSS JOIN "
+            join_type = "FULL OUTER JOIN"
+        elif is_cross:
+            join_type = "CROSS JOIN"
         elif join.isouter:
-            join_kw = " LEFT OUTER JOIN "
+            join_type = "LEFT OUTER JOIN"
         else:
-            join_kw = " INNER JOIN "
+            join_type = "INNER JOIN"
 
-        text = left + join_kw + right
+        # ClickHouse modifiers: [GLOBAL] [ALL|ANY|ASOF] <join_type>
+        distribution = getattr(join, "distribution", None)
+        strictness = getattr(join, "strictness", None)
+        parts = []
+        if distribution:
+            parts.append(distribution)
+        if strictness:
+            parts.append(strictness)
+        parts.append(join_type)
+        join_kw = " ".join(parts)
 
-        if onclause is not None:
+        text = f"{left} {join_kw} {right}"
+
+        if not is_cross and onclause is not None:
             text += " ON " + self.process(onclause, **kw)
 
         return text

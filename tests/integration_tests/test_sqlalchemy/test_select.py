@@ -9,6 +9,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     String,
     UInt32,
 )
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import ch_join
 from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
 
 
@@ -340,3 +341,68 @@ def test_argmax_aggregate_function(test_engine: Engine, test_db: str):
         assert rows[1].id == 2
         assert rows[1].latest_name == "Bob_v2"
         assert rows[1].latest_value == 250
+
+
+def test_all_inner_ch_join(test_engine: Engine, test_db: str):
+    """ALL INNER JOIN returns all matching rows"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+        orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name, orders.c.product).select_from(
+            ch_join(users, orders, users.c.id == orders.c.user_id, strictness="ALL")
+        )
+
+        compiled = query.compile(dialect=test_engine.dialect)
+        assert "ALL INNER JOIN" in str(compiled).upper()
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        assert len(rows) == 4
+
+
+def test_any_left_ch_join(test_engine: Engine, test_db: str):
+    """ANY LEFT JOIN returns at most one match per left row"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+        orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name, orders.c.product).select_from(
+            ch_join(users, orders, users.c.id == orders.c.user_id, isouter=True, strictness="ANY")
+        )
+
+        compiled = query.compile(dialect=test_engine.dialect)
+        sql_str = str(compiled).upper()
+        assert "ANY LEFT OUTER JOIN" in sql_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        # ANY returns at most one order per user; user_id=1 has 2 orders but gets 1
+        assert len(rows) == 3
+        user_ids = [row.id for row in rows]
+        assert sorted(user_ids) == [1, 2, 3]
+
+
+def test_global_all_left_ch_join(test_engine: Engine, test_db: str):
+    """GLOBAL ALL LEFT OUTER JOIN compiles and executes correctly"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+        orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name, orders.c.product).select_from(
+            ch_join(users, orders, users.c.id == orders.c.user_id, isouter=True, strictness="ALL", distribution="GLOBAL")
+        )
+
+        compiled = query.compile(dialect=test_engine.dialect)
+        sql_str = str(compiled).upper()
+        assert "GLOBAL ALL LEFT OUTER JOIN" in sql_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        # LEFT JOIN: at least all 3 users returned
+        assert len(rows) >= 3
+        user_names = {row.name for row in rows}
+        assert {"Alice", "Bob", "Charlie"}.issubset(user_names)
