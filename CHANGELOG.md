@@ -26,6 +26,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ### New Features
 - SQLAlchemy: Comprehensive ClickHouse JOIN support via the new `ch_join()` helper. All strictness modifiers (`ALL`, `ANY`, `SEMI`, `ANTI`, `ASOF`), the `GLOBAL` distribution modifier, and explicit `CROSS JOIN` are now available. Use with `select_from()` to generate ClickHouse-specific join syntax like `GLOBAL ALL LEFT OUTER JOIN`. Closes [#635](https://github.com/ClickHouse/clickhouse-connect/issues/635)
 
+### Bug Fixes
+- SQLAlchemy: Fix `sqlalchemy.values()` to generate ClickHouse's `VALUES` table function syntax. The compiler now emits `VALUES('col1 Type1, col2 Type2', ...)` with the column structure as the first argument, instead of the standard SQL form that places column names after the alias. Generic SQLAlchemy types are mapped to ClickHouse equivalents (e.g. `Integer` to `Int32`, `String` to `String`). Also handles CTE usage by wrapping in `SELECT * FROM VALUES(...)`. Fixes [#681](https://github.com/ClickHouse/clickhouse-connect/issues/681)
+
 ## 0.14.1, 2026-03-11
 
 ### Bug Fixes
