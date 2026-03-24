@@ -121,13 +121,16 @@ class ChStatementCompiler(SQLCompiler):
 
     def visit_array_join(self, array_join_clause, asfrom=False, from_linter=None, **kw):
         left = self.process(array_join_clause.left, asfrom=True, from_linter=from_linter, **kw)
-        array_col = self.process(array_join_clause.array_column, **kw)
         join_type = "LEFT ARRAY JOIN" if array_join_clause.is_left else "ARRAY JOIN"
-        text = f"{left} {join_type} {array_col}"
-        if array_join_clause.alias:
-            text += f" AS {self.preparer.quote(array_join_clause.alias)}"
 
-        return text
+        parts = []
+        for col, alias in array_join_clause.array_columns:
+            col_text = self.process(col, **kw)
+            if alias is not None:
+                col_text += f" AS {self.preparer.quote(alias)}"
+            parts.append(col_text)
+
+        return f"{left} {join_type} {', '.join(parts)}"
 
     def visit_join(self, join, **kw):
         if isinstance(join, ArrayJoin):
@@ -160,7 +163,15 @@ class ChStatementCompiler(SQLCompiler):
 
         text = f"{left} {join_kw} {right}"
 
-        if not is_cross and onclause is not None:
+        using_columns = getattr(join, "using_columns", None)
+        if using_columns:
+            # Process the onclause so the from-linter registers the
+            # table relationship, but render USING syntax instead.
+            if onclause is not None:
+                self.process(onclause, **kw)
+            quoted = ", ".join(self.preparer.quote(col) for col in using_columns)
+            text += f" USING ({quoted})"
+        elif not is_cross and onclause is not None:
             text += " ON " + self.process(onclause, **kw)
 
         return text

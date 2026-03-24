@@ -1,6 +1,6 @@
 # pylint: disable=no-member
 from pytest import fixture
-from sqlalchemy import MetaData, Table, func, select, text
+from sqlalchemy import MetaData, Table, func, literal_column, select, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
@@ -96,10 +96,53 @@ def test_tables(test_engine: Engine, test_db: str):
             )
         )
 
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_sales"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_returns"))
+
+        conn.execute(
+            text(
+                f"""
+            CREATE TABLE {test_db}.test_using_sales (
+                product_id UInt32,
+                sold UInt32
+            ) ENGINE MergeTree() ORDER BY product_id
+        """
+            )
+        )
+        conn.execute(
+            text(
+                f"""
+            CREATE TABLE {test_db}.test_using_returns (
+                product_id UInt32,
+                returned UInt32
+            ) ENGINE MergeTree() ORDER BY product_id
+        """
+            )
+        )
+
+        conn.execute(
+            text(
+                f"""
+            INSERT INTO {test_db}.test_using_sales VALUES
+            (1, 10), (2, 20), (3, 30)
+        """
+            )
+        )
+        conn.execute(
+            text(
+                f"""
+            INSERT INTO {test_db}.test_using_returns VALUES
+            (2, 5), (3, 10), (4, 15)
+        """
+            )
+        )
+
         verify_tables_ready(conn, {
             f"{test_db}.select_test_users": 3,
             f"{test_db}.select_test_orders": 4,
-            f"{test_db}.test_argmax": 5
+            f"{test_db}.test_argmax": 5,
+            f"{test_db}.test_using_sales": 3,
+            f"{test_db}.test_using_returns": 3,
         })
 
         yield
@@ -107,6 +150,8 @@ def test_tables(test_engine: Engine, test_db: str):
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.select_test_users"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.select_test_orders"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_argmax"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_sales"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_returns"))
 
 
 def test_basic_select(test_engine: Engine, test_db: str):
@@ -456,3 +501,84 @@ def test_global_all_left_ch_join(test_engine: Engine, test_db: str):
         assert len(rows) >= 3
         user_names = {row.name for row in rows}
         assert {"Alice", "Bob", "Charlie"}.issubset(user_names)
+
+
+def test_using_inner_join(test_engine: Engine, test_db: str):
+    """INNER JOIN USING on a shared column name"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        sales = Table("test_using_sales", metadata, autoload_with=test_engine)
+        returns = Table("test_using_returns", metadata, autoload_with=test_engine)
+
+        query = (
+            select(sales.c.product_id, sales.c.sold, returns.c.returned)
+            .select_from(ch_join(sales, returns, using=["product_id"]))
+            .order_by(sales.c.product_id)
+        )
+
+        compiled_str = str(query.compile(dialect=test_engine.dialect))
+        assert "USING" in compiled_str
+        assert "ON" not in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        # Only product_id 2 and 3 exist in both tables
+        assert len(rows) == 2
+        assert rows[0] == (2, 20, 5)
+        assert rows[1] == (3, 30, 10)
+
+
+def test_using_full_outer_join(test_engine: Engine, test_db: str):
+    """FULL OUTER JOIN USING merges the join column correctly."""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        sales = Table("test_using_sales", metadata, autoload_with=test_engine)
+        returns = Table("test_using_returns", metadata, autoload_with=test_engine)
+
+        # Use unqualified product_id to get the merged USING column
+        pid = literal_column("product_id")
+        query = (
+            select(pid, sales.c.sold, returns.c.returned)
+            .select_from(ch_join(sales, returns, using=["product_id"], full=True))
+            .order_by(pid)
+        )
+
+        compiled_str = str(query.compile(dialect=test_engine.dialect))
+        assert "FULL OUTER JOIN" in compiled_str
+        assert "USING" in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        assert len(rows) == 4
+
+        by_pid = {row.product_id: row for row in rows}
+        # product_id=4 only in returns. With USING, product_id is 4 (correct).
+        # With ON, it would be 0 (wrong).
+        assert by_pid[4].product_id == 4
+        assert by_pid[4].sold == 0
+        assert by_pid[4].returned == 15
+        # product_id=1 only in sales
+        assert by_pid[1].sold == 10
+        assert by_pid[1].returned == 0
+
+
+def test_using_with_strictness_integration(test_engine: Engine, test_db: str):
+    """ANY INNER JOIN with USING compiles and executes"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        sales = Table("test_using_sales", metadata, autoload_with=test_engine)
+        returns = Table("test_using_returns", metadata, autoload_with=test_engine)
+
+        query = (
+            select(sales.c.product_id, sales.c.sold, returns.c.returned)
+            .select_from(ch_join(sales, returns, using=["product_id"], strictness="ANY"))
+            .order_by(sales.c.product_id)
+        )
+
+        compiled_str = str(query.compile(dialect=test_engine.dialect))
+        assert "ANY INNER JOIN" in compiled_str
+        assert "USING" in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        assert len(rows) == 2

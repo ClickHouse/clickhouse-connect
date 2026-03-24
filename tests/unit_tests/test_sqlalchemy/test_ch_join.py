@@ -210,3 +210,91 @@ def test_chained_joins():
     sql = compile_query(db.select(users.c.name, items.c.sku).select_from(j2))
     assert "ALL INNER JOIN" in sql
     assert "ANY INNER JOIN" in sql
+
+
+def test_using_single_column():
+    j = ch_join(users, orders, using=["id"])
+    sql = compile_query(db.select(users.c.name).select_from(j))
+    assert "INNER JOIN" in sql
+    assert "USING (`id`)" in sql
+    assert "ON" not in sql
+
+
+def test_using_multiple_columns():
+    # Use users + items which both have 'id'; add a second shared column name for the test
+    t1 = db.Table("t1", db.MetaData(), db.Column("a", UInt32), db.Column("b", UInt32), db.Column("x", String))
+    t2 = db.Table("t2", db.MetaData(), db.Column("a", UInt32), db.Column("b", UInt32), db.Column("y", String))
+    j = ch_join(t1, t2, using=["a", "b"])
+    sql = compile_query(db.select(t1.c.x, t2.c.y).select_from(j))
+    assert "USING (`a`, `b`)" in sql
+
+
+def test_using_full_outer_join():
+    j = ch_join(users, orders, using=["id"], full=True)
+    sql = compile_query(db.select(users.c.name).select_from(j))
+    assert "FULL OUTER JOIN" in sql
+    assert "USING (`id`)" in sql
+    assert "ON" not in sql
+
+
+def test_using_left_outer_join():
+    j = ch_join(users, orders, using=["id"], isouter=True)
+    sql = compile_query(db.select(users.c.name).select_from(j))
+    assert "LEFT OUTER JOIN" in sql
+    assert "USING (`id`)" in sql
+
+
+def test_using_with_strictness():
+    j = ch_join(users, orders, using=["id"], strictness="ANY")
+    sql = compile_query(db.select(users.c.name).select_from(j))
+    assert "ANY INNER JOIN" in sql
+    assert "USING (`id`)" in sql
+
+
+def test_using_with_distribution():
+    j = ch_join(users, orders, using=["id"], distribution="GLOBAL")
+    sql = compile_query(db.select(users.c.name).select_from(j))
+    assert "GLOBAL INNER JOIN" in sql
+    assert "USING (`id`)" in sql
+
+
+def test_using_with_all_modifiers():
+    j = ch_join(users, orders, using=["id"], full=True, strictness="ALL", distribution="GLOBAL")
+    sql = compile_query(db.select(users.c.name).select_from(j))
+    assert "GLOBAL ALL FULL OUTER JOIN" in sql
+    assert "USING (`id`)" in sql
+
+
+def test_using_with_onclause_raises():
+    with pytest.raises(ValueError, match="Cannot specify both onclause and using"):
+        ch_join(users, orders, users.c.id == orders.c.id, using=["id"])
+
+
+def test_using_with_cross_raises():
+    with pytest.raises(ValueError, match="cross=True conflicts with using"):
+        ch_join(users, orders, cross=True, using=["id"])
+
+
+def test_using_empty_list_raises():
+    with pytest.raises(ValueError, match="non-empty list"):
+        ch_join(users, orders, using=[])
+
+
+def test_using_non_string_raises():
+    with pytest.raises(ValueError, match="column name strings"):
+        ch_join(users, orders, using=[users.c.id])
+
+
+def test_using_missing_column_raises():
+    with pytest.raises(ValueError, match="USING column 'missing'.*not found"):
+        ch_join(users, orders, using=["missing"])
+
+
+# pylint: disable=protected-access
+def test_using_cache_key_differs_from_on():
+    """USING and ON joins on the same column must produce different cache keys."""
+    j_on = ch_join(users, orders, users.c.id == orders.c.id)
+    j_using = ch_join(users, orders, using=["id"])
+    key_on = j_on._generate_cache_key()
+    key_using = j_using._generate_cache_key()
+    assert key_on != key_using
