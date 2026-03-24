@@ -68,6 +68,8 @@ class ChStatementCompiler(SQLCompiler):
 
         This differs from standard SQL which places column names after the alias:
             (VALUES (row1), (row2)) AS name (col1, col2)
+
+        Compatible with both SQLAlchemy 1.4 and 2.x.
         """
         if getattr(element, "_independent_ctes", None):
             self._dispatch_independent_ctes(element, kw)
@@ -90,7 +92,9 @@ class ChStatementCompiler(SQLCompiler):
         structure_literal = self.render_literal_value(structure, sqltypes.String())
         v = f"VALUES({structure_literal}, {tuples})"
 
-        if element._unnamed:
+        # SA 2.x has _unnamed; SA 1.4 uses name=None for unnamed values
+        is_unnamed = getattr(element, "_unnamed", element.name is None)
+        if is_unnamed:
             name = None
         elif isinstance(element.name, elements._truncated_label):
             name = self._truncated_identifier("values", element.name)
@@ -101,7 +105,9 @@ class ChStatementCompiler(SQLCompiler):
 
         if asfrom:
             if from_linter:
-                from_linter.froms[element._de_clone()] = (
+                # SA 2.x has _de_clone(); SA 1.4 doesn't
+                key = element._de_clone() if hasattr(element, "_de_clone") else element
+                from_linter.froms[key] = (
                     name if name is not None else "(unnamed VALUES element)"
                 )
 

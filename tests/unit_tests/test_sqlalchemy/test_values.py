@@ -1,10 +1,13 @@
 from datetime import datetime
 
+import pytest
 from sqlalchemy import DateTime as SqlaDateTime
 import sqlalchemy as db
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+
+SA_2 = db.__version__ >= "2"
 
 dialect = ClickHouseDialect()
 
@@ -38,6 +41,7 @@ def test_values_escapes_structure_literal_for_clickhouse_type_names():
     assert "VALUES('ts DateTime(''UTC'')', ('2024-01-02 03:04:05')) AS `v`" in sql
 
 
+@pytest.mark.skipif(not SA_2, reason="SA 1.4 lacks literal datetime rendering for this type")
 def test_values_maps_generic_sqla_datetime_type():
     values_clause = db.values(
         db.column("ts", SqlaDateTime()),
@@ -49,6 +53,7 @@ def test_values_maps_generic_sqla_datetime_type():
     assert "VALUES('ts DateTime', ('2024-01-02 03:04:05')) AS `v`" in sql
 
 
+@pytest.mark.skipif(not SA_2, reason="Values.cte() was added in SA 2.x")
 def test_values_cte_wraps_table_function_in_select():
     values_clause = db.values(
         db.column("id", db.Integer),
