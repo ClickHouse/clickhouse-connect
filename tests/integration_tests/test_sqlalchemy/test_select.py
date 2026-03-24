@@ -164,6 +164,56 @@ def test_basic_select_with_sample(test_engine: Engine, test_db: str):
     assert compiled_str.endswith("SAMPLE 1")
 
 
+def test_final_and_sample_chained(test_engine: Engine, test_db: str):
+    """Chaining .final() and .sample() in either order should produce both clauses."""
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+
+    # final() then sample()
+    query_fs = select(users).final().sample(0.1)
+    compiled_fs = str(query_fs.compile(dialect=test_engine.dialect))
+    assert "FINAL" in compiled_fs
+    assert "SAMPLE 0.1" in compiled_fs
+    assert compiled_fs.index("FINAL") < compiled_fs.index("SAMPLE")
+
+    # sample() then final()
+    query_sf = select(users).sample(0.1).final()
+    compiled_sf = str(query_sf.compile(dialect=test_engine.dialect))
+    assert "FINAL" in compiled_sf
+    assert "SAMPLE 0.1" in compiled_sf
+    assert compiled_sf.index("FINAL") < compiled_sf.index("SAMPLE")
+
+
+def test_final_and_sample_with_alias(test_engine: Engine, test_db: str):
+    """FINAL/SAMPLE on aliased tables renders after the alias suffix."""
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+    alias = users.alias("u")
+
+    compiled = str(select(alias).final().sample(0.1).compile(dialect=test_engine.dialect))
+    assert "AS `u` FINAL SAMPLE 0.1" in compiled
+    assert "FINAL AS" not in compiled
+
+    # Reversed order produces the same output
+    compiled_rev = str(select(alias).sample(0.1).final().compile(dialect=test_engine.dialect))
+    assert "AS `u` FINAL SAMPLE 0.1" in compiled_rev
+
+
+def test_final_with_explicit_table_on_join(test_engine: Engine, test_db: str):
+    """FINAL applied to a specific table in a join renders correctly."""
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+    orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+    join = users.join(orders, users.c.id == orders.c.user_id)
+    query = select(users.c.id, orders.c.product).select_from(join).final(users)
+    compiled = str(query.compile(dialect=test_engine.dialect))
+    # FINAL should appear between the users table and the JOIN keyword
+    from_clause = compiled[compiled.index("FROM"):]
+    assert "select_test_users` FINAL" in from_clause
+    assert "FINAL" not in from_clause[from_clause.index("JOIN"):]
+
+
 def test_select_with_where_with_sample(test_engine: Engine, test_db: str):
     with test_engine.begin() as conn:
         metadata = MetaData(schema=test_db)

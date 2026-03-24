@@ -59,7 +59,6 @@ class ChStatementCompiler(SQLCompiler):
 
         return text
 
-
     # pylint: disable=protected-access
     def visit_values(self, element, asfrom=False, from_linter=None, visiting_cte=None, **kw):
         """Compile a VALUES clause using ClickHouse's VALUES table function syntax.
@@ -219,9 +218,44 @@ class ChStatementCompiler(SQLCompiler):
             **kw,
         )
 
-    def get_from_hint_text(self, table, text):
-        if text == "FINAL":
-            return "FINAL"
-        if text.startswith("SAMPLE"):
-            return text
-        return super().get_from_hint_text(table, text)
+    # pylint: disable=protected-access
+    def _compose_select_body(self, text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs):
+        ch_final = getattr(select, "_ch_final", set())
+        ch_sample = getattr(select, "_ch_sample", {})
+
+        if ch_final or ch_sample:
+            mods = {}
+            for target in ch_final | set(ch_sample):
+                parts = []
+                if target in ch_final:
+                    parts.append("FINAL")
+                if target in ch_sample:
+                    parts.append(f"SAMPLE {ch_sample[target]}")
+                mods[target] = " ".join(parts)
+
+            prev = getattr(self, "_ch_from_modifiers", None)
+            self._ch_from_modifiers = mods
+            try:
+                return super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
+            finally:
+                self._ch_from_modifiers = prev
+
+        return super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
+
+    def visit_table(self, table, asfrom=False, iscrud=False, ashint=False, fromhints=None, enclosing_alias=None, **kwargs):
+        result = super().visit_table(
+            table, asfrom=asfrom, iscrud=iscrud, ashint=ashint, fromhints=fromhints, enclosing_alias=enclosing_alias, **kwargs
+        )
+        if asfrom and enclosing_alias is None:
+            mods = getattr(self, "_ch_from_modifiers", None)
+            if mods and table in mods:
+                result += " " + mods[table]
+        return result
+
+    def visit_alias(self, alias, asfrom=False, **kwargs):
+        result = super().visit_alias(alias, asfrom=asfrom, **kwargs)
+        if asfrom:
+            mods = getattr(self, "_ch_from_modifiers", None)
+            if mods and alias in mods:
+                result += " " + mods[alias]
+        return result
