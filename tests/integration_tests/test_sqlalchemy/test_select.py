@@ -1,6 +1,6 @@
 # pylint: disable=no-member
 from pytest import fixture
-from sqlalchemy import MetaData, Table, func, select, text
+from sqlalchemy import MetaData, Table, func, literal_column, select, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
@@ -9,6 +9,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     String,
     UInt32,
 )
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import ch_join
 from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
 
 
@@ -95,10 +96,53 @@ def test_tables(test_engine: Engine, test_db: str):
             )
         )
 
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_sales"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_returns"))
+
+        conn.execute(
+            text(
+                f"""
+            CREATE TABLE {test_db}.test_using_sales (
+                product_id UInt32,
+                sold UInt32
+            ) ENGINE MergeTree() ORDER BY product_id
+        """
+            )
+        )
+        conn.execute(
+            text(
+                f"""
+            CREATE TABLE {test_db}.test_using_returns (
+                product_id UInt32,
+                returned UInt32
+            ) ENGINE MergeTree() ORDER BY product_id
+        """
+            )
+        )
+
+        conn.execute(
+            text(
+                f"""
+            INSERT INTO {test_db}.test_using_sales VALUES
+            (1, 10), (2, 20), (3, 30)
+        """
+            )
+        )
+        conn.execute(
+            text(
+                f"""
+            INSERT INTO {test_db}.test_using_returns VALUES
+            (2, 5), (3, 10), (4, 15)
+        """
+            )
+        )
+
         verify_tables_ready(conn, {
             f"{test_db}.select_test_users": 3,
             f"{test_db}.select_test_orders": 4,
-            f"{test_db}.test_argmax": 5
+            f"{test_db}.test_argmax": 5,
+            f"{test_db}.test_using_sales": 3,
+            f"{test_db}.test_using_returns": 3,
         })
 
         yield
@@ -106,6 +150,8 @@ def test_tables(test_engine: Engine, test_db: str):
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.select_test_users"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.select_test_orders"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_argmax"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_sales"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_returns"))
 
 
 def test_basic_select(test_engine: Engine, test_db: str):
@@ -161,6 +207,56 @@ def test_basic_select_with_sample(test_engine: Engine, test_db: str):
     compiled = query.compile(dialect=test_engine.dialect)
     compiled_str = str(compiled)
     assert compiled_str.endswith("SAMPLE 1")
+
+
+def test_final_and_sample_chained(test_engine: Engine, test_db: str):
+    """Chaining .final() and .sample() in either order should produce both clauses."""
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+
+    # final() then sample()
+    query_fs = select(users).final().sample(0.1)
+    compiled_fs = str(query_fs.compile(dialect=test_engine.dialect))
+    assert "FINAL" in compiled_fs
+    assert "SAMPLE 0.1" in compiled_fs
+    assert compiled_fs.index("FINAL") < compiled_fs.index("SAMPLE")
+
+    # sample() then final()
+    query_sf = select(users).sample(0.1).final()
+    compiled_sf = str(query_sf.compile(dialect=test_engine.dialect))
+    assert "FINAL" in compiled_sf
+    assert "SAMPLE 0.1" in compiled_sf
+    assert compiled_sf.index("FINAL") < compiled_sf.index("SAMPLE")
+
+
+def test_final_and_sample_with_alias(test_engine: Engine, test_db: str):
+    """FINAL/SAMPLE on aliased tables renders after the alias suffix."""
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+    alias = users.alias("u")
+
+    compiled = str(select(alias).final().sample(0.1).compile(dialect=test_engine.dialect))
+    assert "AS `u` FINAL SAMPLE 0.1" in compiled
+    assert "FINAL AS" not in compiled
+
+    # Reversed order produces the same output
+    compiled_rev = str(select(alias).sample(0.1).final().compile(dialect=test_engine.dialect))
+    assert "AS `u` FINAL SAMPLE 0.1" in compiled_rev
+
+
+def test_final_with_explicit_table_on_join(test_engine: Engine, test_db: str):
+    """FINAL applied to a specific table in a join renders correctly."""
+    metadata = MetaData(schema=test_db)
+    users = Table("select_test_users", metadata, autoload_with=test_engine)
+    orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+    join = users.join(orders, users.c.id == orders.c.user_id)
+    query = select(users.c.id, orders.c.product).select_from(join).final(users)
+    compiled = str(query.compile(dialect=test_engine.dialect))
+    # FINAL should appear between the users table and the JOIN keyword
+    from_clause = compiled[compiled.index("FROM"):]
+    assert "select_test_users` FINAL" in from_clause
+    assert "FINAL" not in from_clause[from_clause.index("JOIN"):]
 
 
 def test_select_with_where_with_sample(test_engine: Engine, test_db: str):
@@ -340,3 +436,149 @@ def test_argmax_aggregate_function(test_engine: Engine, test_db: str):
         assert rows[1].id == 2
         assert rows[1].latest_name == "Bob_v2"
         assert rows[1].latest_value == 250
+
+
+def test_all_inner_ch_join(test_engine: Engine, test_db: str):
+    """ALL INNER JOIN returns all matching rows"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+        orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name, orders.c.product).select_from(
+            ch_join(users, orders, users.c.id == orders.c.user_id, strictness="ALL")
+        )
+
+        compiled = query.compile(dialect=test_engine.dialect)
+        assert "ALL INNER JOIN" in str(compiled).upper()
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        assert len(rows) == 4
+
+
+def test_any_left_ch_join(test_engine: Engine, test_db: str):
+    """ANY LEFT JOIN returns at most one match per left row"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+        orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name, orders.c.product).select_from(
+            ch_join(users, orders, users.c.id == orders.c.user_id, isouter=True, strictness="ANY")
+        )
+
+        compiled = query.compile(dialect=test_engine.dialect)
+        sql_str = str(compiled).upper()
+        assert "ANY LEFT OUTER JOIN" in sql_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        # ANY returns at most one order per user; user_id=1 has 2 orders but gets 1
+        assert len(rows) == 3
+        user_ids = [row.id for row in rows]
+        assert sorted(user_ids) == [1, 2, 3]
+
+
+def test_global_all_left_ch_join(test_engine: Engine, test_db: str):
+    """GLOBAL ALL LEFT OUTER JOIN compiles and executes correctly"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        users = Table("select_test_users", metadata, autoload_with=test_engine)
+        orders = Table("select_test_orders", metadata, autoload_with=test_engine)
+
+        query = select(users.c.id, users.c.name, orders.c.product).select_from(
+            ch_join(users, orders, users.c.id == orders.c.user_id, isouter=True, strictness="ALL", distribution="GLOBAL")
+        )
+
+        compiled = query.compile(dialect=test_engine.dialect)
+        sql_str = str(compiled).upper()
+        assert "GLOBAL ALL LEFT OUTER JOIN" in sql_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        # LEFT JOIN: at least all 3 users returned
+        assert len(rows) >= 3
+        user_names = {row.name for row in rows}
+        assert {"Alice", "Bob", "Charlie"}.issubset(user_names)
+
+
+def test_using_inner_join(test_engine: Engine, test_db: str):
+    """INNER JOIN USING on a shared column name"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        sales = Table("test_using_sales", metadata, autoload_with=test_engine)
+        returns = Table("test_using_returns", metadata, autoload_with=test_engine)
+
+        query = (
+            select(sales.c.product_id, sales.c.sold, returns.c.returned)
+            .select_from(ch_join(sales, returns, using=["product_id"]))
+            .order_by(sales.c.product_id)
+        )
+
+        compiled_str = str(query.compile(dialect=test_engine.dialect))
+        assert "USING" in compiled_str
+        assert "ON" not in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        # Only product_id 2 and 3 exist in both tables
+        assert len(rows) == 2
+        assert rows[0] == (2, 20, 5)
+        assert rows[1] == (3, 30, 10)
+
+
+def test_using_full_outer_join(test_engine: Engine, test_db: str):
+    """FULL OUTER JOIN USING merges the join column correctly."""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        sales = Table("test_using_sales", metadata, autoload_with=test_engine)
+        returns = Table("test_using_returns", metadata, autoload_with=test_engine)
+
+        # Use unqualified product_id to get the merged USING column
+        pid = literal_column("product_id")
+        query = (
+            select(pid, sales.c.sold, returns.c.returned)
+            .select_from(ch_join(sales, returns, using=["product_id"], full=True))
+            .order_by(pid)
+        )
+
+        compiled_str = str(query.compile(dialect=test_engine.dialect))
+        assert "FULL OUTER JOIN" in compiled_str
+        assert "USING" in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        assert len(rows) == 4
+
+        by_pid = {row.product_id: row for row in rows}
+        # product_id=4 only in returns. With USING, product_id is 4 (correct).
+        # With ON, it would be 0 (wrong).
+        assert by_pid[4].product_id == 4
+        assert by_pid[4].sold == 0
+        assert by_pid[4].returned == 15
+        # product_id=1 only in sales
+        assert by_pid[1].sold == 10
+        assert by_pid[1].returned == 0
+
+
+def test_using_with_strictness_integration(test_engine: Engine, test_db: str):
+    """ANY INNER JOIN with USING compiles and executes"""
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        sales = Table("test_using_sales", metadata, autoload_with=test_engine)
+        returns = Table("test_using_returns", metadata, autoload_with=test_engine)
+
+        query = (
+            select(sales.c.product_id, sales.c.sold, returns.c.returned)
+            .select_from(ch_join(sales, returns, using=["product_id"], strictness="ANY"))
+            .order_by(sales.c.product_id)
+        )
+
+        compiled_str = str(query.compile(dialect=test_engine.dialect))
+        assert "ANY INNER JOIN" in compiled_str
+        assert "USING" in compiled_str
+
+        result = conn.execute(query)
+        rows = result.fetchall()
+        assert len(rows) == 2
