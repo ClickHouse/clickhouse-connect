@@ -16,7 +16,7 @@ from base64 import b64encode
 from datetime import tzinfo
 from importlib import import_module
 from importlib.metadata import version as dist_version
-from typing import Any, BinaryIO, Dict, Generator, Iterable, List, Optional, Sequence, Union
+from typing import Any, BinaryIO, Dict, Generator, Iterable, List, Literal, Optional, Sequence, Union
 
 import aiohttp
 import lz4.frame
@@ -28,7 +28,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, tzutil
 from clickhouse_connect.driver.binding import bind_query, quote_identifier
-from clickhouse_connect.driver.client import Client, _strip_utc_timezone_from_arrow
+from clickhouse_connect.driver.client import Client, _apply_arrow_tz_policy
 from clickhouse_connect.driver.common import StreamContext, coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
@@ -38,7 +38,7 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.options import IS_PANDAS_2, arrow, check_arrow, check_numpy, check_pandas, check_polars, pd, pl
-from clickhouse_connect.driver.query import QueryContext, QueryResult, arrow_buffer
+from clickhouse_connect.driver.query import QueryContext, QueryResult, TzMode, TzSource, arrow_buffer
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.asyncqueue import AsyncSyncQueue, EOF_SENTINEL
 from clickhouse_connect.driver.streaming import StreamingInsertSource
@@ -132,8 +132,10 @@ class AiohttpAsyncClient(Client):
         settings: Optional[Dict[str, Any]] = None,
         query_limit: int = 0,
         query_retries: int = 2,
+        tz_source: Optional[TzSource] = None,
+        tz_mode: Optional[TzMode] = None,
         apply_server_timezone: Optional[Union[str, bool]] = None,
-        utc_tz_aware: Optional[bool] = None,
+        utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
         show_clickhouse_errors: Optional[bool] = None,
         autogenerate_session_id: Optional[bool] = None,
         autogenerate_query_id: Optional[bool] = None,
@@ -262,13 +264,15 @@ class AiohttpAsyncClient(Client):
             uri=self.uri,
             query_retries=query_retries,
             server_host_name=server_host_name,
-            apply_server_timezone=apply_server_timezone,
+            tz_source=tz_source,
+            tz_mode=tz_mode,
             utc_tz_aware=utc_tz_aware,
+            apply_server_timezone=apply_server_timezone,
             show_clickhouse_errors=show_clickhouse_errors,
             autoconnect=False
         )
 
-    async def _initialize(self, apply_server_timezone: Optional[Union[str, bool]] = None):
+    async def _initialize(self):
         """
         Async equivalent of Client._init_common_settings.
         Fetches server version, timezone, and settings.
@@ -288,23 +292,23 @@ class AiohttpAsyncClient(Client):
             return
 
         try:
-            if apply_server_timezone is None:
-                apply_server_timezone = self._deferred_apply_server_timezone
+            tz_source = self._deferred_tz_source
 
-            self.server_tz, dst_safe = pytz.UTC, True
+            self.server_tz, self._dst_safe = pytz.UTC, True
             row = await self.command("SELECT version(), timezone()", use_database=False)
             self.server_version, server_tz_str = tuple(row)
             try:
                 server_tz = pytz.timezone(server_tz_str)
-                server_tz, dst_safe = tzutil.normalize_timezone(server_tz)
-                if apply_server_timezone is None:
-                    apply_server_timezone = dst_safe
-                self.apply_server_timezone = apply_server_timezone == "always" or coerce_bool(apply_server_timezone)
+                server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
+                if tz_source == "auto":
+                    self._apply_server_tz = self._dst_safe
+                else:
+                    self._apply_server_tz = tz_source == "server"
                 self.server_tz = server_tz
             except pytz.exceptions.UnknownTimeZoneError:
                 logger.warning("Warning, server is using an unrecognized timezone %s, will use UTC default", server_tz_str)
 
-            if not self.apply_server_timezone and not tzutil.local_tz_dst_safe:
+            if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
                 logger.warning("local timezone %s may return unexpected times due to Daylight Savings Time", tzutil.local_tz.tzname(None))
 
             readonly = "readonly"
@@ -601,6 +605,7 @@ class AiohttpAsyncClient(Client):
         utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
+        tz_mode: Optional[TzMode] = None,
     ) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
@@ -628,6 +633,7 @@ class AiohttpAsyncClient(Client):
                 utc_tz_aware=utc_tz_aware,
                 external_data=external_data,
                 transport_settings=transport_settings,
+                tz_mode=tz_mode,
             )
 
         if context.is_command:
@@ -659,6 +665,7 @@ class AiohttpAsyncClient(Client):
         utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
+        tz_mode: Optional[TzMode] = None,
     ) -> StreamContext:
         """
         Async version of query_column_block_stream.
@@ -681,6 +688,7 @@ class AiohttpAsyncClient(Client):
         utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
+        tz_mode: Optional[TzMode] = None,
     ) -> StreamContext:
         """
         Async version of query_row_block_stream.
@@ -703,6 +711,7 @@ class AiohttpAsyncClient(Client):
         utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
+        tz_mode: Optional[TzMode] = None,
     ) -> StreamContext:
         """
         Async version of query_rows_stream.
@@ -765,6 +774,7 @@ class AiohttpAsyncClient(Client):
         external_data: Optional[ExternalData] = None,
         use_extended_dtypes: Optional[bool] = None,
         transport_settings: Optional[Dict[str, str]] = None,
+        tz_mode: Optional[TzMode] = None,
     ):
         check_pandas()
         self._add_integration_tag("pandas")
@@ -788,6 +798,7 @@ class AiohttpAsyncClient(Client):
         external_data: Optional[ExternalData] = None,
         use_extended_dtypes: Optional[bool] = None,
         transport_settings: Optional[Dict[str, str]] = None,
+        tz_mode: Optional[TzMode] = None,
     ) -> StreamContext:
         check_pandas()
         self._add_integration_tag("pandas")
@@ -1078,7 +1089,8 @@ class AiohttpAsyncClient(Client):
         def parse_arrow_stream():
             file_adapter = StreamingFileAdapter(streaming_source)
             reader = arrow.ipc.open_stream(file_adapter)
-            return reader.read_all()
+            table = reader.read_all()
+            return _apply_arrow_tz_policy(table, self.tz_mode)
 
         try:
             return await loop.run_in_executor(None, parse_arrow_stream)
@@ -1150,6 +1162,7 @@ class AiohttpAsyncClient(Client):
 
                 for batch in reader:
                     try:
+                        batch = _apply_arrow_tz_policy(batch, self.tz_mode)
                         queue.sync_q.put(batch)
                     except RuntimeError:
                         return
@@ -1213,8 +1226,7 @@ class AiohttpAsyncClient(Client):
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "arrow.Table") -> "pd.DataFrame":
-                if not self.utc_tz_aware:
-                    table = _strip_utc_timezone_from_arrow(table)
+                table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
 
         elif dataframe_library == "polars":
@@ -1222,8 +1234,7 @@ class AiohttpAsyncClient(Client):
             self._add_integration_tag("polars")
 
             def converter(table: "arrow.Table") -> "pl.DataFrame":
-                if not self.utc_tz_aware:
-                    table = _strip_utc_timezone_from_arrow(table)
+                table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return pl.from_arrow(table)
 
         else:
@@ -1271,8 +1282,7 @@ class AiohttpAsyncClient(Client):
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "arrow.Table") -> "pd.DataFrame":
-                if not self.utc_tz_aware:
-                    table = _strip_utc_timezone_from_arrow(table)
+                table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
 
         elif dataframe_library == "polars":
@@ -1280,8 +1290,7 @@ class AiohttpAsyncClient(Client):
             self._add_integration_tag("polars")
 
             def converter(table: "arrow.Table") -> "pl.DataFrame":
-                if not self.utc_tz_aware:
-                    table = _strip_utc_timezone_from_arrow(table)
+                table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return pl.from_arrow(table)
 
         else:

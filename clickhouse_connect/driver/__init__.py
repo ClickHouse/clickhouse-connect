@@ -4,7 +4,7 @@ from inspect import signature
 from typing import Optional, Union, Dict, Any, Tuple
 from urllib.parse import urlparse, parse_qs
 
-import clickhouse_connect.driver.ctypes
+import clickhouse_connect.driver.ctypes  # noqa: F401 -- side-effect import
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient
@@ -131,8 +131,15 @@ def create_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
-    :param utc_tz_aware When True, ClickHouse Connect will return timezone-aware UTC datetimes instead of the
-      legacy naive UTC datetimes.
+    :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
+      explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
+      uses the server timezone. "local" always uses the local timezone.
+    :param apply_server_timezone Deprecated. Use tz_source instead.
+    :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+      naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
+      match the server's column definition which means timezone-aware when the column defines a timezone and naive
+      for bare DateTime columns.
+    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
@@ -235,8 +242,15 @@ async def create_async_client(*,
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
-    :param utc_tz_aware When True, ClickHouse Connect will return timezone-aware UTC datetimes instead of the
-      legacy naive UTC datetimes.
+    :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
+      explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
+      uses the server timezone. "local" always uses the local timezone.
+    :param apply_server_timezone Deprecated. Use tz_source instead.
+    :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+      naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
+      match the server's column definition which means timezone-aware when the column defines a timezone and naive
+      for bare DateTime columns.
+    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length

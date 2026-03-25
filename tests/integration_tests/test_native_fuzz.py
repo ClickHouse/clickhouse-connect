@@ -18,7 +18,7 @@ def test_query_fuzz(param_client: Client, call, test_table_engine: str, client_m
     if not param_client.min_version('21'):
         pytest.skip(f'flatten_nested setting not supported in this server version {param_client.server_version}')
     test_runs = int(os.environ.get('CLICKHOUSE_CONNECT_TEST_FUZZ', '250'))
-    param_client.apply_server_timezone = True
+    param_client.tz_source = "server"
     try:
         for _ in range(test_runs):
             call(param_client.command, 'DROP TABLE IF EXISTS fuzz_test')
@@ -49,4 +49,4 @@ def test_query_fuzz(param_client: Client, call, test_table_engine: str, client_m
                 assert result_cols == col_names
                 assert result_rows == data
     finally:
-        param_client.apply_server_timezone = False
+        param_client.tz_source = "auto"

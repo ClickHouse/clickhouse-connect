@@ -1,15 +1,19 @@
 import os
 import time
+import warnings
 from datetime import datetime
 
 import pytz
+import pytest
 
 from clickhouse_connect.driver import Client, tzutil
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 # We have to localize a datetime from a timezone to get a current, sensible timezone object for testing.  See
 # https://stackoverflow.com/questions/35462876/python-pytz-timezone-function-returns-a-timezone-that-is-off-by-9-minutes
 chicago_tz = pytz.timezone('America/Chicago').localize(datetime(2020, 8, 8, 10, 5, 5)).tzinfo
 
+# pylint:disable=protected-access
 
 def test_basic_timezones(param_client: Client, call):
     row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22', 'America/Chicago') as chicago," +
@@ -36,7 +40,7 @@ def test_basic_timezones(param_client: Client, call):
 def test_server_timezone(param_client: Client, call):
     #  This test is really for manual testing since changing the timezone on the test ClickHouse server
     #  still requires a restart.  Other tests will depend on https://github.com/ClickHouse/ClickHouse/pull/44149
-    param_client.apply_server_timezone = True
+    param_client.tz_source = "server"
     test_datetime = datetime(2023, 3, 18, 16, 4, 25)
     try:
         date = call(param_client.query, 'SELECT toDateTime(%s) as st', parameters=[test_datetime]).first_row[0]
@@ -50,7 +54,7 @@ def test_server_timezone(param_client: Client, call):
             assert date.tzinfo == den_tz
             assert date.timestamp() == 1679177065
     finally:
-        param_client.apply_server_timezone = False
+        param_client.tz_source = "auto"
 
 
 def test_column_timezones(param_client: Client, call):
@@ -80,7 +84,7 @@ def test_column_timezones(param_client: Client, call):
 def test_local_timezones(param_client: Client, call):
     denver_tz = pytz.timezone('America/Denver')
     tzutil.local_tz = denver_tz
-    param_client.apply_server_timezone = False
+    param_client.tz_source = "local"
     try:
         row = call(param_client.query, "SELECT toDateTime('2022-10-25 10:55:22'," +
                                 "'America/Chicago') as chicago," +
@@ -96,7 +100,7 @@ def test_local_timezones(param_client: Client, call):
         assert row[3].tzinfo.tzname(None) == denver_tz.tzname(None)
     finally:
         tzutil.local_tz = pytz.UTC
-        param_client.apply_server_timezone = True
+        param_client.tz_source = "auto"
 
 
 def test_naive_timezones(param_client: Client, call):
@@ -115,7 +119,7 @@ def test_timezone_binding_client(param_client: Client, call):
     time.tzset()
     denver_tz = pytz.timezone('America/Denver')
     tzutil.local_tz = denver_tz
-    param_client.apply_server_timezone = False
+    param_client.tz_source = "local"
     denver_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=denver_tz)
     try:
         server_time = call(param_client.query,
@@ -125,7 +129,7 @@ def test_timezone_binding_client(param_client: Client, call):
         os.environ['TZ'] = 'UTC'
         tzutil.local_tz = pytz.UTC
         time.tzset()
-        param_client.apply_server_timezone = True
+        param_client.tz_source = "auto"
 
     naive_time = datetime(2023, 3, 18, 16, 4, 25)
     server_time = call(param_client.query,
@@ -143,7 +147,7 @@ def test_timezone_binding_server(param_client: Client, call):
     time.tzset()
     denver_tz = pytz.timezone('America/Denver')
     tzutil.local_tz = denver_tz
-    param_client.apply_server_timezone = False
+    param_client.tz_source = "local"
     denver_time = datetime(2022, 3, 18, 16, 4, 25, tzinfo=denver_tz)
     try:
         server_time = call(param_client.query,
@@ -153,7 +157,7 @@ def test_timezone_binding_server(param_client: Client, call):
         os.environ['TZ'] = 'UTC'
         time.tzset()
         tzutil.local_tz = pytz.UTC
-        param_client.apply_server_timezone = True
+        param_client.tz_source = "auto"
 
     naive_time = datetime(2022, 3, 18, 16, 4, 25)
     server_time = call(param_client.query,
@@ -166,7 +170,7 @@ def test_timezone_binding_server(param_client: Client, call):
     assert server_time.astimezone(pytz.UTC) == utc_time
 
 
-def test_utc_tz_aware(param_client: Client, call):
+def test_tz_mode(param_client: Client, call):
     row = call(param_client.query, "SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
                             query_tz='UTC').first_row
@@ -175,7 +179,7 @@ def test_utc_tz_aware(param_client: Client, call):
 
     row = call(param_client.query, "SELECT toDateTime('2023-07-05 15:10:40') as dt," +
                             "toDateTime('2023-07-05 15:10:40', 'UTC') as dt_utc",
-                            query_tz='UTC', utc_tz_aware=True).first_row
+                            query_tz='UTC', tz_mode="aware").first_row
     assert row[0].tzinfo == pytz.UTC
     assert row[1].tzinfo == pytz.UTC
 
@@ -189,7 +193,59 @@ def test_utc_tz_aware(param_client: Client, call):
 
         row = call(param_client.query, "SELECT toDateTime64('2023-07-05 15:10:40.123456', 6) as dt64," +
                                 "toDateTime64('2023-07-05 15:10:40.123456', 6, 'UTC') as dt64_utc",
-                                query_tz='UTC', utc_tz_aware=True).first_row
+                                query_tz='UTC', tz_mode="aware").first_row
         assert row[0].tzinfo == pytz.UTC
         assert row[1].tzinfo == pytz.UTC
         assert row[0].microsecond == 123456
+
+
+def test_apply_server_timezone_setter_deprecated(param_client: Client, call):
+    """Setting client.apply_server_timezone should emit a DeprecationWarning and update state."""
+    try:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            param_client.apply_server_timezone = True
+            assert len(w) >= 1
+            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert len(dep_warnings) >= 1
+            assert "apply_server_timezone is deprecated" in str(dep_warnings[0].message)
+        assert param_client.tz_source == "server"
+        assert param_client._apply_server_tz is True
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            param_client.apply_server_timezone = False
+            assert len(w) >= 1
+            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert len(dep_warnings) >= 1
+        assert param_client.tz_source == "local"
+        assert param_client._apply_server_tz is False
+    finally:
+        param_client.tz_source = "auto"
+
+
+def test_apply_server_timezone_getter_deprecated(param_client: Client, call):
+    """Reading client.apply_server_timezone should emit a DeprecationWarning."""
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _ = param_client.apply_server_timezone
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+
+def test_tz_source_setter_validates(param_client: Client, call):
+    """Setting client.tz_source to an invalid value should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match='tz_source must be'):
+        param_client.tz_source = "serer"
+
+
+def test_tz_source_setter_auto_restores_dst_safe(param_client: Client, call):
+    """Setting tz_source back to 'auto' should re-resolve based on server DST safety."""
+    original = param_client._apply_server_tz
+    try:
+        param_client.tz_source = "local"
+        assert param_client._apply_server_tz is False
+        param_client.tz_source = "auto"
+        assert param_client._apply_server_tz == original
+    finally:
+        param_client.tz_source = "auto"

@@ -142,7 +142,8 @@ class AsyncClient:
                     column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                     utc_tz_aware: Optional[bool] = None,
                     external_data: Optional[ExternalData] = None,
-                    transport_settings: Optional[Dict[str, str]] = None) -> QueryResult:
+                    transport_settings: Optional[Dict[str, str]] = None,
+                    tz_mode: Optional[str] = None) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.
         For parameters, see the create_query_context method.
@@ -153,7 +154,8 @@ class AsyncClient:
                                       encoding=encoding, use_none=use_none, column_oriented=column_oriented,
                                       use_numpy=use_numpy, max_str_len=max_str_len, context=context,
                                       query_tz=query_tz, column_tzs=column_tzs, utc_tz_aware=utc_tz_aware,
-                                      external_data=external_data, transport_settings=transport_settings)
+                                      external_data=external_data, transport_settings=transport_settings,
+                                      tz_mode=tz_mode)
 
     async def query_column_block_stream(self,
                                         query: Optional[str] = None,
@@ -169,6 +171,7 @@ class AsyncClient:
                                         utc_tz_aware: Optional[bool] = None,
                                         external_data: Optional[ExternalData] = None,
                                         transport_settings: Optional[Dict[str, str]] = None,
+                                        tz_mode: Optional[str] = None,
                                         ) -> StreamContext:
         """
         Variation of main query method that returns a stream of column oriented blocks.
@@ -180,7 +183,8 @@ class AsyncClient:
                                                           encoding=encoding, use_none=use_none, context=context,
                                                           query_tz=query_tz, column_tzs=column_tzs,
                                                           utc_tz_aware=utc_tz_aware,
-                                                          external_data=external_data, transport_settings=transport_settings)
+                                                          external_data=external_data, transport_settings=transport_settings,
+                                                          tz_mode=tz_mode)
 
     async def query_row_block_stream(self,
                                      query: Optional[str] = None,
@@ -195,7 +199,8 @@ class AsyncClient:
                                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                                      utc_tz_aware: Optional[bool] = None,
                                      external_data: Optional[ExternalData] = None,
-                                     transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+                                     transport_settings: Optional[Dict[str, str]] = None,
+                                     tz_mode: Optional[str] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks.
         For parameters, see the create_query_context method.
@@ -206,7 +211,8 @@ class AsyncClient:
                                                        encoding=encoding, use_none=use_none, context=context,
                                                        query_tz=query_tz, column_tzs=column_tzs,
                                                        utc_tz_aware=utc_tz_aware,
-                                                       external_data=external_data, transport_settings=transport_settings)
+                                                       external_data=external_data, transport_settings=transport_settings,
+                                                       tz_mode=tz_mode)
 
     async def query_rows_stream(self,
                                 query: Optional[str] = None,
@@ -221,7 +227,8 @@ class AsyncClient:
                                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
                                 utc_tz_aware: Optional[bool] = None,
                                 external_data: Optional[ExternalData] = None,
-                                transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+                                transport_settings: Optional[Dict[str, str]] = None,
+                                tz_mode: Optional[str] = None) -> StreamContext:
         """
         Variation of main query method that returns a stream of row oriented blocks.
         For parameters, see the create_query_context method.
@@ -232,7 +239,8 @@ class AsyncClient:
                                                   encoding=encoding, use_none=use_none, context=context,
                                                   query_tz=query_tz, column_tzs=column_tzs,
                                                   utc_tz_aware=utc_tz_aware,
-                                                  external_data=external_data, transport_settings=transport_settings)
+                                                  external_data=external_data, transport_settings=transport_settings,
+                                                  tz_mode=tz_mode)
 
     async def raw_query(self,
                         query: str,
@@ -344,7 +352,8 @@ class AsyncClient:
                        context: Optional[QueryContext] = None,
                        external_data: Optional[ExternalData] = None,
                        use_extended_dtypes: Optional[bool] = None,
-                       transport_settings: Optional[Dict[str, str]] = None):
+                       transport_settings: Optional[Dict[str, str]] = None,
+                       tz_mode: Optional[str] = None):
         """
         Query method that results the results as a pandas dataframe.
         For parameter values, see the create_query_context method.
@@ -355,7 +364,8 @@ class AsyncClient:
                                          encoding=encoding, use_none=use_none, max_str_len=max_str_len,
                                          use_na_values=use_na_values, query_tz=query_tz, column_tzs=column_tzs,
                                          utc_tz_aware=utc_tz_aware, context=context, external_data=external_data,
-                                         use_extended_dtypes=use_extended_dtypes, transport_settings=transport_settings)
+                                         use_extended_dtypes=use_extended_dtypes, transport_settings=transport_settings,
+                                         tz_mode=tz_mode)
 
     async def query_df_arrow(
             self,
@@ -402,7 +412,8 @@ class AsyncClient:
                               context: Optional[QueryContext] = None,
                               external_data: Optional[ExternalData] = None,
                               use_extended_dtypes: Optional[bool] = None,
-                              transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+                              transport_settings: Optional[Dict[str, str]] = None,
+                              tz_mode: Optional[str] = None) -> StreamContext:
         """
         Query method that returns the results as a StreamContext.
         For parameter values, see the create_query_context method.
@@ -413,7 +424,8 @@ class AsyncClient:
                                                 encoding=encoding, use_none=use_none, max_str_len=max_str_len,
                                                 use_na_values=use_na_values, query_tz=query_tz, column_tzs=column_tzs,
                                                 utc_tz_aware=utc_tz_aware, context=context, external_data=external_data,
-                                                use_extended_dtypes=use_extended_dtypes, transport_settings=transport_settings)
+                                                use_extended_dtypes=use_extended_dtypes, transport_settings=transport_settings,
+                                                tz_mode=tz_mode)
 
     async def query_df_arrow_stream(self,
                                     query: str,
