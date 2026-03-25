@@ -2,7 +2,7 @@ import datetime
 from typing import Callable
 
 import pytest
-from clickhouse_connect.driver.options import pd, PANDAS_VERSION, arrow
+from clickhouse_connect.driver.options import pd, PANDAS_VERSION, arrow  # pylint: disable=no-name-in-module
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.common import set_setting

@@ -5,7 +5,7 @@ import pytest
 from clickhouse_connect import get_client
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.external import ExternalData
-from clickhouse_connect.driver.options import arrow
+from clickhouse_connect.driver.options import arrow  # pylint: disable=no-name-in-module
 from tests.integration_tests.conftest import TestConfig
 
 ext_settings = {'input_format_allow_errors_num': 10, 'input_format_allow_errors_ratio': .2}
