@@ -23,6 +23,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### Improvements
+- Lazy imports for optional dependencies (numpy, pandas, pyarrow, polars). If installed, these heavy libraries are no longer imported at `import clickhouse_connect` time. They are only imported when features that need them are actually used. The C/Numpy optimization bridge is also deferred. This speeds up bare import time of `clickhouse-connect` about 4X in environments where all four are installed. Closes [#589](https://github.com/ClickHouse/clickhouse-connect/issues/589)
+
 ## 0.14.1, 2026-03-11
 
 ### Bug Fixes
