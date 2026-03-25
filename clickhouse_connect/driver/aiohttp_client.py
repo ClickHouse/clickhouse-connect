@@ -272,6 +272,7 @@ class AiohttpAsyncClient(Client):
             autoconnect=False
         )
 
+    # pylint: disable=attribute-defined-outside-init
     async def _initialize(self):
         """
         Async equivalent of Client._init_common_settings.
