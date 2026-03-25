@@ -199,7 +199,7 @@ def test_tz_mode(param_client: Client, call):
         assert row[0].microsecond == 123456
 
 
-def test_apply_server_timezone_setter_deprecated(param_client: Client, call):
+def test_apply_server_timezone_setter_deprecated(param_client: Client):
     """Setting client.apply_server_timezone should emit a DeprecationWarning and update state."""
     try:
         with warnings.catch_warnings(record=True) as w:
@@ -224,7 +224,7 @@ def test_apply_server_timezone_setter_deprecated(param_client: Client, call):
         param_client.tz_source = "auto"
 
 
-def test_apply_server_timezone_getter_deprecated(param_client: Client, call):
+def test_apply_server_timezone_getter_deprecated(param_client: Client):
     """Reading client.apply_server_timezone should emit a DeprecationWarning."""
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
@@ -233,13 +233,13 @@ def test_apply_server_timezone_getter_deprecated(param_client: Client, call):
         assert issubclass(w[0].category, DeprecationWarning)
 
 
-def test_tz_source_setter_validates(param_client: Client, call):
+def test_tz_source_setter_validates(param_client: Client):
     """Setting client.tz_source to an invalid value should raise ProgrammingError."""
     with pytest.raises(ProgrammingError, match='tz_source must be'):
         param_client.tz_source = "serer"
 
 
-def test_tz_source_setter_auto_restores_dst_safe(param_client: Client, call):
+def test_tz_source_setter_auto_restores_dst_safe(param_client: Client):
     """Setting tz_source back to 'auto' should re-resolve based on server DST safety."""
     original = param_client._apply_server_tz
     try:
