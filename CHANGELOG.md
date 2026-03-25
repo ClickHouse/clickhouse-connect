@@ -23,6 +23,12 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+### New Features
+- SQLAlchemy: Add missing Replicated table engine variants: `ReplicatedReplacingMergeTree`, `ReplicatedCollapsingMergeTree`, `ReplicatedVersionedCollapsingMergeTree`, and `ReplicatedGraphiteMergeTree`. Closes [#687](https://github.com/ClickHouse/clickhouse-connect/issues/687)
+
+### Bug Fixes
+- SQLAlchemy: Fix `GraphiteMergeTree` and `ReplicatedGraphiteMergeTree` to properly single-quote the `config_section` argument as ClickHouse requires.
+
 ## 0.14.1, 2026-03-11
 
 ### Bug Fixes
