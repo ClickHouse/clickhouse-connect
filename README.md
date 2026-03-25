@@ -32,16 +32,23 @@ When creating a Superset Data Source, either use the provided connection dialog,
 ### SQLAlchemy Implementation
 
 ClickHouse Connect includes a lightweight SQLAlchemy dialect implementation focused on compatibility with **Superset**
-and **SQLAlchemy Core**.
+and **SQLAlchemy Core**. Both SQLAlchemy 1.4 and 2.x are supported. SQLAlchemy 1.4 compatibility is maintained
+because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
 
 Supported features include:
 - Basic query execution via SQLAlchemy Core
-- `SELECT` queries with `JOIN`s, `ARRAY JOIN`, and `FINAL` modifier
+- `SELECT` queries with `JOIN`s (including ClickHouse-specific strictness, `USING`, and `GLOBAL` modifiers),
+  `ARRAY JOIN` (single and multi-column), `FINAL`, and `SAMPLE`
+- `VALUES` table function syntax
 - Lightweight `DELETE` statements
 
-The implementation does not include ORM support and is not intended as a full SQLAlchemy dialect. While it can support
-a range of Core-based applications beyond Superset, it may not be suitable for more complex SQLAlchemy applications
-that rely on full ORM or advanced dialect functionality.
+A small number of features require SQLAlchemy 2.x: `Values.cte()` and certain literal-rendering behaviors.
+All other dialect features, including those used by Superset, work on both 1.4 and 2.x.
+
+Basic ORM usage works for insert-heavy, read-focused workloads: declarative model definitions, `CREATE TABLE`,
+`session.add()`, `bulk_save_objects()`, and read queries all function correctly. However, full ORM support is not
+provided. UPDATE compilation, foreign key/relationship reflection, autoincrement/RETURNING, and cascade operations
+are not implemented. The dialect is best suited for SQLAlchemy Core usage and Superset connectivity.
 
 ### Asyncio Support
 
