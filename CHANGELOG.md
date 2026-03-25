@@ -24,6 +24,12 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 
 ### New Features
+- SQLAlchemy: Add missing Replicated table engine variants: `ReplicatedReplacingMergeTree`, `ReplicatedCollapsingMergeTree`, `ReplicatedVersionedCollapsingMergeTree`, and `ReplicatedGraphiteMergeTree`. Closes [#687](https://github.com/ClickHouse/clickhouse-connect/issues/687)
+
+### Bug Fixes
+- SQLAlchemy: Fix `GraphiteMergeTree` and `ReplicatedGraphiteMergeTree` to properly single-quote the `config_section` argument as ClickHouse requires.
+
+### New Features
 - SQLAlchemy: Comprehensive ClickHouse JOIN support via the new `ch_join()` helper. All strictness modifiers (`ALL`, `ANY`, `SEMI`, `ANTI`, `ASOF`), the `GLOBAL` distribution modifier, and explicit `CROSS JOIN` are now available. Use with `select_from()` to generate ClickHouse-specific join syntax like `GLOBAL ALL LEFT OUTER JOIN`. Closes [#635](https://github.com/ClickHouse/clickhouse-connect/issues/635)
 - SQLAlchemy: `array_join()` now supports multiple columns for parallel array expansion. Pass a list of columns and a matching list of aliases to generate `ARRAY JOIN col1 AS a, col2 AS b, col3 AS c`. Single-column usage is unchanged. Closes [#633](https://github.com/ClickHouse/clickhouse-connect/issues/633)
 - SQLAlchemy: `ch_join()` now supports `USING` syntax via the new `using` parameter. Pass a list of column name strings to generate `USING (col1, col2)` instead of `ON`. This is important for `FULL OUTER JOIN` where `USING` merges the join column correctly while `ON` produces default values (0, '') for unmatched sides. Closes [#636](https://github.com/ClickHouse/clickhouse-connect/issues/636)
