@@ -52,7 +52,17 @@ def _target_cache_key(target: FromClause) -> str:
 
 # pylint: disable=protected-access
 def final(select_stmt: Select, table: Optional[FromClause] = None) -> Select:
-    """Apply the ClickHouse FINAL modifier to a select statement."""
+    """Apply the ClickHouse FINAL modifier to a select statement.
+
+    FINAL forces ClickHouse to merge data parts before returning results,
+    guaranteeing fully collapsed rows for ReplacingMergeTree, CollapsingMergeTree,
+    and similar engines.
+
+    Args:
+        select_stmt: The SELECT statement to modify.
+        table: The target table to apply FINAL to. Required when the query
+            joins multiple tables, optional when there is a single FROM target.
+    """
     target = _resolve_target(select_stmt, table, "final")
     ch_final = getattr(select_stmt, "_ch_final", set())
 
@@ -75,8 +85,16 @@ def _select_final(self: Select, table: Optional[FromClause] = None) -> Select:
 
 
 def sample(select_stmt: Select, sample_value: Union[str, int, float], table: Optional[FromClause] = None) -> Select:
-    """
-    Apply ClickHouse SAMPLE clause to a select statement.
+    """Apply the ClickHouse SAMPLE modifier to a select statement.
+
+    Args:
+        select_stmt: The SELECT statement to modify.
+        sample_value: The sample expression. Can be a float between 0 and 1
+            for a fractional sample (e.g. 0.1 for 10%), an integer for an
+            approximate row count, or a string for SAMPLE expressions like
+            '1/10 OFFSET 1/2'.
+        table: The target table to sample. Required when the query joins
+            multiple tables, optional when there is a single FROM target.
     """
     target = _resolve_target(select_stmt, table, "sample")
 
