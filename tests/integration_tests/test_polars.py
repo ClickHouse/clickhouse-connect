@@ -5,7 +5,7 @@ from typing import Callable
 import pytest
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.options import pl, arrow
+from clickhouse_connect.driver.options import pl, arrow  # pylint: disable=no-name-in-module
 
 pytestmark = [
     pytest.mark.skipif(pl is None, reason="polars package not installed"),

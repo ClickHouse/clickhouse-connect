@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from clickhouse_connect.driver.options import arrow, IS_PANDAS_2
+from clickhouse_connect.driver.options import arrow, IS_PANDAS_2  # pylint: disable=no-name-in-module
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver import AsyncClient
 

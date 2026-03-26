@@ -5,7 +5,7 @@ import string
 import pytest
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.options import arrow
+from clickhouse_connect.driver.options import arrow  # pylint: disable=no-name-in-module
 
 
 def test_arrow(param_client: Client, call, table_context: Callable):
