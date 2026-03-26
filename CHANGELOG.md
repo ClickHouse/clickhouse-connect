@@ -1,8 +1,5 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Breaking change for AsyncClient close()
-The AsyncClient close() method is now async and should be called as an async function.
-
 ### WARNING -- Python 3.8 EOL
 Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
 3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
@@ -22,6 +19,15 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+
+### Breaking Changes
+- Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
+- The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
+
+### Improvements
+- Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
+- Clearer error message when attempting to use the async client without aiohttp installed.
+- The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
 
 ## 0.15.0, 2026-03-26
 
