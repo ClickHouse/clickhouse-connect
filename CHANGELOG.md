@@ -23,6 +23,8 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ## UNRELEASED
 
+## 0.15.0, 2026-03-26
+
 ### Improvements
 - SQLAlchemy: Comprehensive ClickHouse JOIN support via the new `ch_join()` helper. All strictness modifiers (`ALL`, `ANY`, `SEMI`, `ANTI`, `ASOF`), the `GLOBAL` distribution modifier, and explicit `CROSS JOIN` are now available. Use with `select_from()` to generate ClickHouse-specific join syntax like `GLOBAL ALL LEFT OUTER JOIN`. Closes [#635](https://github.com/ClickHouse/clickhouse-connect/issues/635)
 - SQLAlchemy: `array_join()` now supports multiple columns for parallel array expansion. Pass a list of columns and a matching list of aliases to generate `ARRAY JOIN col1 AS a, col2 AS b, col3 AS c`. Single-column usage is unchanged. Closes [#633](https://github.com/ClickHouse/clickhouse-connect/issues/633)
