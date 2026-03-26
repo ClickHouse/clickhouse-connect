@@ -1,16 +1,32 @@
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from __future__ import annotations
+
 from inspect import signature
-from typing import Optional, Union, Dict, Any, Tuple
+from typing import Optional, Union, Dict, Any, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse, parse_qs
 
 import clickhouse_connect.driver.ctypes  # noqa: F401 -- side-effect import
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver.asyncclient import AsyncClient, DefaultThreadPoolExecutor, NEW_THREAD_POOL_EXECUTOR
+
+if TYPE_CHECKING:
+    from clickhouse_connect.driver.asyncclient import AsyncClient
 
 __all__ = ['Client', 'AsyncClient', 'create_client', 'create_async_client']
+
+
+def __getattr__(name):
+    if name == "AsyncClient":
+        try:
+            from clickhouse_connect.driver.asyncclient import AsyncClient  # pylint: disable=import-outside-toplevel
+        except ModuleNotFoundError as ex:
+            if ex.name == "aiohttp" or (ex.name and ex.name.startswith("aiohttp.")):  # pylint: disable=no-member
+                raise ImportError(
+                    "Async support requires aiohttp. Install with: pip install clickhouse-connect[async]"
+                ) from ex
+            raise
+        return AsyncClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def default_port(interface: str, secure: bool) -> int:
@@ -182,14 +198,14 @@ async def create_async_client(*,
                               dsn: Optional[str] = None,
                               settings: Optional[Dict[str, Any]] = None,
                               generic_args: Optional[Dict[str, Any]] = None,
-                              executor_threads: int = 0,
-                              executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR,
                               connector_limit: int = 100,
                               connector_limit_per_host: int = 20,
                               keepalive_timeout: float = 30.0,
                               **kwargs) -> AsyncClient:
     """
     The preferred method to get an async ClickHouse Connect Client instance.
+    Requires the async extra: pip install clickhouse-connect[async]
+
     For sync version, see create_client.
 
     Unlike sync version, the 'autogenerate_session_id' setting by default is False.
@@ -209,12 +225,10 @@ async def create_async_client(*,
     :param settings: ClickHouse server settings to be used with the session/every request
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
-    :param executor_threads: (LEGACY) 'max_worker' threads used by the client ThreadPoolExecutor.
-    :param executor: (LEGACY) Optional `ThreadPoolExecutor` to use for async operations.
-    :param connector_limit: Maximum number of allowable connections to the server (native async)
-    :param connector_limit_per_host: Maximum number of connections per host (native async)
-    :param keepalive_timeout: Time limit on idle keepalive connections (native async)
-    :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
+    :param connector_limit: Maximum number of allowable connections to the server
+    :param connector_limit_per_host: Maximum number of connections per host
+    :param keepalive_timeout: Time limit on idle keepalive connections
+    :param kwargs -- Recognized keyword arguments (used by the async HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
       compression method (lz4).  A str of 'lz4', 'zstd', 'brotli', or 'gzip' can be used to use a specific compression type
@@ -223,7 +237,6 @@ async def create_async_client(*,
     :param send_receive_timeout: Read timeout in seconds for http connection
     :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
       in the ClickHouse system.query_log.
-    :param send_progress: Deprecated, has no effect.  Previous functionality is now automatically determined
     :param verify: Verify the server certificate in secure/https mode
     :param ca_cert: If verify is True, the file path to Certificate Authority root to validate ClickHouse server
      certificate, in .pem format.  Ignored if verify is False.  This is not necessary if the ClickHouse server
@@ -235,8 +248,6 @@ async def create_async_client(*,
       is not included the Client Certificate key file
     :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
       is True, the client will generate a UUID1 session id
-    :param pool_mgr Optional urllib3 PoolManager for this client.  Useful for creating separate connection
-      pools for multiple client endpoints for applications with many clients
     :param http_proxy  http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
     :param https_proxy https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
     :param server_host_name  This is the server host name that will be checked against a TLS certificate for
@@ -257,32 +268,47 @@ async def create_async_client(*,
       limits. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect AsyncClient instance
     """
+    try:
+        from clickhouse_connect.driver.asyncclient import AsyncClient as _AsyncClient  # pylint: disable=import-outside-toplevel
+    except ModuleNotFoundError as ex:
+        if ex.name == "aiohttp" or (ex.name and ex.name.startswith("aiohttp.")):  # pylint: disable=no-member
+            raise ImportError(
+                "Async support requires aiohttp. Install with: pip install clickhouse-connect[async]"
+            ) from ex
+        raise
+
+    if "pool_mgr" in kwargs:
+        raise ProgrammingError(
+            "pool_mgr is not supported by the async client. "
+            "Use connector_limit and connector_limit_per_host to configure connection pooling."
+        )
+
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
     _validate_access_token(access_token, username, password)
 
-    if executor_threads != 0 or executor is not NEW_THREAD_POOL_EXECUTOR:
-        # LEGACY PATH: User explicitly requested executor-based client
-        def _create_client():
-            if 'autogenerate_session_id' not in kwargs:
-                kwargs['autogenerate_session_id'] = False
-            return create_client(host=host, username=username, password=password, database=database, interface=interface,
-                                 port=port, secure=secure, dsn=None, settings=settings, generic_args=generic_args, **kwargs)
+    settings = settings or {}
+    if generic_args:
+        client_params = signature(_AsyncClient).parameters
+        for name, value in generic_args.items():
+            if name in client_params:
+                kwargs[name] = value
+            elif name == "compression":
+                if "compress" not in kwargs:
+                    kwargs["compress"] = value
+            else:
+                if name.startswith("ch_"):
+                    name = name[3:]
+                settings[name] = value
 
-        loop = asyncio.get_running_loop()
-        _client = await loop.run_in_executor(None, _create_client)
-        return AsyncClient(client=_client, executor_threads=executor_threads, executor=executor)
-
-    # NATIVE PATH: Default to true async client
-    # Set autogenerate_session_id to False by default
     if "autogenerate_session_id" not in kwargs:
         kwargs["autogenerate_session_id"] = False
 
-    client = AsyncClient(host=host, username=username, password=password, access_token=access_token,
-                         database=database, interface=interface,
-                         port=port, secure=secure, dsn=None, settings=settings, generic_args=generic_args,
-                         connector_limit=connector_limit, connector_limit_per_host=connector_limit_per_host,
-                         keepalive_timeout=keepalive_timeout, **kwargs)
-    await client._initialize() # pylint: disable=protected-access
+    client = _AsyncClient(interface=interface, host=host, port=port, username=username, password=password,
+                          database=database, access_token=access_token,
+                          settings=settings,
+                          connector_limit=connector_limit, connector_limit_per_host=connector_limit_per_host,
+                          keepalive_timeout=keepalive_timeout, **kwargs)
+    await client._initialize()  # pylint: disable=protected-access
     return client

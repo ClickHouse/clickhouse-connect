@@ -17,7 +17,7 @@ from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.tools.testing import TableContext
 from clickhouse_connect.driver.httpclient import HttpClient
-from clickhouse_connect.driver import AsyncClient, Client, create_client
+from clickhouse_connect.driver import Client, create_client
 from tests.helpers import PROJECT_ROOT_DIR
 
 
@@ -324,15 +324,9 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
             sys.stderr.write('Successfully stopped docker compose')
 
 
-@pytest_asyncio.fixture(scope='session', name='test_async_client')
-async def test_async_client_fixture(test_client: Client) -> AsyncContextManager[AsyncClient]:
-    async with AsyncClient(client=test_client) as client:
-        yield client
-
-
 @pytest_asyncio.fixture(scope="function", loop_scope="function", name="test_native_async_client")
 async def test_native_async_client_fixture(test_config: TestConfig) -> AsyncContextManager:
-    """Function-scoped fixture for aiohttp async client"""
+    """Function-scoped async client fixture"""
     async with await get_async_client(
         host=test_config.host,
         port=test_config.port,
@@ -340,7 +334,7 @@ async def test_native_async_client_fixture(test_config: TestConfig) -> AsyncCont
         password=test_config.password,
         database=test_config.test_database,
         compress=test_config.compress,
-        client_name="int_tests/aiohttp_async",
+        client_name="int_tests/native_async",
     ) as client:
         if client.min_version("22.8"):
             client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")

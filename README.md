@@ -53,19 +53,15 @@ are not implemented. The dialect is best suited for SQLAlchemy Core usage and Su
 
 ### Asyncio Support
 
-ClickHouse Connect provides native async support using aiohttp. For the best performance with async applications,
+ClickHouse Connect provides native async support using aiohttp. To use the async client,
 install the optional async dependency:
 
 ```
 pip install clickhouse-connect[async]
 ```
 
-See the [run_async example](./examples/run_async.py) for more details.
-
-The current `AsyncClient` is a thread-pool executor wrapper around the synchronous client and is deprecated.
-In 1.0.0 it will be replaced by a fully native async implementation. The API surface is the same,
-with one difference: you will no longer be able to create a sync client first and pass it to the
-`AsyncClient` constructor. Instead, use `clickhouse_connect.get_async_client()` directly.
+Then create a client with `clickhouse_connect.get_async_client()`. See the
+[run_async example](./examples/run_async.py) for more details.
 
 ### Complete Documentation
 

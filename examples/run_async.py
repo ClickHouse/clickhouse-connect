@@ -1,51 +1,37 @@
 #!/usr/bin/env python -u
 
 """
-This example will execute 10 queries in total, 2 concurrent queries at a time.
-Each query will sleep for 2 seconds before returning.
-Here's a sample output that shows that the queries are executed concurrently in batches of 2:
-```
-Completed query 1, elapsed ms since start: 2002
-Completed query 0, elapsed ms since start: 2002
-Completed query 3, elapsed ms since start: 4004
-Completed query 2, elapsed ms since start: 4005
-Completed query 4, elapsed ms since start: 6006
-Completed query 5, elapsed ms since start: 6007
-Completed query 6, elapsed ms since start: 8009
-Completed query 7, elapsed ms since start: 8009
-Completed query 9, elapsed ms since start: 10011
-Completed query 8, elapsed ms since start: 10011
-```
+Demonstrates concurrent async queries using clickhouse-connect.
+
+Executes 10 queries with a concurrency limit of 2. Each query sleeps for 2 seconds,
+so the total wall time is ~10 seconds rather than ~20.
+
+Sample output:
+    Completed query 1, elapsed: 2002ms
+    Completed query 0, elapsed: 2003ms
+    Completed query 3, elapsed: 4005ms
+    Completed query 2, elapsed: 4005ms
+    ...
 """
 
 import asyncio
-from datetime import datetime
+import time
 
 import clickhouse_connect
 
-QUERIES = 10
-SEMAPHORE = 2
-
 
 async def concurrent_queries():
-    test_query = "SELECT sleep(2)"
-    client = await clickhouse_connect.get_async_client()
+    async with await clickhouse_connect.get_async_client() as client:
+        semaphore = asyncio.Semaphore(2)
+        start = time.monotonic()
 
-    start = datetime.now()
+        async def run_query(num: int):
+            async with semaphore:
+                await client.query("SELECT sleep(2)")
+                elapsed = int((time.monotonic() - start) * 1000)
+                print(f"Completed query {num}, elapsed: {elapsed}ms")
 
-    async def semaphore_wrapper(sm: asyncio.Semaphore, num: int):
-        async with sm:
-            await client.query(query=test_query)
-            print(f"Completed query {num}, "
-                  f"elapsed ms since start: {int((datetime.now() - start).total_seconds() * 1000)}")
-
-    semaphore = asyncio.Semaphore(SEMAPHORE)
-    await asyncio.gather(*[semaphore_wrapper(semaphore, num) for num in range(QUERIES)])
-    await client.close()
+        await asyncio.gather(*(run_query(i) for i in range(10)))
 
 
-async def main():
-    await concurrent_queries()
-
-
-asyncio.run(main())
+asyncio.run(concurrent_queries())
