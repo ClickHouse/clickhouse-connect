@@ -29,7 +29,7 @@ class CommonSetting:
 _common_settings: Dict[str, CommonSetting] = {}
 
 
-def build_client_name(client_name: str) -> str:
+def build_client_name(client_name: Optional[str]) -> str:
     product_name = get_setting('product_name')
     product_name = product_name.strip() + ' ' if product_name else ''
     client_name = client_name.strip() + ' ' if client_name else ''

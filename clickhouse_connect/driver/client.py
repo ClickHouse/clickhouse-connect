@@ -124,8 +124,8 @@ class Client(ABC):
     """
     Base ClickHouse Connect client
     """
-    compression: str = None
-    write_compression: str = None
+    compression: Optional[str] = None
+    write_compression: Optional[str] = None
     protocol_version = 0
     valid_transport_settings = set()
     optional_transport_settings = set()
@@ -190,7 +190,7 @@ class Client(ABC):
         return _TZ_MODE_TO_UTC_TZ_AWARE[self.tz_mode]
 
     def __init__(self,
-                 database: str,
+                 database: Optional[str],
                  query_limit: int,
                  uri: str,
                  query_retries: int,
@@ -199,7 +199,8 @@ class Client(ABC):
                  tz_mode: Optional[TzMode] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
-                 apply_server_timezone: Optional[Union[str, bool]] = None):
+                 apply_server_timezone: Optional[Union[str, bool]] = None,
+                 autoconnect: bool = True):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
@@ -214,6 +215,8 @@ class Client(ABC):
           for bare DateTime columns.
         :param utc_tz_aware: Deprecated. Use tz_mode instead.
         :param apply_server_timezone: Deprecated. Use tz_source instead.
+        :param autoconnect: If True, immediately connect to server and fetch settings. If False,
+          defer connection to _connect() method. Used by async clients to avoid blocking I/O in __init__.
         """
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
@@ -226,7 +229,17 @@ class Client(ABC):
         self.tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
         resolved_tz_source = _resolve_tz_source(tz_source, apply_server_timezone)
         self._tz_source = resolved_tz_source
-        self._init_common_settings(resolved_tz_source)
+
+        # Initialize attributes that will be set during connection
+        self.server_version = None
+        self.server_tz = pytz.UTC
+        self.server_settings = {}
+
+        if autoconnect:
+            self._init_common_settings(resolved_tz_source)
+        else:
+            # Store for deferred async initialization
+            self._deferred_tz_source = resolved_tz_source
 
     def _init_common_settings(self, tz_source: TzSource):
         self.server_tz, self._dst_safe = pytz.UTC, True
@@ -495,9 +508,9 @@ class Client(ABC):
                    fmt: str = None,
                    use_database: bool = True,
                    external_data: Optional[ExternalData] = None,
-                   transport_settings: Optional[Dict[str, str]] = None) -> io.IOBase:
+                   transport_settings: Optional[Dict[str, str]] = None) -> Union[io.IOBase, StreamContext]:
         """
-       Query method that returns the result as an io.IOBase iterator
+       Query method that returns the result as a stream iterator.
        :param query: Query statement/format string
        :param parameters: Optional dictionary used to format the query
        :param settings: Optional dictionary of ClickHouse settings (key/string values)
@@ -506,7 +519,7 @@ class Client(ABC):
         database context.
        :param external_data: External data to send with the query.
        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
-       :return: io.IOBase stream/iterator for the result
+       :return: io.IOBase (sync) or StreamContext (async) - both support iteration over raw bytes
        """
 
     # pylint: disable=duplicate-code,unused-argument
