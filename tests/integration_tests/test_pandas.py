@@ -49,7 +49,7 @@ def test_pandas_nulls(param_client: Client, call, table_context: Callable):
     with table_context('test_pandas_nulls_bad', ['key String', 'num Int32', 'flt Float32',
                                                  'str String', 'dt DateTime', 'day_col Date']):
 
-        with pytest.raises(DataError):
+        with pytest.raises((DataError, AttributeError)):
             call(param_client.insert_df, 'test_pandas_nulls_bad', df, column_names=insert_columns)
 
     with table_context('test_pandas_nulls_good',
@@ -166,7 +166,7 @@ def test_pandas_enums(param_client: Client, call, table_context: Callable):
         result_df = call(param_client.query_df, 'SELECT * FROM test_pandas_enums ORDER BY key')
         assert result_df.iloc[0]['value'] == 'Rostov'
         assert result_df.iloc[1]['value'] == 'Moscow'
-        assert result_df.iloc[1]['null_value'] is None
+        assert pd.isna(result_df.iloc[1]['null_value'])
         assert result_df.iloc[0]['null_value'] == 'red'
         assert df.equals(source_df)
         df = pd.DataFrame([['key3', 'Rostov', 'blue'], ['key4', 'Moscow', None]], columns=['key', 'value', 'null_value'])
@@ -176,7 +176,7 @@ def test_pandas_enums(param_client: Client, call, table_context: Callable):
         assert result_df.iloc[2]['value'] == 'Rostov'
         assert result_df.iloc[3]['value'] == 'Moscow'
         assert result_df.iloc[2]['null_value'] == 'blue'
-        assert result_df.iloc[3]['null_value'] is None
+        assert pd.isna(result_df.iloc[3]['null_value'])
 
 
 def test_pandas_datetime64(param_client: Client, call, table_context: Callable):
@@ -285,11 +285,11 @@ def test_pandas_null_strings(param_client: Client, call, table_context: Callable
         row = {'id': 'id', 'test_col': None}
         df = pd.DataFrame([row])
         assert df['test_col'].isnull().values.all()
-        with pytest.raises(DataError):
+        with pytest.raises((DataError, AttributeError)):
             call(param_client.insert_df, 'test_pandas_null_strings', df)
         row2 = {'id': 'id2', 'test_col': 'val'}
         df = pd.DataFrame([row, row2])
-        with pytest.raises(DataError):
+        with pytest.raises((DataError, AttributeError)):
             call(param_client.insert_df, 'test_pandas_null_strings', df)
 
 

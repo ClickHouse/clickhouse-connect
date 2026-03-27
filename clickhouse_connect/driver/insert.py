@@ -145,6 +145,7 @@ class InsertContext(BaseQueryContext):
     def _row_block_data(self, block_start, block_end):
         return data_conv.pivot(self._block_rows, block_start, block_end)
 
+    # pylint: disable=too-many-branches
     def _convert_pandas(self, df):
         data = []
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
@@ -167,7 +168,7 @@ class InsertContext(BaseQueryContext):
                 self.column_formats[col_name] = "int"
                 continue
             if ch_type.nullable:
-                if d_type_kind == 'O':
+                if d_type_kind == 'O' or ch_type.np_type == 'O':
                     #  This is ugly, but the multiple replaces seem required as a result of this bug:
                     #  https://github.com/pandas-dev/pandas/issues/29024
                     df_col = df_col.replace({options.pd.NaT: None}).replace({options.np.nan: None})
@@ -176,7 +177,10 @@ class InsertContext(BaseQueryContext):
                     continue
                 else:
                     df_col = df_col.replace({options.np.nan: None})
-            data.append(df_col.to_numpy(copy=False))
+            if ch_type.np_type == 'O':
+                data.append(df_col.to_numpy(dtype=object, na_value=None))
+            else:
+                data.append(df_col.to_numpy(copy=False))
         return data
 
     def _convert_numpy(self, np_array):
