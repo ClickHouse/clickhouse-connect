@@ -175,8 +175,7 @@ class InsertContext(BaseQueryContext):
                 if 'Float' in ch_type.base_type:
                     data.append([None if options.pd.isnull(x) else x for x in df_col])
                     continue
-                else:
-                    df_col = df_col.replace({options.np.nan: None})
+                df_col = df_col.replace({options.np.nan: None})
             if ch_type.np_type == 'O':
                 data.append(df_col.to_numpy(dtype=object, na_value=None))
             else:
