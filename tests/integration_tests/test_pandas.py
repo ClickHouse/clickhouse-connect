@@ -49,7 +49,7 @@ def test_pandas_nulls(param_client: Client, call, table_context: Callable):
     with table_context('test_pandas_nulls_bad', ['key String', 'num Int32', 'flt Float32',
                                                  'str String', 'dt DateTime', 'day_col Date']):
 
-        with pytest.raises((DataError, AttributeError)):
+        with pytest.raises(DataError):
             call(param_client.insert_df, 'test_pandas_nulls_bad', df, column_names=insert_columns)
 
     with table_context('test_pandas_nulls_good',
@@ -285,11 +285,11 @@ def test_pandas_null_strings(param_client: Client, call, table_context: Callable
         row = {'id': 'id', 'test_col': None}
         df = pd.DataFrame([row])
         assert df['test_col'].isnull().values.all()
-        with pytest.raises((DataError, AttributeError)):
+        with pytest.raises(DataError):
             call(param_client.insert_df, 'test_pandas_null_strings', df)
         row2 = {'id': 'id2', 'test_col': 'val'}
         df = pd.DataFrame([row, row2])
-        with pytest.raises((DataError, AttributeError)):
+        with pytest.raises(DataError):
             call(param_client.insert_df, 'test_pandas_null_strings', df)
 
 
