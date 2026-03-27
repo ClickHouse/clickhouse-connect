@@ -71,6 +71,20 @@ class NativeTransform:
                         if not error_msg:
                             error_msg = extract_error_message(source.last_message)
                         raise StreamFailureError(error_msg) from None
+                    raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
+
+                # Handle async streaming errors (ClientPayloadError from aiohttp)
+                if ex.__class__.__name__ == "ClientPayloadError":
+                    if source.last_message:
+                        error_msg = None
+                        exception_tag = getattr(source, "exception_tag", None)
+                        if exception_tag:
+                            error_msg = extract_exception_with_tag(source.last_message, exception_tag)
+                        if not error_msg:
+                            error_msg = extract_error_message(source.last_message)
+                        raise StreamFailureError(error_msg) from None
+                    raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
+
                 raise
             block_num += 1
             return result_block

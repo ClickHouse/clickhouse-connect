@@ -51,7 +51,6 @@ def run_setup(try_c: bool = True):
         version=version,
         long_description=long_desc,
         long_description_content_type='text/markdown',
-        package_data={'clickhouse_connect': ['VERSION', 'py.typed']},
         url='https://github.com/ClickHouse/clickhouse-connect',
         packages=find_packages(exclude=['tests*']),
         python_requires='>=3.9,<3.15',
@@ -73,6 +72,7 @@ def run_setup(try_c: bool = True):
             'arrow': ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             'orjson': ['orjson'],
             'tzlocal': ['tzlocal>=4.0'],
+            'async': ['aiohttp>=3.8.0'],
         },
         tests_require=['pytest'],
         entry_points={

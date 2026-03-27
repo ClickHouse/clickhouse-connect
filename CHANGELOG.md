@@ -1,8 +1,5 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Breaking change for AsyncClient close()
-The AsyncClient close() method is now async and should be called as an async function.
-
 ### WARNING -- Python 3.8 EOL
 Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
 3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
@@ -25,12 +22,53 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ### Breaking Changes
 - Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
+- Removed the deprecated `apply_server_timezone` parameter entirely. Use `tz_source` instead: `"auto"` (default), `"server"` (was `True`), or `"local"` (was `False`).
 
 ## UNRELEASED
 
 ### Breaking Changes
+- Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
+- The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
+
+### Improvements
+- Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
+- Clearer error message when attempting to use the async client without aiohttp installed.
+- The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
+
+## 0.15.0, 2026-03-26
+
+### Improvements
+- SQLAlchemy: Comprehensive ClickHouse JOIN support via the new `ch_join()` helper. All strictness modifiers (`ALL`, `ANY`, `SEMI`, `ANTI`, `ASOF`), the `GLOBAL` distribution modifier, and explicit `CROSS JOIN` are now available. Use with `select_from()` to generate ClickHouse-specific join syntax like `GLOBAL ALL LEFT OUTER JOIN`. Closes [#635](https://github.com/ClickHouse/clickhouse-connect/issues/635)
+- SQLAlchemy: `array_join()` now supports multiple columns for parallel array expansion. Pass a list of columns and a matching list of aliases to generate `ARRAY JOIN col1 AS a, col2 AS b, col3 AS c`. Single-column usage is unchanged. Closes [#633](https://github.com/ClickHouse/clickhouse-connect/issues/633)
+- SQLAlchemy: `ch_join()` now supports `USING` syntax via the new `using` parameter. Pass a list of column name strings to generate `USING (col1, col2)` instead of `ON`. This is important for `FULL OUTER JOIN` where `USING` merges the join column correctly while `ON` produces default values (0, '') for unmatched sides. Closes [#636](https://github.com/ClickHouse/clickhouse-connect/issues/636)
+- SQLAlchemy: Add missing Replicated table engine variants: `ReplicatedReplacingMergeTree`, `ReplicatedCollapsingMergeTree`, `ReplicatedVersionedCollapsingMergeTree`, and `ReplicatedGraphiteMergeTree`. Closes [#687](https://github.com/ClickHouse/clickhouse-connect/issues/687)
+- Lazy imports for optional dependencies (numpy, pandas, pyarrow, polars). If installed, these heavy libraries are no longer imported at `import clickhouse_connect` time. They are only imported when features that need them are actually used. The C/Numpy optimization bridge is also deferred. This speeds up bare import time of `clickhouse-connect` about 4X in environments where all four are installed. Closes [#589](https://github.com/ClickHouse/clickhouse-connect/issues/589)
+
+### Other
+- Remove `py.typed` marker file. The package does not have comprehensive type annotations, so the PEP 561 marker was causing false type errors for mypy/pyright users. Closes [#691](https://github.com/ClickHouse/clickhouse-connect/issues/691)
+
+### Bug Fixes
+- SQLAlchemy: Fix `.final()` and `.sample()` silently overwriting each other when chained. Both methods now store modifiers as custom attributes on the `Select` instance and render them during compilation, replacing the previous `with_hint()` approach that only allowed one hint per table. Chaining in either order (e.g. `select(t).final().sample(0.1)`) correctly produces `FROM t FINAL SAMPLE 0.1`. Also fixes rendering for aliased tables (`FROM t AS u FINAL`) and supports explicit table targeting in joins. Fixes [#658](https://github.com/ClickHouse/clickhouse-connect/issues/658)
+- SQLAlchemy: Fix `sqlalchemy.values()` to generate ClickHouse's `VALUES` table function syntax. The compiler now emits `VALUES('col1 Type1, col2 Type2', ...)` with the column structure as the first argument, instead of the standard SQL form that places column names after the alias. Generic SQLAlchemy types are mapped to ClickHouse equivalents (e.g. `Integer` to `Int32`, `String` to `String`). Also handles CTE usage by wrapping in `SELECT * FROM VALUES(...)`. Fixes [#681](https://github.com/ClickHouse/clickhouse-connect/issues/681)
+- SQLAlchemy: Fix `GraphiteMergeTree` and `ReplicatedGraphiteMergeTree` to properly single-quote the `config_section` argument as ClickHouse requires.
+
+## 0.14.1, 2026-03-11
+
+### Bug Fixes
+- Fix JSON and Dynamic column read paths to properly decode shared variant data instead of returning raw binary with discriminator byte prefixes. Shared data values, used when paths exceed `max_dynamic_paths` or types exceed `max_dynamic_types` are now decoded from ClickHouse's binary variant encoding. Scalar types like integers, floats, strings, booleans, and nulls as well as nested objects are now fully decoded. Compound types like Array, Tuple, Map, DateTime, Date, Decimal, and UUID are not yet decoded and will be returned as raw bytes. Fixes [#599](https://github.com/ClickHouse/clickhouse-connect/issues/599), [#615](https://github.com/ClickHouse/clickhouse-connect/issues/615), and [#674](https://github.com/ClickHouse/clickhouse-connect/issues/674)
+- SQLAlchemy: Fixed empty ORM/DBAPI SELECT results so `cursor.description` is still populated when ClickHouse Native format returns no data blocks. This restores correct handling for empty result sets, including parameterized and limited queries. Closes [#675](https://github.com/ClickHouse/clickhouse-connect/issues/675)
+- Restore the default Cython runtime path so compiled `driverc` modules are used again unless `CLICKHOUSE_CONNECT_USE_C=0` is set. Fix C/Python parity issues in streaming exception handling, `FixedString` string reads, nullable array helpers, and numpy conversion helpers, and expand CI and unit parity coverage to keep the optimized and pure-Python paths in sync. Addresses [#676](https://github.com/ClickHouse/clickhouse-connect/issues/676)
+- Simplify `pivot` in the Cython data conversion module to use `tuple(zip(*...))` instead of a manual tuple-building loop which matches the pure-Python implementation and provides significant insert speedup.
+
+## 0.14.0, 2026-03-09
+
+### Breaking Changes
+- Renamed `apply_server_timezone` parameter to `tz_source` across Client and HttpClient. The new `tz_source` parameter accepts string values: `"auto"` (default, was `None`), `"server"` (was `True` or `"always"`), and `"local"` (was `False`). The old `apply_server_timezone` parameter is still accepted but emits a `DeprecationWarning` and will be removed in 1.0. Passing both `tz_source` and `apply_server_timezone` raises `ProgrammingError`. The `"always"` value (which had no distinct runtime behavior from `True`) maps to `"server"`.
 - Renamed `utc_tz_aware` parameter to `tz_mode` across Client, QueryContext, and all query methods. The new `tz_mode` parameter accepts string values: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), and `"schema"` (unchanged). The old `utc_tz_aware` parameter is still accepted but emits a `DeprecationWarning` and will be removed in 1.0. Passing both `tz_mode` and `utc_tz_aware` raises `ProgrammingError`. Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654)
 - Removed the deprecated `Object('json')` type. This was the legacy experimental JSON type that has been superseded by the new `JSON` type in ClickHouse. Closes [#556](https://github.com/ClickHouse/clickhouse-connect/issues/556)
+
+### Deprecations
+- Pandas 1.x support is now deprecated and will be removed in v1.0.0. A `DeprecationWarning` is emitted at import time for pandas 1.x users.
 
 ### Improvements
 - Added support for the `SAMPLE` clause in SQLAlchemy statements. Note: Due to a SQLAlchemy limitation, only one hint (SAMPLE or FINAL) can be applied per table; chaining both will silently ignore one. For now, this change enables use of sample(), but chaining with final() is not yet supported.  Closes [#634](https://github.com/ClickHouse/clickhouse-connect/issues/634)
@@ -56,6 +94,9 @@ are now serialized using their native ClickHouse types client-side (e.g. inserti
 - Fix `dict_add` parameter typed as builtin `any` instead of `typing.Any`.
 - Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
 - SQLAlchemy: `GROUP BY` now renders label aliases instead of full expressions which avoids circular reference errors when an alias shadows a source column name in ClickHouse.
+
+## 0.12.0rc1, 2026-02-11
+- Implement a native async client. Closes [#141](https://github.com/ClickHouse/clickhouse-connect/issues/141)
 
 ## 0.11.0, 2026-02-10
 

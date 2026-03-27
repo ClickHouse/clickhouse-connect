@@ -1,30 +1,65 @@
 import io
 import logging
+from abc import ABC, abstractmethod
 from datetime import tzinfo
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    BinaryIO,
+    Dict,
+    Generator,
+    Iterable,
+    Optional,
+    Sequence,
+    Union,
+)
 
 import pytz
-
-from abc import ABC, abstractmethod
-from typing import Iterable, Optional, Any, Union, Sequence, Dict, Generator, BinaryIO, TYPE_CHECKING
 from pytz.exceptions import UnknownTimeZoneError
 
 from clickhouse_connect import common
 from clickhouse_connect.common import version
-from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes import dynamic as dynamic_module
-from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.common import dict_copy, StreamContext, coerce_int, coerce_bool
-from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
-from clickhouse_connect.driver.exceptions import ProgrammingError, OperationalError, DataError
+from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import options, tzutil
+from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.common import (
+    StreamContext,
+    coerce_bool,
+    coerce_int,
+    dict_copy,
+)
+from clickhouse_connect.driver.constants import (
+    CH_VERSION_WITH_PROTOCOL,
+    PROTOCOL_VERSION_WITH_LOW_CARD,
+)
+from clickhouse_connect.driver.exceptions import (
+    DataError,
+    OperationalError,
+    ProgrammingError,
+)
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.options import check_arrow, check_pandas, check_numpy, check_polars, pd, arrow, pl, IS_PANDAS_2
-from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
-from clickhouse_connect.driver.query import QueryResult, to_arrow, to_arrow_batches, QueryContext, arrow_buffer, \
-    TzMode, _VALID_TZ_MODES
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.options import (
+    check_arrow,
+    check_numpy,
+    check_pandas,
+    check_polars,
+)
+from clickhouse_connect.driver.query import (
+    _VALID_TZ_MODES,
+    _VALID_TZ_SOURCES,
+    QueryContext,
+    QueryResult,
+    TzMode,
+    TzSource,
+    arrow_buffer,
+    to_arrow,
+    to_arrow_batches,
+)
+from clickhouse_connect.driver.summary import QuerySummary
 
 if TYPE_CHECKING:
     import numpy
@@ -49,17 +84,17 @@ def _strip_utc_timezone_from_arrow(table: "arrow.Table") -> "arrow.Table":
     new_fields = []
     needs_cast = False
     for field in table.schema:
-        if arrow.types.is_timestamp(field.type) and tzutil.is_utc_timezone(field.type.tz):
-            new_fields.append(arrow.field(field.name, arrow.timestamp(field.type.unit)))
+        if options.arrow.types.is_timestamp(field.type) and tzutil.is_utc_timezone(field.type.tz):
+            new_fields.append(options.arrow.field(field.name, options.arrow.timestamp(field.type.unit)))
             needs_cast = True
         else:
             new_fields.append(field)
     if needs_cast:
-        return table.cast(arrow.schema(new_fields))
+        return table.cast(options.arrow.schema(new_fields))
     return table
 
 
-def _apply_arrow_tz_policy(table: "arrow.Table", tz_mode: str) -> "arrow.Table":
+def _apply_arrow_tz_policy(table: "options.arrow.Table", tz_mode: str) -> "options.arrow.Table":
     """Apply the tz_mode policy to an Arrow table before conversion.
 
     Handles UTC stripping when tz_mode is "naive_utc" and warns when
@@ -84,35 +119,59 @@ class Client(ABC):
     """
     Base ClickHouse Connect client
     """
-    compression: str = None
-    write_compression: str = None
+    compression: Optional[str] = None
+    write_compression: Optional[str] = None
     protocol_version = 0
     valid_transport_settings = set()
     optional_transport_settings = set()
     database = None
     max_error_message = 0
-    apply_server_timezone = False
+    _tz_source: TzSource = "auto"
+    _apply_server_tz = False
     tz_mode: TzMode = "naive_utc"
     show_clickhouse_errors = True
 
+    @property
+    def tz_source(self) -> TzSource:
+        return self._tz_source
+
+    @tz_source.setter
+    def tz_source(self, value: TzSource):
+        if value not in _VALID_TZ_SOURCES:
+            raise ProgrammingError(
+                f'tz_source must be "auto", "server", or "local", got "{value}"'
+            )
+        self._tz_source = value
+        if value == "auto":
+            self._apply_server_tz = self._dst_safe
+        else:
+            self._apply_server_tz = value == "server"
+
+
     def __init__(self,
-                 database: str,
+                 database: Optional[str],
                  query_limit: int,
                  uri: str,
                  query_retries: int,
                  server_host_name: Optional[str],
-                 apply_server_timezone: Optional[Union[str, bool]],
+                 tz_source: Optional[TzSource] = None,
                  tz_mode: Optional[TzMode] = None,
-                 show_clickhouse_errors: Optional[bool] = None):
+                 show_clickhouse_errors: Optional[bool] = None,
+                 autoconnect: bool = True):
         """
         Shared initialization of ClickHouse Connect client
         :param database: database name
         :param query_limit: default LIMIT for queries
         :param uri: uri for error messages
+        :param tz_source: Controls how the client determines the fallback timezone for DateTime columns without an
+          explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
+          uses the server timezone. "local" always uses the local timezone.
         :param tz_mode: Controls timezone-aware behavior for UTC DateTime columns.  "naive_utc" (default) returns
           naive UTC timestamps.  "aware" forces timezone-aware UTC datetimes.  "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column defines a timezone and naive
           for bare DateTime columns.
+        :param autoconnect: If True, immediately connect to server and fetch settings. If False,
+          defer connection to _connect() method. Used by async clients to avoid blocking I/O in __init__.
         """
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
@@ -125,23 +184,38 @@ class Client(ABC):
         self.tz_mode = tz_mode if tz_mode is not None else "naive_utc"
         if self.tz_mode not in _VALID_TZ_MODES:
             raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
-        self._init_common_settings(apply_server_timezone)
+        resolved_tz_source = tz_source if tz_source is not None else "auto"
+        if resolved_tz_source not in _VALID_TZ_SOURCES:
+            raise ProgrammingError(f'tz_source must be "auto", "server", or "local", got "{resolved_tz_source}"')
+        self._tz_source = resolved_tz_source
 
-    def _init_common_settings(self, apply_server_timezone: Optional[Union[str, bool]]):
-        self.server_tz, dst_safe = pytz.UTC, True
+        # Initialize attributes that will be set during connection
+        self.server_version = None
+        self.server_tz = pytz.UTC
+        self.server_settings = {}
+
+        if autoconnect:
+            self._init_common_settings(resolved_tz_source)
+        else:
+            # Store for deferred async initialization
+            self._deferred_tz_source = resolved_tz_source
+
+    def _init_common_settings(self, tz_source: TzSource):
+        self.server_tz, self._dst_safe = pytz.UTC, True
         self.server_version, server_tz = \
             tuple(self.command('SELECT version(), timezone()', use_database=False))
         try:
             server_tz = pytz.timezone(server_tz)
-            server_tz, dst_safe = tzutil.normalize_timezone(server_tz)
-            if apply_server_timezone is None:
-                apply_server_timezone = dst_safe
-            self.apply_server_timezone = apply_server_timezone == 'always' or coerce_bool(apply_server_timezone)
+            server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
+            if tz_source == "auto":
+                self._apply_server_tz = self._dst_safe
+            else:
+                self._apply_server_tz = tz_source == "server"
             self.server_tz = server_tz
         except UnknownTimeZoneError:
             logger.warning('Warning, server is using an unrecognized timezone %s, will use UTC default', server_tz)
 
-        if not self.apply_server_timezone and not tzutil.local_tz_dst_safe:
+        if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
             logger.warning('local timezone %s may return unexpected times due to Daylight Savings Time/' +
                            'Summer Time differences', tzutil.local_tz.tzname(None))
         readonly = 'readonly'
@@ -389,9 +463,9 @@ class Client(ABC):
                    fmt: str = None,
                    use_database: bool = True,
                    external_data: Optional[ExternalData] = None,
-                   transport_settings: Optional[Dict[str, str]] = None) -> io.IOBase:
+                   transport_settings: Optional[Dict[str, str]] = None) -> Union[io.IOBase, StreamContext]:
         """
-       Query method that returns the result as an io.IOBase iterator
+       Query method that returns the result as a stream iterator.
        :param query: Query statement/format string
        :param parameters: Optional dictionary used to format the query
        :param settings: Optional dictionary of ClickHouse settings (key/string values)
@@ -400,7 +474,7 @@ class Client(ABC):
         database context.
        :param external_data: External data to send with the query.
        :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
-       :return: io.IOBase stream/iterator for the result
+       :return: io.IOBase (sync) or StreamContext (async) - both support iteration over raw bytes
        """
 
     # pylint: disable=duplicate-code,unused-argument
@@ -603,7 +677,7 @@ class Client(ABC):
                             use_extended_dtypes=use_extended_dtypes,
                             as_pandas=as_pandas,
                             streaming=streaming,
-                            apply_server_tz=self.apply_server_timezone,
+                            apply_server_tz=self._apply_server_tz,
                             external_data=external_data,
                             transport_settings=transport_settings)
 
@@ -689,20 +763,20 @@ class Client(ABC):
         if dataframe_library == "pandas":
             check_pandas()
             self._add_integration_tag("pandas")
-            if not IS_PANDAS_2:
+            if not options.IS_PANDAS_2:
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
-            def converter(table: arrow.Table) -> pd.DataFrame:
+            def converter(table: options.arrow.Table) -> options.pd.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
-                return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
+                return table.to_pandas(types_mapper=options.pd.ArrowDtype, safe=False)
 
         elif dataframe_library == "polars":
             check_polars()
             self._add_integration_tag("polars")
 
-            def converter(table: arrow.Table) -> pl.DataFrame:
+            def converter(table: options.arrow.Table) -> options.pl.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
-                return pl.from_arrow(table)
+                return options.pl.from_arrow(table)
 
         else:
             raise ValueError(f"dataframe_library must be 'pandas' or 'polars', got '{dataframe_library}'")
@@ -743,26 +817,26 @@ class Client(ABC):
         if dataframe_library == "pandas":
             check_pandas()
             self._add_integration_tag("pandas")
-            if not IS_PANDAS_2:
+            if not options.IS_PANDAS_2:
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
-            def converter(table: "arrow.Table") -> "pd.DataFrame":
+            def converter(table: "options.arrow.Table") -> "options.pd.DataFrame":
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
-                return table.to_pandas(types_mapper=pd.ArrowDtype, safe=False)
+                return table.to_pandas(types_mapper=options.pd.ArrowDtype, safe=False)
         elif dataframe_library == "polars":
             check_polars()
             self._add_integration_tag("polars")
 
-            def converter(table: arrow.Table) -> pl.DataFrame:
+            def converter(table: options.arrow.Table) -> options.pl.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
-                return pl.from_arrow(table)
+                return options.pl.from_arrow(table)
         else:
             raise ValueError(f"dataframe_library must be 'pandas' or 'polars', got '{dataframe_library}'")
         settings = self._update_arrow_settings(settings, use_strings)
         raw_stream = self.raw_stream(
             query, parameters, settings, fmt="ArrowStream", external_data=external_data, transport_settings=transport_settings
         )
-        reader = arrow.ipc.open_stream(raw_stream)
+        reader = options.arrow.ipc.open_stream(raw_stream)
 
         def df_generator():
             for batch in reader:
@@ -950,26 +1024,26 @@ class Client(ABC):
         """
         check_arrow()
 
-        if pd is not None and isinstance(df, pd.DataFrame):
+        if options.pd is not None and isinstance(df, options.pd.DataFrame):
             df_lib = "pandas"
-        elif pl is not None and isinstance(df, pl.DataFrame):
+        elif options.pl is not None and isinstance(df, options.pl.DataFrame):
             df_lib = "polars"
         else:
-            if pd is None and pl is None:
+            if options.pd is None and options.pl is None:
                 raise ImportError("A DataFrame library (pandas or polars) must be installed to use insert_df_arrow.")
             raise TypeError(f"df must be either a pandas DataFrame or polars DataFrame, got {type(df).__name__}")
 
         if df_lib == "pandas":
-            if not IS_PANDAS_2:
+            if not options.IS_PANDAS_2:
                 raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
-            non_arrow_cols = [col for col, dtype in df.dtypes.items() if not isinstance(dtype, pd.ArrowDtype)]
+            non_arrow_cols = [col for col, dtype in df.dtypes.items() if not isinstance(dtype, options.pd.ArrowDtype)]
             if non_arrow_cols:
                 raise ProgrammingError(
                     f"insert_df_arrow requires all columns to use PyArrow dtypes. Non-Arrow columns found: [{', '.join(non_arrow_cols)}]. "
                 )
             try:
-                arrow_table = arrow.Table.from_pandas(df, preserve_index=False)
+                arrow_table = options.arrow.Table.from_pandas(df, preserve_index=False)
             except Exception as e:
                 raise DataError(f"Failed to convert pandas DataFrame to Arrow table: {e}") from e
         else:
