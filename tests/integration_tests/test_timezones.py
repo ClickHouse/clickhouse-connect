@@ -1,6 +1,5 @@
 import os
 import time
-import warnings
 from datetime import datetime
 
 import pytz
@@ -197,40 +196,6 @@ def test_tz_mode(param_client: Client, call):
         assert row[0].tzinfo == pytz.UTC
         assert row[1].tzinfo == pytz.UTC
         assert row[0].microsecond == 123456
-
-
-def test_apply_server_timezone_setter_deprecated(param_client: Client):
-    """Setting client.apply_server_timezone should emit a DeprecationWarning and update state."""
-    try:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            param_client.apply_server_timezone = True
-            assert len(w) >= 1
-            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep_warnings) >= 1
-            assert "apply_server_timezone is deprecated" in str(dep_warnings[0].message)
-        assert param_client.tz_source == "server"
-        assert param_client._apply_server_tz is True
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            param_client.apply_server_timezone = False
-            assert len(w) >= 1
-            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep_warnings) >= 1
-        assert param_client.tz_source == "local"
-        assert param_client._apply_server_tz is False
-    finally:
-        param_client.tz_source = "auto"
-
-
-def test_apply_server_timezone_getter_deprecated(param_client: Client):
-    """Reading client.apply_server_timezone should emit a DeprecationWarning."""
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        _ = param_client.apply_server_timezone
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
 
 
 def test_tz_source_setter_validates(param_client: Client):

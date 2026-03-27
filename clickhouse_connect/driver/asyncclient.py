@@ -16,7 +16,7 @@ from base64 import b64encode
 from datetime import tzinfo
 from importlib import import_module
 from importlib.metadata import version as dist_version
-from typing import Any, BinaryIO, Dict, Generator, Iterable, List, Literal, Optional, Sequence, Union
+from typing import Any, BinaryIO, Dict, Generator, Iterable, List, Optional, Sequence, Union
 
 import aiohttp
 import lz4.frame
@@ -135,13 +135,11 @@ class AsyncClient(Client):
         query_retries: int = 2,
         tz_source: Optional[TzSource] = None,
         tz_mode: Optional[TzMode] = None,
-        apply_server_timezone: Optional[Union[str, bool]] = None,
-        utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
         show_clickhouse_errors: Optional[bool] = None,
         autogenerate_session_id: Optional[bool] = None,
         autogenerate_query_id: Optional[bool] = None,
         form_encode_query_params: bool = False,
-        **kwargs,
+        rename_response_column: Optional[str] = None,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
@@ -152,7 +150,7 @@ class AsyncClient(Client):
         self.uri = f"{interface}://{host}:{port}{proxy_path}"
         self.url = self.uri
         self.form_encode_query_params = form_encode_query_params
-        self._rename_response_column = kwargs.get("rename_response_column")
+        self._rename_response_column = rename_response_column
         self._initial_settings = settings
         self.headers = {}
 
@@ -267,8 +265,6 @@ class AsyncClient(Client):
             server_host_name=server_host_name,
             tz_source=tz_source,
             tz_mode=tz_mode,
-            utc_tz_aware=utc_tz_aware,
-            apply_server_timezone=apply_server_timezone,
             show_clickhouse_errors=show_clickhouse_errors,
             autoconnect=False
         )
@@ -604,7 +600,6 @@ class AsyncClient(Client):
         context: Optional[QueryContext] = None,
         query_tz: Optional[Union[str, tzinfo]] = None,
         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
         tz_mode: Optional[TzMode] = None,
@@ -632,7 +627,6 @@ class AsyncClient(Client):
                 max_str_len=max_str_len,
                 query_tz=query_tz,
                 column_tzs=column_tzs,
-                utc_tz_aware=utc_tz_aware,
                 external_data=external_data,
                 transport_settings=transport_settings,
                 tz_mode=tz_mode,
@@ -664,7 +658,6 @@ class AsyncClient(Client):
         context: Optional[QueryContext] = None,
         query_tz: Optional[Union[str, tzinfo]] = None,
         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
         tz_mode: Optional[TzMode] = None,
@@ -687,7 +680,6 @@ class AsyncClient(Client):
         context: Optional[QueryContext] = None,
         query_tz: Optional[Union[str, tzinfo]] = None,
         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
         tz_mode: Optional[TzMode] = None,
@@ -710,7 +702,6 @@ class AsyncClient(Client):
         context: Optional[QueryContext] = None,
         query_tz: Optional[Union[str, tzinfo]] = None,
         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        utc_tz_aware: Optional[bool] = None,
         external_data: Optional[ExternalData] = None,
         transport_settings: Optional[Dict[str, str]] = None,
         tz_mode: Optional[TzMode] = None,
@@ -771,7 +762,6 @@ class AsyncClient(Client):
         use_na_values: Optional[bool] = None,
         query_tz: Optional[str] = None,
         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        utc_tz_aware: Optional[bool] = None,
         context: Optional[QueryContext] = None,
         external_data: Optional[ExternalData] = None,
         use_extended_dtypes: Optional[bool] = None,
@@ -795,7 +785,6 @@ class AsyncClient(Client):
         use_na_values: Optional[bool] = None,
         query_tz: Optional[str] = None,
         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        utc_tz_aware: Optional[bool] = None,
         context: Optional[QueryContext] = None,
         external_data: Optional[ExternalData] = None,
         use_extended_dtypes: Optional[bool] = None,

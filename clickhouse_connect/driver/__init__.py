@@ -150,12 +150,10 @@ def create_client(*,
     :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
       explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
       uses the server timezone. "local" always uses the local timezone.
-    :param apply_server_timezone Deprecated. Use tz_source instead.
     :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
-    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
@@ -256,12 +254,10 @@ async def create_async_client(*,
     :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
       explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
       uses the server timezone. "local" always uses the local timezone.
-    :param apply_server_timezone Deprecated. Use tz_source instead.
     :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
-    :param utc_tz_aware Deprecated. Use tz_mode instead.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
     :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
       instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length

@@ -6,7 +6,7 @@ import uuid
 from importlib import import_module
 from importlib.metadata import version as dist_version
 from base64 import b64encode
-from typing import Literal, Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
+from typing import Optional, Dict, Any, Sequence, Union, List, Callable, Generator, BinaryIO
 from urllib.parse import urlencode
 
 from urllib3 import Timeout
@@ -78,8 +78,6 @@ class HttpClient(Client):
                  server_host_name: Optional[str] = None,
                  tz_source: Optional[TzSource] = None,
                  tz_mode: Optional[str] = None,
-                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
-                 apply_server_timezone: Optional[Union[str, bool]] = None,
                  show_clickhouse_errors: Optional[bool] = None,
                  autogenerate_session_id: Optional[bool] = None,
                  autogenerate_query_id: Optional[bool] = None,
@@ -188,8 +186,6 @@ class HttpClient(Client):
                          server_host_name=server_host_name,
                          tz_source=tz_source,
                          tz_mode=tz_mode,
-                         utc_tz_aware=utc_tz_aware,
-                         apply_server_timezone=apply_server_timezone,
                          show_clickhouse_errors=show_clickhouse_errors,
                          autoconnect=True)
         self.params = dict_copy(self.params, self._validate_settings(ch_settings))

@@ -1,6 +1,5 @@
 import io
 import logging
-import warnings
 from abc import ABC, abstractmethod
 from datetime import tzinfo
 from typing import (
@@ -10,7 +9,6 @@ from typing import (
     Dict,
     Generator,
     Iterable,
-    Literal,
     Optional,
     Sequence,
     Union,
@@ -51,15 +49,12 @@ from clickhouse_connect.driver.options import (
     check_polars,
 )
 from clickhouse_connect.driver.query import (
-    _APPLY_SERVER_TZ_TO_TZ_SOURCE,
-    _TZ_MODE_TO_UTC_TZ_AWARE,
+    _VALID_TZ_MODES,
     _VALID_TZ_SOURCES,
     QueryContext,
     QueryResult,
     TzMode,
     TzSource,
-    _resolve_tz_mode,
-    _resolve_tz_source,
     arrow_buffer,
     to_arrow,
     to_arrow_batches,
@@ -80,11 +75,11 @@ def _strip_utc_timezone_from_arrow(table: "arrow.Table") -> "arrow.Table":
     """Strip UTC timezone from timestamp columns in Arrow table.
 
     This ensures naive datetimes are returned when the server timezone is UTC
-    and utc_tz_aware is False (the default).
+    and tz_mode is 'naive_utc' (the default).
 
     Only UTC-equivalent timezones (UTC, Etc/UTC, GMT, etc.) are stripped.
     Non-UTC timezones carry important offset information and are always
-    preserved regardless of utc_tz_aware setting.
+    preserved regardless of tz_mode setting.
     """
     new_fields = []
     needs_cast = False
@@ -152,42 +147,6 @@ class Client(ABC):
         else:
             self._apply_server_tz = value == "server"
 
-    @property
-    def apply_server_timezone(self) -> bool:
-        """Deprecated: use tz_source instead."""
-        warnings.warn(
-            "apply_server_timezone is deprecated and will be removed in 1.0. "
-            "Use tz_source instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._apply_server_tz
-
-    @apply_server_timezone.setter
-    def apply_server_timezone(self, value: Union[bool, str]):
-        """Deprecated: use tz_source instead."""
-        warnings.warn(
-            "apply_server_timezone is deprecated and will be removed in 1.0. "
-            "Use tz_source instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if value not in _APPLY_SERVER_TZ_TO_TZ_SOURCE:
-            raise ProgrammingError(
-                f"apply_server_timezone must be True, False, or 'always', got \"{value}\""
-            )
-        self.tz_source = _APPLY_SERVER_TZ_TO_TZ_SOURCE[value]
-
-    @property
-    def utc_tz_aware(self) -> Union[bool, Literal["schema"]]:
-        """Deprecated: use tz_mode instead."""
-        warnings.warn(
-            "utc_tz_aware is deprecated and will be removed in 1.0. "
-            "Use tz_mode instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _TZ_MODE_TO_UTC_TZ_AWARE[self.tz_mode]
 
     def __init__(self,
                  database: Optional[str],
@@ -198,8 +157,6 @@ class Client(ABC):
                  tz_source: Optional[TzSource] = None,
                  tz_mode: Optional[TzMode] = None,
                  show_clickhouse_errors: Optional[bool] = None,
-                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
-                 apply_server_timezone: Optional[Union[str, bool]] = None,
                  autoconnect: bool = True):
         """
         Shared initialization of ClickHouse Connect client
@@ -213,8 +170,6 @@ class Client(ABC):
           naive UTC timestamps.  "aware" forces timezone-aware UTC datetimes.  "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column defines a timezone and naive
           for bare DateTime columns.
-        :param utc_tz_aware: Deprecated. Use tz_mode instead.
-        :param apply_server_timezone: Deprecated. Use tz_source instead.
         :param autoconnect: If True, immediately connect to server and fetch settings. If False,
           defer connection to _connect() method. Used by async clients to avoid blocking I/O in __init__.
         """
@@ -226,8 +181,12 @@ class Client(ABC):
             self.show_clickhouse_errors = coerce_bool(show_clickhouse_errors)
         self.server_host_name = server_host_name
         self.uri = uri
-        self.tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
-        resolved_tz_source = _resolve_tz_source(tz_source, apply_server_timezone)
+        self.tz_mode = tz_mode if tz_mode is not None else "naive_utc"
+        if self.tz_mode not in _VALID_TZ_MODES:
+            raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
+        resolved_tz_source = tz_source if tz_source is not None else "auto"
+        if resolved_tz_source not in _VALID_TZ_SOURCES:
+            raise ProgrammingError(f'tz_source must be "auto", "server", or "local", got "{resolved_tz_source}"')
         self._tz_source = resolved_tz_source
 
         # Initialize attributes that will be set during connection
@@ -388,7 +347,6 @@ class Client(ABC):
               context: QueryContext = None,
               query_tz: Optional[Union[str, tzinfo]] = None,
               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-              utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
               external_data: Optional[ExternalData] = None,
               transport_settings: Optional[Dict[str, str]] = None,
               tz_mode: Optional[TzMode] = None) -> QueryResult:
@@ -425,7 +383,6 @@ class Client(ABC):
                                   context: QueryContext = None,
                                   query_tz: Optional[Union[str, tzinfo]] = None,
                                   column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                                  utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                                   external_data: Optional[ExternalData] = None,
                                   transport_settings: Optional[Dict[str, str]] = None,
                                   tz_mode: Optional[TzMode] = None) -> StreamContext:
@@ -447,7 +404,6 @@ class Client(ABC):
                                context: QueryContext = None,
                                query_tz: Optional[Union[str, tzinfo]] = None,
                                column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                               utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                                external_data: Optional[ExternalData] = None,
                                transport_settings: Optional[Dict[str, str]] = None,
                                tz_mode: Optional[TzMode] = None) -> StreamContext:
@@ -469,7 +425,6 @@ class Client(ABC):
                           context: QueryContext = None,
                           query_tz: Optional[Union[str, tzinfo]] = None,
                           column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                          utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                           external_data: Optional[ExternalData] = None,
                           transport_settings: Optional[Dict[str, str]] = None,
                           tz_mode: Optional[TzMode] = None) -> StreamContext:
@@ -579,7 +534,6 @@ class Client(ABC):
                  use_na_values: Optional[bool] = None,
                  query_tz: Optional[str] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                  context: QueryContext = None,
                  external_data: Optional[ExternalData] = None,
                  use_extended_dtypes: Optional[bool] = None,
@@ -607,7 +561,6 @@ class Client(ABC):
                         use_na_values: Optional[bool] = None,
                         query_tz: Optional[str] = None,
                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                        utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                         context: QueryContext = None,
                         external_data: Optional[ExternalData] = None,
                         use_extended_dtypes: Optional[bool] = None,
@@ -638,7 +591,6 @@ class Client(ABC):
                              context: Optional[QueryContext] = None,
                              query_tz: Optional[Union[str, tzinfo]] = None,
                              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                             utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                              use_na_values: Optional[bool] = None,
                              streaming: bool = False,
                              as_pandas: bool = False,
@@ -671,7 +623,6 @@ class Client(ABC):
         :param tz_mode: Override the client default for handling UTC results.  "aware" forces timezone-aware
           UTC datetimes, "naive_utc" returns naive UTC datetimes, and "schema" returns datetimes matching the
           server's column definition.
-        :param utc_tz_aware: Deprecated. Use tz_mode instead.
         :param use_na_values: Deprecated alias for use_advanced_dtypes
         :param as_pandas Return the result columns as pandas.Series objects
         :param streaming Marker used to correctly configure streaming queries
@@ -682,10 +633,7 @@ class Client(ABC):
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable QueryContext
         """
-        if tz_mode is not None or utc_tz_aware is not None:
-            resolved_tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
-        else:
-            resolved_tz_mode = self.tz_mode
+        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         if context:
             return context.updated_copy(query=query,
                                         parameters=parameters,
