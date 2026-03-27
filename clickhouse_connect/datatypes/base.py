@@ -42,12 +42,20 @@ class ClickHouseType(ABC):
     encoding = 'utf8'
     np_type = 'O'  # Default to Numpy Object type
     nano_divisor = 0  # Only relevant for date like objects
-    pd_datetime_res = "ns"  # Default date-like resolution for pd
     byte_size = 0
     valid_formats = 'native'
 
     python_type = None
     base_type = None
+
+    @property
+    def _null_time_unit(self):
+        """Extract the time unit from np_type, e.g. 'datetime64[s]' -> 's'."""
+        start = self.np_type.find("[")
+        end = self.np_type.find("]")
+        if start != -1 and end != -1:
+            return self.np_type[start + 1:end]
+        return "ns"
 
     def __init_subclass__(cls, registered: bool = True):
         if registered:

@@ -15,7 +15,6 @@ from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
-from clickhouse_connect.driver import options
 from clickhouse_connect.driver.options import check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
@@ -140,7 +139,6 @@ class QueryContext(BaseQueryContext):
         self.response_tz = None
         self.block_info = False
         self.as_pandas = as_pandas
-        self.use_pandas_na = as_pandas and options.pd_extended_dtypes
         self.streaming = streaming
         self._rename_response_column: Optional[str] = rename_response_column
         self.column_renamer = get_rename_method(rename_response_column)

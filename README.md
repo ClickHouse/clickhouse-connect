@@ -2,7 +2,7 @@
 
 A high performance core database driver for connecting ClickHouse to Python, Pandas, and Superset
 
-* Pandas DataFrames (numpy and arrow-backed). Pandas 2.x and above only, 1.x is deprecated and will be dropped in 1.0.
+* Pandas DataFrames (numpy and arrow-backed). Requires pandas 2.0 or later.
 * Numpy Arrays
 * PyArrow Tables
 * Polars DataFrames
