@@ -763,8 +763,6 @@ class Client(ABC):
         if dataframe_library == "pandas":
             check_pandas()
             self._add_integration_tag("pandas")
-            if not options.IS_PANDAS_2:
-                raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: options.arrow.Table) -> options.pd.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
@@ -817,8 +815,6 @@ class Client(ABC):
         if dataframe_library == "pandas":
             check_pandas()
             self._add_integration_tag("pandas")
-            if not options.IS_PANDAS_2:
-                raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
 
             def converter(table: "options.arrow.Table") -> "options.pd.DataFrame":
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
@@ -1034,9 +1030,6 @@ class Client(ABC):
             raise TypeError(f"df must be either a pandas DataFrame or polars DataFrame, got {type(df).__name__}")
 
         if df_lib == "pandas":
-            if not options.IS_PANDAS_2:
-                raise ProgrammingError("PyArrow-backed dtypes are only supported when using pandas 2.x.")
-
             non_arrow_cols = [col for col, dtype in df.dtypes.items() if not isinstance(dtype, options.pd.ArrowDtype)]
             if non_arrow_cols:
                 raise ProgrammingError(

@@ -8,12 +8,22 @@ import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
-from clickhouse_connect.driver.options import np, pd  # pylint: disable=no-name-in-module
+from clickhouse_connect.driver.options import np, pd, arrow  # pylint: disable=no-name-in-module
 from tests.helpers import random_query
 from tests.integration_tests.conftest import TestConfig
 from tests.integration_tests.datasets import null_ds, null_ds_columns, null_ds_types
 
 pytestmark = pytest.mark.skipif(pd is None, reason='Pandas package not installed')
+
+
+def _dtype_unit(dtype) -> str:
+    """Extract the time unit string from a datetime64/timedelta64 dtype, e.g. 'datetime64[s]' -> 's'."""
+    s = str(dtype)
+    start = s.find("[")
+    end = s.find("]")
+    if start != -1 and end != -1:
+        return s[start + 1:end]
+    return ""
 
 
 def test_pandas_basic(param_client: Client, call, test_table_engine: str):
@@ -233,6 +243,7 @@ def test_pandas_date(param_client: Client, call, table_context: Callable):
         assert result_df.iloc[0]['null_dt'] == pd.Timestamp(2023, 5, 4)
         assert pd.isnull(result_df.iloc[1]['null_dt'])
         assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
+        assert _dtype_unit(result_df["dt"].dtype) == "s"
 
 
 def test_pandas_date32(param_client: Client, call, table_context: Callable):
@@ -249,6 +260,7 @@ def test_pandas_date32(param_client: Client, call, table_context: Callable):
         assert pd.isnull(result_df.iloc[1]['null_dt'])
         assert result_df.iloc[2]['null_dt'] == pd.Timestamp(2101, 12, 31)
         assert result_df.iloc[2]['dt'] == pd.Timestamp(1968, 4, 15)
+        assert _dtype_unit(result_df["dt"].dtype) == "s"
 
 
 def test_pandas_row_df(param_client: Client, call, table_context: Callable):
@@ -369,7 +381,6 @@ def test_pandas_time(
         call(param_client.insert, table_name, df)
 
         df_res = call(param_client.query_df, f"SELECT * FROM {table_name}")
-        print(df_res)
         assert df_res["t"][0] == pd.Timedelta("0 days 00:00:01")
         assert df_res["t"][1] == pd.Timedelta("0 days 00:00:02")
         assert df_res["nt"][0] == pd.Timedelta("0 days 00:01:00")
@@ -451,3 +462,119 @@ def test_pandas_time64(
         ]
 
         assert expected_row_1 == df_res.iloc[1].tolist()
+
+        # Verify native resolution for each Time64 scale
+        assert _dtype_unit(df_res["t64_3"].dtype) == "ms"
+        assert _dtype_unit(df_res["t64_6"].dtype) == "us"
+        assert _dtype_unit(df_res["t64_9"].dtype) == "ns"
+
+
+def test_pandas_date_resolution_roundtrip(param_client: Client, call, table_context: Callable):
+    """Verify Date columns return datetime64[s] resolution after insert/query roundtrip."""
+    with table_context("test_date_res_rt", ["key UInt8", "dt Date", "ndt Nullable(Date)"]):
+        df = pd.DataFrame(
+            [[1, pd.Timestamp(2024, 6, 15), pd.Timestamp(2024, 7, 20)], [2, pd.Timestamp(1985, 3, 10), pd.NaT]],
+            columns=["key", "dt", "ndt"],
+        )
+        call(param_client.insert_df, "test_date_res_rt", df)
+        result_df = call(param_client.query_df, "SELECT * FROM test_date_res_rt")
+        assert _dtype_unit(result_df["dt"].dtype) == "s"
+
+
+def test_pandas_datetime_resolution_roundtrip(param_client: Client, call, table_context: Callable):
+    """Verify DateTime columns return datetime64[s] resolution after insert/query roundtrip."""
+    with table_context("test_datetime_res_rt", ["key UInt8", "dt DateTime", "ndt Nullable(DateTime)"]):
+        df = pd.DataFrame(
+            [[1, pd.Timestamp(2024, 6, 15, 10, 30), pd.Timestamp(2024, 7, 20, 14, 0)], [2, pd.Timestamp(1985, 3, 10, 8, 0), pd.NaT]],
+            columns=["key", "dt", "ndt"],
+        )
+        call(param_client.insert_df, "test_datetime_res_rt", df)
+        result_df = call(param_client.query_df, "SELECT * FROM test_datetime_res_rt")
+        assert _dtype_unit(result_df["dt"].dtype) == "s"
+
+
+def test_pandas_datetime64_scale_resolution(param_client: Client, call, table_context: Callable):
+    """Verify DateTime64 columns return their native scale resolution."""
+    if not param_client.min_version("20"):
+        pytest.skip(f"DateTime64 not supported in this server version {param_client.server_version}")
+    with table_context(
+        "test_dt64_scale_res",
+        [
+            "key UInt8",
+            "dt3 DateTime64(3)",
+            "dt6 DateTime64(6)",
+            "dt9 DateTime64(9)",
+        ],
+    ):
+        now = pd.Timestamp.now()
+        df = pd.DataFrame(
+            [[1, now, now, now], [2, now, now, now]],
+            columns=["key", "dt3", "dt6", "dt9"],
+        )
+        call(param_client.insert_df, "test_dt64_scale_res", df)
+        result_df = call(param_client.query_df, "SELECT * FROM test_dt64_scale_res")
+        assert _dtype_unit(result_df["dt3"].dtype) == "ms"
+        assert _dtype_unit(result_df["dt6"].dtype) == "us"
+        assert _dtype_unit(result_df["dt9"].dtype) == "ns"
+
+
+def test_pandas_query_df_arrow(param_client: Client, call, table_context: Callable):
+    """Test Arrow dtype backend for query results."""
+    if arrow is None:
+        pytest.skip("PyArrow package not available")
+    with table_context(
+        "test_df_arrow_query",
+        [
+            "ui8 UInt8",
+            "d Date",
+            "nui8 Nullable(UInt8)",
+            "f32 Float32",
+            "s String",
+        ],
+    ):
+        data = (
+            [1, pd.Timestamp(2023, 5, 4), 10, 35.2, "str_1"],
+            [2, pd.Timestamp(2023, 5, 5), None, 8.55, "str_2"],
+            [3, pd.Timestamp(2023, 5, 6), 30, 3.14, "str_3"],
+        )
+        call(param_client.insert, "test_df_arrow_query", data)
+        result_df = call(param_client.query_df_arrow, "SELECT * FROM test_df_arrow_query")
+        for dt in list(result_df.dtypes):
+            assert isinstance(dt, pd.ArrowDtype)
+
+
+def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Callable):
+    """Test Arrow dtype insert."""
+    if arrow is None:
+        pytest.skip("PyArrow package not available")
+    with table_context(
+        "test_df_arrow_insert",
+        [
+            "i64 Int64",
+            "ni64 Nullable(Int64)",
+            "str String",
+        ],
+    ):
+        data = [[78, pd.NA, "a"], [51, 421, "b"]]
+        df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+        df = df.convert_dtypes(dtype_backend="pyarrow")
+        call(param_client.insert_df_arrow, "test_df_arrow_insert", df)
+        res = call(param_client.query, "SELECT * FROM test_df_arrow_insert ORDER BY i64")
+        assert res.result_rows == [(51, 421, "b"), (78, None, "a")]
+
+
+def test_pandas_time_resolution(test_config: TestConfig, param_client: Client, call, table_context: Callable):
+    """Verify Time columns return timedelta64[s] resolution."""
+    if not param_client.min_version("25.6"):
+        pytest.skip("Time types require ClickHouse 25.6+")
+    if test_config.cloud:
+        pytest.skip("Time types require settings change, but settings are locked in cloud.")
+
+    with table_context("test_time_res", ["t Time", "nt Nullable(Time)"], settings={"enable_time_time64_type": 1}):
+        data = [
+            [timedelta(seconds=10), timedelta(seconds=30)],
+            [timedelta(seconds=20), None],
+        ]
+        call(param_client.insert, "test_time_res", data)
+        df_res = call(param_client.query_df, "SELECT * FROM test_time_res")
+        assert _dtype_unit(df_res["t"].dtype) == "s"

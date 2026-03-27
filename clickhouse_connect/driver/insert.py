@@ -152,14 +152,19 @@ class InsertContext(BaseQueryContext):
             d_type_kind = df_col.dtype.kind
             if ch_type.python_type == int:
                 if d_type_kind == 'f':
-                    df_col = df_col.round().astype(ch_type.base_type, copy=False)
+                    df_col = df_col.round().astype(ch_type.base_type)
                 elif d_type_kind in ('i', 'u') and not df_col.hasnans:
                     data.append(df_col.to_list())
                     continue
-            elif 'datetime' in ch_type.np_type and (options.pd_time_test(df_col) or 'datetime64[ns' in str(df_col.dtype)):
-                div = ch_type.nano_divisor
-                data.append([None if options.pd.isnull(x) else x.value // div for x in df_col])
-                self.column_formats[col_name] = 'int'
+            elif "datetime" in ch_type.np_type and (options.pd_time_test(df_col) or "datetime64" in str(df_col.dtype)):
+                np_col = df_col.to_numpy(dtype=ch_type.np_type)
+                int_col = np_col.astype("int64")
+                if df_col.hasnans:
+                    nat_mask = options.pd.isnull(df_col)
+                    data.append([None if nat_mask.iloc[i] else int(int_col[i]) for i in range(len(int_col))])
+                else:
+                    data.append(int_col.tolist())
+                self.column_formats[col_name] = "int"
                 continue
             if ch_type.nullable:
                 if d_type_kind == 'O':

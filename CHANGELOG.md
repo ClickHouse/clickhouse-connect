@@ -25,11 +25,14 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
 - Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
 - Removed the deprecated `apply_server_timezone` parameter entirely. Use `tz_source` instead: `"auto"` (default), `"server"` (was `True`), or `"local"` (was `False`).
+- Dropped pandas 1.x support. Minimum pandas version is now 2.0. Users with pandas < 2.0 will get a `NotSupportedError` at import time. Non-pandas usage is unaffected. Closes [#661](https://github.com/ClickHouse/clickhouse-connect/issues/661)
+- Removed the `preserve_pandas_datetime_resolution` common setting. Datetime columns now always return their natural resolution, e.g. `datetime64[s]` for `DateTime`, `datetime64[ms]` for `DateTime64(3)`, instead of coercing everything to `datetime64[ns]`. Closes [#662](https://github.com/ClickHouse/clickhouse-connect/issues/662)
 
 ### Improvements
 - Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
 - Clearer error message when attempting to use the async client without aiohttp installed.
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
+- Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
 
 ## 0.15.0, 2026-03-26
 

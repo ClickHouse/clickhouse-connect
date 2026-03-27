@@ -6,6 +6,7 @@ import pytest
 
 from clickhouse_connect import get_async_client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
+from clickhouse_connect.driver.options import pd, arrow  # pylint: disable=no-name-in-module
 from tests.integration_tests.conftest import make_client_config
 
 # pylint: disable=protected-access
@@ -241,3 +242,49 @@ async def test_regular_query_streams_then_materializes(test_config):
         expected_numbers = list(range(10000))
         actual_numbers = [row[0] for row in result.result_rows]
         assert actual_numbers == expected_numbers
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(pd is None or arrow is None, reason="Pandas and PyArrow required")
+async def test_async_query_df_arrow(test_config, table_context: Callable):
+    """Test Arrow dtype backend for async query results."""
+    with table_context("test_async_df_arrow_q", ["ui8 UInt8", "f32 Float32", "s String"]):
+        async with await get_async_client(**make_client_config(test_config)) as client:
+            await client.insert("test_async_df_arrow_q", [[1, 3.14, "val_1"], [2, 2.71, "val_2"]])
+            result_df = await client.query_df_arrow("SELECT * FROM test_async_df_arrow_q")
+            for dt in list(result_df.dtypes):
+                assert isinstance(dt, pd.ArrowDtype)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(pd is None or arrow is None, reason="Pandas and PyArrow required")
+async def test_async_query_df_arrow_stream(test_config, table_context: Callable):
+    """Test streaming Arrow DataFrames via async client."""
+    with table_context("test_async_df_arrow_s", ["id UInt32", "val String"]):
+        async with await get_async_client(**make_client_config(test_config)) as client:
+            await client.insert("test_async_df_arrow_s", [[i, f"v_{i}"] for i in range(100)])
+            stream = await client.query_df_arrow_stream(
+                "SELECT * FROM test_async_df_arrow_s",
+                settings={"max_block_size": 25},
+            )
+            total_rows = 0
+            async with stream:
+                async for df_block in stream:
+                    total_rows += len(df_block)
+                    for dt in list(df_block.dtypes):
+                        assert isinstance(dt, pd.ArrowDtype)
+            assert total_rows == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(pd is None or arrow is None, reason="Pandas and PyArrow required")
+async def test_async_insert_df_arrow(test_config, table_context: Callable):
+    """Test inserting a PyArrow-backed DataFrame via async client."""
+    with table_context("test_async_df_arrow_i", ["i64 Int64", "ni64 Nullable(Int64)", "str String"]):
+        async with await get_async_client(**make_client_config(test_config)) as client:
+            data = [[78, pd.NA, "a"], [51, 421, "b"]]
+            df = pd.DataFrame(data, columns=["i64", "ni64", "str"])
+            df = df.convert_dtypes(dtype_backend="pyarrow")
+            await client.insert_df_arrow("test_async_df_arrow_i", df)
+            res = await client.query("SELECT * FROM test_async_df_arrow_i ORDER BY i64")
+            assert res.result_rows == [(51, 421, "b"), (78, None, "a")]
