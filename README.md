@@ -17,8 +17,7 @@ ClickHouse Connect currently uses the ClickHouse HTTP interface for maximum comp
 pip install clickhouse-connect
 ```
 
-ClickHouse Connect requires Python 3.9 or higher. We officially test against Python 3.10 through 3.14.
-Python 3.9 is deprecated and support will be removed entirely in 1.0.
+ClickHouse Connect requires Python 3.10 or higher.
 
 ### Superset Connectivity
 

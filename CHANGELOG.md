@@ -27,6 +27,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Removed the deprecated `apply_server_timezone` parameter entirely. Use `tz_source` instead: `"auto"` (default), `"server"` (was `True`), or `"local"` (was `False`).
 - Dropped pandas 1.x support. Minimum pandas version is now 2.0. Users with pandas < 2.0 will get a `NotSupportedError` at import time. Non-pandas usage is unaffected. Closes [#661](https://github.com/ClickHouse/clickhouse-connect/issues/661)
 - Removed the `preserve_pandas_datetime_resolution` common setting. Datetime columns now always return their natural resolution, e.g. `datetime64[s]` for `DateTime`, `datetime64[ms]` for `DateTime64(3)`, instead of coercing everything to `datetime64[ns]`. Closes [#662](https://github.com/ClickHouse/clickhouse-connect/issues/662)
+- Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
 
 ### Improvements
 - Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.

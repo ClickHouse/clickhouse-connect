@@ -17,8 +17,8 @@ jobs:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: '*-musllinux* pp38-* pp311-* cp38-* cp313t-*'
-      CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
+      CIBW_SKIP: '*-musllinux* pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
+      CIBW_ENABLE: 'pypy cpython-freethreading'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -32,8 +32,8 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-latest
     env:
-      CIBW_SKIP: '*-manylinux* pp38-* pp311-* cp38-* cp313t-*'
-      CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
+      CIBW_SKIP: '*-manylinux* pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
+      CIBW_ENABLE: 'pypy cpython-freethreading'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: '*-musllinux* cp38-* cp313t-*'
+      CIBW_SKIP: '*-musllinux* cp38-* cp39-* cp313t-*'
       CIBW_ENABLE: 'cpython-freethreading'
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: '*-manylinux* cp38-* cp313t-*'
+      CIBW_SKIP: '*-manylinux* cp38-* cp39-* cp313t-*'
       CIBW_ENABLE: 'cpython-freethreading'
     steps:
       - uses: actions/checkout@v4
@@ -88,8 +88,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_BUILD: 'pp39-* pp310-*'
-      CIBW_ENABLE: 'pypy pypy-eol'
+      CIBW_BUILD: 'pp310-*'
+      CIBW_ENABLE: 'pypy'
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -108,8 +108,8 @@ jobs:
     runs-on: macos-14
     env:
       CIBW_ARCHS_MACOS: x86_64 arm64
-      CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
-      CIBW_SKIP: 'pp38-* pp311-* cp38-* cp313t-*'
+      CIBW_ENABLE: 'pypy cpython-freethreading'
+      CIBW_SKIP: 'pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
@@ -126,8 +126,8 @@ jobs:
     runs-on: windows-latest
     env:
       CIBW_BUILD_VERBOSITY: 2
-      CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
-      CIBW_SKIP: 'pp38-* pp311-* cp38-* cp313t-*'
+      CIBW_ENABLE: 'pypy cpython-freethreading'
+      CIBW_SKIP: 'pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
     steps:
       - uses: actions/checkout@v4
       - name: Build wheels
