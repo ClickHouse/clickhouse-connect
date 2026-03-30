@@ -34,6 +34,11 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
 - Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
 
+## 0.15.1, 2026-03-30
+
+### Bug Fixes
+- Use timezone from parameter type hint instead of `server_tz` when formatting tz-aware datetimes in `{param:Type}` bind expressions. Previously, `bind_query` always converted datetimes to the server timezone, ignoring explicit timezone declarations in type hints like `DateTime64(6, 'UTC')`. This caused incorrect query results when `server_tz` differed from the hint timezone. Handles `LowCardinality`, `Nullable`, and container type wrappers. Fixes [#697](https://github.com/ClickHouse/clickhouse-connect/issues/697)
+
 ## 0.15.0, 2026-03-26
 
 ### Improvements
