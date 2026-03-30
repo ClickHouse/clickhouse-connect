@@ -67,11 +67,12 @@ def run_setup(try_c: bool = True):
         extras_require={
             'sqlalchemy': ['sqlalchemy>=1.4.40,<3.0'],
             'numpy': ['numpy'],
-            'pandas': ['pandas<3'],
+            'pandas': ['pandas>=2,<4'],
             'polars': ['polars>=1.0'],
             'arrow': ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             'orjson': ['orjson'],
             'tzlocal': ['tzlocal>=4.0'],
+            'async': ['aiohttp>=3.8.0'],
         },
         tests_require=['pytest'],
         entry_points={

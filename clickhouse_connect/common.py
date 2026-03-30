@@ -29,7 +29,7 @@ class CommonSetting:
 _common_settings: Dict[str, CommonSetting] = {}
 
 
-def build_client_name(client_name: str) -> str:
+def build_client_name(client_name: Optional[str]) -> str:
     product_name = get_setting('product_name')
     product_name = product_name.strip() + ' ' if product_name else ''
     client_name = client_name.strip() + ' ' if client_name else ''
@@ -90,8 +90,3 @@ _init_common('max_error_size', (), 1024)
 
 # HTTP raw data buffer for streaming queries.  This should not be reduced below 64KB to ensure compatibility with LZ4 compression
 _init_common('http_buffer_size', (), 10 * 1024 * 1024)
-
-# If True and using pandas 2.x, preserves the datetime64/timedelta64
-# dtype resolution (e.g., 's', 'ms', 'us', 'ns'). If False (or on
-# pandas <2.x), coerces to nanosecond ('ns') resolution for compatibility.
-_init_common('preserve_pandas_datetime_resolution', (True, False), False)

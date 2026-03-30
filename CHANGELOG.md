@@ -1,8 +1,5 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Breaking change for AsyncClient close()
-The AsyncClient close() method is now async and should be called as an async function.
-
 ### WARNING -- Python 3.8 EOL
 Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
 3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
@@ -22,6 +19,20 @@ instead of being passed as ClickHouse server settings. This is in conjunction wi
 The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
 
 ## UNRELEASED
+
+### Breaking Changes
+- Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
+- The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
+- Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
+- Removed the deprecated `apply_server_timezone` parameter entirely. Use `tz_source` instead: `"auto"` (default), `"server"` (was `True`), or `"local"` (was `False`).
+- Dropped pandas 1.x support. Minimum pandas version is now 2.0. Users with pandas < 2.0 will get a `NotSupportedError` at import time. Non-pandas usage is unaffected. Closes [#661](https://github.com/ClickHouse/clickhouse-connect/issues/661)
+- Removed the `preserve_pandas_datetime_resolution` common setting. Datetime columns now always return their natural resolution, e.g. `datetime64[s]` for `DateTime`, `datetime64[ms]` for `DateTime64(3)`, instead of coercing everything to `datetime64[ns]`. Closes [#662](https://github.com/ClickHouse/clickhouse-connect/issues/662)
+
+### Improvements
+- Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
+- Clearer error message when attempting to use the async client without aiohttp installed.
+- The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
+- Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
 
 ## 0.15.1, 2026-03-30
 
@@ -62,7 +73,6 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 
 ### Deprecations
 - Pandas 1.x support is now deprecated and will be removed in v1.0.0. A `DeprecationWarning` is emitted at import time for pandas 1.x users.
-- The current `AsyncClient` is a thread-pool wrapper around the sync client and now emits a `FutureWarning` on creation, pointing users to the fully native async client available as a prerelease: `pip install 'clickhouse-connect[async]==0.12.0rc1'`. This prerelease branch is based on 0.11.0 and is gathering feedback ahead of 1.0.0, where it will become the default async implementation. It is a drop-in replacement with the same API surface.
 
 ### Improvements
 - Added support for the `SAMPLE` clause in SQLAlchemy statements. Note: Due to a SQLAlchemy limitation, only one hint (SAMPLE or FINAL) can be applied per table; chaining both will silently ignore one. For now, this change enables use of sample(), but chaining with final() is not yet supported.  Closes [#634](https://github.com/ClickHouse/clickhouse-connect/issues/634)
@@ -88,6 +98,9 @@ are now serialized using their native ClickHouse types client-side (e.g. inserti
 - Fix `dict_add` parameter typed as builtin `any` instead of `typing.Any`.
 - Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
 - SQLAlchemy: `GROUP BY` now renders label aliases instead of full expressions which avoids circular reference errors when an alias shadows a source column name in ClickHouse.
+
+## 0.12.0rc1, 2026-02-11
+- Implement a native async client. Closes [#141](https://github.com/ClickHouse/clickhouse-connect/issues/141)
 
 ## 0.11.0, 2026-02-10
 

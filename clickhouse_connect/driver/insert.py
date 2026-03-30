@@ -145,6 +145,7 @@ class InsertContext(BaseQueryContext):
     def _row_block_data(self, block_start, block_end):
         return data_conv.pivot(self._block_rows, block_start, block_end)
 
+    # pylint: disable=too-many-branches
     def _convert_pandas(self, df):
         data = []
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
@@ -152,26 +153,33 @@ class InsertContext(BaseQueryContext):
             d_type_kind = df_col.dtype.kind
             if ch_type.python_type == int:
                 if d_type_kind == 'f':
-                    df_col = df_col.round().astype(ch_type.base_type, copy=False)
+                    df_col = df_col.round().astype(ch_type.base_type)
                 elif d_type_kind in ('i', 'u') and not df_col.hasnans:
                     data.append(df_col.to_list())
                     continue
-            elif 'datetime' in ch_type.np_type and (options.pd_time_test(df_col) or 'datetime64[ns' in str(df_col.dtype)):
-                div = ch_type.nano_divisor
-                data.append([None if options.pd.isnull(x) else x.value // div for x in df_col])
-                self.column_formats[col_name] = 'int'
+            elif "datetime" in ch_type.np_type and (options.pd_time_test(df_col) or "datetime64" in str(df_col.dtype)):
+                np_col = df_col.to_numpy(dtype=ch_type.np_type)
+                int_col = np_col.astype("int64")
+                if df_col.hasnans:
+                    nat_mask = options.pd.isnull(df_col).to_numpy()
+                    int_list = int_col.tolist()
+                    data.append([None if nat_mask[i] else int_list[i] for i in range(len(int_list))])
+                else:
+                    data.append(int_col.tolist())
+                self.column_formats[col_name] = "int"
                 continue
             if ch_type.nullable:
-                if d_type_kind == 'O':
-                    #  This is ugly, but the multiple replaces seem required as a result of this bug:
-                    #  https://github.com/pandas-dev/pandas/issues/29024
-                    df_col = df_col.replace({options.pd.NaT: None}).replace({options.np.nan: None})
-                elif 'Float' in ch_type.base_type:
+                if d_type_kind == 'O' or ch_type.np_type == 'O':
+                    data.append(df_col.to_numpy(dtype=object, na_value=None))
+                    continue
+                if 'Float' in ch_type.base_type:
                     data.append([None if options.pd.isnull(x) else x for x in df_col])
                     continue
-                else:
-                    df_col = df_col.replace({options.np.nan: None})
-            data.append(df_col.to_numpy(copy=False))
+                df_col = df_col.replace({options.np.nan: None})
+            if ch_type.np_type == 'O':
+                data.append(df_col.to_numpy(dtype=object, na_value=None))
+            else:
+                data.append(df_col.to_numpy(copy=False))
         return data
 
     def _convert_numpy(self, np_array):

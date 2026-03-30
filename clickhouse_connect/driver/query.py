@@ -1,6 +1,6 @@
 import logging
 import re
-import warnings
+
 import pytz
 
 from io import IOBase
@@ -15,7 +15,6 @@ from clickhouse_connect.driver.common import dict_copy, empty_gen, StreamContext
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.types import Matrix, Closable
 from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError
-from clickhouse_connect.driver import options
 from clickhouse_connect.driver.options import check_arrow
 from clickhouse_connect.driver.context import BaseQueryContext
 
@@ -27,122 +26,10 @@ logger = logging.getLogger(__name__)
 TzMode = Literal["naive_utc", "aware", "schema"]
 TzSource = Literal["auto", "server", "local"]
 
-_UTC_TZ_AWARE_TO_TZ_MODE: Dict[Union[bool, str], TzMode] = {
-    False: "naive_utc",
-    True: "aware",
-    "schema": "schema",
-}
-
 _VALID_TZ_MODES = {"naive_utc", "aware", "schema"}
-
-_TZ_MODE_TO_UTC_TZ_AWARE: Dict[str, Union[bool, Literal["schema"]]] = {
-    "naive_utc": False,
-    "aware": True,
-    "schema": "schema",
-}
-
-_APPLY_SERVER_TZ_TO_TZ_SOURCE: Dict[Union[bool, str, None], TzSource] = {
-    None: "auto",
-    True: "server",
-    False: "local",
-    "always": "server",
-}
-
-_TZ_SOURCE_TO_APPLY_SERVER_TZ: Dict[str, Optional[Union[bool, str]]] = {
-    "auto": None,
-    "server": True,
-    "local": False,
-}
 
 _VALID_TZ_SOURCES = {"auto", "server", "local"}
 
-# Mapping for string booleans that may arrive via URL params
-_STR_BOOL_MAP = {"true": True, "false": False, "1": True, "0": False}
-
-
-def _resolve_tz_mode(
-    tz_mode: Optional[TzMode] = None,
-    utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
-) -> TzMode:
-    """Resolve tz_mode from either the new ``tz_mode`` or deprecated ``utc_tz_aware`` parameter.
-
-    Returns the canonical TzMode string.  Raises ``ProgrammingError`` on conflicts or
-    invalid values.
-    """
-    if tz_mode is not None and utc_tz_aware is not None:
-        raise ProgrammingError(
-            "Cannot specify both 'tz_mode' and 'utc_tz_aware'. "
-            "Use 'tz_mode' only; 'utc_tz_aware' is deprecated."
-        )
-
-    if utc_tz_aware is not None:
-        # Coerce string booleans from URL params (e.g. "true" -> True)
-        if isinstance(utc_tz_aware, str) and utc_tz_aware.lower() in _STR_BOOL_MAP:
-            utc_tz_aware = _STR_BOOL_MAP[utc_tz_aware.lower()]
-
-        if utc_tz_aware not in _UTC_TZ_AWARE_TO_TZ_MODE:
-            raise ProgrammingError(
-                f'utc_tz_aware must be True, False, or "schema", got "{utc_tz_aware}"'
-            )
-        warnings.warn(
-            "utc_tz_aware is deprecated and will be removed in 1.0. "
-            "Use tz_mode='naive_utc' | 'aware' | 'schema' instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return _UTC_TZ_AWARE_TO_TZ_MODE[utc_tz_aware]
-
-    if tz_mode is not None:
-        if tz_mode not in _VALID_TZ_MODES:
-            raise ProgrammingError(
-                f'tz_mode must be "naive_utc", "aware", or "schema", got "{tz_mode}"'
-            )
-        return tz_mode
-
-    return "naive_utc"
-
-
-def _resolve_tz_source(
-    tz_source: Optional[TzSource] = None,
-    apply_server_timezone: Optional[Union[str, bool]] = None,
-) -> TzSource:
-    """Resolve tz_source from either the new ``tz_source`` or deprecated ``apply_server_timezone`` parameter.
-
-    Returns the canonical TzSource string.  Raises ``ProgrammingError`` on conflicts or
-    invalid values.
-    """
-    if tz_source is not None and apply_server_timezone is not None:
-        raise ProgrammingError(
-            "Cannot specify both 'tz_source' and 'apply_server_timezone'. "
-            "Use 'tz_source' only; 'apply_server_timezone' is deprecated."
-        )
-
-    if apply_server_timezone is not None:
-        # Coerce string booleans from URL params (e.g. "true" -> True)
-        if isinstance(apply_server_timezone, str) and apply_server_timezone.lower() in _STR_BOOL_MAP:
-            apply_server_timezone = _STR_BOOL_MAP[apply_server_timezone.lower()]
-
-        if apply_server_timezone not in _APPLY_SERVER_TZ_TO_TZ_SOURCE:
-            raise ProgrammingError(
-                f"apply_server_timezone must be None, True, False, or 'always', "
-                f'got "{apply_server_timezone}"'
-            )
-        warnings.warn(
-            "apply_server_timezone is deprecated and will be removed in 1.0. "
-            "Use tz_source='auto' | 'server' | 'local' instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return _APPLY_SERVER_TZ_TO_TZ_SOURCE[apply_server_timezone]
-
-    if tz_source is not None:
-        if tz_source not in _VALID_TZ_SOURCES:
-            raise ProgrammingError(
-                f'tz_source must be "auto", "server", or "local", got "{tz_source}"'
-            )
-        return tz_source
-
-    return "auto"
 
 
 commands = 'CREATE|ALTER|SYSTEM|GRANT|REVOKE|CHECK|DETACH|ATTACH|DROP|DELETE|KILL|' + \
@@ -175,7 +62,6 @@ class QueryContext(BaseQueryContext):
                  max_str_len: Optional[int] = 0,
                  query_tz: Optional[Union[str, tzinfo]] = None,
                  column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                  use_extended_dtypes: Optional[bool] = None,
                  as_pandas: bool = False,
                  streaming: bool = False,
@@ -214,7 +100,6 @@ class QueryContext(BaseQueryContext):
           naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column schema defines a timezone
           (e.g. DateTime('UTC')) and naive for bare DateTime columns.
-        :param utc_tz_aware Deprecated. Use tz_mode instead.
         """
         super().__init__(settings,
                          query_formats,
@@ -232,7 +117,9 @@ class QueryContext(BaseQueryContext):
         self.server_tz = server_tz
         self.apply_server_tz = apply_server_tz
         self.external_data = external_data
-        self.tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
+        self.tz_mode = tz_mode if tz_mode is not None else "naive_utc"
+        if self.tz_mode not in _VALID_TZ_MODES:
+            raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
         if isinstance(query_tz, str):
             try:
                 query_tz = pytz.timezone(query_tz)
@@ -252,7 +139,6 @@ class QueryContext(BaseQueryContext):
         self.response_tz = None
         self.block_info = False
         self.as_pandas = as_pandas
-        self.use_pandas_na = as_pandas and options.pd_extended_dtypes
         self.streaming = streaming
         self._rename_response_column: Optional[str] = rename_response_column
         self.column_renamer = get_rename_method(rename_response_column)
@@ -282,17 +168,6 @@ class QueryContext(BaseQueryContext):
     @property
     def is_command(self) -> bool:
         return command_re.search(self.uncommented_query) is not None
-
-    @property
-    def utc_tz_aware(self) -> Union[bool, Literal["schema"]]:
-        """Deprecated: use tz_mode instead."""
-        warnings.warn(
-            "utc_tz_aware is deprecated and will be removed in 1.0. "
-            "Use tz_mode instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _TZ_MODE_TO_UTC_TZ_AWARE[self.tz_mode]
 
     def set_parameters(self, parameters: Dict[str, Any]):
         self.parameters = parameters
@@ -348,7 +223,6 @@ class QueryContext(BaseQueryContext):
                      max_str_len: Optional[int] = None,
                      query_tz: Optional[Union[str, tzinfo]] = None,
                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-                     utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
                      use_extended_dtypes: Optional[bool] = None,
                      as_pandas: bool = False,
                      streaming: bool = False,
@@ -359,10 +233,7 @@ class QueryContext(BaseQueryContext):
         """
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
-        if tz_mode is not None or utc_tz_aware is not None:
-            resolved_tz_mode = _resolve_tz_mode(tz_mode, utc_tz_aware)
-        else:
-            resolved_tz_mode = self.tz_mode
+        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         return QueryContext(
             query=query or self.query,
             parameters=dict_copy(self.parameters, parameters),
@@ -431,12 +302,20 @@ class QueryResult(Closable):
     @property
     def result_columns(self) -> Matrix:
         if self._result_columns is None:
-            result = [[] for _ in range(len(self.column_names))]
-            with self.column_block_stream as stream:
-                for block in stream:
-                    for base, added in zip(result, block):
-                        base.extend(added)
-            self._result_columns = result
+            # If rows are already materialized and stream is closed, transpose from rows
+            # This happens when async client eagerly materializes result_rows
+            if self._result_rows is not None and self._block_gen is None:
+                if self._result_rows:
+                    self._result_columns = list(map(list, zip(*self._result_rows)))
+                else:
+                    self._result_columns = [[] for _ in range(len(self.column_names))]
+            else:
+                result = [[] for _ in range(len(self.column_names))]
+                with self.column_block_stream as stream:
+                    for block in stream:
+                        for base, added in zip(result, block):
+                            base.extend(added)
+                self._result_columns = result
         return self._result_columns
 
     @property
