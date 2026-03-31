@@ -1,0 +1,2 @@
+# Ruff migration: bulk formatting and mechanical cleanup commits.
+# Configure with: git config blame.ignoreRevsFile .git-blame-ignore-revs

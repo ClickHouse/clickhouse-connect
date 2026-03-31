@@ -139,11 +139,26 @@ pytest tests/integration_tests
 
 ## Style Guide
 
-The project uses [PyLint](https://pypi.org/project/pylint/) to enforce the code style. 
+The project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting.
 It is always a good idea to run the linter before committing the changes, as this is a mandatory CI check. For example:
 
 ```bash
-pip install pylint
-pylint clickhouse_connect
-pylint tests
+pip install ruff
+ruff format --check clickhouse_connect tests examples setup.py
+ruff check clickhouse_connect tests examples setup.py
+```
+
+To auto-fix issues:
+
+```bash
+ruff format clickhouse_connect tests examples setup.py
+ruff check --fix clickhouse_connect tests examples setup.py
+```
+
+### Git blame
+
+Bulk formatting commits are listed in `.git-blame-ignore-revs`. To configure git blame to skip them:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
