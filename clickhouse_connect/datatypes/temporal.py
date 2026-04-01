@@ -1,32 +1,36 @@
-import pytz
+from __future__ import annotations
 
 import array
-from datetime import date, datetime, tzinfo, timedelta, time
-
-from typing import Union, Sequence, MutableSequence, Any, NamedTuple, Optional
-from abc import abstractmethod
 import re
+from abc import abstractmethod
+from collections.abc import MutableSequence, Sequence
+from datetime import date, datetime, time, timedelta, tzinfo
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-from clickhouse_connect.datatypes.base import TypeDef, ClickHouseType
-from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.common import write_array, np_date_types, int_size, first_value
-from clickhouse_connect.driver.exceptions import ProgrammingError
+import pytz
+
+if TYPE_CHECKING:
+    import numpy
+
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver import ctypes as driver_ctypes
+from clickhouse_connect.driver import options, tzutil
+from clickhouse_connect.driver.common import first_value, int_size, np_date_types, write_array
 from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
-from clickhouse_connect.driver import options
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
 
 
 class Date(ClickHouseType):
-    _array_type = 'H'
-    np_type = 'datetime64[D]'
+    _array_type = "H"
+    np_type = "datetime64[D]"
     nano_divisor = 86400 * 1000000000
-    valid_formats = 'native', 'int'
+    valid_formats = "native", "int"
     python_type = date
     byte_size = 2
 
@@ -34,16 +38,16 @@ class Date(ClickHouseType):
     def pandas_dtype(self):
         return "datetime64[s]"
 
-    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state:Any):
-        if self.read_format(ctx) == 'int':
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
+        if self.read_format(ctx) == "int":
             return source.read_array(self._array_type, num_rows)
         if ctx.use_numpy:
-            return driver_ctypes.numpy_conv.read_numpy_array(source, '<u2', num_rows).astype(self.np_type)
+            return driver_ctypes.numpy_conv.read_numpy_array(source, "<u2", num_rows).astype(self.np_type)
         return data_conv.read_date_col(source, num_rows)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
+    def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
-        if isinstance(first, int) or self.write_format(ctx) == 'int':
+        if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
         else:
@@ -60,27 +64,24 @@ class Date(ClickHouseType):
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
-            return options.pd.NA if fmt == 'int' else options.pd.NaT
+            return options.pd.NA if fmt == "int" else options.pd.NaT
         if ctx.use_none:
             return None
-        if fmt == 'int':
+        if fmt == "int":
             return 0
         if ctx.use_numpy:
             return options.np.datetime64(0, self._null_time_unit)
         return epoch_start_date
 
-    # pylint: disable=too-many-return-statements
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
-        if self.read_format(ctx) == 'int':
+        if self.read_format(ctx) == "int":
             return column
 
         if ctx.use_numpy and self.nullable and not ctx.use_none:
             return options.np.array(column, dtype=self.np_type)
 
         if ctx.use_extended_dtypes:
-            if isinstance(column, options.np.ndarray) and options.np.issubdtype(
-                column.dtype, options.np.datetime64
-            ):
+            if isinstance(column, options.np.ndarray) and options.np.issubdtype(column.dtype, options.np.datetime64):
                 return column.astype(self.pandas_dtype)
 
             if isinstance(column, options.pd.DatetimeIndex):
@@ -91,32 +92,28 @@ class Date(ClickHouseType):
                 return naive.tz_localize("UTC").tz_convert(column.tz)
 
             if self.nullable and isinstance(column, list):
-                return options.np.array([None if options.pd.isna(s) else s for s in column]).astype(
-                    self.pandas_dtype
-                )
+                return options.np.array([None if options.pd.isna(s) else s for s in column]).astype(self.pandas_dtype)
 
-            return options.pd.to_datetime(column, errors="coerce").to_numpy(
-                dtype=self.pandas_dtype, copy=False
-            )
+            return options.pd.to_datetime(column, errors="coerce").to_numpy(dtype=self.pandas_dtype, copy=False)
 
         return column
 
 
 class Date32(Date):
     byte_size = 4
-    _array_type = 'l' if int_size == 2 else 'i'
+    _array_type = "l" if int_size == 2 else "i"
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         if ctx.use_numpy:
-            return driver_ctypes.numpy_conv.read_numpy_array(source, '<i4', num_rows).astype(self.np_type)
-        if self.read_format(ctx) == 'int':
+            return driver_ctypes.numpy_conv.read_numpy_array(source, "<i4", num_rows).astype(self.np_type)
+        if self.read_format(ctx) == "int":
             return source.read_array(self._array_type, num_rows)
         return data_conv.read_date32_col(source, num_rows)
 
 
 class DateTimeBase(ClickHouseType, registered=False):
-    __slots__ = ('tzinfo',)
-    valid_formats = 'native', 'int'
+    __slots__ = ("tzinfo",)
+    valid_formats = "native", "int"
     python_type = datetime
 
     @property
@@ -127,10 +124,10 @@ class DateTimeBase(ClickHouseType, registered=False):
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
-            return options.pd.NA if fmt == 'int' else options.pd.NaT
+            return options.pd.NA if fmt == "int" else options.pd.NaT
         if ctx.use_none:
             return None
-        if self.read_format(ctx) == 'int':
+        if self.read_format(ctx) == "int":
             return 0
         if ctx.use_numpy:
             return options.np.datetime64(0, self._null_time_unit)
@@ -138,14 +135,11 @@ class DateTimeBase(ClickHouseType, registered=False):
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if ctx.use_extended_dtypes:
-            if isinstance(column, options.np.ndarray) and options.np.issubdtype(
-                column.dtype, options.np.datetime64
-            ):
+            if isinstance(column, options.np.ndarray) and options.np.issubdtype(column.dtype, options.np.datetime64):
                 return column.astype(self.pandas_dtype)
 
             if isinstance(column, options.pd.DatetimeIndex) or (
-                isinstance(column, list)
-                and hasattr(next((s for s in column if not options.pd.isna(s)), None), "tz")
+                isinstance(column, list) and hasattr(next((s for s in column if not options.pd.isna(s)), None), "tz")
             ):
                 if isinstance(column, list):
                     column = options.pd.DatetimeIndex(column)
@@ -156,20 +150,16 @@ class DateTimeBase(ClickHouseType, registered=False):
 
                 naive_ns = column.tz_convert("UTC").tz_localize(None).astype(self.pandas_dtype)
                 tz_aware_result = naive_ns.tz_localize("UTC").tz_convert(column.tz)
-                return (
-                    options.pd.array(tz_aware_result) if self.nullable else tz_aware_result
-                )
+                return options.pd.array(tz_aware_result) if self.nullable else tz_aware_result
 
             if self.nullable:
-                return options.pd.array(
-                    [None if options.pd.isna(s) else s for s in column], dtype=self.pandas_dtype
-                )
+                return options.pd.array([None if options.pd.isna(s) else s for s in column], dtype=self.pandas_dtype)
         return column
 
 
 class DateTime(DateTimeBase):
-    _array_type = 'L' if int_size == 2 else 'I'
-    np_type = 'datetime64[s]'
+    _array_type = "L" if int_size == 2 else "I"
+    np_type = "datetime64[s]"
     nano_divisor = 1000000000
     byte_size = 4
 
@@ -182,19 +172,19 @@ class DateTime(DateTimeBase):
             self.tzinfo = None
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any) -> Sequence:
-        if self.read_format(ctx) == 'int':
+        if self.read_format(ctx) == "int":
             return source.read_array(self._array_type, num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
         if ctx.use_numpy:
-            np_array = driver_ctypes.numpy_conv.read_numpy_array(source, '<u4', num_rows).astype(self.np_type)
+            np_array = driver_ctypes.numpy_conv.read_numpy_array(source, "<u4", num_rows).astype(self.np_type)
             if ctx.as_pandas and active_tz:
-                return options.pd.DatetimeIndex(np_array, tz='UTC').tz_convert(active_tz)
+                return options.pd.DatetimeIndex(np_array, tz="UTC").tz_convert(active_tz)
             return np_array
         return data_conv.read_datetime_col(source, num_rows, active_tz)
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
+    def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
-        if isinstance(first, int) or self.write_format(ctx) == 'int':
+        if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
         else:
@@ -206,14 +196,14 @@ class DateTime(DateTimeBase):
 
 
 class DateTime64(DateTimeBase):
-    __slots__ = 'scale', 'prec', 'unit'
+    __slots__ = "scale", "prec", "unit"
     byte_size = 8
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
         self.scale = type_def.values[0]
-        self.prec = 10 ** self.scale
+        self.prec = 10**self.scale
         self.unit = np_date_types.get(self.scale)
         if len(type_def.values) > 1:
             self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
@@ -228,24 +218,26 @@ class DateTime64(DateTimeBase):
     @property
     def np_type(self):
         if self.unit:
-            return f'datetime64{self.unit}'
-        raise ProgrammingError(f'Cannot use {self.name} as a numpy or Pandas datatype. Only milliseconds(3), ' +
-                               'microseconds(6), or nanoseconds(9) are supported for numpy based queries.')
+            return f"datetime64{self.unit}"
+        raise ProgrammingError(
+            f"Cannot use {self.name} as a numpy or Pandas datatype. Only milliseconds(3), "
+            + "microseconds(6), or nanoseconds(9) are supported for numpy based queries."
+        )
 
     @property
     def nano_divisor(self):
         return 1000000000 // self.prec
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any) -> Sequence:
-        if self.read_format(ctx) == 'int':
-            return source.read_array('q', num_rows)
+        if self.read_format(ctx) == "int":
+            return source.read_array("q", num_rows)
         active_tz = ctx.active_tz(self.tzinfo)
         if ctx.use_numpy:
             np_array = driver_ctypes.numpy_conv.read_numpy_array(source, self.np_type, num_rows)
             if ctx.as_pandas and active_tz:
-                return options.pd.DatetimeIndex(np_array, tz='UTC').tz_convert(active_tz)
+                return options.pd.DatetimeIndex(np_array, tz="UTC").tz_convert(active_tz)
             return np_array
-        column = source.read_array('q', num_rows)
+        column = source.read_array("q", num_rows)
         if active_tz:
             return self._read_binary_tz(column, active_tz)
         return self._read_binary_naive(column)
@@ -272,9 +264,9 @@ class DateTime64(DateTimeBase):
             app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
         return new_col
 
-    def _write_column_binary(self, column: Union[Sequence, MutableSequence], dest: bytearray, ctx: InsertContext):
+    def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
-        if isinstance(first, int) or self.write_format(ctx) == 'int':
+        if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
         elif isinstance(first, str):
@@ -292,11 +284,10 @@ class DateTime64(DateTimeBase):
         else:
             prec = self.prec
             if self.nullable:
-                column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0
-                          for x in column]
+                column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]
             else:
                 column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
-        write_array('q', column, dest, ctx.column_name)
+        write_array("q", column, dest, ctx.column_name)
 
 
 class _HMSParts(NamedTuple):
@@ -305,7 +296,7 @@ class _HMSParts(NamedTuple):
     hours: int
     minutes: int
     seconds: int
-    frac: Optional[str]
+    frac: str | None
     is_negative: bool
 
 
@@ -361,9 +352,7 @@ class TimeBase(ClickHouseType, registered=False):
         fmt = self.read_format(ctx)
 
         if ctx.use_numpy:
-            return options.np.array(
-                [self._ticks_to_np_timedelta(t) for t in ticks], dtype=self.np_type
-            )
+            return options.np.array([self._ticks_to_np_timedelta(t) for t in ticks], dtype=self.np_type)
 
         if fmt == "int":
             return ticks
@@ -397,17 +386,11 @@ class TimeBase(ClickHouseType, registered=False):
         seconds = int(match["seconds"])
 
         if hours > 999:
-            raise ValueError(
-                f"Hours out of range; cannot exceed 999: got {hours} in '{time_str}'"
-            )
+            raise ValueError(f"Hours out of range; cannot exceed 999: got {hours} in '{time_str}'")
         if not 0 <= minutes < 60:
-            raise ValueError(
-                f"Minutes out of range; must be 0-59: got {minutes} in '{time_str}'"
-            )
+            raise ValueError(f"Minutes out of range; must be 0-59: got {minutes} in '{time_str}'")
         if not 0 <= seconds < 60:
-            raise ValueError(
-                f"Seconds out of range; must be 0-59: got {seconds} in '{time_str}'"
-            )
+            raise ValueError(f"Seconds out of range; must be 0-59: got {seconds} in '{time_str}'")
 
         return _HMSParts(
             hours=hours,
@@ -458,11 +441,9 @@ class TimeBase(ClickHouseType, registered=False):
     def _validate_time_obj_range(self, ticks: int) -> None:
         """Ensure ticks can form a valid datetime.time object."""
         if not self.min_time_ticks <= ticks <= self.max_time_ticks:
-            raise ValueError(
-                f"Ticks value {ticks} is outside valid range for datetime.time object."
-            )
+            raise ValueError(f"Ticks value {ticks} is outside valid range for datetime.time object.")
 
-    def _numerical_to_ticks(self, value: Union[int, float, "np.int64"]) -> int:
+    def _numerical_to_ticks(self, value: int | float | numpy.int64) -> int:
         """Convert numerical value to ticks, with range validation."""
         value = int(value)
         self._validate_standard_range(value, value)
@@ -492,18 +473,14 @@ class TimeBase(ClickHouseType, registered=False):
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         """Finalize column data based on context requirements."""
         if ctx.use_extended_dtypes:
-            if isinstance(column, options.np.ndarray) and options.np.issubdtype(
-                column.dtype, options.np.timedelta64
-            ):
+            if isinstance(column, options.np.ndarray) and options.np.issubdtype(column.dtype, options.np.timedelta64):
                 return column.astype(self.pandas_dtype)
 
             if isinstance(column, options.pd.TimedeltaIndex):
                 return column.astype(self.pandas_dtype)
 
             if self.nullable:
-                return options.np.array([None if options.pd.isna(s) else s for s in column]).astype(
-                    self.pandas_dtype
-                )
+                return options.np.array([None if options.pd.isna(s) else s for s in column]).astype(self.pandas_dtype)
         return column
 
     def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
@@ -519,7 +496,7 @@ class TimeBase(ClickHouseType, registered=False):
         raise NotImplementedError
 
     @abstractmethod
-    def _timedelta_to_ticks(self, td: Union[timedelta, "np.timedelta64"]) -> int:
+    def _timedelta_to_ticks(self, td: timedelta | numpy.timedelta64) -> int:
         """Convert a timedelta into integer ticks."""
         raise NotImplementedError
 
@@ -611,7 +588,7 @@ class Time(TimeBase):
 
         return f"{sign}{h:03d}:{m:02d}:{s:02d}"
 
-    def _timedelta_to_ticks(self, td: Union[timedelta, "np.timedelta64"]) -> int:
+    def _timedelta_to_ticks(self, td: timedelta | numpy.timedelta64) -> int:
         """Convert timedelta to ticks (seconds), flooring fractional seconds."""
         if isinstance(td, timedelta):
             total = int(td.total_seconds())
@@ -654,10 +631,7 @@ class Time64(TimeBase):
         self._name_suffix = type_def.arg_str
         self.scale = type_def.values[0]
         if self.scale not in (3, 6, 9):
-            raise ProgrammingError(
-                f"Unsupported Time64 scale {self.scale}; "
-                "only 3, 6, or 9 are allowed for NumPy."
-            )
+            raise ProgrammingError(f"Unsupported Time64 scale {self.scale}; only 3, 6, or 9 are allowed for NumPy.")
         self.precision = 10**self.scale
         self.unit = np_date_types.get(self.scale)
 
@@ -686,9 +660,7 @@ class Time64(TimeBase):
         """Parse string format 'HHH:MM:SS[.fff]' to ticks with sub-second precision."""
         parts = self._parse_core(time_str)
         frac_ticks = int((parts.frac or "").ljust(self.scale, "0")[: self.scale])
-        ticks = (
-            parts.hours * 3600 + parts.minutes * 60 + parts.seconds
-        ) * self.precision + frac_ticks
+        ticks = (parts.hours * 3600 + parts.minutes * 60 + parts.seconds) * self.precision + frac_ticks
         if parts.is_negative:
             ticks = -ticks
         self._validate_standard_range(ticks, time_str)
@@ -706,12 +678,10 @@ class Time64(TimeBase):
 
         return f"{sign}{h:03d}:{m:02d}:{s:02d}{frac_str}"
 
-    def _timedelta_to_ticks(self, td: Union[timedelta, "np.timedelta64"]) -> int:
+    def _timedelta_to_ticks(self, td: timedelta | numpy.timedelta64) -> int:
         """Convert timedelta to ticks with sub-second precision."""
         if isinstance(td, timedelta):
-            total_us = (
-                int(td.total_seconds()) * self._MICROS_PER_SECOND + td.microseconds
-            )
+            total_us = int(td.total_seconds()) * self._MICROS_PER_SECOND + td.microseconds
             ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
         else:
             ticks = td.astype("timedelta64[s]").astype(int)
@@ -730,7 +700,7 @@ class Time64(TimeBase):
 
         return -td if neg else td
 
-    def _ticks_to_np_timedelta(self, ticks: int) -> "np.timedelta64":
+    def _ticks_to_np_timedelta(self, ticks: int) -> numpy.timedelta64:
         """Convert ticks to numpy timedelta64 with nanosecond precision."""
         res_map = {3: "ms", 6: "us", 9: "ns"}
 
@@ -738,9 +708,7 @@ class Time64(TimeBase):
 
     def _time_to_ticks(self, t: time) -> int:
         """Convert time to ticks with sub-second precision."""
-        total_us = (
-            t.hour * 3600 + t.minute * 60 + t.second
-        ) * self._MICROS_PER_SECOND + t.microsecond
+        total_us = (t.hour * 3600 + t.minute * 60 + t.second) * self._MICROS_PER_SECOND + t.microsecond
         ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
         self._validate_time_obj_range(ticks)
 

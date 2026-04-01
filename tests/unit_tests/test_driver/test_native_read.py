@@ -73,7 +73,7 @@ def test_uint16_nulls():
 
 def test_low_cardinality():
     result = parse_response(bytes_source(LOW_CARDINALITY))
-    assert result.result_set == [('CDMA',), ('GSM',), ('UMTS',)]
+    assert result.result_set == [("CDMA",), ("GSM",), ("UMTS",)]
 
 
 def test_low_card_array():
@@ -83,29 +83,29 @@ def test_low_card_array():
 
 def test_map():
     result = parse_response(bytes_source(SIMPLE_MAP))
-    check_result(result, {'key1': 'value1', 'key2': 'value2'})
+    check_result(result, {"key1": "value1", "key2": "value2"})
     result = parse_response(bytes_source(LOW_CARD_MAP))
-    check_result(result, {'george': UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9'), 'igor': None})
+    check_result(result, {"george": UUID("1d439f79-c57d-5f23-52c6-ffccca93e1a9"), "igor": None})
 
 
 def test_ip():
-    ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
-    ipv4_type = registry.get_from_name('IPv4')
+    ips = ["192.168.5.3", "202.44.8.25", "0.0.2.2"]
+    ipv4_type = registry.get_from_name("IPv4")
     dest = bytearray()
-    ipv4_type.write_column(ips, dest, InsertContext('', [], []))
+    ipv4_type.write_column(ips, dest, InsertContext("", [], []))
     python = ipv4_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), None)
     assert tuple(python) == tuple(IPv4Address(ip) for ip in ips)
 
 
 def test_point():
-    points = ((3.22, 3.22),(5.22, 5.22),(4.22, 4.22))
-    point_type = registry.get_from_name('Point')
+    points = ((3.22, 3.22), (5.22, 5.22), (4.22, 4.22))
+    point_type = registry.get_from_name("Point")
     dest = bytearray()
-    point_type.write_column(points, dest, InsertContext('', [], []))
+    point_type.write_column(points, dest, InsertContext("", [], []))
     python = point_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), [None, None])
     assert tuple(python) == tuple(point for point in points)
 
 
 def test_nested():
-    result = parse_response (bytes_source(NESTED_BINARY))
-    check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)
+    result = parse_response(bytes_source(NESTED_BINARY))
+    check_result(result, [{"str1": "one", "int32": 5}, {"str1": "two", "int32": 55}], 2, 0)

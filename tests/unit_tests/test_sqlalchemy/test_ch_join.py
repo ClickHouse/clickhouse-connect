@@ -290,7 +290,6 @@ def test_using_missing_column_raises():
         ch_join(users, orders, using=["missing"])
 
 
-# pylint: disable=protected-access
 def test_using_cache_key_differs_from_on():
     """USING and ON joins on the same column must produce different cache keys."""
     j_on = ch_join(users, orders, users.c.id == orders.c.id)

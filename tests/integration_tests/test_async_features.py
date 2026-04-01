@@ -1,15 +1,13 @@
 import asyncio
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 
 from clickhouse_connect import get_async_client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
-from clickhouse_connect.driver.options import pd, arrow  # pylint: disable=no-name-in-module
+from clickhouse_connect.driver.options import arrow, pd
 from tests.integration_tests.conftest import make_client_config
-
-# pylint: disable=protected-access
 
 
 @pytest.mark.asyncio
@@ -113,8 +111,9 @@ async def test_session_concurrency_protection(test_config):
 
         # Verify it's the right kind of error (concurrent session access)
         error_msg = str(exc_info.value).lower()
-        assert ("concurrent" in error_msg or "session" in error_msg or "locked" in error_msg), \
+        assert "concurrent" in error_msg or "session" in error_msg or "locked" in error_msg, (
             f"Expected session concurrency error, got: {exc_info.value}"
+        )
 
 
 @pytest.mark.asyncio

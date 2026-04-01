@@ -1,6 +1,6 @@
 import math
 import random
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 
@@ -107,7 +107,8 @@ def test_qbit_distance_search(param_client: Client, call, table_context: Callabl
         lemon_vector = [-0.88693672, 1.31532824, -0.51182908, -0.99652702, 0.59907770]
 
         # Full precision search (64-bit)
-        full_precision = call(param_client.query,
+        full_precision = call(
+            param_client.query,
             """
             SELECT word, L2DistanceTransposed(vec, %(lemon)s, 64) AS distance
             FROM fruit_animal
@@ -121,7 +122,8 @@ def test_qbit_distance_search(param_client: Client, call, table_context: Callabl
         assert apple_distance == pytest.approx(0.1464, abs=1e-3)
 
         # Reduced precision search
-        reduced_precision = call(param_client.query,
+        reduced_precision = call(
+            param_client.query,
             """
             SELECT word, L2DistanceTransposed(vec, %(lemon)s, 12) AS distance
             FROM fruit_animal
@@ -302,7 +304,6 @@ def test_qbit_all_zeros(param_client: Client, call, table_context: Callable):
         assert result.result_set[1][0] == pytest.approx([0.0, 0.0, 0.0, 0.0])
 
 
-# pylint: disable=unused-argument
 def test_invalid_dimension(param_client: Client, call, table_context: Callable):
     """Try creating a column with a negative dimension."""
 
@@ -311,7 +312,6 @@ def test_invalid_dimension(param_client: Client, call, table_context: Callable):
             pass
 
 
-# pylint: disable=unused-argument
 def test_invalid_element_type(param_client: Client, call, table_context: Callable):
     """Try creating a column with an invalid element type."""
 

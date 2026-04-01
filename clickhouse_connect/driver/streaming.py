@@ -1,10 +1,8 @@
-# pylint: disable=import-error
-
 import asyncio
 import logging
 import threading
 import zlib
-from typing import Iterator, Optional
+from collections.abc import Iterator
 
 import lz4.frame
 import zstandard
@@ -24,13 +22,12 @@ else:
     brotli = None
 
 
-# pylint: disable=too-many-instance-attributes, broad-exception-caught
 class StreamingResponseSource(Closable):
     """Streaming source that feeds chunks from async producer to sync consumer."""
 
     READ_BUFFER_SIZE = 1024 * 1024
 
-    def __init__(self, response, encoding: Optional[str] = None, exception_tag: Optional[str] = None):
+    def __init__(self, response, encoding: str | None = None, exception_tag: str | None = None):
         self.response = response
         self.encoding = encoding
         self.exception_tag = exception_tag
@@ -46,7 +43,7 @@ class StreamingResponseSource(Closable):
 
         self._producer_task = None
         self._producer_started = threading.Event()
-        self._producer_error: Optional[Exception] = None
+        self._producer_error: Exception | None = None
         self._producer_completed = False
 
     async def start_producer(self, loop: asyncio.AbstractEventLoop):
@@ -98,7 +95,6 @@ class StreamingResponseSource(Closable):
         self._gen_cache = self._create_generator()
         return self._gen_cache
 
-    # pylint: disable=too-many-branches
     def _create_generator(self) -> Iterator[bytes]:
         """Creates the actual generator function."""
         if not self._producer_started.wait(timeout=5.0):
@@ -112,7 +108,6 @@ class StreamingResponseSource(Closable):
                 logger.error("Failed to create decompressor for %s: %s", self.encoding, e)
                 raise
 
-        # pylint: disable=too-many-nested-blocks
         while True:
             chunk = self.queue.sync_q.get()
 

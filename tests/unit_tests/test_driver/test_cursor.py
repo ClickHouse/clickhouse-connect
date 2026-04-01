@@ -1,12 +1,12 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+
 import pytest
 
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
-# pylint: disable=protected-access
 def create_mock_client(result_data):
     """Helper to create a mock client with query result"""
     client = Mock()
@@ -243,7 +243,7 @@ def test_execute_unescapes_double_percents_without_parameters():
     # The query passed to client.query should have %% unescaped to %
     actual_query = client.query.call_args[0][0]
     assert actual_query == "SELECT formatDateTime(toDate('2010-01-04'), '%g')"
-    assert '%%' not in actual_query
+    assert "%%" not in actual_query
 
 
 def test_execute_preserves_percent_with_parameters():
@@ -256,17 +256,14 @@ def test_execute_preserves_percent_with_parameters():
     # Simulate what SQLAlchemy sends for:
     #   text("SELECT formatDateTime(toDate(:d), '%g')")
     # with _double_percents=True and bound parameter d
-    cursor.execute(
-        "SELECT formatDateTime(toDate(%(d)s), '%%g')",
-        {'d': '2010-01-04'}
-    )
+    cursor.execute("SELECT formatDateTime(toDate(%(d)s), '%%g')", {"d": "2010-01-04"})
 
     # Parameters are passed through to client.query; finalize_query handles
     # the %% -> % unescaping via the % operator during parameter substitution.
     actual_query = client.query.call_args[0][0]
     actual_params = client.query.call_args[0][1]
     assert actual_query == "SELECT formatDateTime(toDate(%(d)s), '%%g')"
-    assert actual_params == {'d': '2010-01-04'}
+    assert actual_params == {"d": "2010-01-04"}
 
 
 def test_execute_unescapes_multiple_percents():

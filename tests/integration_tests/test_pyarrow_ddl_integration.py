@@ -1,7 +1,7 @@
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 
-import pytest
 import pyarrow as pa
+import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.ddl import (
@@ -15,9 +15,7 @@ pytest.importorskip("pyarrow")
 
 def test_arrow_create_table_and_insert(param_client: Client, call):
     if not param_client.min_version("20"):
-        pytest.skip(
-            f"Not supported server version {param_client.server_version}"
-        )
+        pytest.skip(f"Not supported server version {param_client.server_version}")
 
     table_name = "test_arrow_basic_integration"
 
@@ -52,9 +50,7 @@ def test_arrow_create_table_and_insert(param_client: Client, call):
 
     call(param_client.insert_arrow, table=table_name, arrow_table=arrow_table)
 
-    result = call(param_client.query,
-        f"SELECT id, name, score, flag FROM {table_name} ORDER BY id"
-    )
+    result = call(param_client.query, f"SELECT id, name, score, flag FROM {table_name} ORDER BY id")
     assert result.result_rows == [
         (1, "a", 1.5, True),
         (2, "b", 2.5, False),
@@ -107,9 +103,7 @@ def test_arrow_schema_to_column_defs(param_client: Client, call):
 
 def test_arrow_datetime_create_and_insert(param_client: Client, call):
     if not param_client.min_version("20"):
-        pytest.skip(
-            f"Not supported server version {param_client.server_version}"
-        )
+        pytest.skip(f"Not supported server version {param_client.server_version}")
 
     table_name = "test_arrow_datetime_integration"
 
@@ -150,10 +144,7 @@ def test_arrow_datetime_create_and_insert(param_client: Client, call):
 
     call(param_client.insert_arrow, table=table_name, arrow_table=arrow_table)
 
-    result = call(param_client.query,
-        f"SELECT id, event_date, event_ts, event_ts_tz "
-        f"FROM {table_name} ORDER BY id"
-    )
+    result = call(param_client.query, f"SELECT id, event_date, event_ts, event_ts_tz FROM {table_name} ORDER BY id")
     rows = result.result_rows
 
     assert len(rows) == 2

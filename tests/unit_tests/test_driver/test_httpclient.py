@@ -1,15 +1,13 @@
-from unittest.mock import Mock, patch, MagicMock
-from typing import Tuple, Dict, Any, Optional
 import logging
+from typing import Any
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
 
-from clickhouse_connect.driver.httpclient import HttpClient, ex_header
-from clickhouse_connect.driver.external import ExternalData
-from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
-
-# pylint: disable=protected-access
-# pylint: disable=attribute-defined-outside-init
+from clickhouse_connect.driver.external import ExternalData
+from clickhouse_connect.driver.httpclient import HttpClient, ex_header
+from clickhouse_connect.driver.query import QueryContext
 
 
 # Helper function to create mock response
@@ -90,9 +88,7 @@ class TestHttpClientErrorHandler:
         # Verify the error message contains expected parts but not empty body
         error_msg = str(excinfo.value)
         assert "Received ClickHouse exception, code: 99" in error_msg
-        assert (
-            "server response:" not in error_msg
-        )  # No body, so no server response part
+        assert "server response:" not in error_msg  # No body, so no server response part
         assert self.client.url in error_msg
         response.close.assert_called_once()
 
@@ -113,10 +109,7 @@ class TestHttpClientErrorHandler:
 
         # Verify the error message is generic
         error_msg = str(excinfo.value)
-        assert (
-            "The ClickHouse server returned an error (for url http://localhost:8123)"
-            in error_msg
-        )
+        assert "The ClickHouse server returned an error (for url http://localhost:8123)" in error_msg
         assert "Invalid query" not in error_msg  # Should not include the body
         assert "99" not in error_msg  # Should not include the exception code
         response.close.assert_called_once()
@@ -125,9 +118,7 @@ class TestHttpClientErrorHandler:
         """Test error handling when the response body has invalid Unicode"""
 
         # Create response with invalid UTF-8 sequence
-        response = create_mock_response(
-            status=500, data=b"\xff\xfe Invalid UTF-8 sequence"
-        )
+        response = create_mock_response(status=500, data=b"\xff\xfe Invalid UTF-8 sequence")
 
         with pytest.raises(DatabaseError) as excinfo:
             self.client._error_handler(response)
@@ -152,9 +143,7 @@ class TestHttpClientErrorHandler:
         response.close.assert_called_once()
 
     @patch("clickhouse_connect.driver.httpclient.get_response_data")
-    def test_error_handler_with_body_reading_exception(
-        self, mock_get_response_data, caplog
-    ):
+    def test_error_handler_with_body_reading_exception(self, mock_get_response_data, caplog):
         """Test error handling when reading the response body throws an exception"""
         # Set up the mock to raise an exception when reading the response body
         mock_get_response_data.side_effect = Exception("Error reading response data")
@@ -203,15 +192,13 @@ class TestQuery:
     def create_mock_external_data() -> Mock:
         """Create a mock ExternalData object with standard test data"""
         external_data = Mock(spec=ExternalData)
-        external_data.query_params = {'_file1_format': 'CSV', '_file1_structure': 'id UInt32'}
-        external_data.form_data = {'_file1': b'1\n2\n3\n'}
+        external_data.query_params = {"_file1_format": "CSV", "_file1_structure": "id UInt32"}
+        external_data.form_data = {"_file1": b"1\n2\n3\n"}
         return external_data
 
     @staticmethod
     def create_mock_query_context(
-        query: str = "SELECT * FROM table",
-        bind_params: Optional[Dict[str, Any]] = None,
-        external_data: Optional[ExternalData] = None
+        query: str = "SELECT * FROM table", bind_params: dict[str, Any] | None = None, external_data: ExternalData | None = None
     ) -> Mock:
         """Create a mock QueryContext with common test values"""
         context = Mock(spec=QueryContext)
@@ -233,7 +220,7 @@ class TestQuery:
         return mock_response
 
     @staticmethod
-    def extract_raw_request_params(mock_raw_request: MagicMock) -> Tuple[Any, Dict, Dict]:
+    def extract_raw_request_params(mock_raw_request: MagicMock) -> tuple[Any, dict, dict]:
         assert mock_raw_request.called
         call_args = mock_raw_request.call_args
 
@@ -242,77 +229,76 @@ class TestQuery:
         params = call_args[0][1] if len(call_args[0]) > 1 else {}
 
         # Extract fields from keyword arguments
-        fields = call_args[1].get('fields', {}) if call_args[1] else {}
+        fields = call_args[1].get("fields", {}) if call_args[1] else {}
 
         return body, params, fields
 
-
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query(self, mock_raw_request):
         """Test raw_query with neither form_encode_query_params nor external_data"""
         self.client.form_encode_query_params = False
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'test_result'
+        mock_response.data = b"test_result"
         mock_raw_request.return_value = mock_response
 
         query = "SELECT * FROM table WHERE id = {id:UInt32}"
-        parameters = {'id': 123}
+        parameters = {"id": 123}
 
         # Call raw_query
         result = self.client.raw_query(query, parameters=parameters)
 
         # Verify result
-        assert result == b'test_result'
+        assert result == b"test_result"
 
         # Check the call to _raw_request
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, str)
         assert body
-        assert 'SELECT * FROM table WHERE id =' in body
-        assert 'param_id' in params
+        assert "SELECT * FROM table WHERE id =" in body
+        assert "param_id" in params
         assert not fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_with_form_encode(self, mock_raw_request):
         """Test raw_query with form_encode_query_params=True"""
         self.client.form_encode_query_params = True
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'test_result'
+        mock_response.data = b"test_result"
         mock_raw_request.return_value = mock_response
 
         query = "SELECT * FROM table WHERE id = {id:UInt32}"
-        parameters = {'id': 123}
+        parameters = {"id": 123}
 
         # Call raw_query
         result = self.client.raw_query(query, parameters=parameters)
 
         # Verify result
-        assert result == b'test_result'
+        assert result == b"test_result"
 
         # Check the call to _raw_request
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' in fields
-        assert isinstance(fields['query'], str)
-        assert 'SELECT * FROM table WHERE id =' in fields['query']
-        assert 'param_id' in fields
-        assert 'param_id' not in params
+        assert body == b""
+        assert "query" in fields
+        assert isinstance(fields["query"], str)
+        assert "SELECT * FROM table WHERE id =" in fields["query"]
+        assert "param_id" in fields
+        assert "param_id" not in params
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_with_external_data_only(self, mock_raw_request):
         """Test raw_query with external_data only (no form_encode)"""
         self.client.form_encode_query_params = False
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'100'
+        mock_response.data = b"100"
         mock_raw_request.return_value = mock_response
 
         external_data = self.create_mock_external_data()
@@ -322,59 +308,59 @@ class TestQuery:
         result = self.client.raw_query(query, external_data=external_data)
 
         # Verify result
-        assert result == b'100'
+        assert result == b"100"
 
         # Check the call to _raw_request
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' in params
-        assert isinstance(params['query'], str)
-        assert params['query'] == query
-        assert '_file1_format' in params
-        assert '_file1' in fields
+        assert body == b""
+        assert "query" in params
+        assert isinstance(params["query"], str)
+        assert params["query"] == query
+        assert "_file1_format" in params
+        assert "_file1" in fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_with_form_encode_and_external_data(self, mock_raw_request):
         """Test raw_query with both form_encode_query_params and external_data"""
         self.client.form_encode_query_params = True
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'150'
+        mock_response.data = b"150"
         mock_raw_request.return_value = mock_response
 
         external_data = self.create_mock_external_data()
         query = "SELECT COUNT() FROM file1 WHERE value > {min_val:UInt32}"
-        parameters = {'min_val': 10}
+        parameters = {"min_val": 10}
 
         # Call raw_query
         result = self.client.raw_query(query, parameters=parameters, external_data=external_data)
 
         # Verify result
-        assert result == b'150'
+        assert result == b"150"
 
         # Check the call to _raw_request
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' not in params
-        assert 'query' in fields
-        assert isinstance(fields['query'], str)
-        assert '_file1_format' in params
-        assert '_file1' in fields
-        assert 'param_min_val' in fields
+        assert body == b""
+        assert "query" not in params
+        assert "query" in fields
+        assert isinstance(fields["query"], str)
+        assert "_file1_format" in params
+        assert "_file1" in fields
+        assert "param_min_val" in fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_form_encode_without_external_data(self, mock_raw_request):
         """Test that query goes to fields when form_encode is True but no external_data"""
         self.client.form_encode_query_params = True
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'50'
+        mock_response.data = b"50"
         mock_raw_request.return_value = mock_response
 
         query = "SELECT COUNT() FROM table"
@@ -383,48 +369,48 @@ class TestQuery:
         result = self.client.raw_query(query)
 
         # Verify result
-        assert result == b'50'
+        assert result == b"50"
 
         # Check the call to _raw_request
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' not in params
-        assert 'query' in fields
-        assert isinstance(fields['query'], str)
-        assert fields['query'] == query
+        assert body == b""
+        assert "query" not in params
+        assert "query" in fields
+        assert isinstance(fields["query"], str)
+        assert fields["query"] == query
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_with_settings(self, mock_raw_request):
         """Test raw_query properly handles settings parameter"""
         self.client.form_encode_query_params = False
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'result_with_settings'
+        mock_response.data = b"result_with_settings"
         mock_raw_request.return_value = mock_response
 
         query = "SELECT * FROM table"
-        settings = {'max_threads': 4, 'max_memory_usage': 1000000}
+        settings = {"max_threads": 4, "max_memory_usage": 1000000}
 
         # Call raw_query
         result = self.client.raw_query(query, settings=settings)
 
         # Verify result
-        assert result == b'result_with_settings'
+        assert result == b"result_with_settings"
 
         # Check the call to _raw_request
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, str)
-        assert 'max_threads' in params
-        assert params['max_threads'] == 4
-        assert 'max_memory_usage' in params
-        assert params['max_memory_usage'] == 1000000
+        assert "max_threads" in params
+        assert params["max_threads"] == 4
+        assert "max_memory_usage" in params
+        assert params["max_memory_usage"] == 1000000
         assert not fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_with_format(self, mock_raw_request):
         """Test raw_query properly appends FORMAT clause"""
         self.client.form_encode_query_params = False
@@ -447,11 +433,11 @@ class TestQuery:
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, str)
-        assert 'FORMAT JSONEachRow' in body
+        assert "FORMAT JSONEachRow" in body
         assert params is not None
         assert not fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_database_handling(self, mock_raw_request):
         """Test raw_query properly handles database parameter"""
         self.client.form_encode_query_params = False
@@ -459,19 +445,19 @@ class TestQuery:
 
         # Setup mock response
         mock_response = Mock()
-        mock_response.data = b'db_result'
+        mock_response.data = b"db_result"
         mock_raw_request.return_value = mock_response
 
         query = "SELECT * FROM table"
 
         # Test with use_database=True (default)
         result = self.client.raw_query(query, use_database=True)
-        assert result == b'db_result'
+        assert result == b"db_result"
 
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
         assert isinstance(body, str)
-        assert 'database' in params
-        assert params['database'] == 'test_db'
+        assert "database" in params
+        assert params["database"] == "test_db"
         assert not fields
 
         # Reset mock for second test
@@ -480,14 +466,14 @@ class TestQuery:
 
         # Test with use_database=False
         result = self.client.raw_query(query, use_database=False)
-        assert result == b'db_result'
+        assert result == b"db_result"
 
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
         assert isinstance(body, str)
-        assert 'database' not in params
+        assert "database" not in params
         assert not fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_query_with_context(self, mock_raw_request):
         """Test _query_with_context with neither form_encode_query_params nor external_data"""
         self.client.form_encode_query_params = False
@@ -498,10 +484,7 @@ class TestQuery:
         self.client._transform.parse_response.return_value = Mock(summary=None)
 
         # Create context
-        context = self.create_mock_query_context(
-            query="SELECT * FROM table WHERE id = 123",
-            bind_params={'param_id': 123}
-        )
+        context = self.create_mock_query_context(query="SELECT * FROM table WHERE id = 123", bind_params={"param_id": 123})
 
         # Call the method
         self.client._query_with_context(context)
@@ -510,11 +493,11 @@ class TestQuery:
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, str)
-        assert 'SELECT * FROM table WHERE id =' in body
-        assert 'param_id' in params
+        assert "SELECT * FROM table WHERE id =" in body
+        assert "param_id" in params
         assert not fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_query_with_context_form_encode(self, mock_raw_request):
         """Test _query_with_context with form_encode_query_params=True"""
         self.client.form_encode_query_params = True
@@ -525,10 +508,7 @@ class TestQuery:
         self.client._transform.parse_response.return_value = Mock(summary=None)
 
         # Create context
-        context = self.create_mock_query_context(
-            query="SELECT * FROM table WHERE id = 123",
-            bind_params={'param_id': 123}
-        )
+        context = self.create_mock_query_context(query="SELECT * FROM table WHERE id = 123", bind_params={"param_id": 123})
 
         # Call the method
         self.client._query_with_context(context)
@@ -537,12 +517,12 @@ class TestQuery:
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' in fields
-        assert 'param_id' in fields
-        assert 'param_id' not in params
+        assert body == b""
+        assert "query" in fields
+        assert "param_id" in fields
+        assert "param_id" not in params
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_query_with_context_external_data(self, mock_raw_request):
         """Test _query_with_context with external_data only"""
         self.client.form_encode_query_params = False
@@ -554,10 +534,7 @@ class TestQuery:
 
         # Create external data and context
         external_data = self.create_mock_external_data()
-        context = self.create_mock_query_context(
-            query="SELECT * FROM file1",
-            external_data=external_data
-        )
+        context = self.create_mock_query_context(query="SELECT * FROM file1", external_data=external_data)
 
         # Call the method
         self.client._query_with_context(context)
@@ -566,13 +543,13 @@ class TestQuery:
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' in params
-        assert isinstance(params['query'], str)
-        assert '_file1_format' in params
-        assert '_file1' in fields
+        assert body == b""
+        assert "query" in params
+        assert isinstance(params["query"], str)
+        assert "_file1_format" in params
+        assert "_file1" in fields
 
-    @patch.object(HttpClient, '_raw_request')
+    @patch.object(HttpClient, "_raw_request")
     def test_query_with_context_with_form_encode_and_external_data(self, mock_raw_request):
         """Test _query_with_context with both form_encode_query_params and external_data"""
         self.client.form_encode_query_params = True
@@ -585,9 +562,7 @@ class TestQuery:
         # Create external data and context
         external_data = self.create_mock_external_data()
         context = self.create_mock_query_context(
-            query="SELECT * FROM file1 WHERE value > 10",
-            bind_params={'param_min_val': 10},
-            external_data=external_data
+            query="SELECT * FROM file1 WHERE value > 10", bind_params={"param_min_val": 10}, external_data=external_data
         )
 
         # Call the method
@@ -597,13 +572,13 @@ class TestQuery:
         body, params, fields = self.extract_raw_request_params(mock_raw_request)
 
         assert isinstance(body, bytes)
-        assert body == b''
-        assert 'query' not in params
-        assert 'query' in fields
-        assert isinstance(fields['query'], str)
-        assert '_file1_format' in params
-        assert '_file1' in fields
-        assert 'param_min_val' in fields
+        assert body == b""
+        assert "query" not in params
+        assert "query" in fields
+        assert isinstance(fields["query"], str)
+        assert "_file1_format" in params
+        assert "_file1" in fields
+        assert "param_min_val" in fields
 
     @patch.object(HttpClient, "_raw_request")
     @patch("clickhouse_connect.driver.httpclient.columns_only_re")
@@ -622,8 +597,7 @@ class TestQuery:
 
         # Create query context
         context = self.create_mock_query_context(
-            query="SELECT * FROM table WHERE id = {id:UInt32} LIMIT 0",
-            bind_params={"param_id": "123"}
+            query="SELECT * FROM table WHERE id = {id:UInt32} LIMIT 0", bind_params={"param_id": "123"}
         )
         context.uncommented_query = "SELECT * FROM table WHERE id = {id:UInt32} LIMIT 0"
         context.is_insert = False
@@ -670,10 +644,7 @@ class TestQuery:
 
         # Create external data and context
         external_data = self.create_mock_external_data()
-        context = self.create_mock_query_context(
-            query="SELECT * FROM file1 LIMIT 0",
-            external_data=external_data
-        )
+        context = self.create_mock_query_context(query="SELECT * FROM file1 LIMIT 0", external_data=external_data)
         context.uncommented_query = "SELECT * FROM file1 LIMIT 0"
         context.is_insert = False
         context.final_query = "SELECT * FROM file1 LIMIT 0"
@@ -717,7 +688,7 @@ class TestQuery:
         context = self.create_mock_query_context(
             query="SELECT * FROM file1 WHERE value > 10",
             bind_params={"param_min_val": 10},
-            external_data=external_data
+            external_data=external_data,
         )
         context.uncommented_query = "SELECT * FROM file1 WHERE value > 10"
         context.is_insert = False

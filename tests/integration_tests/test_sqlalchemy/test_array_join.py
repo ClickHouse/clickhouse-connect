@@ -61,10 +61,13 @@ def test_tables(test_engine: Engine, test_db: str):
             )
         )
 
-        verify_tables_ready(conn, {
-            f"{test_db}.test_array_join": 4,
-            f"{test_db}.test_multi_array_join": 3,
-        })
+        verify_tables_ready(
+            conn,
+            {
+                f"{test_db}.test_array_join": 4,
+                f"{test_db}.test_multi_array_join": 3,
+            },
+        )
 
         yield
 

@@ -1,5 +1,5 @@
 from datetime import time, timedelta
-from typing import Any, List
+from typing import Any
 
 import pytest
 
@@ -110,12 +110,12 @@ STANDARD_TIME_TABLE_SCHEMA = [
 ]
 
 
-def create_test_row(row_id: int, time_val: Any) -> List[Any]:
+def create_test_row(row_id: int, time_val: Any) -> list[Any]:
     """Create a test row with the given ID and time value for all columns."""
     return [row_id, time_val, time_val, time_val, time_val, time_val, time_val]
 
 
-def create_nullable_test_row(row_id: int, **column_values) -> List[Any]:
+def create_nullable_test_row(row_id: int, **column_values) -> list[Any]:
     """Create a test row with specific values for nullable columns."""
     return [
         row_id,
@@ -185,9 +185,9 @@ def test_time64_all_formats(
     call,
     table_context,
     column: str,
-    strings: List[str],
-    deltas: List[timedelta],
-    ticks: List[int],
+    strings: list[str],
+    deltas: list[timedelta],
+    ticks: list[int],
     type_name: str,
 ):
     """Test Time64 round-trip with all supported formats."""
@@ -343,7 +343,7 @@ def test_time_default_read_from_time_objects(param_client, call, table_context):
         ("t64_ns", ClockTimeData.TIME64_NS_OBJS),
     ],
 )
-def test_time64_time_format(param_client, call, table_context, column: str, objects: List[time]):
+def test_time64_time_format(param_client, call, table_context, column: str, objects: list[time]):
     """Validate Time64(6/9) ⇄ datetime.time conversions."""
     with table_context(TABLE_NAME, STANDARD_TIME_TABLE_SCHEMA, settings={"enable_time_time64_type": 1}):
         rows = [create_test_row(i, t) for i, t in enumerate(objects)]

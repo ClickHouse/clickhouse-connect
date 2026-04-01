@@ -1,10 +1,9 @@
 import uuid
-
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 
-SESSION_KEY = 'session_id'
+SESSION_KEY = "session_id"
 
 
 def test_client_default_session_id(client_factory: Callable):
@@ -28,7 +27,7 @@ def test_client_autogenerate_session_id(client_factory: Callable):
 
 
 def test_client_custom_session_id(client_factory: Callable):
-    session_id = 'custom_session_id'
+    session_id = "custom_session_id"
     client = client_factory(session_id=session_id)
     assert client.get_client_setting(SESSION_KEY) == session_id
 

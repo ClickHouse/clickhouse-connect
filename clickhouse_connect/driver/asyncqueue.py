@@ -1,7 +1,7 @@
 import asyncio
 import threading
 from collections import deque
-from typing import Deque, Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
@@ -12,23 +12,22 @@ T = TypeVar("T")
 EOF_SENTINEL = object()
 
 
-# pylint: disable=too-many-instance-attributes
 class AsyncSyncQueue(Generic[T]):
     """High-performance bridge between AsyncIO and Threading."""
 
     def __init__(self, maxsize: int = 100):
         self._maxsize = maxsize
-        self._queue: Deque[T] = deque()
+        self._queue: deque[T] = deque()
         self._shutdown = False
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self._lock = threading.Lock()
 
         self._sync_not_empty = threading.Condition(self._lock)
         self._sync_not_full = threading.Condition(self._lock)
 
-        self._async_getters: Deque[asyncio.Future] = deque()
-        self._async_putters: Deque[asyncio.Future] = deque()
+        self._async_getters: deque[asyncio.Future] = deque()
+        self._async_putters: deque[asyncio.Future] = deque()
 
         self.sync_q = _SyncQueueInterface(self)
         self.async_q = _AsyncQueueInterface(self)
@@ -57,7 +56,7 @@ class AsyncSyncQueue(Generic[T]):
         except RuntimeError:
             pass
 
-    def _wakeup_async_waiter(self, waiter_queue: Deque[asyncio.Future]):
+    def _wakeup_async_waiter(self, waiter_queue: deque[asyncio.Future]):
         """Helper: Wake up the next async waiter in the queue safely."""
         while waiter_queue:
             fut = waiter_queue.popleft()
@@ -89,12 +88,11 @@ class AsyncSyncQueue(Generic[T]):
             return len(self._queue)
 
 
-# pylint: disable=protected-access
 class _SyncQueueInterface(Generic[T]):
     def __init__(self, parent: AsyncSyncQueue[T]):
         self._p = parent
 
-    def get(self, block: bool = True, timeout: Optional[float] = None) -> T:
+    def get(self, block: bool = True, timeout: float | None = None) -> T:
         with self._p._lock:
             while not self._p._queue and not self._p._shutdown:
                 if not block:
@@ -113,7 +111,7 @@ class _SyncQueueInterface(Generic[T]):
 
             return item
 
-    def put(self, item: T, block: bool = True, timeout: Optional[float] = None) -> None:
+    def put(self, item: T, block: bool = True, timeout: float | None = None) -> None:
         with self._p._lock:
             if self._p._shutdown:
                 raise RuntimeError("Queue is shutdown")
@@ -187,9 +185,9 @@ class _AsyncQueueInterface(Generic[T]):
                 raise
 
 
-class Empty(Exception):
+class Empty(Exception):  # noqa: N818
     pass
 
 
-class Full(Exception):
+class Full(Exception):  # noqa: N818
     pass
