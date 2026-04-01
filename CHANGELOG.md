@@ -29,6 +29,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Removed the `preserve_pandas_datetime_resolution` common setting. Datetime columns now always return their natural resolution, e.g. `datetime64[s]` for `DateTime`, `datetime64[ms]` for `DateTime64(3)`, instead of coercing everything to `datetime64[ns]`. Closes [#662](https://github.com/ClickHouse/clickhouse-connect/issues/662)
 - Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
 
+### Development
+- Replaced pylint with [Ruff](https://docs.astral.sh/ruff/) for linting and formatting. Double quotes are now the standard quote style. Bulk formatting commits are listed in `.git-blame-ignore-revs`. CI lint job no longer requires building C extensions or installing project dependencies, significantly reducing lint check time.
+
 ### Improvements
 - Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
 - Clearer error message when attempting to use the async client without aiohttp installed.
