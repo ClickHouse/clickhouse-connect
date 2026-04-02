@@ -40,7 +40,7 @@ class MockContent:
         self.chunks = chunks
         self.index = 0
 
-    async def read(self, n=-1):  # pylint: disable=unused-argument
+    async def read(self, n=-1):
         """Mock read method that returns chunks sequentially."""
         if self.index >= len(self.chunks):
             return b""
@@ -359,7 +359,7 @@ class MockTransform:
     def __init__(self, chunks=None):
         self.chunks = chunks or [b"chunk1", b"chunk2"]
 
-    def build_insert(self, context):  # pylint: disable=unused-argument
+    def build_insert(self, context):
         yield from self.chunks
 
 
@@ -367,7 +367,7 @@ class FailingTransform:
     """Mock NativeTransform that raises error."""
 
     @staticmethod
-    def build_insert(context):  # pylint: disable=unused-argument
+    def build_insert(context):
         yield b"chunk1"
         raise ValueError("Serialization error")
 

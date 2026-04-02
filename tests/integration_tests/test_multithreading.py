@@ -21,7 +21,7 @@ def test_sync_client_sequential_thread_access(test_client, test_config: TestConf
         try:
             result = test_client.command(f"SELECT {value}")
             results.append(result)
-        except Exception as ex:  # pylint: disable=broad-exception-caught
+        except Exception as ex:
             errors.append(ex)
 
     threads = [threading.Thread(target=run_query, args=(i,)) for i in range(3)]
@@ -47,14 +47,11 @@ async def test_async_client_threadsafe_submission(test_native_async_client, test
 
     def run_query_threadsafe(value):
         try:
-            future = asyncio.run_coroutine_threadsafe(
-                test_native_async_client.command(f"SELECT {value}"),
-                loop
-            )
+            future = asyncio.run_coroutine_threadsafe(test_native_async_client.command(f"SELECT {value}"), loop)
             result = future.result(timeout=5)
             with lock:
                 results.append(result)
-        except Exception as ex:  # pylint: disable=broad-exception-caught
+        except Exception as ex:
             with lock:
                 errors.append(ex)
 
@@ -86,13 +83,10 @@ def test_sync_concurrent_session_usage_detection(test_config: TestConfig):
     def run_query(client):
         try:
             client.command("SELECT sleep(1)")
-        except (ProgrammingError, Exception) as ex:  # pylint: disable=broad-exception-caught
+        except (ProgrammingError, Exception) as ex:
             thrown.append(ex)
 
-    threads = [
-        threading.Thread(target=run_query, args=(client1,)),
-        threading.Thread(target=run_query, args=(client2,))
-    ]
+    threads = [threading.Thread(target=run_query, args=(client1,)), threading.Thread(target=run_query, args=(client2,))]
 
     for thread in threads:
         thread.start()
@@ -103,13 +97,14 @@ def test_sync_concurrent_session_usage_detection(test_config: TestConfig):
     try:
         client1.close()
         client2.close()
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         pass
 
     # At least one should fail due to concurrent session usage
     assert len(thrown) > 0, "Expected ClickHouse to detect concurrent session usage"
-    assert any("concurrent" in str(ex).lower() or "session" in str(ex).lower() for ex in thrown), \
+    assert any("concurrent" in str(ex).lower() or "session" in str(ex).lower() for ex in thrown), (
         f"Expected session concurrency error, got: {thrown}"
+    )
 
 
 @pytest.mark.asyncio
@@ -121,25 +116,20 @@ async def test_async_concurrent_session_usage_detection(test_config: TestConfig)
     session_id = str(uuid.uuid4())
     loop = asyncio.get_running_loop()
 
-    async with await get_async_client(**make_client_config(test_config, session_id=session_id)) as client1, \
-               await get_async_client(**make_client_config(test_config, session_id=session_id)) as client2:
-
+    async with (
+        await get_async_client(**make_client_config(test_config, session_id=session_id)) as client1,
+        await get_async_client(**make_client_config(test_config, session_id=session_id)) as client2,
+    ):
         thrown = []
 
         def run_query(client):
             try:
-                future = asyncio.run_coroutine_threadsafe(
-                    client.command("SELECT sleep(1)"),
-                    loop
-                )
+                future = asyncio.run_coroutine_threadsafe(client.command("SELECT sleep(1)"), loop)
                 future.result(timeout=5)
-            except (ProgrammingError, Exception) as ex:  # pylint: disable=broad-exception-caught
+            except (ProgrammingError, Exception) as ex:
                 thrown.append(ex)
 
-        threads = [
-            threading.Thread(target=run_query, args=(client1,)),
-            threading.Thread(target=run_query, args=(client2,))
-        ]
+        threads = [threading.Thread(target=run_query, args=(client1,)), threading.Thread(target=run_query, args=(client2,))]
 
         for thread in threads:
             thread.start()
@@ -151,5 +141,6 @@ async def test_async_concurrent_session_usage_detection(test_config: TestConfig)
 
         # At least one should fail due to concurrent session usage
         assert len(thrown) > 0, "Expected ClickHouse to detect concurrent session usage"
-        assert any("concurrent" in str(ex).lower() or "session" in str(ex).lower() for ex in thrown), \
+        assert any("concurrent" in str(ex).lower() or "session" in str(ex).lower() for ex in thrown), (
             f"Expected session concurrency error, got: {thrown}"
+        )

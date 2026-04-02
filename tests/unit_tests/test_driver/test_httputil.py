@@ -6,7 +6,6 @@ from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.httputil import ResponseSource
 
 
-# pylint: disable=no-self-use, unused-argument, unreachable
 class TestResponseSourceNetworkError:
     """Test ResponseSource handling of network errors"""
 

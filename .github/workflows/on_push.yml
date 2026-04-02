@@ -28,26 +28,21 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    name: PyLint
+    name: Ruff
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python (3.11)
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
-      - name: Install dependencies
+          python-version: "3.11"
+      - name: Install Ruff
         run: |
           python -m pip install --upgrade pip
-          pip install setuptools wheel
-          pip install -r tests/test_requirements.txt
-          pip install astroid==3.3.5
-          pip install pylint==3.3.1
-          python setup.py build_ext --inplace
-      - name: Run Pylint
-        run: |
-          pylint clickhouse_connect
-          pylint tests
-          pylint examples
+          pip install "ruff==0.15.8"
+      - name: Ruff format check
+        run: ruff format --check clickhouse_connect tests examples setup.py
+      - name: Ruff lint check
+        run: ruff check clickhouse_connect tests examples setup.py
 
   bare-import-test:
     runs-on: ubuntu-latest

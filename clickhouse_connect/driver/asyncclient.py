@@ -1,4 +1,4 @@
-# pylint: disable=too-many-lines,duplicate-code,import-error
+from __future__ import annotations
 
 import asyncio
 import gzip
@@ -10,23 +10,31 @@ import ssl
 import sys
 import time
 import uuid
-import pytz
 import zlib
 from base64 import b64encode
+from collections.abc import Generator, Iterable, Sequence
 from datetime import tzinfo
 from importlib import import_module
 from importlib.metadata import version as dist_version
-from typing import Any, BinaryIO, Dict, Generator, Iterable, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 import aiohttp
+
+if TYPE_CHECKING:
+    import pandas
+    import polars
+    import pyarrow
+
 import lz4.frame
+import pytz
 import zstandard
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver import httputil, tzutil
+from clickhouse_connect.driver import httputil, options, tzutil
+from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
 from clickhouse_connect.driver.binding import bind_query, quote_identifier
 from clickhouse_connect.driver.client import Client, _apply_arrow_tz_policy
 from clickhouse_connect.driver.common import StreamContext, coerce_bool, dict_copy
@@ -37,14 +45,11 @@ from clickhouse_connect.driver.exceptions import DatabaseError, DataError, Opera
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
-from clickhouse_connect.driver import options
 from clickhouse_connect.driver.options import check_arrow, check_numpy, check_pandas, check_polars
 from clickhouse_connect.driver.query import QueryContext, QueryResult, TzMode, TzSource, arrow_buffer
+from clickhouse_connect.driver.streaming import StreamingFileAdapter, StreamingInsertSource, StreamingResponseSource
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.asyncqueue import AsyncSyncQueue, EOF_SENTINEL
-from clickhouse_connect.driver.streaming import StreamingInsertSource
 from clickhouse_connect.driver.transform import NativeTransform
-from clickhouse_connect.driver.streaming import StreamingResponseSource, StreamingFileAdapter
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
@@ -56,7 +61,8 @@ if "br" in available_compression:
 else:
     brotli = None
 
-def decompress_response(data: bytes, encoding: Optional[str]) -> bytes:
+
+def decompress_response(data: bytes, encoding: str | None) -> bytes:
     """Decompress response data based on Content-Encoding header."""
 
     if not encoding or encoding == "identity":
@@ -92,54 +98,64 @@ class BytesSource:
     def close(self):
         """No-op close method for compatibility."""
 
-# pylint: disable=invalid-overridden-method, too-many-instance-attributes, too-many-public-methods, broad-exception-caught
-class AsyncClient(Client):
-    valid_transport_settings = {"database", "buffer_size", "session_id",
-                                "compress", "decompress", "session_timeout",
-                                "session_check", "query_id", "quota_key",
-                                "wait_end_of_query", "client_protocol_version",
-                                "role"}
-    optional_transport_settings = {"send_progress_in_http_headers",
-                                   "http_headers_progress_interval_ms",
-                                   "enable_http_compression"}
 
-    # pylint: disable=too-many-arguments, too-many-positional-arguments, too-many-locals, too-many-branches, too-many-statements
+class AsyncClient(Client):
+    valid_transport_settings = {
+        "database",
+        "buffer_size",
+        "session_id",
+        "compress",
+        "decompress",
+        "session_timeout",
+        "session_check",
+        "query_id",
+        "quota_key",
+        "wait_end_of_query",
+        "client_protocol_version",
+        "role",
+    }
+    optional_transport_settings = {
+        "send_progress_in_http_headers",
+        "http_headers_progress_interval_ms",
+        "enable_http_compression",
+    }
+
     def __init__(
         self,
         interface: str,
         host: str,
         port: int,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        database: Optional[str] = None,
-        access_token: Optional[str] = None,
-        compress: Union[bool, str] = True,
+        username: str | None = None,
+        password: str | None = None,
+        database: str | None = None,
+        access_token: str | None = None,
+        compress: bool | str = True,
         connect_timeout: int = 10,
         send_receive_timeout: int = 300,
-        client_name: Optional[str] = None,
-        verify: Union[bool, str] = True,
-        ca_cert: Optional[str] = None,
-        client_cert: Optional[str] = None,
-        client_cert_key: Optional[str] = None,
-        http_proxy: Optional[str] = None,
-        https_proxy: Optional[str] = None,
-        server_host_name: Optional[str] = None,
-        tls_mode: Optional[str] = None,
+        client_name: str | None = None,
+        verify: bool | str = True,
+        ca_cert: str | None = None,
+        client_cert: str | None = None,
+        client_cert_key: str | None = None,
+        http_proxy: str | None = None,
+        https_proxy: str | None = None,
+        server_host_name: str | None = None,
+        tls_mode: str | None = None,
         proxy_path: str = "",
         connector_limit: int = 100,
         connector_limit_per_host: int = 20,
         keepalive_timeout: float = 30.0,
-        session_id: Optional[str] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        session_id: str | None = None,
+        settings: dict[str, Any] | None = None,
         query_limit: int = 0,
         query_retries: int = 2,
-        tz_source: Optional[TzSource] = None,
-        tz_mode: Optional[TzMode] = None,
-        show_clickhouse_errors: Optional[bool] = None,
-        autogenerate_session_id: Optional[bool] = None,
-        autogenerate_query_id: Optional[bool] = None,
+        tz_source: TzSource | None = None,
+        tz_mode: TzMode | None = None,
+        show_clickhouse_errors: bool | None = None,
+        autogenerate_session_id: bool | None = None,
+        autogenerate_query_id: bool | None = None,
         form_encode_query_params: bool = False,
-        rename_response_column: Optional[str] = None,
+        rename_response_column: str | None = None,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
@@ -266,10 +282,9 @@ class AsyncClient(Client):
             tz_source=tz_source,
             tz_mode=tz_mode,
             show_clickhouse_errors=show_clickhouse_errors,
-            autoconnect=False
+            autoconnect=False,
         )
 
-    # pylint: disable=attribute-defined-outside-init
     async def _initialize(self):
         """
         Async equivalent of Client._init_common_settings.
@@ -327,8 +342,11 @@ class AsyncClient(Client):
                     pass
 
             cancel_setting = self._setting_status("cancel_http_readonly_queries_on_client_close")
-            if cancel_setting.is_writable and not cancel_setting.is_set and \
-                    "cancel_http_readonly_queries_on_client_close" not in (self._initial_settings or {}):
+            if (
+                cancel_setting.is_writable
+                and not cancel_setting.is_set
+                and "cancel_http_readonly_queries_on_client_close" not in (self._initial_settings or {})
+            ):
                 self._client_settings["cancel_http_readonly_queries_on_client_close"] = "1"
 
             if self._initial_settings:
@@ -348,7 +366,7 @@ class AsyncClient(Client):
                 compression = None
 
             comp_setting = self._setting_status("enable_http_compression")
-            self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable  # pylint: disable=attribute-defined-outside-init
+            self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
             if comp_setting.is_set or comp_setting.is_writable:
                 self.compression = compression
 
@@ -421,7 +439,7 @@ class AsyncClient(Client):
         if str_value is not None:
             self._client_settings[key] = str_value
 
-    def get_client_setting(self, key) -> Optional[str]:
+    def get_client_setting(self, key) -> str | None:
         return self._client_settings.get(key)
 
     def set_access_token(self, access_token: str):
@@ -489,8 +507,8 @@ class AsyncClient(Client):
             # Offload to executor
             json_result = await loop.run_in_executor(None, decompress_and_parse_json)
 
-            names: List[str] = []
-            types: List[ClickHouseType] = []
+            names: list[str] = []
+            types: list[ClickHouseType] = []
             renamer = context.column_renamer
             for col in json_result["meta"]:
                 name = col["name"]
@@ -536,9 +554,15 @@ class AsyncClient(Client):
 
         headers = dict_copy(headers, context.transport_settings)
 
-        response = await self._raw_request(data, params, headers, files=files,
-                                          server_wait=not context.streaming,
-                                          stream=True, retries=self.query_retries)
+        response = await self._raw_request(
+            data,
+            params,
+            headers,
+            files=files,
+            server_wait=not context.streaming,
+            stream=True,
+            retries=self.query_retries,
+        )
         encoding = response.headers.get("Content-Encoding")
         tz_header = response.headers.get("X-ClickHouse-Timezone")
         exception_tag = response.headers.get(ex_tag_header)
@@ -560,9 +584,9 @@ class AsyncClient(Client):
             # For standard queries, we return a lazy QueryResult. Accessing .result_set on the event loop
             # will raise a ProgrammingError (deadlock check), encouraging usage of .rows_stream.
             if not context.streaming:
-                if context.as_pandas and hasattr(result, 'df_result'):
+                if context.as_pandas and hasattr(result, "df_result"):
                     _ = result.df_result
-                elif context.use_numpy and hasattr(result, 'np_result'):
+                elif context.use_numpy and hasattr(result, "np_result"):
                     _ = result.np_result
                 elif isinstance(result, QueryResult):
                     _ = result.result_set
@@ -583,26 +607,24 @@ class AsyncClient(Client):
 
         return query_result
 
-
-    # pylint: disable=arguments-differ
     async def query(  # type: ignore[override]
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        column_oriented: Optional[bool] = None,
-        use_numpy: Optional[bool] = None,
-        max_str_len: Optional[int] = None,
-        context: Optional[QueryContext] = None,
-        query_tz: Optional[Union[str, tzinfo]] = None,
-        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        tz_mode: Optional[TzMode] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str | dict[str, str]] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        column_oriented: bool | None = None,
+        use_numpy: bool | None = None,
+        max_str_len: int | None = None,
+        context: QueryContext | None = None,
+        query_tz: str | tzinfo | None = None,
+        column_tzs: dict[str, str | tzinfo] | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
+        tz_mode: TzMode | None = None,
     ) -> QueryResult:
         """
         Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.  For
@@ -648,19 +670,19 @@ class AsyncClient(Client):
 
     async def query_column_block_stream(  # type: ignore[override]
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        context: Optional[QueryContext] = None,
-        query_tz: Optional[Union[str, tzinfo]] = None,
-        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        tz_mode: Optional[TzMode] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str | dict[str, str]] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        context: QueryContext | None = None,
+        query_tz: str | tzinfo | None = None,
+        column_tzs: dict[str, str | tzinfo] | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
+        tz_mode: TzMode | None = None,
     ) -> StreamContext:
         """
         Async version of query_column_block_stream.
@@ -670,19 +692,19 @@ class AsyncClient(Client):
 
     async def query_row_block_stream(  # type: ignore[override]
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        context: Optional[QueryContext] = None,
-        query_tz: Optional[Union[str, tzinfo]] = None,
-        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        tz_mode: Optional[TzMode] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str | dict[str, str]] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        context: QueryContext | None = None,
+        query_tz: str | tzinfo | None = None,
+        column_tzs: dict[str, str | tzinfo] | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
+        tz_mode: TzMode | None = None,
     ) -> StreamContext:
         """
         Async version of query_row_block_stream.
@@ -692,19 +714,19 @@ class AsyncClient(Client):
 
     async def query_rows_stream(  # type: ignore[override]
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        context: Optional[QueryContext] = None,
-        query_tz: Optional[Union[str, tzinfo]] = None,
-        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        tz_mode: Optional[TzMode] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str | dict[str, str]] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        context: QueryContext | None = None,
+        query_tz: str | tzinfo | None = None,
+        column_tzs: dict[str, str | tzinfo] | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
+        tz_mode: TzMode | None = None,
     ) -> StreamContext:
         """
         Async version of query_rows_stream.
@@ -712,20 +734,19 @@ class AsyncClient(Client):
         """
         return (await self._context_query(locals(), use_numpy=False, streaming=True)).rows_stream
 
-    # pylint: disable=unused-argument
     async def query_np(
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, str]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        max_str_len: Optional[int] = None,
-        context: Optional[QueryContext] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        max_str_len: int | None = None,
+        context: QueryContext | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
     ):
         check_numpy()
         self._add_integration_tag("numpy")
@@ -733,17 +754,17 @@ class AsyncClient(Client):
 
     async def query_np_stream(  # type: ignore[override]
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, str]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        max_str_len: Optional[int] = None,
-        context: Optional[QueryContext] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        max_str_len: int | None = None,
+        context: QueryContext | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> StreamContext:
         check_numpy()
         self._add_integration_tag("numpy")
@@ -751,22 +772,22 @@ class AsyncClient(Client):
 
     async def query_df(
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, str]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        max_str_len: Optional[int] = None,
-        use_na_values: Optional[bool] = None,
-        query_tz: Optional[str] = None,
-        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        context: Optional[QueryContext] = None,
-        external_data: Optional[ExternalData] = None,
-        use_extended_dtypes: Optional[bool] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        tz_mode: Optional[TzMode] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        max_str_len: int | None = None,
+        use_na_values: bool | None = None,
+        query_tz: str | None = None,
+        column_tzs: dict[str, str | tzinfo] | None = None,
+        context: QueryContext | None = None,
+        external_data: ExternalData | None = None,
+        use_extended_dtypes: bool | None = None,
+        transport_settings: dict[str, str] | None = None,
+        tz_mode: TzMode | None = None,
     ):
         check_pandas()
         self._add_integration_tag("pandas")
@@ -774,22 +795,22 @@ class AsyncClient(Client):
 
     async def query_df_stream(  # type: ignore[override]
         self,
-        query: Optional[str] = None,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        query_formats: Optional[Dict[str, str]] = None,
-        column_formats: Optional[Dict[str, str]] = None,
-        encoding: Optional[str] = None,
-        use_none: Optional[bool] = None,
-        max_str_len: Optional[int] = None,
-        use_na_values: Optional[bool] = None,
-        query_tz: Optional[str] = None,
-        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
-        context: Optional[QueryContext] = None,
-        external_data: Optional[ExternalData] = None,
-        use_extended_dtypes: Optional[bool] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-        tz_mode: Optional[TzMode] = None,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        column_formats: dict[str, str] | None = None,
+        encoding: str | None = None,
+        use_none: bool | None = None,
+        max_str_len: int | None = None,
+        use_na_values: bool | None = None,
+        query_tz: str | None = None,
+        column_tzs: dict[str, str | tzinfo] | None = None,
+        context: QueryContext | None = None,
+        external_data: ExternalData | None = None,
+        use_extended_dtypes: bool | None = None,
+        transport_settings: dict[str, str] | None = None,
+        tz_mode: TzMode | None = None,
     ) -> StreamContext:
         check_pandas()
         self._add_integration_tag("pandas")
@@ -808,13 +829,13 @@ class AsyncClient(Client):
     async def command(  # type: ignore[override]
         self,
         cmd,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        data: Optional[Union[str, bytes]] = None,
-        settings: Optional[Dict] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        data: str | bytes | None = None,
+        settings: dict | None = None,
         use_database: bool = True,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
-    ) -> Union[str, int, Sequence[str], QuerySummary]:
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
+    ) -> str | int | Sequence[str] | QuerySummary:
         """
         See BaseClient doc_string for this method
         """
@@ -890,12 +911,12 @@ class AsyncClient(Client):
     async def raw_query(  # type: ignore[override]
         self,
         query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        fmt: Optional[str] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        fmt: str | None = None,
         use_database: bool = True,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> bytes:
         """
         See BaseClient doc_string for this method
@@ -917,12 +938,12 @@ class AsyncClient(Client):
     async def raw_stream(  # type: ignore[override]
         self,
         query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        fmt: Optional[str] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        fmt: str | None = None,
         use_database: bool = True,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> StreamContext:
 
         body, params, headers, files = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
@@ -987,16 +1008,16 @@ class AsyncClient(Client):
 
     async def insert(  # type: ignore[override]
         self,
-        table: Optional[str] = None,
-        data: Optional[Sequence[Sequence[Any]]] = None,
-        column_names: Union[str, Iterable[str]] = "*",
-        database: Optional[str] = None,
-        column_types: Optional[Sequence[ClickHouseType]] = None,
-        column_type_names: Optional[Sequence[str]] = None,
+        table: str | None = None,
+        data: Sequence[Sequence[Any]] | None = None,
+        column_names: str | Iterable[str] = "*",
+        database: str | None = None,
+        column_types: Sequence[ClickHouseType] | None = None,
+        column_type_names: Sequence[str] | None = None,
         column_oriented: bool = False,
-        settings: Optional[Dict[str, Any]] = None,
-        context: Optional[InsertContext] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        settings: dict[str, Any] | None = None,
+        context: InsertContext | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> QuerySummary:
         """
         Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
@@ -1039,11 +1060,11 @@ class AsyncClient(Client):
     async def query_arrow(
         self,
         query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        use_strings: Optional[bool] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        use_strings: bool | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
     ):
         """
         Query method using the ClickHouse Arrow format to return a PyArrow table
@@ -1060,15 +1081,24 @@ class AsyncClient(Client):
         settings = self._update_arrow_settings(settings, use_strings)
 
         body, params, headers, files = self._prep_raw_query(
-            query, parameters, settings, fmt="ArrowStream",
-            use_database=True, external_data=external_data
+            query,
+            parameters,
+            settings,
+            fmt="ArrowStream",
+            use_database=True,
+            external_data=external_data,
         )
         if transport_settings:
             headers = dict_copy(headers, transport_settings)
 
         response = await self._raw_request(
-            body, params, headers=headers, files=files,
-            stream=True, server_wait=False, retries=self.query_retries
+            body,
+            params,
+            headers=headers,
+            files=files,
+            stream=True,
+            server_wait=False,
+            retries=self.query_retries,
         )
         encoding = response.headers.get("Content-Encoding")
         exception_tag = response.headers.get(ex_tag_header)
@@ -1091,11 +1121,11 @@ class AsyncClient(Client):
     async def query_arrow_stream(  # type: ignore[override]
         self,
         query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        use_strings: Optional[bool] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        use_strings: bool | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> StreamContext:
         """
         Query method that returns the results as a stream of Arrow record batches.
@@ -1113,15 +1143,13 @@ class AsyncClient(Client):
         settings = self._update_arrow_settings(settings, use_strings)
 
         body, params, headers, files = self._prep_raw_query(
-            query, parameters, settings, fmt="ArrowStream",
-            use_database=True, external_data=external_data
+            query, parameters, settings, fmt="ArrowStream", use_database=True, external_data=external_data
         )
         if transport_settings:
             headers = dict_copy(headers, transport_settings)
 
         response = await self._raw_request(
-            body, params, headers=headers, files=files,
-            stream=True, server_wait=False, retries=self.query_retries
+            body, params, headers=headers, files=files, stream=True, server_wait=False, retries=self.query_retries
         )
         encoding = response.headers.get("Content-Encoding")
         exception_tag = response.headers.get(ex_tag_header)
@@ -1187,13 +1215,13 @@ class AsyncClient(Client):
     async def query_df_arrow(
         self,
         query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        use_strings: Optional[bool] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        use_strings: bool | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
         dataframe_library: str = "pandas",
-    ) -> Union["options.pd.DataFrame", "options.pl.DataFrame"]:
+    ) -> pandas.DataFrame | polars.DataFrame:
         """
         Query method using the ClickHouse Arrow format to return a DataFrame
         with PyArrow dtype backend. This provides better performance and memory efficiency
@@ -1214,7 +1242,7 @@ class AsyncClient(Client):
             check_pandas()
             self._add_integration_tag("pandas")
 
-            def converter(table: "options.arrow.Table") -> "options.pd.DataFrame":
+            def converter(table: pyarrow.Table) -> pandas.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return table.to_pandas(types_mapper=options.pd.ArrowDtype, safe=False)
 
@@ -1222,7 +1250,7 @@ class AsyncClient(Client):
             check_polars()
             self._add_integration_tag("polars")
 
-            def converter(table: "options.arrow.Table") -> "options.pl.DataFrame":
+            def converter(table: pyarrow.Table) -> polars.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return options.pl.from_arrow(table)
 
@@ -1243,11 +1271,11 @@ class AsyncClient(Client):
     async def query_df_arrow_stream(  # type: ignore[override]
         self,
         query: str,
-        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        use_strings: Optional[bool] = None,
-        external_data: Optional[ExternalData] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        use_strings: bool | None = None,
+        external_data: ExternalData | None = None,
+        transport_settings: dict[str, str] | None = None,
         dataframe_library: str = "pandas",
     ) -> StreamContext:
         """
@@ -1268,7 +1296,7 @@ class AsyncClient(Client):
             check_pandas()
             self._add_integration_tag("pandas")
 
-            def converter(table: "options.arrow.Table") -> "options.pd.DataFrame":
+            def converter(table: pyarrow.Table) -> pandas.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return table.to_pandas(types_mapper=options.pd.ArrowDtype, safe=False)
 
@@ -1276,7 +1304,7 @@ class AsyncClient(Client):
             check_polars()
             self._add_integration_tag("polars")
 
-            def converter(table: "options.arrow.Table") -> "options.pl.DataFrame":
+            def converter(table: pyarrow.Table) -> polars.DataFrame:
                 table = _apply_arrow_tz_policy(table, self.tz_mode)
                 return options.pl.from_arrow(table)
 
@@ -1285,15 +1313,13 @@ class AsyncClient(Client):
         settings = self._update_arrow_settings(settings, use_strings)
 
         body, params, headers, files = self._prep_raw_query(
-            query, parameters, settings, fmt="ArrowStream",
-            use_database=True, external_data=external_data
+            query, parameters, settings, fmt="ArrowStream", use_database=True, external_data=external_data
         )
         if transport_settings:
             headers = dict_copy(headers, transport_settings)
 
         response = await self._raw_request(
-            body, params, headers=headers, files=files,
-            stream=True, server_wait=False, retries=self.query_retries
+            body, params, headers=headers, files=files, stream=True, server_wait=False, retries=self.query_retries
         )
         encoding = response.headers.get("Content-Encoding")
         exception_tag = response.headers.get(ex_tag_header)
@@ -1361,9 +1387,9 @@ class AsyncClient(Client):
         self,
         table: str,
         arrow_table,
-        database: Optional[str] = None,
-        settings: Optional[Dict] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        database: str | None = None,
+        settings: dict | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> QuerySummary:
         """
         Insert a PyArrow table DataFrame into ClickHouse using raw Arrow format
@@ -1385,10 +1411,10 @@ class AsyncClient(Client):
     async def insert_df_arrow(  # type: ignore[override]
         self,
         table: str,
-        df: Union["options.pd.DataFrame", "options.pl.DataFrame"],
-        database: Optional[str] = None,
-        settings: Optional[Dict] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        df: pandas.DataFrame | polars.DataFrame,
+        database: str | None = None,
+        settings: dict | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> QuerySummary:
         """
         Insert a pandas DataFrame with PyArrow backend or a polars DataFrame into ClickHouse using Arrow format.
@@ -1444,14 +1470,14 @@ class AsyncClient(Client):
     async def create_insert_context(  # type: ignore[override]
         self,
         table: str,
-        column_names: Optional[Union[str, Sequence[str]]] = None,
-        database: Optional[str] = None,
-        column_types: Optional[Sequence[ClickHouseType]] = None,
-        column_type_names: Optional[Sequence[str]] = None,
+        column_names: str | Sequence[str] | None = None,
+        database: str | None = None,
+        column_types: Sequence[ClickHouseType] | None = None,
+        column_type_names: Sequence[str] | None = None,
         column_oriented: bool = False,
-        settings: Optional[Dict[str, Any]] = None,
-        data: Optional[Sequence[Sequence[Any]]] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        settings: dict[str, Any] | None = None,
+        data: Sequence[Sequence[Any]] | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> InsertContext:
         """
         Builds a reusable insert context to hold state for a duration of an insert
@@ -1527,9 +1553,7 @@ class AsyncClient(Client):
 
         loop = asyncio.get_running_loop()
 
-        streaming_source = StreamingInsertSource(
-            transform=self._transform, context=context, loop=loop, maxsize=10
-        )
+        streaming_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
 
         streaming_source.start_producer()
 
@@ -1544,9 +1568,7 @@ class AsyncClient(Client):
         headers = dict_copy(headers, context.transport_settings)
 
         try:
-            response = await self._raw_request(
-                streaming_source.async_generator(), params, headers=headers, server_wait=False
-            )
+            response = await self._raw_request(streaming_source.async_generator(), params, headers=headers, server_wait=False)
             logger.debug("Context insert response code: %d", response.status)
         except Exception:
             await streaming_source.close()
@@ -1564,15 +1586,15 @@ class AsyncClient(Client):
 
     async def insert_df(  # type: ignore[override]
         self,
-        table: Optional[str] = None,
+        table: str | None = None,
         df=None,
-        database: Optional[str] = None,
-        settings: Optional[Dict] = None,
-        column_names: Optional[Sequence[str]] = None,
-        column_types: Optional[Sequence[ClickHouseType]] = None,
-        column_type_names: Optional[Sequence[str]] = None,
-        context: Optional[InsertContext] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        database: str | None = None,
+        settings: dict | None = None,
+        column_names: Sequence[str] | None = None,
+        column_types: Sequence[ClickHouseType] | None = None,
+        column_type_names: Sequence[str] | None = None,
+        context: InsertContext | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> QuerySummary:
         """
         Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
@@ -1612,13 +1634,13 @@ class AsyncClient(Client):
 
     async def raw_insert(  # type: ignore[override]
         self,
-        table: Optional[str] = None,
-        column_names: Optional[Sequence[str]] = None,
-        insert_block: Optional[Union[str, bytes, Generator[bytes, None, None], BinaryIO]] = None,
-        settings: Optional[Dict] = None,
-        fmt: Optional[str] = None,
-        compression: Optional[str] = None,
-        transport_settings: Optional[Dict[str, str]] = None,
+        table: str | None = None,
+        column_names: Sequence[str] | None = None,
+        insert_block: str | bytes | Generator[bytes, None, None] | BinaryIO | None = None,
+        settings: dict | None = None,
+        fmt: str | None = None,
+        compression: str | None = None,
+        transport_settings: dict[str, str] | None = None,
     ) -> QuerySummary:
         """
         See BaseClient doc_string for this method
@@ -1714,10 +1736,7 @@ class AsyncClient(Client):
                     body = await loop.run_in_executor(None, decompress_and_decode)
                 else:
                     loop = asyncio.get_running_loop()
-                    body = await loop.run_in_executor(
-                        None,
-                        lambda: common.format_error(raw_body.decode(errors="backslashreplace")).strip()
-                    )
+                    body = await loop.run_in_executor(None, lambda: common.format_error(raw_body.decode(errors="backslashreplace")).strip())
             except Exception:
                 logger.warning("Failed to read error response body", exc_info=True)
 
@@ -1782,7 +1801,6 @@ class AsyncClient(Client):
         query_session = final_params.get("session_id")
         attempts = 0
 
-        # pylint: disable=too-many-nested-blocks
         while True:
             attempts += 1
 
@@ -1807,14 +1825,14 @@ class AsyncClient(Client):
                     for field_name, field_value in files.items():
                         if isinstance(field_value, tuple):
                             if field_value[0] is None:
-                                form.add_field(field_name, str(field_value[1]), content_type='text/plain')
+                                form.add_field(field_name, str(field_value[1]), content_type="text/plain")
                             else:
                                 filename = field_value[0]
                                 file_data = field_value[1]
                                 content_type = field_value[2] if len(field_value) > 2 else None
                                 form.add_field(field_name, file_data, filename=filename, content_type=content_type)
                         else:
-                            form.add_field(field_name, field_value, content_type='text/plain')
+                            form.add_field(field_name, field_value, content_type="text/plain")
                     request_kwargs["data"] = form
                 elif isinstance(data, dict):
                     request_kwargs["data"] = data

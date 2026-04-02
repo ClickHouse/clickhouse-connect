@@ -1,28 +1,27 @@
 import array
+import asyncio
 import struct
 import sys
-import asyncio
+from collections.abc import Callable, Generator, MutableSequence, Sequence
+from typing import Any
 
-from typing import Any, Sequence, MutableSequence, Dict, Optional, Union, Generator, Callable
-
-from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, DataError
+from clickhouse_connect.driver.exceptions import DataError, ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.types import Closable
 
-# pylint: disable=invalid-name
-must_swap = sys.byteorder == 'big'
-int_size = array.array('i').itemsize
+must_swap = sys.byteorder == "big"
+int_size = array.array("i").itemsize
 low_card_version = 1
 
-array_map = {1: 'b', 2: 'h', 4: 'i', 8: 'q'}
+array_map = {1: "b", 2: "h", 4: "i", 8: "q"}
 decimal_prec = {32: 9, 64: 18, 128: 38, 256: 79}
 
 if int_size == 2:
-    array_map[4] = 'l'
+    array_map[4] = "l"
 
 array_sizes = {v: k for k, v in array_map.items()}
-array_sizes['f'] = 4
-array_sizes['d'] = 8
-np_date_types = {0: '[s]', 3: '[ms]', 6: '[us]', 9: '[ns]'}
+array_sizes["f"] = 4
+array_sizes["d"] = 8
+np_date_types = {0: "[s]", 3: "[ms]", 6: "[us]", 9: "[ns]"}
 
 
 def array_type(size: int, signed: bool):
@@ -39,7 +38,7 @@ def array_type(size: int, signed: bool):
     return code if signed else code.upper()
 
 
-def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: Optional[str]=None):
+def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: str | None = None):
     """
     Write a column of native Python data matching the array.array code
     :param code: Python array.array code matching the column data type
@@ -48,14 +47,16 @@ def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: Op
     :param col_name: Optional column name for error tracking
     """
     try:
-        buff = struct.Struct(f'<{len(column)}{code}')
+        buff = struct.Struct(f"<{len(column)}{code}")
         dest += buff.pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        col_msg = ''
+        col_msg = ""
         if col_name:
-            col_msg = f' for source column `{col_name}`'
-        raise DataError(f'Unable to create Python array{col_msg}.  This is usually caused by trying to insert None ' +
-                                  'values into a ClickHouse column that is not Nullable') from ex
+            col_msg = f" for source column `{col_name}`"
+        raise DataError(
+            f"Unable to create Python array{col_msg}.  This is usually caused by trying to insert None "
+            + "values into a ClickHouse column that is not Nullable"
+        ) from ex
 
 
 def write_uint64(value: int, dest: MutableSequence):
@@ -64,7 +65,7 @@ def write_uint64(value: int, dest: MutableSequence):
     :param value: UInt64 value to write
     :param dest: Destination byte buffer
     """
-    dest.extend(value.to_bytes(8, 'little'))
+    dest.extend(value.to_bytes(8, "little"))
 
 
 def write_leb128(value: int, dest: MutableSequence):
@@ -74,7 +75,7 @@ def write_leb128(value: int, dest: MutableSequence):
     :param dest: Target buffer
     """
     while True:
-        b = value & 0x7f
+        b = value & 0x7F
         value >>= 7
         if value == 0:
             dest.append(b)
@@ -89,7 +90,7 @@ def decimal_size(prec: int):
     :return: Required bit size
     """
     if prec < 1 or prec > 79:
-        raise ArithmeticError(f'Invalid precision {prec} for ClickHouse Decimal type')
+        raise ArithmeticError(f"Invalid precision {prec} for ClickHouse Decimal type")
     if prec < 10:
         return 32
     if prec < 19:
@@ -100,19 +101,19 @@ def decimal_size(prec: int):
 
 
 def unescape_identifier(x: str) -> str:
-    if x.startswith('`') and x.endswith('`'):
+    if x.startswith("`") and x.endswith("`"):
         return x[1:-1]
     return x
 
 
-def dict_copy(source: Dict = None, update: Optional[Dict] = None) -> Dict:
+def dict_copy(source: dict = None, update: dict | None = None) -> dict:
     copy = source.copy() if source else {}
     if update:
         copy.update(update)
     return copy
 
 
-def dict_add(source: Dict, key: str, value: Any) -> Dict:
+def dict_add(source: dict, key: str, value: Any) -> dict:
     if value is not None:
         source[key] = value
     return source
@@ -122,19 +123,19 @@ def empty_gen():
     yield from ()
 
 
-def coerce_int(val: Optional[Union[str, int]]) -> int:
+def coerce_int(val: str | int | None) -> int:
     if not val:
         return 0
     return int(val)
 
 
-def coerce_bool(val: Optional[Union[str, bool]]) -> bool:
+def coerce_bool(val: str | bool | None) -> bool:
     if not val:
         return False
-    return val is True or (isinstance(val, str) and val.lower() in ('true', '1', 'y', 'yes'))
+    return val is True or (isinstance(val, str) and val.lower() in ("true", "1", "y", "yes"))
 
 
-def first_value(column: Sequence, nullable:bool = True):
+def first_value(column: Sequence, nullable: bool = True):
     if nullable:
         return next((x for x in column if x is not None), None)
     if len(column):
@@ -148,9 +149,10 @@ class SliceView(Sequence):
     https://gist.github.com/mathieucaroff/0cf094325fb5294fb54c6a577f05a2c1
     Also see the discussion on SO: https://stackoverflow.com/questions/3485475/can-i-create-a-view-on-a-python-list
     """
-    slots = ('_source', '_range')
 
-    def __init__(self, source: Sequence, source_slice: Optional[slice] = None):
+    slots = ("_source", "_range")
+
+    def __init__(self, source: Sequence, source_slice: slice | None = None):
         if isinstance(source, SliceView):
             self._source = source._source
             self._range = source._range[source_slice]
@@ -175,7 +177,7 @@ class SliceView(Sequence):
 
     def __repr__(self):
         r = self._range
-        return f'SliceView({self._source[slice(r.start, r.stop, r.step)]})'
+        return f"SliceView({self._source[slice(r.start, r.stop, r.step)]})"
 
     def __eq__(self, other):
         if self is other:
@@ -194,7 +196,8 @@ class StreamContext:
     generator is not fully consumed or there is an exception during consumption. Supports both synchronous and
     asynchronous usage.
     """
-    __slots__ = 'source', 'gen', '_in_context'
+
+    __slots__ = "source", "gen", "_in_context"
 
     def __init__(self, source: Closable, gen: Generator):
         self.source = source
@@ -206,7 +209,7 @@ class StreamContext:
 
     def __next__(self):
         if not self._in_context:
-            raise ProgrammingError('Stream should be used within a context')
+            raise ProgrammingError("Stream should be used within a context")
         return next(self.gen)
 
     def __enter__(self):
@@ -262,18 +265,17 @@ class StreamContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self._in_context = False
-        if hasattr(self.source, 'aclose'):
+        if hasattr(self.source, "aclose"):
             await self.source.aclose()
-        elif hasattr(self.source, 'close'):
-            if hasattr(self.source.close, '__await__'):
+        elif hasattr(self.source, "close"):
+            if hasattr(self.source.close, "__await__"):
                 await self.source.close()
             else:
                 self.source.close()
         self.gen = None
 
 
-# pylint: disable=too-many-return-statements
-def get_rename_method(method: Optional[str]) -> Optional[Callable[[str], str]]:
+def get_rename_method(method: str | None) -> Callable[[str], str] | None:
     def _to_camel(s: str) -> str:
         if not s:
             return ""

@@ -1,6 +1,5 @@
 import os
 from datetime import datetime, tzinfo
-from typing import Optional, Tuple, Union
 
 import pytz
 
@@ -18,10 +17,10 @@ local_tz: pytz.timezone
 local_tz_dst_safe: bool = False
 
 # Timezone names that are equivalent to UTC
-UTC_EQUIVALENTS = ('UTC', 'Etc/UTC', 'GMT', 'Universal', 'GMT-0', 'Zulu', 'Greenwich', 'UCT')
+UTC_EQUIVALENTS = ("UTC", "Etc/UTC", "GMT", "Universal", "GMT-0", "Zulu", "Greenwich", "UCT")
 
 
-def normalize_timezone(timezone: pytz.timezone) -> Tuple[pytz.timezone, bool]:
+def normalize_timezone(timezone: pytz.timezone) -> tuple[pytz.timezone, bool]:
     if timezone.tzname(None) in UTC_EQUIVALENTS:
         return pytz.UTC, True
 
@@ -36,7 +35,7 @@ def normalize_timezone(timezone: pytz.timezone) -> Tuple[pytz.timezone, bool]:
     return timezone, False
 
 
-def is_utc_timezone(tz: Optional[Union[tzinfo, str]]) -> bool:
+def is_utc_timezone(tz: tzinfo | str | None) -> bool:
     """Check if timezone is UTC or an equivalent (Etc/UTC, GMT, etc.).
 
     This handles the issue where pytz.timezone('Etc/UTC') != pytz.UTC despite
@@ -54,8 +53,9 @@ def is_utc_timezone(tz: Optional[Union[tzinfo, str]]) -> bool:
 def utcfromtimestamp(ts: float) -> datetime:
     return datetime.fromtimestamp(ts, tz=pytz.UTC).replace(tzinfo=None)
 
+
 try:
-    local_tz = pytz.timezone(os.environ.get('TZ', ''))
+    local_tz = pytz.timezone(os.environ.get("TZ", ""))
 except pytz.UnknownTimeZoneError:
     local_tz = datetime.now().astimezone().tzinfo
 

@@ -6,8 +6,6 @@ import pytest
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue, Empty
 
-# pylint: disable=broad-exception-caught
-
 
 def test_async_put_sync_get():
     """Test async producer putting items, sync consumer getting them."""

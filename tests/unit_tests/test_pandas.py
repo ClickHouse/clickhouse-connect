@@ -1,6 +1,6 @@
 import pytest
 
-from clickhouse_connect.driver.options import pd, pd_time_test  # pylint: disable=no-name-in-module
+from clickhouse_connect.driver.options import pd, pd_time_test
 
 pytestmark = pytest.mark.skipif(pd is None, reason="Pandas package not installed")
 

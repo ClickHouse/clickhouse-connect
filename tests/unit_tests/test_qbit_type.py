@@ -5,9 +5,7 @@ import pytest
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.vector import QBit
 from clickhouse_connect.driver import options
-from clickhouse_connect.driver.options import np  # pylint: disable=no-name-in-module
-
-# pylint: disable=protected-access
+from clickhouse_connect.driver.options import np
 
 
 def test_qbit_type_registration():

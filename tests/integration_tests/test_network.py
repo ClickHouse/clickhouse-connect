@@ -1,5 +1,5 @@
+from collections.abc import Callable
 from ipaddress import IPv4Address, IPv6Address
-from typing import Callable
 
 import pytest
 
@@ -30,6 +30,7 @@ def test_ipv6_round_trip(param_client: Client, call, table_context: Callable):
             assert result.result_rows[i][2] == ip
             assert isinstance(result.result_rows[i][1], IPv6Address)
 
+
 def test_ipv4_mapping_and_promotion(param_client: Client, call, table_context: Callable):
     """Test that plain IPv4 strings/objects are correctly promoted to IPv4-mapped IPv6 addresses."""
     with table_context("ipv4_promotion_test", ["id UInt32", "ip_addr IPv6", "ip_addr_nullable Nullable(IPv6)"], order_by="id"):
@@ -54,6 +55,7 @@ def test_ipv4_mapping_and_promotion(param_client: Client, call, table_context: C
             assert isinstance(result.result_rows[i][1], IPv6Address)
             assert result.result_rows[i][1] == ip
 
+
 def test_ipv6_null_handling(param_client: Client, call, table_context: Callable):
     """Test inserting and retrieving NULL values in an IPv6 column."""
     with table_context("ipv6_null_test", ["id UInt32", "ip_addr IPv6", "ip_addr_nullable Nullable(IPv6)"], order_by="id"):
@@ -65,6 +67,7 @@ def test_ipv6_null_handling(param_client: Client, call, table_context: Callable)
         assert result.row_count == 2
         assert result.result_rows[0][1] is None
         assert result.result_rows[1][1] == IPv6Address("2001:db8::")
+
 
 def test_ipv6_read_as_string(param_client: Client, call, table_context: Callable):
     """Test reading IPv6 values as strings using the toString() function."""
@@ -78,6 +81,7 @@ def test_ipv6_read_as_string(param_client: Client, call, table_context: Callable
         read_val = result.result_rows[0][0]
         assert isinstance(read_val, str)
         assert read_val == str(ip)
+
 
 def test_ipv6_insert_invalid_fails(param_client: Client, call, table_context: Callable):
     """Test that the client correctly rejects an invalid IPv6 string."""

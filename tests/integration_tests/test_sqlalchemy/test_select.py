@@ -1,4 +1,3 @@
-# pylint: disable=no-member
 from pytest import fixture
 from sqlalchemy import MetaData, Table, func, literal_column, select, text
 from sqlalchemy.engine import Engine
@@ -137,13 +136,16 @@ def test_tables(test_engine: Engine, test_db: str):
             )
         )
 
-        verify_tables_ready(conn, {
-            f"{test_db}.select_test_users": 3,
-            f"{test_db}.select_test_orders": 4,
-            f"{test_db}.test_argmax": 5,
-            f"{test_db}.test_using_sales": 3,
-            f"{test_db}.test_using_returns": 3,
-        })
+        verify_tables_ready(
+            conn,
+            {
+                f"{test_db}.select_test_users": 3,
+                f"{test_db}.select_test_orders": 4,
+                f"{test_db}.test_argmax": 5,
+                f"{test_db}.test_using_sales": 3,
+                f"{test_db}.test_using_returns": 3,
+            },
+        )
 
         yield
 
@@ -254,9 +256,9 @@ def test_final_with_explicit_table_on_join(test_engine: Engine, test_db: str):
     query = select(users.c.id, orders.c.product).select_from(join).final(users)
     compiled = str(query.compile(dialect=test_engine.dialect))
     # FINAL should appear between the users table and the JOIN keyword
-    from_clause = compiled[compiled.index("FROM"):]
+    from_clause = compiled[compiled.index("FROM") :]
     assert "select_test_users` FINAL" in from_clause
-    assert "FINAL" not in from_clause[from_clause.index("JOIN"):]
+    assert "FINAL" not in from_clause[from_clause.index("JOIN") :]
 
 
 def test_select_with_where_with_sample(test_engine: Engine, test_db: str):

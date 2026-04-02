@@ -1,13 +1,13 @@
 import os
 import time
-import pytz
-import pytest
 
-from clickhouse_connect.driver import tzutil
+import pytest
+import pytz
 
 from clickhouse_connect.datatypes.format import clear_all_formats
+from clickhouse_connect.driver import tzutil
 
-os.environ['TZ'] = 'UTC'
+os.environ["TZ"] = "UTC"
 time.tzset()
 
 

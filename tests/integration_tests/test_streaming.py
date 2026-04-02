@@ -1,12 +1,13 @@
 import random
 import string
+
 import pytest
 
-from clickhouse_connect.driver.exceptions import StreamClosedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, StreamFailureError
 
 
 def test_row_stream(param_client, call, consume_stream):
-    stream = call(param_client.query_rows_stream, 'SELECT number FROM numbers(10000)')
+    stream = call(param_client.query_rows_stream, "SELECT number FROM numbers(10000)")
     total = 0
 
     def process(row):
@@ -24,12 +25,14 @@ def test_row_stream(param_client, call, consume_stream):
 
 
 def test_column_block_stream(param_client, call, consume_stream):
-    random_string = 'randomStringUTF8(50)'
-    if not param_client.min_version('20'):
+    random_string = "randomStringUTF8(50)"
+    if not param_client.min_version("20"):
         random_string = random.choices(string.ascii_lowercase, k=50)
-    stream = call(param_client.query_column_block_stream,
-                  f'SELECT number, {random_string} FROM numbers(10000)',
-                  settings={'max_block_size': 4000})
+    stream = call(
+        param_client.query_column_block_stream,
+        f"SELECT number, {random_string} FROM numbers(10000)",
+        settings={"max_block_size": 4000},
+    )
     total = 0
     block_count = 0
 
@@ -45,12 +48,14 @@ def test_column_block_stream(param_client, call, consume_stream):
 
 
 def test_row_block_stream(param_client, call, consume_stream):
-    random_string = 'randomStringUTF8(50)'
-    if not param_client.min_version('20'):
+    random_string = "randomStringUTF8(50)"
+    if not param_client.min_version("20"):
         random_string = random.choices(string.ascii_lowercase, k=50)
-    stream = call(param_client.query_row_block_stream,
-                  f'SELECT number, {random_string} FROM numbers(10000)',
-                  settings={'max_block_size': 4000})
+    stream = call(
+        param_client.query_row_block_stream,
+        f"SELECT number, {random_string} FROM numbers(10000)",
+        settings={"max_block_size": 4000},
+    )
     total = 0
     block_count = 0
 
@@ -67,7 +72,7 @@ def test_row_block_stream(param_client, call, consume_stream):
 
 
 def test_stream_errors_sync(test_client):
-    query_result = test_client.query('SELECT number FROM numbers(100000)')
+    query_result = test_client.query("SELECT number FROM numbers(100000)")
 
     # 1. Test accessing without context manager raises error
     with pytest.raises(ProgrammingError, match="context"):
@@ -85,7 +90,7 @@ def test_stream_errors_sync(test_client):
 
 @pytest.mark.asyncio
 async def test_stream_errors_async(test_native_async_client):
-    stream = await test_native_async_client.query_row_block_stream('SELECT number FROM numbers(100)')
+    stream = await test_native_async_client.query_row_block_stream("SELECT number FROM numbers(100)")
     async with stream:
         async for _ in stream:
             pass
@@ -98,8 +103,7 @@ async def test_stream_errors_async(test_native_async_client):
 
 
 def test_stream_failure_sync(test_client):
-    query = ('SELECT toString(cityHash64(number)) FROM numbers(10000000)' +
-             ' where intDiv(1,number-300000)>-100000000')
+    query = "SELECT toString(cityHash64(number)) FROM numbers(10000000)" + " where intDiv(1,number-300000)>-100000000"
 
     stream = test_client.query_row_block_stream(query)
 
@@ -110,13 +114,12 @@ def test_stream_failure_sync(test_client):
 
     error_msg = str(excinfo.value).lower()
     # Race condition: may get actual ClickHouse error or generic connection closed
-    assert 'division by zero' in error_msg or 'connection closed' in error_msg
+    assert "division by zero" in error_msg or "connection closed" in error_msg
 
 
 @pytest.mark.asyncio
 async def test_stream_failure_async(test_native_async_client):
-    query = ('SELECT toString(cityHash64(number)) FROM numbers(10000000)' +
-             ' where intDiv(1,number-300000)>-100000000')
+    query = "SELECT toString(cityHash64(number)) FROM numbers(10000000)" + " where intDiv(1,number-300000)>-100000000"
 
     stream = await test_native_async_client.query_row_block_stream(query)
 

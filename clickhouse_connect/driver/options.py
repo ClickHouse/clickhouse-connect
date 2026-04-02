@@ -3,7 +3,6 @@ from clickhouse_connect.driver.exceptions import NotSupportedError
 # Attributes resolved lazily by __getattr__ / _resolve_* functions:
 #   np, pd, arrow, pl, pd_time_test
 
-# pylint: disable=import-outside-toplevel
 
 _PANDAS_ATTRS = frozenset({"pd", "pd_time_test"})
 _ALL_LAZY = frozenset({"np", "arrow", "pl"}) | _PANDAS_ATTRS
@@ -37,8 +36,7 @@ def _resolve_pandas():
         version = tuple(map(int, pandas.__version__.split(".")[:2]))
         if version < (2, 0):
             raise NotSupportedError(
-                f"clickhouse-connect requires pandas 2.0 or later, found {pandas.__version__}. "
-                "Please upgrade: pip install --upgrade pandas"
+                f"clickhouse-connect requires pandas 2.0 or later, found {pandas.__version__}. Please upgrade: pip install --upgrade pandas"
             )
         globals()["pd"] = pandas
         globals()["pd_time_test"] = _pd_time_test
@@ -87,7 +85,6 @@ def __dir__():
     return list(globals().keys()) + list(_ALL_LAZY - globals().keys())
 
 
-# pylint: disable=redefined-outer-name
 def check_numpy():
     _resolve_numpy()
     np = globals()["np"]

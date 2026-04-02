@@ -3,20 +3,22 @@ import os
 
 import clickhouse_connect
 
-
 #  You can use an -L ssh tunnel directly, but to avoid HTTPS certificate errors you must add the
 #  `server_host_name` argument to the get_client method
+
 
 #  This example uses the following ssh tunnel command
 #  ssh -f -N -L 1443:play.clickhouse.com:443 <jump host user>@<jump host> -i <ssh private key file>
 def direct_tunnel():
-    client = clickhouse_connect.get_client(host='localhost',
-                                           user='play',
-                                           password='clickhouse',
-                                           port=1443,
-                                           secure=True,
-                                           server_host_name='play.clickhouse.com')
-    print(client.query('SHOW DATABASES').result_set)
+    client = clickhouse_connect.get_client(
+        host="localhost",
+        user="play",
+        password="clickhouse",
+        port=1443,
+        secure=True,
+        server_host_name="play.clickhouse.com",
+    )
+    print(client.query("SHOW DATABASES").result_set)
     client.close()
 
 
@@ -25,30 +27,32 @@ def direct_tunnel():
 #  https://sshtunnel.readthedocs.io/en/latest/
 
 try:
-    import sshtunnel  # pylint: disable=wrong-import-position
+    import sshtunnel
 except ImportError:
     pass
 
 
 def create_tunnel():
     server = sshtunnel.SSHTunnelForwarder(
-        (os.environ.get('CLICKHOUSE_TUNNEL_JUMP_HOST'), 22),  # Create an ssh tunnel to your jump host/port
-        ssh_username=os.environ.get('CLICKHOUSE_TUNNEL_USER', 'ubuntu'),  # Set the user for the remote/jump host
-        ssh_pkey=os.environ.get('CLICKHOUSE_TUNNEL_KEY_FILE', '~/.ssh/id_rsa'),  # The private key file to use
-        ssh_private_key_password=os.environ.get('CLICKHOUSE_TUNNEL_KEY_PASSWORD', None),  # Private key password
-        remote_bind_address=('play.clickhouse.com', 443),  # The ClickHouse server and port you want to reach
-        local_bind_address=('localhost', 1443)  # The local address and port to bind the tunnel to
+        (os.environ.get("CLICKHOUSE_TUNNEL_JUMP_HOST"), 22),  # Create an ssh tunnel to your jump host/port
+        ssh_username=os.environ.get("CLICKHOUSE_TUNNEL_USER", "ubuntu"),  # Set the user for the remote/jump host
+        ssh_pkey=os.environ.get("CLICKHOUSE_TUNNEL_KEY_FILE", "~/.ssh/id_rsa"),  # The private key file to use
+        ssh_private_key_password=os.environ.get("CLICKHOUSE_TUNNEL_KEY_PASSWORD", None),  # Private key password
+        remote_bind_address=("play.clickhouse.com", 443),  # The ClickHouse server and port you want to reach
+        local_bind_address=("localhost", 1443),  # The local address and port to bind the tunnel to
     )
     server.start()
 
-    client = clickhouse_connect.get_client(host='localhost',
-                                           user='play',
-                                           password='clickhouse',
-                                           port=1443,
-                                           secure=True,
-                                           verify=True,
-                                           server_host_name='play.clickhouse.com')
-    print(client.query('SHOW DATABASES').result_set)
+    client = clickhouse_connect.get_client(
+        host="localhost",
+        user="play",
+        password="clickhouse",
+        port=1443,
+        secure=True,
+        verify=True,
+        server_host_name="play.clickhouse.com",
+    )
+    print(client.query("SHOW DATABASES").result_set)
     client.close()
     server.close()
 
@@ -62,21 +66,24 @@ def create_tunnel():
 #
 #  Documentation for the SocksProxyManager here:  https://urllib3.readthedocs.io/en/stable/reference/contrib/socks.html
 #  Note there are limitations for the urllib3 SOCKSProxyManager,
-from urllib3.contrib.socks import SOCKSProxyManager  # pylint: disable=wrong-import-position,wrong-import-order
-from clickhouse_connect.driver import httputil  # pylint: disable=wrong-import-position
+from urllib3.contrib.socks import SOCKSProxyManager  # noqa: E402
+
+from clickhouse_connect.driver import httputil  # noqa: E402
 
 
 def socks_proxy():
     options = httputil.get_pool_manager_options()
-    proxy_manager = SOCKSProxyManager('socks5h://localhost:1443', **options)
+    proxy_manager = SOCKSProxyManager("socks5h://localhost:1443", **options)
 
-    client = clickhouse_connect.get_client(host='play.clickhouse.com',
-                                           user='play',
-                                           password='clickhouse',
-                                           port=443,
-                                           pool_mgr=proxy_manager)
+    client = clickhouse_connect.get_client(
+        host="play.clickhouse.com",
+        user="play",
+        password="clickhouse",
+        port=443,
+        pool_mgr=proxy_manager,
+    )
 
-    print(client.query('SHOW DATABASES').result_set)
+    print(client.query("SHOW DATABASES").result_set)
     client.close()
 
 

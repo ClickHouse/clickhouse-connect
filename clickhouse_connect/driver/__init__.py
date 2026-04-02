@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from inspect import signature
-from typing import Optional, Union, Dict, Any, Tuple, TYPE_CHECKING
-from urllib.parse import urlparse, parse_qs
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs, urlparse
 
 import clickhouse_connect.driver.ctypes  # noqa: F401 -- side-effect import
 from clickhouse_connect.driver.client import Client
@@ -12,18 +12,16 @@ from clickhouse_connect.driver.httpclient import HttpClient
 if TYPE_CHECKING:
     from clickhouse_connect.driver.asyncclient import AsyncClient
 
-__all__ = ['Client', 'AsyncClient', 'create_client', 'create_async_client']
+__all__ = ["Client", "AsyncClient", "create_client", "create_async_client"]
 
 
 def __getattr__(name):
     if name == "AsyncClient":
         try:
-            from clickhouse_connect.driver.asyncclient import AsyncClient  # pylint: disable=import-outside-toplevel
+            from clickhouse_connect.driver.asyncclient import AsyncClient
         except ModuleNotFoundError as ex:
-            if ex.name == "aiohttp" or (ex.name and ex.name.startswith("aiohttp.")):  # pylint: disable=no-member
-                raise ImportError(
-                    "Async support requires aiohttp. Install with: pip install clickhouse-connect[async]"
-                ) from ex
+            if ex.name == "aiohttp" or (ex.name and ex.name.startswith("aiohttp.")):
+                raise ImportError("Async support requires aiohttp. Install with: pip install clickhouse-connect[async]") from ex
             raise
         return AsyncClient
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -37,16 +35,16 @@ def default_port(interface: str, secure: bool) -> int:
 
 
 def _parse_connection_params(
-    host: Optional[str],
-    username: Optional[str],
+    host: str | None,
+    username: str | None,
     password: str,
     port: int,
     database: str,
-    interface: Optional[str],
-    secure: Union[bool, str],
-    dsn: Optional[str],
-    kwargs: Dict[str, Any]
-) -> Tuple[str, Optional[str], str, int, str, str]:
+    interface: str | None,
+    secure: bool | str,
+    dsn: str | None,
+    kwargs: dict[str, Any],
+) -> tuple[str, str | None, str, int, str, str]:
     """Parse and normalize connection parameters including DSN parsing."""
     if dsn:
         parsed = urlparse(dsn)
@@ -77,26 +75,27 @@ def _parse_connection_params(
     return host, username, password, port, database, interface
 
 
-def _validate_access_token(access_token: Optional[str], username: Optional[str], password: str) -> None:
+def _validate_access_token(access_token: str | None, username: str | None, password: str) -> None:
     """Validate that access_token and username/password are not both provided."""
     if access_token and (username or password != ""):
         raise ProgrammingError("Cannot use both access_token and username/password")
 
 
-# pylint: disable=too-many-arguments,too-many-locals,too-many-branches
-def create_client(*,
-                  host: Optional[str] = None,
-                  username: Optional[str] = None,
-                  password: str = '',
-                  access_token: Optional[str] = None,
-                  database: str = '__default__',
-                  interface: Optional[str] = None,
-                  port: int = 0,
-                  secure: Union[bool, str] = False,
-                  dsn: Optional[str] = None,
-                  settings: Optional[Dict[str, Any]] = None,
-                  generic_args: Optional[Dict[str, Any]] = None,
-                  **kwargs) -> Client:
+def create_client(
+    *,
+    host: str | None = None,
+    username: str | None = None,
+    password: str = "",
+    access_token: str | None = None,
+    database: str = "__default__",
+    interface: str | None = None,
+    port: int = 0,
+    secure: bool | str = False,
+    dsn: str | None = None,
+    settings: dict[str, Any] | None = None,
+    generic_args: dict[str, Any] | None = None,
+    **kwargs,
+) -> Client:
     """
     The preferred method to get a ClickHouse Connect Client instance
 
@@ -166,40 +165,41 @@ def create_client(*,
     _validate_access_token(access_token, username, password)
 
     settings = settings or {}
-    if interface.startswith('http'):
+    if interface.startswith("http"):
         if generic_args:
             client_params = signature(HttpClient).parameters
             for name, value in generic_args.items():
                 if name in client_params:
                     kwargs[name] = value
-                elif name == 'compression':
-                    if 'compress' not in kwargs:
-                        kwargs['compress'] = value
+                elif name == "compression":
+                    if "compress" not in kwargs:
+                        kwargs["compress"] = value
                 else:
-                    if name.startswith('ch_'):
+                    if name.startswith("ch_"):
                         name = name[3:]
                     settings[name] = value
-        return HttpClient(interface, host, port, username, password, database, access_token,
-                          settings=settings, **kwargs)
-    raise ProgrammingError(f'Unrecognized client type {interface}')
+        return HttpClient(interface, host, port, username, password, database, access_token, settings=settings, **kwargs)
+    raise ProgrammingError(f"Unrecognized client type {interface}")
 
 
-async def create_async_client(*,
-                              host: Optional[str] = None,
-                              username: Optional[str] = None,
-                              password: str = '',
-                              access_token: Optional[str] = None,
-                              database: str = '__default__',
-                              interface: Optional[str] = None,
-                              port: int = 0,
-                              secure: Union[bool, str] = False,
-                              dsn: Optional[str] = None,
-                              settings: Optional[Dict[str, Any]] = None,
-                              generic_args: Optional[Dict[str, Any]] = None,
-                              connector_limit: int = 100,
-                              connector_limit_per_host: int = 20,
-                              keepalive_timeout: float = 30.0,
-                              **kwargs) -> AsyncClient:
+async def create_async_client(
+    *,
+    host: str | None = None,
+    username: str | None = None,
+    password: str = "",
+    access_token: str | None = None,
+    database: str = "__default__",
+    interface: str | None = None,
+    port: int = 0,
+    secure: bool | str = False,
+    dsn: str | None = None,
+    settings: dict[str, Any] | None = None,
+    generic_args: dict[str, Any] | None = None,
+    connector_limit: int = 100,
+    connector_limit_per_host: int = 20,
+    keepalive_timeout: float = 30.0,
+    **kwargs,
+) -> AsyncClient:
     """
     The preferred method to get an async ClickHouse Connect Client instance.
     Requires the async extra: pip install clickhouse-connect[async]
@@ -265,12 +265,10 @@ async def create_async_client(*,
     :return: ClickHouse Connect AsyncClient instance
     """
     try:
-        from clickhouse_connect.driver.asyncclient import AsyncClient as _AsyncClient  # pylint: disable=import-outside-toplevel
+        from clickhouse_connect.driver.asyncclient import AsyncClient as _AsyncClient
     except ModuleNotFoundError as ex:
-        if ex.name == "aiohttp" or (ex.name and ex.name.startswith("aiohttp.")):  # pylint: disable=no-member
-            raise ImportError(
-                "Async support requires aiohttp. Install with: pip install clickhouse-connect[async]"
-            ) from ex
+        if ex.name == "aiohttp" or (ex.name and ex.name.startswith("aiohttp.")):
+            raise ImportError("Async support requires aiohttp. Install with: pip install clickhouse-connect[async]") from ex
         raise
 
     if "pool_mgr" in kwargs:
@@ -301,10 +299,19 @@ async def create_async_client(*,
     if "autogenerate_session_id" not in kwargs:
         kwargs["autogenerate_session_id"] = False
 
-    client = _AsyncClient(interface=interface, host=host, port=port, username=username, password=password,
-                          database=database, access_token=access_token,
-                          settings=settings,
-                          connector_limit=connector_limit, connector_limit_per_host=connector_limit_per_host,
-                          keepalive_timeout=keepalive_timeout, **kwargs)
-    await client._initialize()  # pylint: disable=protected-access
+    client = _AsyncClient(
+        interface=interface,
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        database=database,
+        access_token=access_token,
+        settings=settings,
+        connector_limit=connector_limit,
+        connector_limit_per_host=connector_limit_per_host,
+        keepalive_timeout=keepalive_timeout,
+        **kwargs,
+    )
+    await client._initialize()
     return client

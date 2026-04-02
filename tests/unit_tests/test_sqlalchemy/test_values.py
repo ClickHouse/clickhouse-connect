@@ -1,8 +1,8 @@
 from datetime import datetime
 
 import pytest
-from sqlalchemy import DateTime as SqlaDateTime
 import sqlalchemy as db
+from sqlalchemy import DateTime as SqlaDateTime
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
@@ -55,10 +55,14 @@ def test_values_maps_generic_sqla_datetime_type():
 
 @pytest.mark.skipif(not SA_2, reason="Values.cte() was added in SA 2.x")
 def test_values_cte_wraps_table_function_in_select():
-    values_clause = db.values(
-        db.column("id", db.Integer),
-        name="v",
-    ).data([(17,), (29,)]).cte("input_rows")
+    values_clause = (
+        db.values(
+            db.column("id", db.Integer),
+            name="v",
+        )
+        .data([(17,), (29,)])
+        .cte("input_rows")
+    )
 
     sql = compile_query(db.select(values_clause.c.id).select_from(values_clause))
 

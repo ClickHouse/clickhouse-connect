@@ -1,4 +1,5 @@
 import logging
+
 import pytest
 
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
@@ -18,10 +19,8 @@ def test_wrong_port_error_message(client_factory, test_config: TestConfig):
         client_factory(port=wrong_port)
 
     error_message = str(excinfo.value)
-    assert (
-        f"Port {wrong_port} is for clickhouse-client program" in error_message
-        or "You must use port 8123 for HTTP" in error_message
-    )
+    assert f"Port {wrong_port} is for clickhouse-client program" in error_message or "You must use port 8123 for HTTP" in error_message
+
 
 def test_connection_refused_error(client_factory, test_config: TestConfig, caplog):
     """
