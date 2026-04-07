@@ -82,6 +82,7 @@ To disable this behavior, set the `CLICKHOUSE_CONNECT_TEST_DOCKER` environment v
 
 ```bash
 export CLICKHOUSE_CONNECT_TEST_DOCKER=0
+
 ```
 
 The easiest way to start all the required ClickHouse instances is to use the provided Docker Compose file (the integrations tests [setup script](tests/integration_tests/conftest.py) uses the same file).
