@@ -20,6 +20,23 @@ from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
+
+_FIXED_TZ_RE = re.compile(r'^Fixed/UTC([+-])(\d{2}):(\d{2}):(\d{2})$')
+
+
+def _parse_timezone(tz_name: str) -> tzinfo:
+    """Parse a ClickHouse timezone name, including Fixed/UTC offsets."""
+    fixed_match = _FIXED_TZ_RE.match(tz_name)
+    if fixed_match:
+        from datetime import timezone as dt_tz
+        sign = 1 if fixed_match.group(1) == '+' else -1
+        offset = timedelta(
+            hours=int(fixed_match.group(2)),
+            minutes=int(fixed_match.group(3)),
+            seconds=int(fixed_match.group(4)),
+        )
+        return dt_tz(sign * offset)
+    return pytz.timezone(tz_name)
 from clickhouse_connect.driver.types import ByteSource
 
 epoch_start_date = date(1970, 1, 1)
@@ -167,7 +184,8 @@ class DateTime(DateTimeBase):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
         if len(type_def.values) > 0:
-            self.tzinfo = pytz.timezone(type_def.values[0][1:-1])
+            tz_name = type_def.values[0][1:-1]
+            self.tzinfo = _parse_timezone(tz_name)
         else:
             self.tzinfo = None
 
@@ -206,7 +224,8 @@ class DateTime64(DateTimeBase):
         self.prec = 10**self.scale
         self.unit = np_date_types.get(self.scale)
         if len(type_def.values) > 1:
-            self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
+            tz_name = type_def.values[1][1:-1]
+            self.tzinfo = _parse_timezone(tz_name)
         else:
             self.tzinfo = None
 
