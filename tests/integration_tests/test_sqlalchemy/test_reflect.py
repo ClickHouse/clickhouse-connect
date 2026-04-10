@@ -1,5 +1,5 @@
 import sqlalchemy as db
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
@@ -49,6 +49,24 @@ def test_types_reflection(test_engine: Engine, test_db: str):
 
 def test_table_exists(test_engine: Engine):
     common.set_setting("invalid_setting_action", "drop")
-    with test_engine.begin() as conn:
-        assert test_engine.dialect.has_table(conn, "columns", "system")
-        assert not test_engine.dialect.has_table(conn, "nope", "fake_db")
+    inspector = inspect(test_engine)
+    assert inspector.has_table(table_name="columns", schema="system")
+    assert not inspector.has_table(table_name="nope", schema="fake_db")
+
+
+def test_get_schema_names(test_engine: Engine):
+    common.set_setting("invalid_setting_action", "drop")
+    inspector = inspect(test_engine)
+    schema_names = inspector.get_schema_names()
+    assert isinstance(schema_names, list)
+    assert "system" in schema_names
+    assert "fake_db" not in schema_names
+
+
+def test_get_table_names(test_engine: Engine, test_db: str):
+    common.set_setting("invalid_setting_action", "drop")
+    inspector = inspect(test_engine)
+    system_tables = inspector.get_table_names(schema="system")
+    assert isinstance(system_tables, list)
+    assert "columns" in system_tables
+    assert "fake_table" not in system_tables
