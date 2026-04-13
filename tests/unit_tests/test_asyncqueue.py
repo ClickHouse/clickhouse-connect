@@ -291,5 +291,93 @@ def test_empty_exception_on_non_blocking_get():
         queue.sync_q.get(block=False)
 
 
+def test_shutdown_then_cancel_no_invalid_state():
+    """Regression: shutdown() + task.cancel() on a blocked putter must not
+    raise InvalidStateError.
+
+    Before the fix, shutdown() scheduled fut.set_result via call_soon_threadsafe
+    after a not-fut.done() check. task.cancel() could cancel the future before
+    the callback ran, so set_result hit an already-cancelled future.
+    """
+    errors = []
+
+    async def run_test():
+        loop = asyncio.get_running_loop()
+        old_handler = loop.get_exception_handler()
+
+        def exception_handler(_loop, context):
+            exc = context.get("exception")
+            if exc:
+                errors.append(exc)
+
+        loop.set_exception_handler(exception_handler)
+        try:
+            q = AsyncSyncQueue(maxsize=1)
+            producer_blocked = asyncio.Event()
+
+            async def producer():
+                await q.async_q.put(b"chunk_1")
+                producer_blocked.set()
+                await q.async_q.put(b"chunk_2")  # blocks, queue full
+
+            task = loop.create_task(producer())
+            await producer_blocked.wait()
+
+            for _ in range(200):
+                if len(q._async_putters) == 1:
+                    break
+                await asyncio.sleep(0.001)
+            assert len(q._async_putters) == 1, "Producer never registered its putter future"
+
+            q.shutdown()
+            task.cancel()
+
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+            await asyncio.sleep(0)
+
+        finally:
+            loop.set_exception_handler(old_handler)
+
+    asyncio.run(run_test())
+
+    invalid_state_errors = [e for e in errors if isinstance(e, asyncio.InvalidStateError)]
+    assert not invalid_state_errors, (
+        f"Got {len(invalid_state_errors)} InvalidStateError(s). _safe_set_result should guard against set_result on cancelled futures."
+    )
+
+
+def test_shutdown_still_wakes_async_getter():
+    """After the _safe_set_result fix, shutdown() must still wake async getters
+    so they see EOF_SENTINEL instead of hanging."""
+
+    async def run_test():
+        q = AsyncSyncQueue(maxsize=10)
+        got_sentinel = asyncio.Event()
+
+        async def consumer():
+            result = await q.async_q.get()
+            if result is EOF_SENTINEL:
+                got_sentinel.set()
+
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(consumer())
+
+        for _ in range(200):
+            if len(q._async_getters) == 1:
+                break
+            await asyncio.sleep(0.001)
+        assert len(q._async_getters) == 1, "Consumer never registered its getter future"
+
+        q.shutdown()
+        await asyncio.wait_for(task, timeout=2.0)
+        assert got_sentinel.is_set(), "Consumer should have received EOF_SENTINEL from shutdown"
+
+    asyncio.run(run_test())
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
