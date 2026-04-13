@@ -302,6 +302,13 @@ def test_shutdown_then_cancel_no_invalid_state():
     errors = []
 
     async def run_test():
+        async def wait_for_putter_registration(q: AsyncSyncQueue, timeout: float = 1.0):
+            async def _wait():
+                while len(q._async_putters) != 1:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(_wait(), timeout=timeout)
+
         loop = asyncio.get_running_loop()
         old_handler = loop.get_exception_handler()
 
@@ -323,10 +330,7 @@ def test_shutdown_then_cancel_no_invalid_state():
             task = loop.create_task(producer())
             await producer_blocked.wait()
 
-            for _ in range(200):
-                if len(q._async_putters) == 1:
-                    break
-                await asyncio.sleep(0.001)
+            await wait_for_putter_registration(q)
             assert len(q._async_putters) == 1, "Producer never registered its putter future"
 
             q.shutdown()
