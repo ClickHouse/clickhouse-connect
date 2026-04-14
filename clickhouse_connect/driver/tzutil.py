@@ -168,8 +168,8 @@ def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
     the Cython epoch_days_to_date, but returns components instead of a date object.
     """
     # Month days arrays (non-leap and leap year)
-    MONTH_DAYS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365]
-    MONTH_DAYS_LEAP = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366]
+    month_days = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365]
+    month_days_leap = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366]
 
     if 0 <= days < 47482:
         cycles = (days + 365) // 1461
@@ -180,9 +180,9 @@ def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
         if years == 4:
             return year - 1, 12, 31
         if years == 3:
-            m_list = MONTH_DAYS_LEAP
+            m_list = month_days_leap
         else:
-            m_list = MONTH_DAYS
+            m_list = month_days
     else:
         cycles400 = (days + 134774) // 146097
         rem = days + 134774 - (cycles400 * 146097)
@@ -196,9 +196,9 @@ def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
         if years == 4 or cycles100 == 4:
             return year - 1, 12, 31
         if years == 3 and (year == 2000 or year % 100 != 0):
-            m_list = MONTH_DAYS_LEAP
+            m_list = month_days_leap
         else:
-            m_list = MONTH_DAYS
+            m_list = month_days
 
     month = (rem + 24) >> 5
     prev = m_list[month]

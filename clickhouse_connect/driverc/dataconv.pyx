@@ -55,7 +55,7 @@ def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows, tzinfo
     if tzinfo is None:
         # Fast path: naive UTC, use arithmetic to avoid Python datetime.fromtimestamp overhead
         while x < num_rows:
-            components = epoch_seconds_to_components(<unsigned int*>loc[0])
+            components = epoch_seconds_to_components((<unsigned int*>loc)[0])
             v = datetime(components[0], components[1], components[2],
                         components[3], components[4], components[5], components[6])
             PyTuple_SET_ITEM(column, x, v)
@@ -65,7 +65,7 @@ def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows, tzinfo
     elif tzutil.is_utc_timezone(tzinfo):
         # Fast path: UTC-equivalent timezone, use arithmetic + attach timezone
         while x < num_rows:
-            components = epoch_seconds_to_components(<unsigned int*>loc[0])
+            components = epoch_seconds_to_components((<unsigned int*>loc)[0])
             v = datetime(components[0], components[1], components[2],
                         components[3], components[4], components[5], components[6], tzinfo=tzinfo)
             PyTuple_SET_ITEM(column, x, v)
@@ -174,6 +174,69 @@ cpdef inline object epoch_days_to_date(int days):
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
+cdef inline void _epoch_days_to_components_c(int days, int* out_year, int* out_month, int* out_day):
+    """Convert days since epoch to (year, month, day) components without allocating objects.
+
+    Low-level helper that computes calendar components directly, reusing the fast
+    epoch_days_to_date algorithm but returning components as output parameters.
+
+    Args:
+        days: Days since epoch
+        out_year, out_month, out_day: Pointers to store results
+    """
+    cdef int years, month, year, cycles400, cycles100, cycles, rem
+    cdef unsigned short prev
+    cdef unsigned short* m_list
+
+    if 0 <= days < 47482:
+        cycles = (days + 365) // 1461
+        rem = (days + 365) - cycles * 1461
+        years = rem // 365
+        rem -= years * 365
+        year = (cycles << 2) + years + 1969
+        if years == 4:
+            out_year[0] = year - 1
+            out_month[0] = 12
+            out_day[0] = 31
+            return
+        if years == 3:
+            m_list = MONTH_DAYS_LEAP
+        else:
+            m_list = MONTH_DAYS
+    else:
+        cycles400 = (days + 134774) // 146097
+        rem = days + 134774 - (cycles400 * 146097)
+        cycles100 = rem // 36524
+        rem -= cycles100 * 36524
+        cycles = rem // 1461
+        rem -= cycles * 1461
+        years = rem // 365
+        rem -= years * 365
+        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
+        if years == 4 or cycles100 == 4:
+            out_year[0] = year - 1
+            out_month[0] = 12
+            out_day[0] = 31
+            return
+        if years == 3 and (year == 2000 or year % 100 != 0):
+            m_list = MONTH_DAYS_LEAP
+        else:
+            m_list = MONTH_DAYS
+
+    month = (rem + 24) >> 5
+    prev = m_list[month]
+    while rem < prev:
+        month -= 1
+        prev = m_list[month]
+
+    out_year[0] = year
+    out_month[0] = month + 1
+    out_day[0] = rem + 1 - prev
+
+
+@cython.cdivision(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cpdef inline tuple epoch_seconds_to_components(long long seconds):
     """Convert epoch seconds to (year, month, day, hour, minute, second, microsecond).
 
@@ -188,7 +251,7 @@ cpdef inline tuple epoch_seconds_to_components(long long seconds):
     """
     cdef long long days, secs_in_day
     cdef int hour, minute, second
-    cdef object date_obj
+    cdef int year, month, day
 
     # Decompose seconds into days and seconds-within-day
     # We use divmod-like logic: floor division for negative values
@@ -201,8 +264,8 @@ cpdef inline tuple epoch_seconds_to_components(long long seconds):
         days = (seconds + 1) // 86400 - 1
         secs_in_day = seconds - days * 86400
 
-    # Get date components using the fast day calculator
-    date_obj = epoch_days_to_date(days)
+    # Get date components directly without creating a date object
+    _epoch_days_to_components_c(days, &year, &month, &day)
 
     # Decompose time-of-day seconds into hours, minutes, seconds
     hour = secs_in_day // 3600
@@ -210,7 +273,7 @@ cpdef inline tuple epoch_seconds_to_components(long long seconds):
     minute = secs_in_day // 60
     second = secs_in_day % 60
 
-    return (date_obj.year, date_obj.month, date_obj.day, hour, minute, second, 0)
+    return (year, month, day, hour, minute, second, 0)
 
 
 @cython.boundscheck(False)
