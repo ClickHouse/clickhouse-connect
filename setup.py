@@ -83,7 +83,7 @@ def run_setup(try_c: bool = True):
             ]
         },
         classifiers=[
-            "Development Status :: 4 - Beta",
+            "Development Status :: 5 - Production/Stable",
             "Intended Audience :: Developers",
             "License :: OSI Approved :: Apache Software License",
             "Programming Language :: Python :: 3.10",

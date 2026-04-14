@@ -1,24 +1,8 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Python 3.8 EOL
-Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
-3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
-missing dependencies in the build chain.
-
-### WARNING -- JSON Incompatibility between versions 22.8 and 22.10
-The internal serialization format for experimental JSON was updated in ClickHouse version 24.10.  `clickhouse-connect`
-will set the compatibility level on a global basis based on the last client created, so multiple clients using the
-library with mixed versions 22.8/22.9 and 22.10 and later versions will break.  If you need JSON support for mixed
-versions you must use different Python interpreters for each version.
-
-### WARNING -- Impending Breaking Change - Server Settings in DSN
-When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
-converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
-release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
-instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
-The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
-
 ## UNRELEASED
+
+## 1.0.0rc1, 2026-04-13
 
 ### Breaking Changes
 - Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
