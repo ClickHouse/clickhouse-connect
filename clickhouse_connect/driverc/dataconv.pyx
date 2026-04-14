@@ -51,10 +51,13 @@ def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows, tzinfo
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(4 * num_rows)
     cdef object column = PyTuple_New(num_rows), v
+    cdef object components
     if tzinfo is None:
-        fts = tzutil.utcfromtimestamp
+        # Fast path: naive UTC, use arithmetic to avoid Python datetime.fromtimestamp overhead
         while x < num_rows:
-            v = fts((<unsigned int*>loc)[0])
+            components = epoch_seconds_to_components(<unsigned int*>loc[0])
+            v = datetime(components[0], components[1], components[2],
+                        components[3], components[4], components[5], components[6])
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
             loc += 4
@@ -155,6 +158,48 @@ cpdef inline object epoch_days_to_date(int days):
         month -= 1
         prev = m_list[month]
     return date(year, month + 1, rem + 1 - prev)
+
+
+@cython.cdivision(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cpdef inline tuple epoch_seconds_to_components(long long seconds):
+    """Convert epoch seconds to (year, month, day, hour, minute, second, microsecond).
+
+    This decomposes a Unix timestamp into datetime components without creating
+    intermediate objects. Handles both positive and negative epoch values correctly.
+
+    Args:
+        seconds: Unix timestamp (seconds since 1970-01-01 00:00:00 UTC)
+
+    Returns:
+        Tuple of (year, month, day, hour, minute, second, microsecond)
+    """
+    cdef long long days, secs_in_day
+    cdef int hour, minute, second
+    cdef object date_obj
+
+    # Decompose seconds into days and seconds-within-day
+    # We use divmod-like logic: floor division for negative values
+    if seconds >= 0:
+        days = seconds // 86400
+        secs_in_day = seconds % 86400
+    else:
+        # For negative seconds, we need floor division semantics
+        # Python's // gives us this, but we need to handle it carefully
+        days = (seconds + 1) // 86400 - 1
+        secs_in_day = seconds - days * 86400
+
+    # Get date components using the fast day calculator
+    date_obj = epoch_days_to_date(days)
+
+    # Decompose time-of-day seconds into hours, minutes, seconds
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return (date_obj.year, date_obj.month, date_obj.day, hour, minute, second, 0)
 
 
 @cython.boundscheck(False)

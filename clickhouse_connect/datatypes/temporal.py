@@ -256,12 +256,15 @@ class DateTime64(DateTimeBase):
     def _read_binary_naive(self, column: Sequence):
         new_col = []
         app = new_col.append
-        dt_from = tzutil.utcfromtimestamp
         prec = self.prec
+
+        # Use divmod for clearer semantics and single datetime construction
         for ticks in column:
-            seconds = ticks // prec
-            dt_sec = dt_from(seconds)
-            app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
+            seconds, fractional_ticks = divmod(ticks, prec)
+            microseconds = (fractional_ticks * 1000000) // prec
+            # Build datetime directly with all components to avoid .replace() allocation
+            dt = tzutil.utcfromtimestamp_with_microseconds(seconds, microseconds)
+            app(dt)
         return new_col
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):

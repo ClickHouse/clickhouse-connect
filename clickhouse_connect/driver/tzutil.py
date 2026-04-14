@@ -50,8 +50,122 @@ def is_utc_timezone(tz: tzinfo | str | None) -> bool:
     return tz.tzname(None) in UTC_EQUIVALENTS
 
 
+def utcfromtimestamp_with_microseconds(ts: float, microseconds: int = 0) -> datetime:
+    """Convert Unix timestamp to naive UTC datetime with explicit microseconds.
+
+    This is more efficient than calling utcfromtimestamp() and then .replace(microsecond=...)
+    because it constructs the datetime once with all components.
+
+    Args:
+        ts: Unix timestamp (seconds since epoch)
+        microseconds: Microsecond component (0-999999)
+
+    Returns:
+        Naive UTC datetime with specified microseconds
+    """
+    if not isinstance(ts, float):
+        ts = float(ts)
+
+    seconds = int(ts)
+
+    # Decompose epoch seconds into days and time-of-day
+    if seconds >= 0:
+        days = seconds // 86400
+        secs_in_day = seconds % 86400
+    else:
+        # Floor division semantics for negative values
+        days = (seconds + 1) // 86400 - 1
+        secs_in_day = seconds - days * 86400
+
+    # Use the same fast date calculation
+    year, month, day = _epoch_days_to_date_components(days)
+
+    # Decompose time-of-day
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return datetime(year, month, day, hour, minute, second, microseconds)
+
+
 def utcfromtimestamp(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=pytz.UTC).replace(tzinfo=None)
+    """Convert Unix timestamp to naive UTC datetime using arithmetic, avoiding
+    the expensive datetime.fromtimestamp() + replace() round-trip."""
+    # For timestamps in the common range, use fast arithmetic
+    # This avoids the pytz overhead entirely
+    if not isinstance(ts, float):
+        ts = float(ts)
+
+    seconds = int(ts)
+
+    # Decompose epoch seconds into days and time-of-day
+    if seconds >= 0:
+        days = seconds // 86400
+        secs_in_day = seconds % 86400
+    else:
+        # Floor division semantics for negative values
+        days = (seconds + 1) // 86400 - 1
+        secs_in_day = seconds - days * 86400
+
+    # Use the same fast date calculation as the Cython version
+    year, month, day = _epoch_days_to_date_components(days)
+
+    # Decompose time-of-day
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return datetime(year, month, day, hour, minute, second, 0)
+
+
+def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
+    """Convert days since epoch to (year, month, day).
+
+    This is a pure Python implementation of the same algorithm as
+    the Cython epoch_days_to_date, but returns components instead of a date object.
+    """
+    # Month days arrays (non-leap and leap year)
+    MONTH_DAYS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365]
+    MONTH_DAYS_LEAP = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366]
+
+    if 0 <= days < 47482:
+        cycles = (days + 365) // 1461
+        rem = (days + 365) - cycles * 1461
+        years = rem // 365
+        rem -= years * 365
+        year = (cycles << 2) + years + 1969
+        if years == 4:
+            return year - 1, 12, 31
+        if years == 3:
+            m_list = MONTH_DAYS_LEAP
+        else:
+            m_list = MONTH_DAYS
+    else:
+        cycles400 = (days + 134774) // 146097
+        rem = days + 134774 - (cycles400 * 146097)
+        cycles100 = rem // 36524
+        rem -= cycles100 * 36524
+        cycles = rem // 1461
+        rem -= cycles * 1461
+        years = rem // 365
+        rem -= years * 365
+        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
+        if years == 4 or cycles100 == 4:
+            return year - 1, 12, 31
+        if years == 3 and (year == 2000 or year % 100 != 0):
+            m_list = MONTH_DAYS_LEAP
+        else:
+            m_list = MONTH_DAYS
+
+    month = (rem + 24) >> 5
+    prev = m_list[month]
+    while rem < prev:
+        month -= 1
+        prev = m_list[month]
+
+    return year, month + 1, rem + 1 - prev
 
 
 try:
