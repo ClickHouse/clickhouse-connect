@@ -237,6 +237,42 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
+def read_datetime64_naive_col(object column: Sequence, unsigned long long prec):
+    """Read DateTime64 column with naive UTC using epoch arithmetic.
+
+    Constructs datetime objects directly from epoch seconds components,
+    avoiding per-row calls to tzutil helpers.
+
+    Args:
+        column: Sequence of integer ticks
+        prec: Precision divisor (10**scale)
+
+    Returns:
+        Tuple of datetime objects with microseconds, no timezone
+    """
+    cdef unsigned long long x = 0
+    cdef unsigned long long num_rows = len(column)
+    cdef object result = PyTuple_New(num_rows), v, components
+    cdef long long ticks, seconds, fractional_ticks
+    cdef unsigned long long microseconds
+
+    for x in range(num_rows):
+        ticks = column[x]
+        seconds, fractional_ticks = divmod(ticks, prec)
+        microseconds = (fractional_ticks * 1000000) // prec
+
+        # Use epoch_seconds_to_components to get all date/time parts, then construct datetime once
+        components = epoch_seconds_to_components(seconds)
+        v = datetime(components[0], components[1], components[2],
+                    components[3], components[4], components[5], microseconds)
+        PyTuple_SET_ITEM(result, x, v)
+        Py_INCREF(v)
+
+    return result
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def read_datetime64_tz_col(object column: Sequence, unsigned long long prec, tzinfo: tzinfo):
     """Read DateTime64 column with timezone conversion using per-row fromtimestamp.
 

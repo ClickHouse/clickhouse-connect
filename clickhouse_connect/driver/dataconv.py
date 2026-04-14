@@ -65,6 +65,21 @@ def read_date32_col(source: ByteSource, num_rows: int):
     return [epoch_days_to_date(x) for x in column]
 
 
+def read_datetime64_naive_col(column: Sequence, prec: int):
+    """Read DateTime64 column with naive UTC using epoch arithmetic.
+
+    Constructs datetime objects directly from epoch seconds components.
+    """
+    result = []
+    for ticks in column:
+        seconds, fractional_ticks = divmod(ticks, prec)
+        microseconds = (fractional_ticks * 1000000) // prec
+        # Use the helper to build datetime with all components at once
+        dt = tzutil.utcfromtimestamp_with_microseconds(seconds, microseconds)
+        result.append(dt)
+    return result
+
+
 def read_datetime64_tz_col(column: Sequence, prec: int, tz_info: tzinfo):
     """Read DateTime64 column with non-UTC timezone conversion.
 

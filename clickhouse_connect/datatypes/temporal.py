@@ -261,18 +261,8 @@ class DateTime64(DateTimeBase):
             return data_conv.read_datetime64_tz_col(column, prec, tz_info)
 
     def _read_binary_naive(self, column: Sequence):
-        new_col = []
-        app = new_col.append
-        prec = self.prec
-
-        # Use divmod for clearer semantics and single datetime construction
-        for ticks in column:
-            seconds, fractional_ticks = divmod(ticks, prec)
-            microseconds = (fractional_ticks * 1000000) // prec
-            # Build datetime directly with all components to avoid .replace() allocation
-            dt = tzutil.utcfromtimestamp_with_microseconds(seconds, microseconds)
-            app(dt)
-        return new_col
+        # Delegate to data_conv (Cython or pure Python) for efficient naive UTC DateTime64 reading
+        return data_conv.read_datetime64_naive_col(column, self.prec)
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
