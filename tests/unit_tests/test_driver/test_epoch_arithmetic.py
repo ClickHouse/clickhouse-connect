@@ -1,7 +1,7 @@
 """Tests for epoch seconds arithmetic helper functions."""
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytz
 
@@ -141,8 +141,8 @@ class TestEpochSecondsToComponents(unittest.TestCase):
                 # Build datetime from components
                 dt_from_components = datetime(year, month, day, hour, minute, second, microsecond)
 
-                # Compare to datetime.utcfromtimestamp (deprecated but still works for testing)
-                dt_from_timestamp = datetime.utcfromtimestamp(ts)
+                # Compare to datetime.fromtimestamp with UTC timezone
+                dt_from_timestamp = datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
 
                 self.assertEqual(dt_from_components, dt_from_timestamp)
 
