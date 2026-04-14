@@ -38,6 +38,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
 - Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
 
+### Bug Fixes
+- SQLAlchemy `Bool` type now accepts and forwards `**kwargs` to the underlying `SqlaBoolean` constructor, fixing compatibility with SQLAlchemy 2.x dialect inspection. Previously, passing extra keyword arguments (e.g., from `create_engine` connect args) would raise a `TypeError`. Closes [#706](https://github.com/ClickHouse/clickhouse-connect/pull/706)
+
 ## 0.15.1, 2026-03-30
 
 ### Bug Fixes
