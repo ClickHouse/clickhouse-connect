@@ -62,7 +62,18 @@ def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows, tzinfo
             Py_INCREF(v)
             loc += 4
             x += 1
+    elif tzutil.is_utc_timezone(tzinfo):
+        # Fast path: UTC-equivalent timezone, use arithmetic + attach timezone
+        while x < num_rows:
+            components = epoch_seconds_to_components(<unsigned int*>loc[0])
+            v = datetime(components[0], components[1], components[2],
+                        components[3], components[4], components[5], components[6], tzinfo=tzinfo)
+            PyTuple_SET_ITEM(column, x, v)
+            Py_INCREF(v)
+            loc += 4
+            x += 1
     else:
+        # Slow path: non-UTC timezone, requires fromtimestamp for DST-aware conversion
         fts = datetime.fromtimestamp
         while x < num_rows:
             v = fts((<unsigned int*>loc)[0], tzinfo)
@@ -222,6 +233,44 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
         Py_INCREF(v)
         loc += 16
     return column
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def read_datetime64_tz_col(object column: Sequence, unsigned long long prec, tzinfo: tzinfo):
+    """Read DateTime64 column with timezone conversion using per-row fromtimestamp.
+
+    This handles non-UTC timezone conversion where DST-aware logic is necessary.
+    The loop is in Cython for speed of the per-row datetime construction.
+
+    Args:
+        column: Sequence of integer ticks
+        prec: Precision divisor (10**scale)
+        tzinfo: Target timezone object
+
+    Returns:
+        List of datetime objects with specified timezone and microseconds
+    """
+    cdef unsigned long long x = 0
+    cdef unsigned long long num_rows = len(column)
+    cdef object result = PyTuple_New(num_rows), v
+    cdef long long ticks, seconds, fractional_ticks
+    cdef unsigned long long microseconds
+    cdef object dt_from = datetime.fromtimestamp
+
+    for x in range(num_rows):
+        ticks = column[x]
+        seconds, fractional_ticks = divmod(ticks, prec)
+        microseconds = (fractional_ticks * 1000000) // prec
+
+        # Use fromtimestamp for DST-aware conversion, then set microseconds directly
+        v = dt_from(seconds, tzinfo)
+        if microseconds != 0:
+            v = v.replace(microsecond=microseconds)
+        PyTuple_SET_ITEM(result, x, v)
+        Py_INCREF(v)
+
+    return result
 
 
 @cython.boundscheck(False)

@@ -29,10 +29,15 @@ def read_ipv4_col(source: ByteSource, num_rows: int):
 def read_datetime_col(source: ByteSource, num_rows: int, tz_info: tzinfo | None):
     src_array = source.read_array("I", num_rows)
     if tz_info is None:
-        fts = tzutil.utcfromtimestamp
-        return [fts(ts) for ts in src_array]
-    fts = datetime.fromtimestamp
-    return [fts(ts, tz_info) for ts in src_array]
+        # Fast path: naive UTC
+        return [tzutil.utcfromtimestamp(ts) for ts in src_array]
+    elif tzutil.is_utc_timezone(tz_info):
+        # Fast path: UTC-equivalent timezone
+        return [tzutil.utc_equivalent_tzaware_datetime(ts, 0, tz_info) for ts in src_array]
+    else:
+        # Slow path: non-UTC timezone
+        fts = datetime.fromtimestamp
+        return [fts(ts, tz_info) for ts in src_array]
 
 
 def epoch_days_to_date(days: int) -> date:
@@ -58,6 +63,23 @@ def read_date_col(source: ByteSource, num_rows: int):
 def read_date32_col(source: ByteSource, num_rows: int):
     column = source.read_array("l" if int_size == 2 else "i", num_rows)
     return [epoch_days_to_date(x) for x in column]
+
+
+def read_datetime64_tz_col(column: Sequence, prec: int, tz_info: tzinfo):
+    """Read DateTime64 column with non-UTC timezone conversion.
+
+    Constructs datetime objects with the specified timezone and microseconds.
+    """
+    result = []
+    dt_from = datetime.fromtimestamp
+    for ticks in column:
+        seconds, fractional_ticks = divmod(ticks, prec)
+        microseconds = (fractional_ticks * 1000000) // prec
+        v = dt_from(seconds, tz_info)
+        if microseconds != 0:
+            v = v.replace(microsecond=microseconds)
+        result.append(v)
+    return result
 
 
 def read_uuid_col(source: ByteSource, num_rows: int):

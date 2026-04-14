@@ -50,6 +50,47 @@ def is_utc_timezone(tz: tzinfo | str | None) -> bool:
     return tz.tzname(None) in UTC_EQUIVALENTS
 
 
+def utc_equivalent_tzaware_datetime(ts: float, microseconds: int, tz_info: tzinfo) -> datetime:
+    """Build a UTC-equivalent timezone-aware datetime using arithmetic.
+
+    For UTC-equivalent timezones (UTC, Etc/UTC, GMT, etc.), construct the datetime
+    using epoch arithmetic rather than datetime.fromtimestamp(), then attach the
+    timezone. This avoids timezone conversion machinery that's unnecessary for UTC.
+
+    Args:
+        ts: Unix timestamp (seconds since epoch)
+        microseconds: Microsecond component
+        tz_info: A UTC-equivalent timezone object
+
+    Returns:
+        Timezone-aware datetime in the specified timezone
+    """
+    if not isinstance(ts, float):
+        ts = float(ts)
+
+    seconds = int(ts)
+
+    # Decompose epoch seconds into days and time-of-day
+    if seconds >= 0:
+        days = seconds // 86400
+        secs_in_day = seconds % 86400
+    else:
+        # Floor division semantics for negative values
+        days = (seconds + 1) // 86400 - 1
+        secs_in_day = seconds - days * 86400
+
+    year, month, day = _epoch_days_to_date_components(days)
+
+    # Decompose time-of-day
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    # Construct with all components and attach timezone
+    return datetime(year, month, day, hour, minute, second, microseconds, tzinfo=tz_info)
+
+
 def utcfromtimestamp_with_microseconds(ts: float, microseconds: int = 0) -> datetime:
     """Convert Unix timestamp to naive UTC datetime with explicit microseconds.
 
