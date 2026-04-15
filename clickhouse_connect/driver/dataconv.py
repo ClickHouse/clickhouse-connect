@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, SafeUUID
 
 from clickhouse_connect.driver import options, tzutil
-from clickhouse_connect.driver.common import int_size
+from clickhouse_connect.driver.common import int_size, must_swap, write_array
 from clickhouse_connect.driver.errors import NONE_IN_NULLABLE_COLUMN
 from clickhouse_connect.driver.types import ByteSource
 
@@ -173,12 +173,11 @@ def write_str_col(column: Sequence, nullable: bool, encoding: str | None, dest: 
     return 0
 
 
-def write_native_col(code: str, column: Sequence, dest: bytearray, col_name: str | None = None) -> int:
+def write_native_col(code: str, column: Sequence, dest: bytearray, col_name: object = None) -> int:
     """
     Pure Python fallback for write_native_col.
     Delegates to write_array which uses struct.pack.
     """
-    from clickhouse_connect.driver.common import write_array
     write_array(code, column, dest, col_name)
     return 0
 
@@ -187,9 +186,7 @@ def build_map_columns(column: Sequence, dest: bytearray):
     """
     Pure Python fallback for build_map_columns.
     Flattens dicts into keys/values lists and writes UInt64 offsets into dest.
-    Uses two-pass strategy: compute offsets, pre-allocate, then fill by index.
     """
-    from clickhouse_connect.driver.common import must_swap
     offsets = array.array("Q")
     total = 0
     for v in column:
@@ -198,12 +195,10 @@ def build_map_columns(column: Sequence, dest: bytearray):
     if must_swap:
         offsets.byteswap()
     dest += offsets.tobytes()
-    keys = [None] * total
-    values = [None] * total
-    ix = 0
+    keys = []
+    values = []
     for v in column:
         for k, val in v.items():
-            keys[ix] = k
-            values[ix] = val
-            ix += 1
+            keys.append(k)
+            values.append(val)
     return keys, values

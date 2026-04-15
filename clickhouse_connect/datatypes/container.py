@@ -59,10 +59,10 @@ class Array(ClickHouseType):
             all_values = []
         column = all_values if isinstance(all_values, list) else list(all_values)
         for offset_range in reversed(offset_sizes):
-            data = [None] * len(offset_range)
+            data = []
             last = 0
-            for i, x in enumerate(offset_range):
-                data[i] = column[last:x]
+            for x in offset_range:
+                data.append(column[last:x])
                 last = x
             column = data
         return column
@@ -204,10 +204,10 @@ class Map(ClickHouseType):
         total_rows = 0 if len(offsets) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx, read_state[0])
         values = self.value_type.read_column_data(source, total_rows, ctx, read_state[1])
-        column = [None] * num_rows
+        column = []
         prev = 0
-        for i, offset in enumerate(offsets):
-            column[i] = dict(zip(keys[prev:offset], values[prev:offset]))
+        for offset in offsets:
+            column.append(dict(zip(keys[prev:offset], values[prev:offset])))
             prev = offset
         return column
 
