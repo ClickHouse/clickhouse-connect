@@ -58,10 +58,10 @@ class Array(ClickHouseType):
             all_values = []
         column = all_values if isinstance(all_values, list) else list(all_values)
         for offset_range in reversed(offset_sizes):
-            data = []
+            data = [None] * len(offset_range)
             last = 0
-            for x in offset_range:
-                data.append(column[last:x])
+            for i, x in enumerate(offset_range):
+                data[i] = column[last:x]
                 last = x
             column = data
         return column
