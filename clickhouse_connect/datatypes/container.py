@@ -203,13 +203,11 @@ class Map(ClickHouseType):
         total_rows = 0 if len(offsets) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx, read_state[0])
         values = self.value_type.read_column_data(source, total_rows, ctx, read_state[1])
-        all_pairs = tuple(zip(keys, values))
-        column = []
-        app = column.append
-        last = 0
-        for offset in offsets:
-            app(dict(all_pairs[last:offset]))
-            last = offset
+        column = [None] * num_rows
+        prev = 0
+        for i, offset in enumerate(offsets):
+            column[i] = dict(zip(keys[prev:offset], values[prev:offset]))
+            prev = offset
         return column
 
     def write_column_prefix(self, dest: bytearray):
