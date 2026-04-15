@@ -511,7 +511,7 @@ _code_to_kind = {
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def write_native_col(str code, column, bytearray dest, str col_name=None) -> int:
+def write_native_col(str code, column, bytearray dest, object col_name=None) -> int:
     """
     Write a column of fixed-width values directly into dest bytearray.
     Fast-paths C-contiguous numpy arrays with matching dtype via memcpy.
@@ -557,7 +557,7 @@ def write_native_col(str code, column, bytearray dest, str col_name=None) -> int
     try:
         arr = array.array(code, column)
     except (TypeError, OverflowError, struct.error) as ex:
-        col_msg = f" for column `{col_name}`" if col_name else ""
+        col_msg = f" for column `{str(col_name)}`" if col_name else ""
         error_detail = type(ex).__name__
         if isinstance(ex, OverflowError):
             error_detail = "value out of range"
