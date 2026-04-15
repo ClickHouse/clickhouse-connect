@@ -31,7 +31,7 @@ class IntBase(ArrayType, registered=False):
             column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
         elif not isinstance(column[0], int):
             column = [int(x) for x in column]
-        write_array(self._array_type, column, dest)
+        data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
 class Int8(IntBase):
@@ -197,7 +197,7 @@ class Float(ArrayType, registered=False):
                 column = [0 if x is None else x for x in column]
         elif not isinstance(column[0], float):
             column = [float(x) for x in column]
-        write_array(self._array_type, column, dest)
+        data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
 class Float32(Float):

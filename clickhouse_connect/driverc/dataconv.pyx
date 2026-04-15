@@ -5,13 +5,14 @@ import array
 from datetime import datetime, date
 
 import cython
+import sys
 
 from .buffer cimport ResponseBuffer
 from cpython cimport Py_INCREF, Py_DECREF
-from cpython.buffer cimport PyBUF_READ
+from cpython.buffer cimport PyBUF_READ, PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE, Py_buffer
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
-from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize
+from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize, PyByteArray_AS_STRING
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cython.view cimport array as cvarray
 from ipaddress import IPv4Address
@@ -19,8 +20,9 @@ from uuid import UUID, SafeUUID
 from libc.string cimport memcpy
 from datetime import tzinfo
 
-from clickhouse_connect.driver import tzutil
+from clickhouse_connect.driver import tzutil, options
 from clickhouse_connect.driver.errors import NONE_IN_NULLABLE_COLUMN
+from clickhouse_connect.driver.exceptions import DataError
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -495,4 +497,80 @@ def write_str_col(column: Sequence, nullable: bool, encoding: Optional[str], des
     finally:
         mv.release()
         PyMem_Free(<void *>temp_buff)
+    return 0
+
+
+# Mapping of struct format codes to expected numpy dtype kind
+_code_to_kind = {
+    'b': 'i', 'h': 'i', 'i': 'i', 'l': 'i', 'q': 'i',
+    'B': 'u', 'H': 'u', 'I': 'u', 'L': 'u', 'Q': 'u',
+    'f': 'f', 'd': 'f',
+}
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def write_native_col(str code, column, bytearray dest, str col_name=None) -> int:
+    """
+    Write a column of fixed-width values directly into dest bytearray.
+    Fast-paths C-contiguous numpy arrays with matching dtype via memcpy.
+    Falls back to array.array for Python sequences.
+    """
+    cdef Py_ssize_t old_size = PyByteArray_GET_SIZE(dest)
+    cdef Py_buffer view
+    cdef object arr
+    cdef object dtype
+    cdef str byteorder
+    cdef str expected_kind
+    cdef object np
+
+    # Numpy fast path: check if array is 1-D, contiguous, matching kind+size, little-endian
+    np = options.np
+    if np is not None and isinstance(column, np.ndarray):
+        dtype = column.dtype
+        byteorder = dtype.byteorder
+        expected_kind = _code_to_kind.get(code, None)
+        expected_size = array.array(code).itemsize
+
+        # Check all safety conditions for memcpy
+        if (column.ndim == 1 and
+            column.flags['C_CONTIGUOUS'] and
+            expected_kind is not None and
+            dtype.kind == expected_kind and
+            dtype.itemsize == expected_size and
+            dtype.kind != 'O' and  # no object arrays
+            (byteorder == '<' or
+             (byteorder in ('=', '|') and sys.byteorder == 'little'))):
+
+            # All checks passed, do direct memcpy
+            PyObject_GetBuffer(column, &view, PyBUF_SIMPLE)
+            try:
+                PyByteArray_Resize(dest, old_size + view.len)
+                memcpy(PyByteArray_AS_STRING(dest) + old_size, view.buf, view.len)
+            finally:
+                PyBuffer_Release(&view)
+            return 0
+
+    # Python list/tuple fallback: array.array for fast C-level conversion
+    # (faster than struct.pack because it avoids *args unpacking overhead)
+    try:
+        arr = array.array(code, column)
+    except (TypeError, OverflowError, struct.error) as ex:
+        col_msg = f" for column `{col_name}`" if col_name else ""
+        error_detail = type(ex).__name__
+        if isinstance(ex, OverflowError):
+            error_detail = "value out of range"
+        elif isinstance(ex, TypeError):
+            error_detail = "type mismatch (usually None in non-Nullable column)"
+        raise DataError(
+            f"Unable to create native array{col_msg}: {error_detail}"
+        ) from ex
+
+    # Write the array.array data directly to the bytearray
+    PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+    try:
+        PyByteArray_Resize(dest, old_size + view.len)
+        memcpy(PyByteArray_AS_STRING(dest) + old_size, view.buf, view.len)
+    finally:
+        PyBuffer_Release(&view)
     return 0

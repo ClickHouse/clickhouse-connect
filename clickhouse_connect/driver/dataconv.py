@@ -171,3 +171,13 @@ def write_str_col(column: Sequence, nullable: bool, encoding: str | None, dest: 
                 app(0x80 | b)
             dest += x
     return 0
+
+
+def write_native_col(code: str, column: Sequence, dest: bytearray, col_name: str | None = None) -> int:
+    """
+    Pure Python fallback for write_native_col.
+    Delegates to write_array which uses struct.pack.
+    """
+    from clickhouse_connect.driver.common import write_array
+    write_array(code, column, dest, col_name)
+    return 0
