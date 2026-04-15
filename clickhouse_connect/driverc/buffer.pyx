@@ -159,7 +159,7 @@ cdef class ResponseBuffer:
         cdef unsigned char b
         cdef char* buf
         while x < num_rows:
-            # Fast path: 1-byte varint (covers most string lengths < 128)
+            # Fast path: 1-byte varint covers most string lengths < 128
             if self.buf_loc < self.buf_sz:
                 b = self.buffer[self.buf_loc]
                 self.buf_loc += 1
@@ -167,10 +167,8 @@ cdef class ResponseBuffer:
                 b = self._read_byte_load()
 
             if (b & 0x80) == 0:
-                # Common case: length fits in one byte
                 sz = b
             else:
-                # Slow path: multi-byte varint
                 sz = b & 0x7f
                 shift = 7
                 while 1:
@@ -215,7 +213,7 @@ cdef class ResponseBuffer:
         cdef char * null_map = <char *> PyMem_Malloc(<size_t> num_rows)
         memcpy(<void *> null_map, <void *> self.read_bytes_c(num_rows), num_rows)
         for x in range(num_rows):
-            # Fast path: 1-byte varint (covers most string lengths < 128)
+            # Fast path: 1-byte varint covers most string lengths < 128
             if self.buf_loc < self.buf_sz:
                 b = self.buffer[self.buf_loc]
                 self.buf_loc += 1
@@ -223,10 +221,8 @@ cdef class ResponseBuffer:
                 b = self._read_byte_load()
 
             if (b & 0x80) == 0:
-                # Common case: length fits in one byte
                 sz = b
             else:
-                # Slow path: multi-byte varint
                 sz = b & 0x7f
                 shift = 7
                 while 1:
@@ -244,19 +240,16 @@ cdef class ResponseBuffer:
             if null_map[x]:
                 v = null_obj
             elif encoding == utf8:
-                # Fast path for UTF-8 encoding
                 try:
                     v = PyUnicode_Decode(buf, sz, utf8, errors)
                 except UnicodeDecodeError:
                     v = PyBytes_FromStringAndSize(buf, sz).hex()
             elif encoding:
-                # Generic encoding path
                 try:
                     v = PyUnicode_Decode(buf, sz, encoding, errors)
                 except UnicodeDecodeError:
                     v = PyBytes_FromStringAndSize(buf, sz).hex()
             else:
-                # Raw bytes path
                 v = PyBytes_FromStringAndSize(buf, sz)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)

@@ -256,12 +256,9 @@ class DateTime64(DateTimeBase):
                 app(dt)
             return new_col
         else:
-            # Slow path: delegate to data_conv (Cython or pure Python) for DST-aware conversion
-            # This avoids the per-row fromtimestamp call in this Python method
             return data_conv.read_datetime64_tz_col(column, prec, tz_info)
 
     def _read_binary_naive(self, column: Sequence):
-        # Delegate to data_conv (Cython or pure Python) for efficient naive UTC DateTime64 reading
         return data_conv.read_datetime64_naive_col(column, self.prec)
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):

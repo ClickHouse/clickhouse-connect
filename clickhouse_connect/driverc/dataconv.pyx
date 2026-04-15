@@ -256,21 +256,15 @@ cpdef inline tuple epoch_seconds_to_components(long long seconds):
     cdef int hour, minute, second
     cdef int year, month, day
 
-    # Decompose seconds into days and seconds-within-day
-    # We use divmod-like logic: floor division for negative values
     if seconds >= 0:
         days = seconds // 86400
         secs_in_day = seconds % 86400
     else:
-        # For negative seconds, we need floor division semantics
-        # Python's // gives us this, but we need to handle it carefully
         days = (seconds + 1) // 86400 - 1
         secs_in_day = seconds - days * 86400
 
-    # Get date components directly without creating a date object
     _epoch_days_to_components_c(days, &year, &month, &day)
 
-    # Decompose time-of-day seconds into hours, minutes, seconds
     hour = secs_in_day // 3600
     secs_in_day %= 3600
     minute = secs_in_day // 60
@@ -327,7 +321,6 @@ def read_datetime64_naive_col(object column: Sequence, unsigned long long prec):
         seconds, fractional_ticks = divmod(ticks, prec)
         microseconds = (fractional_ticks * 1000000) // prec
 
-        # Use epoch_seconds_to_components to get all date/time parts, then construct datetime once
         components = epoch_seconds_to_components(seconds)
         v = datetime(components[0], components[1], components[2],
                     components[3], components[4], components[5], microseconds)
@@ -365,7 +358,6 @@ def read_datetime64_tz_col(object column: Sequence, unsigned long long prec, tzi
         seconds, fractional_ticks = divmod(ticks, prec)
         microseconds = (fractional_ticks * 1000000) // prec
 
-        # Use fromtimestamp for DST-aware conversion, then set microseconds directly
         v = dt_from(seconds, tzinfo)
         if microseconds != 0:
             v = v.replace(microsecond=microseconds)
@@ -543,7 +535,7 @@ def write_native_col(str code, column, bytearray dest, object col_name=None) -> 
             (byteorder == '<' or
              (byteorder in ('=', '|') and sys.byteorder == 'little'))):
 
-            # All checks passed, do direct memcpy
+            # All checks passed so do direct memcpy
             PyObject_GetBuffer(column, &view, PyBUF_SIMPLE)
             try:
                 PyByteArray_Resize(dest, old_size + view.len)
@@ -553,7 +545,6 @@ def write_native_col(str code, column, bytearray dest, object col_name=None) -> 
             return 0
 
     # Python list/tuple fallback: array.array for fast C-level conversion
-    # (faster than struct.pack because it avoids *args unpacking overhead)
     try:
         arr = array.array(code, column)
     except (TypeError, OverflowError, struct.error) as ex:

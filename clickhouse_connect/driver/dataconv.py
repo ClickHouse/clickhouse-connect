@@ -29,13 +29,10 @@ def read_ipv4_col(source: ByteSource, num_rows: int):
 def read_datetime_col(source: ByteSource, num_rows: int, tz_info: tzinfo | None):
     src_array = source.read_array("I", num_rows)
     if tz_info is None:
-        # Fast path: naive UTC
         return [tzutil.utcfromtimestamp(ts) for ts in src_array]
     elif tzutil.is_utc_timezone(tz_info):
-        # Fast path: UTC-equivalent timezone
         return [tzutil.utc_equivalent_tzaware_datetime(ts, 0, tz_info) for ts in src_array]
     else:
-        # Slow path: non-UTC timezone
         fts = datetime.fromtimestamp
         return [fts(ts, tz_info) for ts in src_array]
 
@@ -74,7 +71,6 @@ def read_datetime64_naive_col(column: Sequence, prec: int):
     for ticks in column:
         seconds, fractional_ticks = divmod(ticks, prec)
         microseconds = (fractional_ticks * 1000000) // prec
-        # Use the helper to build datetime with all components at once
         dt = tzutil.utcfromtimestamp_with_microseconds(seconds, microseconds)
         result.append(dt)
     return result
