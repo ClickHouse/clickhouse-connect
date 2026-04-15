@@ -7,6 +7,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import first_value, must_swap
+from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -215,18 +216,7 @@ class Map(ClickHouseType):
         self.value_type.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        offsets = array.array("Q")
-        keys = []
-        values = []
-        total = 0
-        for v in column:
-            total += len(v)
-            offsets.append(total)
-            keys.extend(v.keys())
-            values.extend(v.values())
-        if must_swap:
-            offsets.byteswap()
-        dest += offsets.tobytes()
+        keys, values = data_conv.build_map_columns(column, dest)
         self.key_type.write_column_data(keys, dest, ctx)
         self.value_type.write_column_data(values, dest, ctx)
 

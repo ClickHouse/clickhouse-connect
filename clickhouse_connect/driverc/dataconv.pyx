@@ -21,6 +21,7 @@ from libc.string cimport memcpy
 from datetime import tzinfo
 
 from clickhouse_connect.driver import tzutil, options
+from clickhouse_connect.driver.common import must_swap
 from clickhouse_connect.driver.errors import NONE_IN_NULLABLE_COLUMN
 from clickhouse_connect.driver.exceptions import DataError
 
@@ -574,3 +575,49 @@ def write_native_col(str code, column, bytearray dest, str col_name=None) -> int
     finally:
         PyBuffer_Release(&view)
     return 0
+
+
+cdef inline unsigned long long _bswap_uint64(unsigned long long v):
+    """Byte-swap a 64-bit unsigned integer for big-endian systems."""
+    return (((v & 0xFF) << 56) | (((v >> 8) & 0xFF) << 48) |
+            (((v >> 16) & 0xFF) << 40) | (((v >> 24) & 0xFF) << 32) |
+            (((v >> 32) & 0xFF) << 24) | (((v >> 40) & 0xFF) << 16) |
+            (((v >> 48) & 0xFF) << 8) | ((v >> 56) & 0xFF))
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def build_map_columns(column, bytearray dest):
+    """
+    Flatten a column of dicts into (keys, values) lists and write UInt64 offsets into dest.
+    Uses two-pass strategy: first compute offsets, pre-allocate lists, then fill by index.
+    """
+    cdef unsigned long long num_rows = len(column)
+    cdef unsigned long long total = 0, ix = 0, old_size
+    cdef Py_ssize_t offset_bytes = num_rows * 8
+    cdef char* dest_ptr
+    cdef unsigned long long offset_value
+    cdef unsigned long long i
+
+    # First pass: compute offsets and total entry count, write into dest via memcpy (safe for alignment)
+    old_size = PyByteArray_GET_SIZE(dest)
+    PyByteArray_Resize(dest, old_size + offset_bytes)
+    dest_ptr = PyByteArray_AS_STRING(dest) + old_size
+
+    for i, v in enumerate(column):
+        total += len(v)
+        offset_value = total
+        if must_swap:
+            offset_value = _bswap_uint64(offset_value)
+        memcpy(dest_ptr + i * 8, &offset_value, 8)
+
+    # Pre-allocate lists at exact size, second pass fills by index
+    keys = [None] * total
+    values = [None] * total
+    for v in column:
+        for k, val in v.items():
+            keys[ix] = k
+            values[ix] = val
+            ix += 1
+
+    return keys, values

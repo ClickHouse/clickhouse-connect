@@ -181,3 +181,29 @@ def write_native_col(code: str, column: Sequence, dest: bytearray, col_name: str
     from clickhouse_connect.driver.common import write_array
     write_array(code, column, dest, col_name)
     return 0
+
+
+def build_map_columns(column: Sequence, dest: bytearray):
+    """
+    Pure Python fallback for build_map_columns.
+    Flattens dicts into keys/values lists and writes UInt64 offsets into dest.
+    Uses two-pass strategy: compute offsets, pre-allocate, then fill by index.
+    """
+    from clickhouse_connect.driver.common import must_swap
+    offsets = array.array("Q")
+    total = 0
+    for v in column:
+        total += len(v)
+        offsets.append(total)
+    if must_swap:
+        offsets.byteswap()
+    dest += offsets.tobytes()
+    keys = [None] * total
+    values = [None] * total
+    ix = 0
+    for v in column:
+        for k, val in v.items():
+            keys[ix] = k
+            values[ix] = val
+            ix += 1
+    return keys, values
