@@ -14,6 +14,7 @@ from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize, PyByteArray_AS_STRING
 from cpython.memoryview cimport PyMemoryView_FromMemory
+from cpython.datetime cimport datetime_new, import_datetime
 from cython.view cimport array as cvarray
 from ipaddress import IPv4Address
 from uuid import UUID, SafeUUID
@@ -24,6 +25,9 @@ from clickhouse_connect.driver import tzutil, options
 from clickhouse_connect.driver.common import must_swap
 from clickhouse_connect.driver.errors import NONE_IN_NULLABLE_COLUMN
 from clickhouse_connect.driver.exceptions import DataError
+
+# Initialize datetime C API for direct object construction
+import_datetime()
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -54,23 +58,18 @@ def read_datetime_col(ResponseBuffer buffer, unsigned long long num_rows, tzinfo
     cdef unsigned long long x = 0
     cdef char * loc = buffer.read_bytes_c(4 * num_rows)
     cdef object column = PyTuple_New(num_rows), v
-    cdef object components
     if tzinfo is None:
-        # Fast path: naive UTC, use arithmetic to avoid Python datetime.fromtimestamp overhead
+        # Fast path: naive UTC, construct datetime directly via C API
         while x < num_rows:
-            components = epoch_seconds_to_components((<unsigned int*>loc)[0])
-            v = datetime(components[0], components[1], components[2],
-                        components[3], components[4], components[5], components[6])
+            v = _epoch_to_datetime((<unsigned int*>loc)[0], 0, None)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
             loc += 4
             x += 1
     elif tzutil.is_utc_timezone(tzinfo):
-        # Fast path: UTC-equivalent timezone, use arithmetic + attach timezone
+        # Fast path: UTC-equivalent timezone, direct C API construction with tzinfo
         while x < num_rows:
-            components = epoch_seconds_to_components((<unsigned int*>loc)[0])
-            v = datetime(components[0], components[1], components[2],
-                        components[3], components[4], components[5], components[6], tzinfo=tzinfo)
+            v = _epoch_to_datetime((<unsigned int*>loc)[0], 0, tzinfo)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
             loc += 4
@@ -256,12 +255,11 @@ cpdef inline tuple epoch_seconds_to_components(long long seconds):
     cdef int hour, minute, second
     cdef int year, month, day
 
-    if seconds >= 0:
-        days = seconds // 86400
-        secs_in_day = seconds % 86400
-    else:
-        days = (seconds + 1) // 86400 - 1
-        secs_in_day = seconds - days * 86400
+    days = seconds // 86400
+    secs_in_day = seconds - days * 86400
+    if secs_in_day < 0:
+        secs_in_day += 86400
+        days -= 1
 
     _epoch_days_to_components_c(days, &year, &month, &day)
 
@@ -271,6 +269,32 @@ cpdef inline tuple epoch_seconds_to_components(long long seconds):
     second = secs_in_day % 60
 
     return (year, month, day, hour, minute, second, 0)
+
+
+cdef inline object _epoch_to_datetime(long long seconds, int microseconds, object tz):
+    """Construct datetime directly from epoch seconds via C API, bypassing tuple + Python constructor.
+
+    Uses cpython.datetime.datetime_new which calls PyDateTimeAPI factory directly,
+    avoiding intermediate tuple allocation and Python-level datetime(...) overhead.
+    """
+    cdef long long days, secs_in_day
+    cdef int hour, minute, second
+    cdef int year, month, day
+
+    days = seconds // 86400
+    secs_in_day = seconds - days * 86400
+    if secs_in_day < 0:
+        secs_in_day += 86400
+        days -= 1
+
+    _epoch_days_to_components_c(days, &year, &month, &day)
+
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return datetime_new(year, month, day, hour, minute, second, microseconds, tz, 0)
 
 
 @cython.boundscheck(False)
@@ -312,7 +336,7 @@ def read_datetime64_naive_col(object column: Sequence, unsigned long long prec):
     """
     cdef unsigned long long x = 0
     cdef unsigned long long num_rows = len(column)
-    cdef object result = PyTuple_New(num_rows), v, components
+    cdef object result = PyTuple_New(num_rows), v
     cdef long long ticks, seconds, fractional_ticks
     cdef unsigned long long microseconds
 
@@ -321,9 +345,7 @@ def read_datetime64_naive_col(object column: Sequence, unsigned long long prec):
         seconds, fractional_ticks = divmod(ticks, prec)
         microseconds = (fractional_ticks * 1000000) // prec
 
-        components = epoch_seconds_to_components(seconds)
-        v = datetime(components[0], components[1], components[2],
-                    components[3], components[4], components[5], microseconds)
+        v = _epoch_to_datetime(seconds, microseconds, None)
         PyTuple_SET_ITEM(result, x, v)
         Py_INCREF(v)
 
