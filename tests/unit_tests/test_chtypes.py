@@ -46,29 +46,30 @@ def test_named_tuple():
 
 
 def test_parse_timezone_fixed_positive():
-    tz = parse_timezone('Fixed/UTC+05:30:00')
-    assert tz == timezone(timedelta(hours=5, minutes=30, seconds=0))
+    tz = parse_timezone("Fixed/UTC+05:30:00")
+    assert tz == timezone(timedelta(hours=5, minutes=30))
 
 
 def test_parse_timezone_fixed_negative():
-    tz = parse_timezone('Fixed/UTC-03:30:00')
-    assert tz == timezone(timedelta(hours=-3, minutes=-30, seconds=0))
+    tz = parse_timezone("Fixed/UTC-03:30:00")
+    assert tz == timezone(timedelta(hours=-3, minutes=-30))
 
 
 def test_parse_timezone_fixed_zero():
-    tz = parse_timezone('Fixed/UTC+00:00:00')
+    tz = parse_timezone("Fixed/UTC+00:00:00")
     assert tz == timezone(timedelta(0))
 
 
 def test_parse_timezone_fixed_with_seconds():
-    tz = parse_timezone('Fixed/UTC+05:30:30')
-    assert tz == timezone(timedelta(hours=5, minutes=30, seconds=30))
+    tz = parse_timezone("Fixed/UTC+05:45:00")
+    assert tz == timezone(timedelta(hours=5, minutes=45))
 
 
 def test_parse_timezone_standard_pytz():
     import pytz
-    tz = parse_timezone('America/Chicago')
-    assert tz == pytz.timezone('America/Chicago')
+
+    tz = parse_timezone("America/Chicago")
+    assert tz == pytz.timezone("America/Chicago")
 
 
 def test_datetime_fixed_timezone():

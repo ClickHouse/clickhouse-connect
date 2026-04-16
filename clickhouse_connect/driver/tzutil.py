@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytz
 
-# Matches ClickHouse Fixed timezone strings like Fixed/UTC+05:30:00 or Fixed/UTC-03:00:00
-_FIXED_TZ_RE = re.compile(r'^Fixed/UTC([+-])(\d{1,2}):(\d{2}):(\d{2})$')
+# Matches ClickHouse Fixed timezone strings like Fixed/UTC+05:30:00 or Fixed/UTC-03:00:00.
+# Hours are 0-23, minutes and seconds are 00-59.
+_FIXED_TZ_RE = re.compile(r"^Fixed/UTC([+-])([01]?\d|2[0-3]):([0-5]\d):([0-5]\d)$")
 
 tzlocal = None
 try:
@@ -69,7 +70,7 @@ def parse_timezone(tz_str: str) -> tzinfo:
     if match:
         sign, hours, minutes, seconds = match.groups()
         offset = timedelta(hours=int(hours), minutes=int(minutes), seconds=int(seconds))
-        if sign == '-':
+        if sign == "-":
             offset = -offset
         return timezone(offset)
     return pytz.timezone(tz_str)
