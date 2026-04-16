@@ -41,6 +41,9 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
 - Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
 
+### Bug Fixes
+- SQLAlchemy: Wrap raw SQL strings in `text()` in `ChClickHouseDialect.get_schema_names()` and `get_table_names()`, so `Inspector.get_schema_names()` and `get_table_names()` work on SQLAlchemy 2.x instead of raising `ObjectNotExecutableError`.
+
 ## 0.15.1, 2026-03-30
 
 ### Bug Fixes
