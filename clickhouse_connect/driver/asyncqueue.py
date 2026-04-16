@@ -56,12 +56,24 @@ class AsyncSyncQueue(Generic[T]):
         except RuntimeError:
             pass
 
+    @staticmethod
+    def _safe_set_result(fut: asyncio.Future):
+        """Set result on a future only if it hasn't been cancelled or resolved.
+
+        This runs on the event loop thread after being scheduled via
+        call_soon_threadsafe. Between scheduling and execution the future
+        may have been cancelled (e.g. by Task.cancel()), so the done()
+        check must happen here, not at schedule time.
+        """
+        if not fut.done():
+            fut.set_result(None)
+
     def _wakeup_async_waiter(self, waiter_queue: deque[asyncio.Future]):
         """Helper: Wake up the next async waiter in the queue safely."""
         while waiter_queue:
             fut = waiter_queue.popleft()
             if not fut.done():
-                self._loop.call_soon_threadsafe(fut.set_result, None)
+                self._loop.call_soon_threadsafe(self._safe_set_result, fut)
                 break
 
     def shutdown(self):
@@ -75,10 +87,10 @@ class AsyncSyncQueue(Generic[T]):
             if self._loop and not self._loop.is_closed():
                 for fut in list(self._async_getters):
                     if not fut.done():
-                        self._loop.call_soon_threadsafe(fut.set_result, None)
+                        self._loop.call_soon_threadsafe(self._safe_set_result, fut)
                 for fut in list(self._async_putters):
                     if not fut.done():
-                        self._loop.call_soon_threadsafe(fut.set_result, None)
+                        self._loop.call_soon_threadsafe(self._safe_set_result, fut)
                 self._async_getters.clear()
                 self._async_putters.clear()
 
