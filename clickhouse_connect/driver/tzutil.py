@@ -70,12 +70,8 @@ def utc_equivalent_tzaware_datetime(ts: float, microseconds: int, tz_info: tzinf
 
     seconds = int(ts)
 
-    if seconds >= 0:
-        days = seconds // 86400
-        secs_in_day = seconds % 86400
-    else:
-        days = (seconds + 1) // 86400 - 1
-        secs_in_day = seconds - days * 86400
+    days = seconds // 86400
+    secs_in_day = seconds % 86400
 
     year, month, day = _epoch_days_to_date_components(days)
 
@@ -105,12 +101,8 @@ def utcfromtimestamp_with_microseconds(ts: float, microseconds: int = 0) -> date
 
     seconds = int(ts)
 
-    if seconds >= 0:
-        days = seconds // 86400
-        secs_in_day = seconds % 86400
-    else:
-        days = (seconds + 1) // 86400 - 1
-        secs_in_day = seconds - days * 86400
+    days = seconds // 86400
+    secs_in_day = seconds % 86400
 
     year, month, day = _epoch_days_to_date_components(days)
 
@@ -130,12 +122,8 @@ def utcfromtimestamp(ts: float) -> datetime:
 
     seconds = int(ts)
 
-    if seconds >= 0:
-        days = seconds // 86400
-        secs_in_day = seconds % 86400
-    else:
-        days = (seconds + 1) // 86400 - 1
-        secs_in_day = seconds - days * 86400
+    days = seconds // 86400
+    secs_in_day = seconds % 86400
 
     year, month, day = _epoch_days_to_date_components(days)
 
