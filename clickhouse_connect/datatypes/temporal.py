@@ -243,26 +243,23 @@ class DateTime64(DateTimeBase):
         return self._read_binary_naive(column)
 
     def _read_binary_tz(self, column: Sequence, tz_info: tzinfo):
-        new_col = []
-        app = new_col.append
-        dt_from = datetime.fromtimestamp
         prec = self.prec
-        for ticks in column:
-            seconds = ticks // prec
-            dt_sec = dt_from(seconds, tz_info)
-            app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
-        return new_col
+
+        # Fast path for UTC-equivalent timezones: use arithmetic instead of fromtimestamp
+        if tzutil.is_utc_timezone(tz_info):
+            new_col = []
+            app = new_col.append
+            for ticks in column:
+                seconds, fractional_ticks = divmod(ticks, prec)
+                microseconds = (fractional_ticks * 1000000) // prec
+                dt = tzutil.utc_equivalent_tzaware_datetime(seconds, microseconds, tz_info)
+                app(dt)
+            return new_col
+        else:
+            return data_conv.read_datetime64_tz_col(column, prec, tz_info)
 
     def _read_binary_naive(self, column: Sequence):
-        new_col = []
-        app = new_col.append
-        dt_from = tzutil.utcfromtimestamp
-        prec = self.prec
-        for ticks in column:
-            seconds = ticks // prec
-            dt_sec = dt_from(seconds)
-            app(dt_sec.replace(microsecond=((ticks - seconds * prec) * 1000000) // prec))
-        return new_col
+        return data_conv.read_datetime64_naive_col(column, self.prec)
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
