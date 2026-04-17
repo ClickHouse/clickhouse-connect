@@ -167,7 +167,7 @@ class DateTime(DateTimeBase):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
         if len(type_def.values) > 0:
-            self.tzinfo = pytz.timezone(type_def.values[0][1:-1])
+            self.tzinfo = tzutil.parse_timezone(type_def.values[0][1:-1])
         else:
             self.tzinfo = None
 
@@ -206,7 +206,7 @@ class DateTime64(DateTimeBase):
         self.prec = 10**self.scale
         self.unit = np_date_types.get(self.scale)
         if len(type_def.values) > 1:
-            self.tzinfo = pytz.timezone(type_def.values[1][1:-1])
+            self.tzinfo = tzutil.parse_timezone(type_def.values[1][1:-1])
         else:
             self.tzinfo = None
 

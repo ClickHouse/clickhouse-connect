@@ -1,5 +1,8 @@
+from datetime import timedelta, timezone
+
 from clickhouse_connect.datatypes.container import Nested
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
+from clickhouse_connect.driver.tzutil import parse_timezone
 
 
 def test_enum_parse():
@@ -40,3 +43,46 @@ def test_named_tuple():
     assert tuple_type.name == "Tuple(Int64, String)"
     tuple_type = gfn("Tuple(`key` Int64, `value` String)")
     assert tuple_type.name == "Tuple(`key` Int64, `value` String)"
+
+
+def test_parse_timezone_fixed_positive():
+    tz = parse_timezone("Fixed/UTC+05:30:00")
+    assert tz == timezone(timedelta(hours=5, minutes=30))
+
+
+def test_parse_timezone_fixed_negative():
+    tz = parse_timezone("Fixed/UTC-03:30:00")
+    assert tz == timezone(timedelta(hours=-3, minutes=-30))
+
+
+def test_parse_timezone_fixed_zero():
+    tz = parse_timezone("Fixed/UTC+00:00:00")
+    assert tz == timezone(timedelta(0))
+
+
+def test_parse_timezone_fixed_with_seconds():
+    tz = parse_timezone("Fixed/UTC+05:45:00")
+    assert tz == timezone(timedelta(hours=5, minutes=45))
+
+
+def test_parse_timezone_standard_pytz():
+    import pytz
+
+    tz = parse_timezone("America/Chicago")
+    assert tz == pytz.timezone("America/Chicago")
+
+
+def test_datetime_fixed_timezone():
+    # DateTime('Fixed/UTC+05:30:00') should parse without raising UnknownTimeZoneError
+    dt_type = gfn("DateTime('Fixed/UTC+05:30:00')")
+    assert dt_type.tzinfo == timezone(timedelta(hours=5, minutes=30))
+
+
+def test_datetime_fixed_timezone_negative():
+    dt_type = gfn("DateTime('Fixed/UTC-03:00:00')")
+    assert dt_type.tzinfo == timezone(timedelta(hours=-3))
+
+
+def test_datetime64_fixed_timezone():
+    dt64_type = gfn("DateTime64(3, 'Fixed/UTC+05:30:00')")
+    assert dt64_type.tzinfo == timezone(timedelta(hours=5, minutes=30))

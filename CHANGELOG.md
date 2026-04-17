@@ -30,6 +30,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
 
 ### Bug Fixes
+- Fix `DateTime` and `DateTime64` columns failing to construct when the ClickHouse schema uses a `Fixed/UTC±HH:MM:SS` timezone string (e.g. `DateTime('Fixed/UTC+05:30:00')`). This format is used by ClickHouse servers where the IANA timezone database is unavailable. `pytz` does not recognise it and raises `UnknownTimeZoneError`, which bubbled up as an unhandled error during type construction. A new `parse_timezone()` helper in `driver/tzutil.py` handles this format by building a stdlib `datetime.timezone` from the parsed offset components, and falls back to `pytz` for everything else. Closes [#702](https://github.com/ClickHouse/clickhouse-connect/issues/702)
 - Fix async streaming race condition that caused unhandled `InvalidStateError` exceptions on early stream termination. When breaking out of an async stream early, `shutdown()` scheduled a `set_result` callback for pending futures via `call_soon_threadsafe`, but `Task.cancel()` could cancel the future before the callback ran. The done-check is now deferred into the callback itself so it sees the actual future state at execution time.
 - SQLAlchemy: Wrap raw SQL strings in `text()` in `ChClickHouseDialect.get_schema_names()` and `get_table_names()`, so `Inspector.get_schema_names()` and `get_table_names()` work on SQLAlchemy 2.x instead of raising `ObjectNotExecutableError`.
 

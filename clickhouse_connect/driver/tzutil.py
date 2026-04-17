@@ -1,7 +1,12 @@
 import os
-from datetime import datetime, tzinfo
+import re
+from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytz
+
+# Matches ClickHouse Fixed timezone strings like Fixed/UTC+05:30:00 or Fixed/UTC-03:00:00.
+# Hours are 0-23, minutes and seconds are 00-59.
+_FIXED_TZ_RE = re.compile(r"^Fixed/UTC([+-])([01]?\d|2[0-3]):([0-5]\d):([0-5]\d)$")
 
 tzlocal = None
 try:
@@ -52,6 +57,23 @@ def is_utc_timezone(tz: tzinfo | str | None) -> bool:
 
 def utcfromtimestamp(ts: float) -> datetime:
     return datetime.fromtimestamp(ts, tz=pytz.UTC).replace(tzinfo=None)
+
+
+def parse_timezone(tz_str: str) -> tzinfo:
+    """Parse a ClickHouse timezone string into a tzinfo object.
+
+    Handles standard pytz timezone names as well as ClickHouse Fixed offset
+    timezones of the form ``Fixed/UTC±HH:MM:SS`` (e.g. ``Fixed/UTC+05:30:00``),
+    which pytz does not recognise natively.
+    """
+    match = _FIXED_TZ_RE.match(tz_str)
+    if match:
+        sign, hours, minutes, seconds = match.groups()
+        offset = timedelta(hours=int(hours), minutes=int(minutes), seconds=int(seconds))
+        if sign == "-":
+            offset = -offset
+        return timezone(offset)
+    return pytz.timezone(tz_str)
 
 
 try:
