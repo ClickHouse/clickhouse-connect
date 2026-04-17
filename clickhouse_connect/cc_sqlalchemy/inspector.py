@@ -12,7 +12,8 @@ ch_col_args = ("default_type", "codec_expression", "ttl_expression")
 
 
 def get_engine(connection, table_name, schema=None):
-    result_set = connection.execute(text(f"SELECT engine_full FROM system.tables WHERE database = '{schema}' and name = '{table_name}'"))
+    result_set = connection.execute(text("SELECT engine_full FROM system.tables WHERE database = :schema and name = :table_name"),
+                                    {'schema': schema, 'table_name': table_name})
     row = next(result_set, None)
     if not row:
         raise NoResultFound(f"Table {schema}.{table_name} does not exist")
