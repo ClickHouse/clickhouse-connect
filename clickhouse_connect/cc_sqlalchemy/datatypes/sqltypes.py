@@ -1,7 +1,11 @@
 from collections.abc import Sequence
 from enum import Enum as PyEnum
 
-import pytz
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.types import (
     Boolean as SqlaBoolean,
@@ -265,7 +269,7 @@ class DateTime(ChSqlaType, SqlaDateTime):
         """
         if not type_def:
             if tz:
-                pytz.timezone(tz)
+                zoneinfo.ZoneInfo(tz)
                 type_def = TypeDef(values=(f"'{tz}'",))
             else:
                 type_def = EMPTY_TYPE_DEF
@@ -283,7 +287,7 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         """
         if not type_def:
             if tz:
-                pytz.timezone(tz)
+                zoneinfo.ZoneInfo(tz)
                 type_def = TypeDef(values=(precision, f"'{tz}'"))
             else:
                 type_def = TypeDef(values=(precision,))

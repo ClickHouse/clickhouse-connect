@@ -26,7 +26,12 @@ if TYPE_CHECKING:
     import pyarrow
 
 import lz4.frame
-import pytz
+
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
 import zstandard
 
 from clickhouse_connect import common
@@ -307,18 +312,18 @@ class AsyncClient(Client):
         try:
             tz_source = self._deferred_tz_source
 
-            self.server_tz, self._dst_safe = pytz.UTC, True
+            self.server_tz, self._dst_safe = zoneinfo.ZoneInfo("UTC"), True
             row = await self.command("SELECT version(), timezone()", use_database=False)
             self.server_version, server_tz_str = tuple(row)
             try:
-                server_tz = pytz.timezone(server_tz_str)
+                server_tz = zoneinfo.ZoneInfo(server_tz_str)
                 server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
                 if tz_source == "auto":
                     self._apply_server_tz = self._dst_safe
                 else:
                     self._apply_server_tz = tz_source == "server"
                 self.server_tz = server_tz
-            except pytz.exceptions.UnknownTimeZoneError:
+            except zoneinfo.ZoneInfoNotFoundError:
                 logger.warning("Warning, server is using an unrecognized timezone %s, will use UTC default", server_tz_str)
 
             if not self._apply_server_tz and not tzutil.local_tz_dst_safe:

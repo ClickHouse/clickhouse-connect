@@ -7,7 +7,11 @@ from ipaddress import IPv4Address, IPv6Address
 from random import choice, random
 from typing import NamedTuple
 
-import pytz
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Map, Nested, Tuple
@@ -31,7 +35,7 @@ class RandomValueDef(NamedTuple):
     Parameter object to control the generation of random data values for testing
     """
 
-    server_tz: tzinfo = pytz.UTC
+    server_tz: tzinfo = zoneinfo.ZoneInfo("UTC")
     null_pct: float = 0.15
     str_len: int = 200
     arr_len: int = 12
@@ -95,13 +99,13 @@ def random_value_gen(ch_type: ClickHouseType, col_def: RandomValueDef):
     if isinstance(ch_type, FixedString):
         return lambda: bytes(int(random() * 256) for _ in range(ch_type.byte_size))
     if isinstance(ch_type, DateTime):
-        if col_def.server_tz == pytz.UTC:
+        if col_def.server_tz == zoneinfo.ZoneInfo("UTC"):
             return random_datetime
         timezone = col_def.server_tz
         return lambda: random_datetime_tz(timezone)
     if isinstance(ch_type, DateTime64):
         prec = ch_type.prec
-        if col_def.server_tz == pytz.UTC:
+        if col_def.server_tz == zoneinfo.ZoneInfo("UTC"):
             return lambda: random_datetime64(prec)
         timezone = col_def.server_tz
         return lambda: random_datetime64_tz(prec, timezone)
