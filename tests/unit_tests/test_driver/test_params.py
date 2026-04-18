@@ -1,7 +1,12 @@
 from datetime import date, datetime, timezone
 
 import pytest
-import pytz
+
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
 
 from clickhouse_connect.driver.binding import _extract_tz_from_type, bind_query, finalize_query, format_bind_value
 
@@ -43,7 +48,7 @@ def test_format_bind_value(value, expected):
 class TestBindQueryTimezoneHint:
     """Type hint timezone in {param:Type} should override server_tz."""
 
-    berlin_tz = pytz.timezone("Europe/Berlin")
+    berlin_tz = zoneinfo.ZoneInfo("Europe/Berlin")
     dt_utc = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
     def test_datetime64_utc_hint(self):
@@ -88,10 +93,10 @@ class TestBindQueryTimezoneHint:
 
     def test_map_type_hint_extraction(self):
         tz = _extract_tz_from_type("Map(String, DateTime64(6, 'UTC'))")
-        assert tz == pytz.UTC
+        assert tz == zoneinfo.ZoneInfo("UTC")
 
     def test_non_utc_hint(self):
-        tokyo_tz = pytz.timezone("Asia/Tokyo")
+        tokyo_tz = zoneinfo.ZoneInfo("Asia/Tokyo")
         query = "SELECT * FROM t WHERE dt >= {dt:DateTime('Asia/Tokyo')}"
         _, params = bind_query(query, {"dt": self.dt_utc}, server_tz=self.berlin_tz)
         # 12:00 UTC = 21:00 Tokyo

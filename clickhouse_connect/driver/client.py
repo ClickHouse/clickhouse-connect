@@ -11,8 +11,12 @@ from typing import (
     BinaryIO,
 )
 
-import pytz
-from pytz.exceptions import UnknownTimeZoneError
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
+from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect import common
 from clickhouse_connect.common import version
@@ -187,7 +191,7 @@ class Client(ABC):
 
         # Initialize attributes that will be set during connection
         self.server_version = None
-        self.server_tz = pytz.UTC
+        self.server_tz = zoneinfo.ZoneInfo("UTC")
         self.server_settings = {}
 
         if autoconnect:
@@ -197,10 +201,10 @@ class Client(ABC):
             self._deferred_tz_source = resolved_tz_source
 
     def _init_common_settings(self, tz_source: TzSource):
-        self.server_tz, self._dst_safe = pytz.UTC, True
+        self.server_tz, self._dst_safe = zoneinfo.ZoneInfo("UTC"), True
         self.server_version, server_tz = tuple(self.command("SELECT version(), timezone()", use_database=False))
         try:
-            server_tz = pytz.timezone(server_tz)
+            server_tz = zoneinfo.ZoneInfo(server_tz)
             server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
             if tz_source == "auto":
                 self._apply_server_tz = self._dst_safe
@@ -296,7 +300,7 @@ class Client(ABC):
     def _check_tz_change(self, new_tz) -> tzinfo | None:
         if new_tz:
             try:
-                new_tzinfo = pytz.timezone(new_tz)
+                new_tzinfo = zoneinfo.ZoneInfo(new_tz)
                 if new_tzinfo != self.server_tz:
                     return new_tzinfo
             except UnknownTimeZoneError:

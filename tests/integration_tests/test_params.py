@@ -16,10 +16,10 @@ def test_params(param_client: Client, call, table_context: Callable):
         )
         assert "rr" in result.first_item["name"]
 
-    first_date = datetime.strptime("Jun 1 2005  1:33PM", "%b %d %Y %I:%M%p")
-    first_date = param_client.server_tz.localize(first_date)
-    second_date = datetime.strptime("Dec 25 2022  5:00AM", "%b %d %Y %I:%M%p")
-    second_date = param_client.server_tz.localize(second_date)
+    first_date = datetime.strptime("Jun 1 2005  1:33PM", "%b %d %Y %I:%M%p").astimezone(param_client.server_tz)
+    # first_date = param_client.server_tz.localize(first_date)
+    second_date = datetime.strptime("Dec 25 2022  5:00AM", "%b %d %Y %I:%M%p").astimezone(param_client.server_tz)
+    # second_date = param_client.server_tz.localize(second_date)
     with table_context("test_bind_params", ["key UInt64", "dt DateTime", "value String", "t Tuple(String, String)"]):
         call(
             param_client.insert,

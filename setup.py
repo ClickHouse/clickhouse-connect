@@ -59,7 +59,7 @@ def run_setup(try_c: bool = True):
         install_requires=[
             "certifi",
             "urllib3>=1.26",
-            "pytz",
+            'backports.zoneinfo;python_version<"3.9"',
             'zstandard; python_version<"3.14"',
             'zstandard>=0.25.0; python_version>="3.14"',
             'lz4; python_version<"3.14"',

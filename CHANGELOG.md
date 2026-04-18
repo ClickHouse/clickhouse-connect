@@ -21,6 +21,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 ## UNRELEASED
 
 ### Breaking Changes
+- Remove `pytz` as a dependency and prefer `zoneinfo` from the Python standard library. This cuts down on a dependency which is not needed for python installations that are not end-of-life (>=python 3.9) Closes [#714](https://github.com/ClickHouse/clickhouse-connect/issues/714).
 - Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
 - The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
 - Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)

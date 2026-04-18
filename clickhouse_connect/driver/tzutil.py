@@ -1,7 +1,11 @@
 import os
 from datetime import datetime, tzinfo
 
-import pytz
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
 
 tzlocal = None
 try:
@@ -13,24 +17,24 @@ except ImportError:
 # timezone, but if someone insists on using the local timezone we will try to convert.  The problem is we
 # never have anything but an epoch timestamp returned from ClickHouse, so attempts to convert times when the
 # local timezone is "DST" aware (like 'CEST' vs 'CET') will be wrong approximately half the time
-local_tz: pytz.timezone
+local_tz: zoneinfo.ZoneInfo
 local_tz_dst_safe: bool = False
 
 # Timezone names that are equivalent to UTC
 UTC_EQUIVALENTS = ("UTC", "Etc/UTC", "GMT", "Universal", "GMT-0", "Zulu", "Greenwich", "UCT")
 
 
-def normalize_timezone(timezone: pytz.timezone) -> tuple[pytz.timezone, bool]:
+def normalize_timezone(timezone: zoneinfo.ZoneInfo) -> tuple[zoneinfo.ZoneInfo, bool]:
     if timezone.tzname(None) in UTC_EQUIVALENTS:
-        return pytz.UTC, True
+        return zoneinfo.ZoneInfo("UTC"), True
 
-    if timezone.tzname(None) in pytz.common_timezones:
+    if timezone.tzname(None) in zoneinfo.available_timezones():
         return timezone, True
 
     if tzlocal is not None:  # Maybe we can use the tzlocal module to get a safe timezone
         local_name = tzlocal.get_localzone_name()
-        if local_name in pytz.common_timezones:
-            return pytz.timezone(local_name), True
+        if local_name in zoneinfo.available_timezones():
+            return zoneinfo.ZoneInfo(local_name), True
 
     return timezone, False
 
@@ -38,25 +42,29 @@ def normalize_timezone(timezone: pytz.timezone) -> tuple[pytz.timezone, bool]:
 def is_utc_timezone(tz: tzinfo | str | None) -> bool:
     """Check if timezone is UTC or an equivalent (Etc/UTC, GMT, etc.).
 
-    This handles the issue where pytz.timezone('Etc/UTC') != pytz.UTC despite
+    This handles the issue where zoneinfo.ZoneInfo('Etc/UTC') != zoneinfo.ZoneInfo("UTC") despite
     being semantically equivalent. Also accepts timezone name strings.
     """
     if tz is None:
         return False
     if isinstance(tz, str):
         return tz in UTC_EQUIVALENTS
-    if tz == pytz.UTC:
+    if tz == zoneinfo.ZoneInfo("UTC"):
         return True
     return tz.tzname(None) in UTC_EQUIVALENTS
 
 
 def utcfromtimestamp(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=pytz.UTC).replace(tzinfo=None)
+    return datetime.fromtimestamp(ts, tz=zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
 
 
-try:
-    local_tz = pytz.timezone(os.environ.get("TZ", ""))
-except pytz.UnknownTimeZoneError:
-    local_tz = datetime.now().astimezone().tzinfo
+def local_tz() -> tzinfo:
+    if os.getenv("TZ"):
+        try:
+            return zoneinfo.ZoneInfo(os.environ.get("TZ", ""))
+        except zoneinfo.ZoneInfoNotFoundError:
+            pass
+    return datetime.now().astimezone().tzinfo
 
-local_tz, local_tz_dst_safe = normalize_timezone(local_tz)
+
+local_tz, local_tz_dst_safe = normalize_timezone(local_tz())

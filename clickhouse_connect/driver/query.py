@@ -5,8 +5,12 @@ from datetime import tzinfo
 from io import IOBase
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 
-import pytz
-from pytz.exceptions import UnknownTimeZoneError
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+
+from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import bind_query
@@ -51,7 +55,7 @@ class QueryContext(BaseQueryContext):
         query_formats: dict[str, str] | None = None,
         column_formats: dict[str, str | dict[str, str]] | None = None,
         encoding: str | None = None,
-        server_tz: tzinfo = pytz.UTC,
+        server_tz: tzinfo = zoneinfo.ZoneInfo("UTC"),
         use_none: bool | None = None,
         column_oriented: bool | None = None,
         use_numpy: bool | None = None,
@@ -121,7 +125,7 @@ class QueryContext(BaseQueryContext):
             raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
         if isinstance(query_tz, str):
             try:
-                query_tz = pytz.timezone(query_tz)
+                query_tz = zoneinfo.ZoneInfo(query_tz)
             except UnknownTimeZoneError as ex:
                 raise ProgrammingError(f"query_tz {query_tz} is not recognized") from ex
         self.query_tz = query_tz
@@ -129,7 +133,7 @@ class QueryContext(BaseQueryContext):
             for col_name, timezone in column_tzs.items():
                 if isinstance(timezone, str):
                     try:
-                        timezone = pytz.timezone(timezone)
+                        timezone = zoneinfo.ZoneInfo(timezone)
                         column_tzs[col_name] = timezone
                     except UnknownTimeZoneError as ex:
                         raise ProgrammingError(f"column_tz {timezone} is not recognized") from ex
