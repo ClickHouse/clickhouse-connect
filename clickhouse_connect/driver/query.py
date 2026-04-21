@@ -124,12 +124,16 @@ class QueryContext(BaseQueryContext):
                 raise ProgrammingError(f"query_tz {query_tz} is not recognized; {tzutil.TZDATA_HINT}") from ex
         self.query_tz = query_tz
         if column_tzs is not None:
+            resolved_column_tzs = {}
             for col_name, col_tz in column_tzs.items():
                 if isinstance(col_tz, str):
                     try:
-                        column_tzs[col_name] = tzutil.resolve_zone(col_tz)
+                        resolved_column_tzs[col_name] = tzutil.resolve_zone(col_tz)
                     except ZoneInfoNotFoundError as ex:
                         raise ProgrammingError(f"column_tz {col_tz} is not recognized; {tzutil.TZDATA_HINT}") from ex
+                else:
+                    resolved_column_tzs[col_name] = col_tz
+            column_tzs = resolved_column_tzs
         self.column_tzs = column_tzs
         self.column_tz = None
         self.response_tz = None
