@@ -1,5 +1,5 @@
 import time
-from typing import Iterator
+from collections.abc import Iterator
 
 from pytest import fixture
 from sqlalchemy import text
@@ -9,13 +9,19 @@ from sqlalchemy.engine.base import Connection, Engine
 from tests.integration_tests.conftest import TestConfig
 
 
-@fixture(scope='module', name='test_engine')
+@fixture(scope="module", name="test_engine")
 def test_engine_fixture(test_config: TestConfig) -> Iterator[Engine]:
-    test_engine: Engine = create_engine(
-        f'clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:' +
-        f'{test_config.port}/{test_config.test_database}?ch_http_max_field_name_size=99999' +
-        '&use_skip_indexes=0&ca_cert=certifi&query_limit=2333&compression=zstd'
+    conn_str = (
+        f"clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:"
+        f"{test_config.port}/{test_config.test_database}?ch_http_max_field_name_size=99999"
+        "&use_skip_indexes=0&ca_cert=certifi&query_limit=2333&compression=zstd"
     )
+    if test_config.cloud:
+        conn_str += "&select_sequential_consistency=1"
+    if test_config.insert_quorum:
+        conn_str += f"&insert_quorum={test_config.insert_quorum}"
+
+    test_engine: Engine = create_engine(conn_str)
 
     yield test_engine
     test_engine.dispose()
@@ -45,7 +51,7 @@ def verify_tables_ready(conn: Connection, table_checks: dict[str, int], max_retr
 
             time.sleep(delay)
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as e:
             retry_count += 1
             if retry_count >= max_retries:
                 raise RuntimeError(f"Failed to verify test data after {max_retries} retries.") from e

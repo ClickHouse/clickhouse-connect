@@ -1,7 +1,7 @@
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 
-import pytest
 import pyarrow as pa
+import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.ddl import (
@@ -13,15 +13,13 @@ from clickhouse_connect.driver.ddl import (
 pytest.importorskip("pyarrow")
 
 
-def test_arrow_create_table_and_insert(test_client: Client):
-    if not test_client.min_version("20"):
-        pytest.skip(
-            f"Not supported server version {test_client.server_version}"
-        )
+def test_arrow_create_table_and_insert(param_client: Client, call):
+    if not param_client.min_version("20"):
+        pytest.skip(f"Not supported server version {param_client.server_version}")
 
     table_name = "test_arrow_basic_integration"
 
-    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
 
     schema = pa.schema(
         [
@@ -38,7 +36,7 @@ def test_arrow_create_table_and_insert(test_client: Client):
         engine="MergeTree",
         engine_params={"ORDER BY": "id"},
     )
-    test_client.command(ddl)
+    call(param_client.command, ddl)
 
     arrow_table = pa.table(
         {
@@ -50,23 +48,21 @@ def test_arrow_create_table_and_insert(test_client: Client):
         schema=schema,
     )
 
-    test_client.insert_arrow(table=table_name, arrow_table=arrow_table)
+    call(param_client.insert_arrow, table=table_name, arrow_table=arrow_table)
 
-    result = test_client.query(
-        f"SELECT id, name, score, flag FROM {table_name} ORDER BY id"
-    )
+    result = call(param_client.query, f"SELECT id, name, score, flag FROM {table_name} ORDER BY id")
     assert result.result_rows == [
         (1, "a", 1.5, True),
         (2, "b", 2.5, False),
     ]
 
-    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_arrow_schema_to_column_defs(test_client: Client):
+def test_arrow_schema_to_column_defs(param_client: Client, call):
     table_name = "test_arrow_manual_integration"
 
-    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
 
     schema = pa.schema(
         [
@@ -84,7 +80,7 @@ def test_arrow_schema_to_column_defs(test_client: Client):
         engine="MergeTree",
         engine_params={"ORDER BY": "id"},
     )
-    test_client.command(ddl)
+    call(param_client.command, ddl)
 
     arrow_table = pa.table(
         {
@@ -94,26 +90,24 @@ def test_arrow_schema_to_column_defs(test_client: Client):
         schema=schema,
     )
 
-    test_client.insert_arrow(table=table_name, arrow_table=arrow_table)
+    call(param_client.insert_arrow, table=table_name, arrow_table=arrow_table)
 
-    result = test_client.query(f"SELECT id, name FROM {table_name} ORDER BY id")
+    result = call(param_client.query, f"SELECT id, name FROM {table_name} ORDER BY id")
     assert result.result_rows == [
         (10, "x"),
         (20, "y"),
     ]
 
-    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_arrow_datetime_create_and_insert(test_client: Client):
-    if not test_client.min_version("20"):
-        pytest.skip(
-            f"Not supported server version {test_client.server_version}"
-        )
+def test_arrow_datetime_create_and_insert(param_client: Client, call):
+    if not param_client.min_version("20"):
+        pytest.skip(f"Not supported server version {param_client.server_version}")
 
     table_name = "test_arrow_datetime_integration"
 
-    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
 
     schema = pa.schema(
         [
@@ -130,7 +124,7 @@ def test_arrow_datetime_create_and_insert(test_client: Client):
         engine="MergeTree",
         engine_params={"ORDER BY": "id"},
     )
-    test_client.command(ddl)
+    call(param_client.command, ddl)
 
     arrow_table = pa.table(
         {
@@ -148,12 +142,9 @@ def test_arrow_datetime_create_and_insert(test_client: Client):
         schema=schema,
     )
 
-    test_client.insert_arrow(table=table_name, arrow_table=arrow_table)
+    call(param_client.insert_arrow, table=table_name, arrow_table=arrow_table)
 
-    result = test_client.query(
-        f"SELECT id, event_date, event_ts, event_ts_tz "
-        f"FROM {table_name} ORDER BY id"
-    )
+    result = call(param_client.query, f"SELECT id, event_date, event_ts, event_ts_tz FROM {table_name} ORDER BY id")
     rows = result.result_rows
 
     assert len(rows) == 2
@@ -162,4 +153,4 @@ def test_arrow_datetime_create_and_insert(test_client: Client):
     assert rows[1][0] == 2
     assert str(rows[1][1]) == "2025-01-02"
 
-    test_client.command(f"DROP TABLE IF EXISTS {table_name}")
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")

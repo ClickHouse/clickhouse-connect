@@ -1,11 +1,12 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
+
 import pytest
 
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
-# pylint: disable=protected-access
 def create_mock_client(result_data):
     """Helper to create a mock client with query result"""
     client = Mock()
@@ -16,6 +17,16 @@ def create_mock_client(result_data):
     query_result.summary = {"rows": len(result_data)}
     client.query.return_value = query_result
     return client
+
+
+def create_mock_query_result(result_data, column_names=None, column_types=None):
+    """Create a mock query result with optional metadata."""
+    query_result = Mock()
+    query_result.result_set = result_data
+    query_result.column_names = column_names or []
+    query_result.column_types = column_types or []
+    query_result.summary = {"rows": len(result_data)}
+    return query_result
 
 
 def test_fetchall_respects_cursor_position():
@@ -211,3 +222,103 @@ def test_empty_result_set():
     assert cursor.fetchone() is None
     assert cursor.fetchall() == []
     assert cursor.fetchmany(5) == []
+
+
+def test_execute_unescapes_double_percents_without_parameters():
+    """Test that cursor.execute unescapes %% to % when no parameters are given.
+
+    This is required by the PEP 249 pyformat paramstyle contract: callers
+    (e.g. SQLAlchemy) escape literal percent signs as %% in the operation
+    string.  When there are no parameters, the cursor must unescape them.
+    See https://github.com/ClickHouse/clickhouse-connect/issues/297
+    """
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    # Simulate what SQLAlchemy sends for:
+    #   text("SELECT formatDateTime(toDate('2010-01-04'), '%g')")
+    # with _double_percents=True (pyformat paramstyle)
+    cursor.execute("SELECT formatDateTime(toDate('2010-01-04'), '%%g')")
+
+    # The query passed to client.query should have %% unescaped to %
+    actual_query = client.query.call_args[0][0]
+    assert actual_query == "SELECT formatDateTime(toDate('2010-01-04'), '%g')"
+    assert "%%" not in actual_query
+
+
+def test_execute_preserves_percent_with_parameters():
+    """Test that cursor.execute does NOT manually unescape %% when parameters
+    are provided, since finalize_query handles it via Python's % operator.
+    """
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    # Simulate what SQLAlchemy sends for:
+    #   text("SELECT formatDateTime(toDate(:d), '%g')")
+    # with _double_percents=True and bound parameter d
+    cursor.execute("SELECT formatDateTime(toDate(%(d)s), '%%g')", {"d": "2010-01-04"})
+
+    # Parameters are passed through to client.query; finalize_query handles
+    # the %% -> % unescaping via the % operator during parameter substitution.
+    actual_query = client.query.call_args[0][0]
+    actual_params = client.query.call_args[0][1]
+    assert actual_query == "SELECT formatDateTime(toDate(%(d)s), '%%g')"
+    assert actual_params == {"d": "2010-01-04"}
+
+
+def test_execute_unescapes_multiple_percents():
+    """Test unescaping multiple %% occurrences in a single query."""
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    cursor.execute("SELECT formatDateTime(now(), '%%Y-%%m-%%d %%H:%%M:%%S')")
+
+    actual_query = client.query.call_args[0][0]
+    assert actual_query == "SELECT formatDateTime(now(), '%Y-%m-%d %H:%M:%S')"
+
+
+def test_execute_empty_result_fetches_metadata_with_parameters():
+    """Empty SELECT results should still populate description metadata."""
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute(
+        "SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s",
+        {"value_1": 13, "param_1": 1},
+    )
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s) LIMIT 0",
+        {"value_1": 13, "param_1": 1},
+    )
+
+
+def test_execute_empty_with_query_fetches_metadata():
+    """CTE queries should use the same metadata fallback."""
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute("WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79")
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
+        None,
+    )
