@@ -276,6 +276,16 @@ def test_invalid_column_tz_string_raises_programming_error():
         QueryContext(column_tzs={"ts": "Not/A/Real/Zone"})
 
 
+@pytest.mark.parametrize("bad_tz", ["", "/absolute/path", "../foo"])
+def test_malformed_query_tz_raises_programming_error(bad_tz):
+    """ZoneInfo raises ValueError (not ZoneInfoNotFoundError) for empty/absolute/unnormalized
+    keys; the driver must still surface ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="query_tz"):
+        QueryContext(query_tz=bad_tz)
+    with pytest.raises(ProgrammingError, match="column_tz"):
+        QueryContext(column_tzs={"ts": bad_tz})
+
+
 def test_resolve_zone_utc_equivalents_without_tzdata(monkeypatch):
     """UTC-equivalent names must resolve without touching zoneinfo, so hosts without a
     system tzdb (and no `tzdata` extra) can still use the library for UTC."""

@@ -299,8 +299,6 @@ class Client(ABC):
         if new_tz:
             try:
                 new_tzinfo = tzutil.resolve_zone(new_tz)
-                if tzutil.is_utc_timezone(new_tzinfo) and tzutil.is_utc_timezone(self.server_tz):
-                    return None
                 if new_tzinfo != self.server_tz:
                     return new_tzinfo
             except ZoneInfoNotFoundError:

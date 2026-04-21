@@ -55,7 +55,12 @@ def resolve_zone(tz_name: str) -> tzinfo:
     """
     if tz_name in UTC_EQUIVALENTS:
         return timezone.utc
-    return zoneinfo.ZoneInfo(tz_name)
+    try:
+        return zoneinfo.ZoneInfo(tz_name)
+    except ValueError as ex:
+        # ZoneInfo raises ValueError for empty strings, absolute paths, and non-normalized
+        # keys; funnel those into ZoneInfoNotFoundError so callers only need one except clause.
+        raise zoneinfo.ZoneInfoNotFoundError(str(ex)) from ex
 
 
 def normalize_timezone(tz: tzinfo) -> tuple[tzinfo, bool]:
