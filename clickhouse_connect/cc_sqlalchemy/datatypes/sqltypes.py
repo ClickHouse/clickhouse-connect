@@ -1,10 +1,6 @@
+import zoneinfo
 from collections.abc import Sequence
 from enum import Enum as PyEnum
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
 
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.types import (
@@ -264,7 +260,9 @@ class DateTime(ChSqlaType, SqlaDateTime):
     def __init__(self, tz: str = None, type_def: TypeDef = None):
         """
         Date time constructor with optional ClickHouse timezone parameter if not constructed with TypeDef
-        :param tz: Timezone string as defined in pytz
+        :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
+            library zoneinfo module. On platforms without system zoneinfo data (notably
+            Windows), install the tzdata package.
         :param type_def: TypeDef from parse_name function
         """
         if not type_def:
@@ -282,7 +280,9 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         """
         Date time constructor with precision and timezone parameters if not constructed with TypeDef
         :param precision:   Usually 3/6/9 for mill/micro/nanosecond precision on ClickHouse side
-        :param tz: Timezone string as defined in pytz
+        :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
+            library zoneinfo module. On platforms without system zoneinfo data (notably
+            Windows), install the tzdata package.
         :param type_def: TypeDef from parse_name function
         """
         if not type_def:

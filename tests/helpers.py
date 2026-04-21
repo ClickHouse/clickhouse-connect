@@ -2,12 +2,8 @@ import math
 import random
 import re
 from collections.abc import Sequence
+from datetime import timezone, tzinfo
 from pathlib import Path
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
 
 from clickhouse_connect.driverc.buffer import ResponseBuffer
 
@@ -162,7 +158,7 @@ def random_columns(cnt: int = 16, col_prefix: str = "col"):
     return tuple(col_names), tuple(col_types)
 
 
-def random_data(col_types: Sequence[ClickHouseType], num_rows: int = 1, server_tz: zoneinfo.ZoneInfo = zoneinfo.ZoneInfo("UTC")):
+def random_data(col_types: Sequence[ClickHouseType], num_rows: int = 1, server_tz: tzinfo = timezone.utc):
     col_def = RandomValueDef(server_tz)
     data = [tuple(random_col_data(col_type, num_rows, col_def)) for col_type in col_types]
     all_cols = [list(range(num_rows))]

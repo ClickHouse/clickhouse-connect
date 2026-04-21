@@ -2,16 +2,11 @@ from __future__ import annotations
 
 import array
 import re
+import zoneinfo
 from abc import abstractmethod
 from collections.abc import MutableSequence, Sequence
 from datetime import date, datetime, time, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, NamedTuple
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
-
 
 if TYPE_CHECKING:
     import numpy

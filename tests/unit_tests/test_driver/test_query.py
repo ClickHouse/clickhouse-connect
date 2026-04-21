@@ -1,11 +1,7 @@
+import zoneinfo
+
 import pyarrow as pa
 import pytest
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
-
 
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
@@ -179,7 +175,16 @@ def test_tzutil_normalize_utc_equivalents():
     for tz_name in utc_equivalents:
         tz = zoneinfo.ZoneInfo(tz_name)
         normalized, is_valid = tzutil.normalize_timezone(tz)
-        assert normalized == zoneinfo.ZoneInfo("UTC")
+        assert tzutil.is_utc_timezone(normalized)
+        assert is_valid is True
+
+
+def test_tzutil_normalize_named_iana_zones_are_dst_safe():
+    """Named IANA zones pass through normalize_timezone unchanged and are marked dst_safe."""
+    for tz_name in ("America/Denver", "Europe/Berlin", "Asia/Tokyo", "Australia/Sydney"):
+        tz = zoneinfo.ZoneInfo(tz_name)
+        normalized, is_valid = tzutil.normalize_timezone(tz)
+        assert normalized == tz
         assert is_valid is True
 
 
@@ -257,3 +262,15 @@ def test_tz_mode_invalid_string_raises():
     """Invalid string value for tz_mode should raise ProgrammingError."""
     with pytest.raises(ProgrammingError, match="tz_mode must be"):
         QueryContext(tz_mode="invalid")
+
+
+def test_invalid_query_tz_string_raises_programming_error():
+    """Unknown query_tz string should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="query_tz"):
+        QueryContext(query_tz="Not/A/Real/Zone")
+
+
+def test_invalid_column_tz_string_raises_programming_error():
+    """Unknown column_tz string must raise ProgrammingError, not NameError."""
+    with pytest.raises(ProgrammingError, match="column_tz"):
+        QueryContext(column_tzs={"ts": "Not/A/Real/Zone"})

@@ -1,12 +1,7 @@
+import zoneinfo
 from datetime import date, datetime, timezone
 
 import pytest
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
-
 
 from clickhouse_connect.driver.binding import _extract_tz_from_type, bind_query, finalize_query, format_bind_value
 

@@ -1,14 +1,9 @@
 import os
 import time
-from datetime import datetime
+import zoneinfo
+from datetime import datetime, timezone
 
 import pytest
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
-
 
 from clickhouse_connect.driver import Client, tzutil
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -50,7 +45,7 @@ def test_server_timezone(param_client: Client, call):
     test_datetime = datetime(2023, 3, 18, 16, 4, 25)
     try:
         date = call(param_client.query, "SELECT toDateTime(%s) as st", parameters=[test_datetime]).first_row[0]
-        if param_client.server_tz == zoneinfo.ZoneInfo("UTC"):
+        if tzutil.is_utc_timezone(param_client.server_tz):
             assert date.tzinfo is None
             assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=None)
             assert date.timestamp() == 1679155465
@@ -114,7 +109,7 @@ def test_local_timezones(param_client: Client, call):
         assert row[2].tzinfo is None
         assert row[3].tzinfo.tzname(None) == denver_tz.tzname(None)
     finally:
-        tzutil.local_tz = zoneinfo.ZoneInfo("UTC")
+        tzutil.local_tz = timezone.utc
         param_client.tz_source = "auto"
 
 
@@ -143,17 +138,17 @@ def test_timezone_binding_client(param_client: Client, call):
         assert server_time == denver_time
     finally:
         os.environ["TZ"] = "UTC"
-        tzutil.local_tz = zoneinfo.ZoneInfo("UTC")
+        tzutil.local_tz = timezone.utc
         time.tzset()
         param_client.tz_source = "auto"
 
     naive_time = datetime(2023, 3, 18, 16, 4, 25)
     server_time = call(param_client.query, "SELECT toDateTime(%(dt)s) as dt", parameters={"dt": naive_time}).first_row[0]
-    assert server_time.astimezone(zoneinfo.ZoneInfo("UTC")) == naive_time.astimezone(zoneinfo.ZoneInfo("UTC"))
+    assert server_time.astimezone(timezone.utc) == naive_time.astimezone(timezone.utc)
 
-    utc_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=zoneinfo.ZoneInfo("UTC"))
+    utc_time = datetime(2023, 3, 18, 16, 4, 25, tzinfo=timezone.utc)
     server_time = call(param_client.query, "SELECT toDateTime(%(dt)s) as dt", parameters={"dt": utc_time}).first_row[0]
-    assert server_time.astimezone(zoneinfo.ZoneInfo("UTC")) == utc_time
+    assert server_time.astimezone(timezone.utc) == utc_time
 
 
 def test_timezone_binding_server(param_client: Client, call):
@@ -169,16 +164,16 @@ def test_timezone_binding_server(param_client: Client, call):
     finally:
         os.environ["TZ"] = "UTC"
         time.tzset()
-        tzutil.local_tz = zoneinfo.ZoneInfo("UTC")
+        tzutil.local_tz = timezone.utc
         param_client.tz_source = "auto"
 
     naive_time = datetime(2022, 3, 18, 16, 4, 25)
     server_time = call(param_client.query, "SELECT toDateTime({dt:DateTime}) as dt", parameters={"dt": naive_time}).first_row[0]
-    assert naive_time.astimezone(zoneinfo.ZoneInfo("UTC")) == server_time.astimezone(zoneinfo.ZoneInfo("UTC"))
+    assert naive_time.astimezone(timezone.utc) == server_time.astimezone(timezone.utc)
 
-    utc_time = datetime(2020, 3, 18, 16, 4, 25, tzinfo=zoneinfo.ZoneInfo("UTC"))
+    utc_time = datetime(2020, 3, 18, 16, 4, 25, tzinfo=timezone.utc)
     server_time = call(param_client.query, "SELECT toDateTime({dt:DateTime}) as dt", parameters={"dt": utc_time}).first_row[0]
-    assert server_time.astimezone(zoneinfo.ZoneInfo("UTC")) == utc_time
+    assert server_time.astimezone(timezone.utc) == utc_time
 
 
 def test_tz_mode(param_client: Client, call):
@@ -217,8 +212,8 @@ def test_tz_mode(param_client: Client, call):
             query_tz="UTC",
             tz_mode="aware",
         ).first_row
-        assert row[0].tzinfo == zoneinfo.ZoneInfo("UTC")
-        assert row[1].tzinfo == zoneinfo.ZoneInfo("UTC")
+        assert tzutil.is_utc_timezone(row[0].tzinfo)
+        assert tzutil.is_utc_timezone(row[1].tzinfo)
         assert row[0].microsecond == 123456
 
 

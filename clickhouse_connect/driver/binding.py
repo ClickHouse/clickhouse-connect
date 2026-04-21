@@ -1,16 +1,11 @@
 import ipaddress
 import re
 import uuid
+import zoneinfo
 from collections.abc import Sequence
-from datetime import date, datetime, tzinfo
+from datetime import date, datetime, timezone, tzinfo
 from enum import Enum
 from typing import Any
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
-
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
@@ -166,7 +161,7 @@ def escape_str(value: str):
     return "".join(f"{BS}{c}" if c in must_escape else c for c in value)
 
 
-def format_query_value(value: Any, server_tz: tzinfo = zoneinfo.ZoneInfo("UTC")):
+def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
     """
     Format Python values in a ClickHouse query
     :param value: Python object
@@ -201,11 +196,11 @@ def format_query_value(value: Any, server_tz: tzinfo = zoneinfo.ZoneInfo("UTC"))
     return value
 
 
-def str_query_value(value: Any, server_tz: tzinfo = zoneinfo.ZoneInfo("UTC")):
+def str_query_value(value: Any, server_tz: tzinfo = timezone.utc):
     return str(format_query_value(value, server_tz))
 
 
-def format_bind_value(value: Any, server_tz: tzinfo = zoneinfo.ZoneInfo("UTC"), top_level: bool = True):
+def format_bind_value(value: Any, server_tz: tzinfo = timezone.utc, top_level: bool = True):
     """
     Format Python values in a ClickHouse query
     :param value: Python object

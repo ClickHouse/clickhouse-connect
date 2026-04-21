@@ -59,7 +59,7 @@ def run_setup(try_c: bool = True):
         install_requires=[
             "certifi",
             "urllib3>=1.26",
-            'backports.zoneinfo;python_version<"3.9"',
+            'tzdata; sys_platform == "win32"',
             'zstandard; python_version<"3.14"',
             'zstandard>=0.25.0; python_version>="3.14"',
             'lz4; python_version<"3.14"',
@@ -73,6 +73,7 @@ def run_setup(try_c: bool = True):
             "arrow": ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             "orjson": ["orjson"],
             "tzlocal": ["tzlocal>=4.0"],
+            "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.8.0"],
         },
         tests_require=["pytest"],

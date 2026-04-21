@@ -11,28 +11,22 @@ import sys
 import time
 import uuid
 import zlib
+import zoneinfo
 from base64 import b64encode
 from collections.abc import Generator, Iterable, Sequence
-from datetime import tzinfo
+from datetime import timezone, tzinfo
 from importlib import import_module
 from importlib.metadata import version as dist_version
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 import aiohttp
+import lz4.frame
+import zstandard
 
 if TYPE_CHECKING:
     import pandas
     import polars
     import pyarrow
-
-import lz4.frame
-
-try:
-    import zoneinfo
-except ImportError:
-    from backports import zoneinfo
-
-import zstandard
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import dynamic as dynamic_module
@@ -312,7 +306,7 @@ class AsyncClient(Client):
         try:
             tz_source = self._deferred_tz_source
 
-            self.server_tz, self._dst_safe = zoneinfo.ZoneInfo("UTC"), True
+            self.server_tz, self._dst_safe = timezone.utc, True
             row = await self.command("SELECT version(), timezone()", use_database=False)
             self.server_version, server_tz_str = tuple(row)
             try:
@@ -324,7 +318,11 @@ class AsyncClient(Client):
                     self._apply_server_tz = tz_source == "server"
                 self.server_tz = server_tz
             except zoneinfo.ZoneInfoNotFoundError:
-                logger.warning("Warning, server is using an unrecognized timezone %s, will use UTC default", server_tz_str)
+                logger.warning(
+                    "Server timezone %s could not be resolved, falling back to UTC; %s",
+                    server_tz_str,
+                    tzutil.TZDATA_HINT,
+                )
 
             if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
                 logger.warning("local timezone %s may return unexpected times due to Daylight Savings Time", tzutil.local_tz.tzname(None))
