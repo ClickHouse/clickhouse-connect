@@ -600,3 +600,26 @@ def test_json_dynamic_variant_multiple_rows(param_client: Client, call, table_co
         r4 = result[3][1]
         assert r4["value"] == pytest.approx(0.0)
         assert r4["status"] == -10
+
+
+def test_json_path_sorts_after_shared_variant(param_client: Client, call, table_context: Callable):
+    type_available(param_client, "json")
+    # Value >= 2^63 forces UInt64 inference on default settings. "UInt64" sorts after
+    # "SharedVariant" alphabetically, so this triggers the discriminator misalignment.
+    huge_uint = 18000000000000000000
+    with table_context("json_sort_uint64", ["id Int32", "j JSON"]):
+        call(param_client.insert, "json_sort_uint64", [[1, {"k": huge_uint}]])
+        result = call(param_client.query, "SELECT * FROM json_sort_uint64 ORDER BY id").result_set
+        assert result[0][1] == {"k": huge_uint}
+
+
+def test_dynamic_uint64_single_variant(param_client: Client, call, table_context: Callable):
+    """Dynamic column whose only active typed variant is UInt64. Without the sort fix this
+    would read each row as SharedVariant and crash or return garbage."""
+    type_available(param_client, "dynamic")
+    with table_context("dynamic_uint64", ["id Int32", "d Dynamic"]):
+        call(param_client.command, "INSERT INTO dynamic_uint64 SELECT 1, toUInt64(17)")
+        call(param_client.command, "INSERT INTO dynamic_uint64 SELECT 2, toUInt64(9223372036854775900)")
+        result = call(param_client.query, "SELECT * FROM dynamic_uint64 ORDER BY id").result_set
+        assert result[0][1] == 17
+        assert result[1][1] == 9223372036854775900

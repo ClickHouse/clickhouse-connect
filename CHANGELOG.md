@@ -30,6 +30,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
 
 ### Bug Fixes
+- Fix Dynamic/JSON column reads when a path's inferred type sorts alphabetically after `"SharedVariant"`. ClickHouse's `DataTypeVariant` constructor sorts its members alphabetically by name, and discriminator bytes on the wire index into that sorted order. The client appended `SharedVariant` to the variant list without sorting, so affected paths were read as the wrong variant. Closes [#712](https://github.com/ClickHouse/clickhouse-connect/issues/712)
 - Fix async streaming race condition that caused unhandled `InvalidStateError` exceptions on early stream termination. When breaking out of an async stream early, `shutdown()` scheduled a `set_result` callback for pending futures via `call_soon_threadsafe`, but `Task.cancel()` could cancel the future before the callback ran. The done-check is now deferred into the callback itself so it sees the actual future state at execution time.
 - SQLAlchemy: Wrap raw SQL strings in `text()` in `ChClickHouseDialect.get_schema_names()` and `get_table_names()`, so `Inspector.get_schema_names()` and `get_table_names()` work on SQLAlchemy 2.x instead of raising `ObjectNotExecutableError`.
 

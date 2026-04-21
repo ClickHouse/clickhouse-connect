@@ -220,6 +220,8 @@ def read_dynamic_prefix(_, source: ByteSource, ctx: QueryContext) -> DynamicStat
     num_variants = source.read_leb128()
     variant_types = [get_from_name(source.read_leb128_str()) for _ in range(num_variants)]
     variant_types.append(SHARED_VARIANT_TYPE)  # noqa: F821 (undefined-name)
+    # replicate the sort after appending SharedVariant
+    variant_types.sort(key=lambda t: t.name)
     if source.read_uint64() != 0:  # discriminator format, currently only 0 is recognized
         raise DataError("Unexpected discriminator format in Variant column prefix")
     variant_states = [e_type.read_column_prefix(source, ctx) for e_type in variant_types]
