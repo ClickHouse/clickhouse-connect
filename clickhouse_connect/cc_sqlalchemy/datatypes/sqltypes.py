@@ -1,4 +1,3 @@
-import zoneinfo
 from collections.abc import Sequence
 from enum import Enum as PyEnum
 
@@ -27,6 +26,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, LC_TYPE_DEF, NULLABLE_TYPE_DEF, TypeDef
 from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8
 from clickhouse_connect.datatypes.numeric import Enum16 as ChEnum16
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import decimal_prec
 
 
@@ -267,7 +267,7 @@ class DateTime(ChSqlaType, SqlaDateTime):
         """
         if not type_def:
             if tz:
-                zoneinfo.ZoneInfo(tz)
+                tzutil.resolve_zone(tz)
                 type_def = TypeDef(values=(f"'{tz}'",))
             else:
                 type_def = EMPTY_TYPE_DEF
@@ -287,7 +287,7 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         """
         if not type_def:
             if tz:
-                zoneinfo.ZoneInfo(tz)
+                tzutil.resolve_zone(tz)
                 type_def = TypeDef(values=(precision, f"'{tz}'"))
             else:
                 type_def = TypeDef(values=(precision,))

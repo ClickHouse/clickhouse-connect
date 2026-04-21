@@ -8,9 +8,7 @@ import pytest
 from clickhouse_connect.driver import Client, tzutil
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
-# We have to localize a datetime from a timezone to get a current, sensible timezone object for testing.  See
-# https://stackoverflow.com/questions/35462876/python-pytz-timezone-function-returns-a-timezone-that-is-off-by-9-minutes
-chicago_tz = datetime(2020, 8, 8, 10, 5, 5, tzinfo=zoneinfo.ZoneInfo("America/Chicago")).tzinfo
+chicago_tz = zoneinfo.ZoneInfo("America/Chicago")
 
 
 def test_basic_timezones(param_client: Client, call):
@@ -50,7 +48,7 @@ def test_server_timezone(param_client: Client, call):
             assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=None)
             assert date.timestamp() == 1679155465
         else:
-            den_tz = datetime(2020, 8, 8, tzinfo=zoneinfo.ZoneInfo("America/Denver")).tzinfo
+            den_tz = zoneinfo.ZoneInfo("America/Denver")
             assert date == datetime(2023, 3, 18, 16, 4, 25, tzinfo=den_tz)
             assert date.tzinfo == den_tz
             assert date.timestamp() == 1679177065
@@ -70,7 +68,7 @@ def test_column_timezones(param_client: Client, call):
         + "toDateTime('2023-07-05 15:10:40') as utc",
         column_tzs=column_tzs,
     ).first_row
-    china_tz = datetime(2024, 12, 4, 10, 5, 5, tzinfo=zoneinfo.ZoneInfo("Asia/Shanghai")).tzinfo
+    china_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
     assert row[0].tzinfo == chicago_tz
     assert row[1].tzinfo == china_tz
     assert row[2].tzinfo is None
@@ -191,8 +189,8 @@ def test_tz_mode(param_client: Client, call):
         query_tz="UTC",
         tz_mode="aware",
     ).first_row
-    assert row[0].tzinfo == zoneinfo.ZoneInfo("UTC")
-    assert row[1].tzinfo == zoneinfo.ZoneInfo("UTC")
+    assert tzutil.is_utc_timezone(row[0].tzinfo)
+    assert tzutil.is_utc_timezone(row[1].tzinfo)
 
     if param_client.min_version("20"):
         row = call(

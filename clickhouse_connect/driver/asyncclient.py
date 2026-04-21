@@ -310,12 +310,8 @@ class AsyncClient(Client):
             row = await self.command("SELECT version(), timezone()", use_database=False)
             self.server_version, server_tz_str = tuple(row)
             try:
-                server_tz = zoneinfo.ZoneInfo(server_tz_str)
+                server_tz = tzutil.resolve_zone(server_tz_str)
                 server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
-                if tz_source == "auto":
-                    self._apply_server_tz = self._dst_safe
-                else:
-                    self._apply_server_tz = tz_source == "server"
                 self.server_tz = server_tz
             except zoneinfo.ZoneInfoNotFoundError:
                 logger.warning(
@@ -323,6 +319,10 @@ class AsyncClient(Client):
                     server_tz_str,
                     tzutil.TZDATA_HINT,
                 )
+            if tz_source == "auto":
+                self._apply_server_tz = self._dst_safe
+            else:
+                self._apply_server_tz = tz_source == "server"
 
             if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
                 logger.warning("local timezone %s may return unexpected times due to Daylight Savings Time", tzutil.local_tz.tzname(None))

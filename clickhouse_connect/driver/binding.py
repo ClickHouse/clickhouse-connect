@@ -68,7 +68,7 @@ def _extract_tz_from_type(type_str: str) -> tzinfo | None:
             for v in values:
                 if isinstance(v, str) and v.startswith("'") and v.endswith("'"):
                     try:
-                        return zoneinfo.ZoneInfo(v[1:-1])
+                        return tzutil.resolve_zone(v[1:-1])
                     except zoneinfo.ZoneInfoNotFoundError:
                         return None
             return None

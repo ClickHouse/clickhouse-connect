@@ -1,6 +1,5 @@
 import logging
 import re
-import zoneinfo
 from collections.abc import Generator, Sequence
 from datetime import timezone, tzinfo
 from io import IOBase
@@ -120,7 +119,7 @@ class QueryContext(BaseQueryContext):
             raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
         if isinstance(query_tz, str):
             try:
-                query_tz = zoneinfo.ZoneInfo(query_tz)
+                query_tz = tzutil.resolve_zone(query_tz)
             except ZoneInfoNotFoundError as ex:
                 raise ProgrammingError(f"query_tz {query_tz} is not recognized; {tzutil.TZDATA_HINT}") from ex
         self.query_tz = query_tz
@@ -128,7 +127,7 @@ class QueryContext(BaseQueryContext):
             for col_name, col_tz in column_tzs.items():
                 if isinstance(col_tz, str):
                     try:
-                        column_tzs[col_name] = zoneinfo.ZoneInfo(col_tz)
+                        column_tzs[col_name] = tzutil.resolve_zone(col_tz)
                     except ZoneInfoNotFoundError as ex:
                         raise ProgrammingError(f"column_tz {col_tz} is not recognized; {tzutil.TZDATA_HINT}") from ex
         self.column_tzs = column_tzs

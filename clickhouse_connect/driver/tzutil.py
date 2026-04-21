@@ -15,13 +15,47 @@ except ImportError:
 local_tz: tzinfo
 local_tz_dst_safe: bool = False
 
-# Timezone names that are equivalent to UTC
-UTC_EQUIVALENTS = ("UTC", "Etc/UTC", "GMT", "Universal", "GMT-0", "Zulu", "Greenwich", "UCT")
+# Zero-offset IANA timezone aliases that are semantically UTC.  Listing every alias lets
+# resolve_zone() short-circuit these names without needing a system zoneinfo database, matching
+# the behavior pytz provided by bundling its own tz data.
+UTC_EQUIVALENTS = (
+    "UTC",
+    "Etc/UTC",
+    "UCT",
+    "Etc/UCT",
+    "GMT",
+    "Etc/GMT",
+    "GMT0",
+    "GMT-0",
+    "GMT+0",
+    "Etc/GMT0",
+    "Etc/GMT-0",
+    "Etc/GMT+0",
+    "Universal",
+    "Etc/Universal",
+    "Zulu",
+    "Etc/Zulu",
+    "Greenwich",
+    "Etc/Greenwich",
+)
 
 # Appended to error/warning messages when a named IANA zone cannot be resolved. On systems without
 # a system zoneinfo database (slim containers, Windows without tzdata), users can install the tzdata
 # extra to get the IANA zone data.
 TZDATA_HINT = "install the tzdata package (e.g. `pip install clickhouse-connect[tzdata]`) if no system zoneinfo database is available"
+
+
+def resolve_zone(tz_name: str) -> tzinfo:
+    """Resolve an IANA timezone name to a tzinfo.
+
+    Short-circuits UTC-equivalent names to datetime.timezone.utc so that representing UTC
+    does not require an IANA zoneinfo database to be available on the host. Other names are
+    resolved via zoneinfo.ZoneInfo and will raise ZoneInfoNotFoundError if the host has
+    no system zoneinfo and the tzdata package is not installed.
+    """
+    if tz_name in UTC_EQUIVALENTS:
+        return timezone.utc
+    return zoneinfo.ZoneInfo(tz_name)
 
 
 def normalize_timezone(tz: tzinfo) -> tuple[tzinfo, bool]:
@@ -68,7 +102,7 @@ def _detect_local_tz() -> tzinfo:
     env_tz = os.environ.get("TZ")
     if env_tz:
         try:
-            return zoneinfo.ZoneInfo(env_tz)
+            return resolve_zone(env_tz)
         except zoneinfo.ZoneInfoNotFoundError:
             pass
     return datetime.now().astimezone().tzinfo

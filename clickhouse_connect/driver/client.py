@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import logging
-import zoneinfo
 from abc import ABC, abstractmethod
 from collections.abc import Generator, Iterable, Sequence
 from datetime import timezone, tzinfo
@@ -199,12 +198,8 @@ class Client(ABC):
         self.server_tz, self._dst_safe = timezone.utc, True
         self.server_version, server_tz = tuple(self.command("SELECT version(), timezone()", use_database=False))
         try:
-            server_tz_info = zoneinfo.ZoneInfo(server_tz)
+            server_tz_info = tzutil.resolve_zone(server_tz)
             server_tz_info, self._dst_safe = tzutil.normalize_timezone(server_tz_info)
-            if tz_source == "auto":
-                self._apply_server_tz = self._dst_safe
-            else:
-                self._apply_server_tz = tz_source == "server"
             self.server_tz = server_tz_info
         except ZoneInfoNotFoundError:
             logger.warning(
@@ -212,6 +207,10 @@ class Client(ABC):
                 server_tz,
                 tzutil.TZDATA_HINT,
             )
+        if tz_source == "auto":
+            self._apply_server_tz = self._dst_safe
+        else:
+            self._apply_server_tz = tz_source == "server"
 
         if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
             logger.warning(
@@ -299,7 +298,7 @@ class Client(ABC):
     def _check_tz_change(self, new_tz) -> tzinfo | None:
         if new_tz:
             try:
-                new_tzinfo = zoneinfo.ZoneInfo(new_tz)
+                new_tzinfo = tzutil.resolve_zone(new_tz)
                 if tzutil.is_utc_timezone(new_tzinfo) and tzutil.is_utc_timezone(self.server_tz):
                     return None
                 if new_tzinfo != self.server_tz:

@@ -67,7 +67,7 @@ def test_active_tz_etc_utc_opt_in_timezone():
     assert ctx.active_tz(None) is not None  # Should return the timezone
 
 
-def test_is_utc_timezone_pytz_utc():
+def test_is_utc_timezone_zoneinfo_utc():
     assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("UTC")) is True
 
 
@@ -274,3 +274,42 @@ def test_invalid_column_tz_string_raises_programming_error():
     """Unknown column_tz string must raise ProgrammingError, not NameError."""
     with pytest.raises(ProgrammingError, match="column_tz"):
         QueryContext(column_tzs={"ts": "Not/A/Real/Zone"})
+
+
+def test_resolve_zone_utc_equivalents_without_tzdata(monkeypatch):
+    """UTC-equivalent names must resolve without touching zoneinfo, so hosts without a
+    system tzdb (and no `tzdata` extra) can still use the library for UTC."""
+    import zoneinfo as zi
+
+    from clickhouse_connect.driver import tzutil as tzutil_mod
+
+    def no_tzdata(*args, **kwargs):
+        raise zi.ZoneInfoNotFoundError("tzdata unavailable")
+
+    monkeypatch.setattr(tzutil_mod.zoneinfo, "ZoneInfo", no_tzdata)
+
+    for name in tzutil_mod.UTC_EQUIVALENTS:
+        assert tzutil_mod.resolve_zone(name).utcoffset(None).total_seconds() == 0
+
+    # Non-UTC names still require tzdata and surface the underlying error.
+    with pytest.raises(zi.ZoneInfoNotFoundError):
+        tzutil_mod.resolve_zone("America/Denver")
+
+
+def test_query_context_utc_query_tz_without_tzdata(monkeypatch):
+    """query_tz='UTC' and column_tzs={c: 'UTC'} must succeed without tzdata."""
+    import zoneinfo as zi
+
+    from clickhouse_connect.driver import tzutil as tzutil_mod
+
+    monkeypatch.setattr(
+        tzutil_mod.zoneinfo,
+        "ZoneInfo",
+        lambda *a, **kw: (_ for _ in ()).throw(zi.ZoneInfoNotFoundError("tzdata unavailable")),
+    )
+
+    ctx = QueryContext(query_tz="UTC")
+    assert tzutil_mod.is_utc_timezone(ctx.query_tz)
+
+    ctx = QueryContext(column_tzs={"ts": "Etc/UTC"})
+    assert tzutil_mod.is_utc_timezone(ctx.column_tzs["ts"])

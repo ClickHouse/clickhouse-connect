@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import _extract_tz_from_type, bind_query, finalize_query, format_bind_value
 
 
@@ -88,7 +89,7 @@ class TestBindQueryTimezoneHint:
 
     def test_map_type_hint_extraction(self):
         tz = _extract_tz_from_type("Map(String, DateTime64(6, 'UTC'))")
-        assert tz == zoneinfo.ZoneInfo("UTC")
+        assert tzutil.is_utc_timezone(tz)
 
     def test_non_utc_hint(self):
         tokyo_tz = zoneinfo.ZoneInfo("Asia/Tokyo")

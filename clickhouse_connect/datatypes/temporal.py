@@ -166,7 +166,11 @@ class DateTime(DateTimeBase):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
         if len(type_def.values) > 0:
-            self.tzinfo = zoneinfo.ZoneInfo(type_def.values[0][1:-1])
+            tz_name = type_def.values[0][1:-1]
+            try:
+                self.tzinfo = tzutil.resolve_zone(tz_name)
+            except zoneinfo.ZoneInfoNotFoundError as ex:
+                raise ProgrammingError(f"Column timezone {tz_name} is not recognized; {tzutil.TZDATA_HINT}") from ex
         else:
             self.tzinfo = None
 
@@ -205,7 +209,11 @@ class DateTime64(DateTimeBase):
         self.prec = 10**self.scale
         self.unit = np_date_types.get(self.scale)
         if len(type_def.values) > 1:
-            self.tzinfo = zoneinfo.ZoneInfo(type_def.values[1][1:-1])
+            tz_name = type_def.values[1][1:-1]
+            try:
+                self.tzinfo = tzutil.resolve_zone(tz_name)
+            except zoneinfo.ZoneInfoNotFoundError as ex:
+                raise ProgrammingError(f"Column timezone {tz_name} is not recognized; {tzutil.TZDATA_HINT}") from ex
         else:
             self.tzinfo = None
 
