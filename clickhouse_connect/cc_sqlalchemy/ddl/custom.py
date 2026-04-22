@@ -1,11 +1,7 @@
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.sql.ddl import DDL
 
-from clickhouse_connect.driver.binding import quote_identifier
-
-
-def _escape_sql_string(value):
-    return str(value).replace("\\", "\\\\").replace("'", "\\'")
+from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 
 class CreateDatabase(DDL):
@@ -38,9 +34,9 @@ class CreateDatabase(DDL):
                 if not zoo_path:
                     raise ArgumentError("zoo_path is required for Replicated Database Engine")
                 stmt += (
-                    f" ('{_escape_sql_string(zoo_path)}', "
-                    f"'{_escape_sql_string(shard_name)}', "
-                    f"'{_escape_sql_string(replica_name)}'"
+                    f" ({format_str(zoo_path)}, "
+                    f"{format_str(shard_name)}, "
+                    f"{format_str(replica_name)})"
                 )
         super().__init__(stmt)
 
