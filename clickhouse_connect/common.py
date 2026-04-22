@@ -4,12 +4,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from clickhouse_connect import __version__
+from clickhouse_connect._version import version as _version_string
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
 def version() -> str:
-    return __version__.version
+    return _version_string
 
 
 def format_error(msg: str) -> str:
