@@ -2,7 +2,7 @@
 
 ## UNRELEASED
 
-## 1.0.0rc1, 2026-04-13
+## 1.0.0rc1, 2026-04-22
 
 ### Breaking Changes
 - Dropped the `pytz` dependency in favor of the standard library `zoneinfo`. On Windows, `tzdata` is pulled in automatically. On slim Linux containers without a system tzdb, install `pip install clickhouse-connect[tzdata]`.
