@@ -1,26 +1,12 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Python 3.8 EOL
-Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
-3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
-missing dependencies in the build chain.
-
-### WARNING -- JSON Incompatibility between versions 22.8 and 22.10
-The internal serialization format for experimental JSON was updated in ClickHouse version 24.10.  `clickhouse-connect`
-will set the compatibility level on a global basis based on the last client created, so multiple clients using the
-library with mixed versions 22.8/22.9 and 22.10 and later versions will break.  If you need JSON support for mixed
-versions you must use different Python interpreters for each version.
-
-### WARNING -- Impending Breaking Change - Server Settings in DSN
-When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
-converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
-release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
-instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
-The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
-
 ## UNRELEASED
 
+## 1.0.0rc1, 2026-04-22
+
 ### Breaking Changes
+- Dropped the `pytz` dependency in favor of the standard library `zoneinfo`. On Windows, `tzdata` is pulled in automatically. On slim Linux containers without a system tzdb, install `pip install clickhouse-connect[tzdata]`.
+- Unknown timezone strings from `query_tz`, `column_tzs`, or the server now surface `zoneinfo.ZoneInfoNotFoundError` internally (previously `pytz.exceptions.UnknownTimeZoneError`). User-visible `ProgrammingError`/log messages suggest the `tzdata` extra. Closes [#714](https://github.com/ClickHouse/clickhouse-connect/issues/714).
 - Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
 - The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
 - Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
@@ -38,6 +24,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Replaced pylint with [Ruff](https://docs.astral.sh/ruff/) for linting and formatting. Double quotes are now the standard quote style. Bulk formatting commits are listed in `.git-blame-ignore-revs`. CI lint job no longer requires building C extensions or installing project dependencies, significantly reducing lint check time.
 
 ### Improvements
+- Package version is now exposed as `clickhouse_connect.__version__` (a string), following Python packaging conventions. The version remains single-sourced from `clickhouse_connect/_version.py`. Users can access version information via `clickhouse_connect.__version__`, `importlib.metadata.version("clickhouse-connect")`, or the `clickhouse_connect.common.version()` helper.
 - Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
 - Clearer error message when attempting to use the async client without aiohttp installed.
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.

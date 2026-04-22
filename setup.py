@@ -36,11 +36,11 @@ def run_setup(try_c: bool = True):
         with open(os.path.join(project_dir, ".dev_version"), encoding="utf-8") as version_file:
             version = version_file.readline()
     else:
-        with open(os.path.join(project_dir, "clickhouse_connect", "__version__.py"), encoding="utf-8") as version_file:
+        with open(os.path.join(project_dir, "clickhouse_connect", "_version.py"), encoding="utf-8") as version_file:
             file_version = version_file.read().strip()
             match = re.search(r"version\s*=\s*['\"](.+)['\"]", file_version)
             if match is None:
-                raise ValueError(f"invalid version {file_version} in clickhouse_connect/__version__.py")
+                raise ValueError(f"invalid version {file_version} in clickhouse_connect/_version.py")
             version = match.group(1)
 
     setup(
@@ -59,7 +59,7 @@ def run_setup(try_c: bool = True):
         install_requires=[
             "certifi",
             "urllib3>=1.26",
-            "pytz",
+            'tzdata; sys_platform == "win32"',
             'zstandard; python_version<"3.14"',
             'zstandard>=0.25.0; python_version>="3.14"',
             'lz4; python_version<"3.14"',
@@ -73,6 +73,7 @@ def run_setup(try_c: bool = True):
             "arrow": ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
             "orjson": ["orjson"],
             "tzlocal": ["tzlocal>=4.0"],
+            "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.8.0"],
         },
         tests_require=["pytest"],
@@ -83,7 +84,7 @@ def run_setup(try_c: bool = True):
             ]
         },
         classifiers=[
-            "Development Status :: 4 - Beta",
+            "Development Status :: 5 - Production/Stable",
             "Intended Audience :: Developers",
             "License :: OSI Approved :: Apache Software License",
             "Programming Language :: Python :: 3.10",

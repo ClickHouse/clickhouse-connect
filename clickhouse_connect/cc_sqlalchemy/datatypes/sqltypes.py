@@ -1,7 +1,6 @@
 from collections.abc import Sequence
 from enum import Enum as PyEnum
 
-import pytz
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.types import (
     Boolean as SqlaBoolean,
@@ -27,6 +26,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, LC_TYPE_DEF, NULLABLE_TYPE_DEF, TypeDef
 from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8
 from clickhouse_connect.datatypes.numeric import Enum16 as ChEnum16
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import decimal_prec
 
 
@@ -260,12 +260,14 @@ class DateTime(ChSqlaType, SqlaDateTime):
     def __init__(self, tz: str = None, type_def: TypeDef = None):
         """
         Date time constructor with optional ClickHouse timezone parameter if not constructed with TypeDef
-        :param tz: Timezone string as defined in pytz
+        :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
+            library zoneinfo module. On platforms without system zoneinfo data (notably
+            Windows), install the tzdata package.
         :param type_def: TypeDef from parse_name function
         """
         if not type_def:
             if tz:
-                pytz.timezone(tz)
+                tzutil.resolve_zone(tz)
                 type_def = TypeDef(values=(f"'{tz}'",))
             else:
                 type_def = EMPTY_TYPE_DEF
@@ -278,12 +280,14 @@ class DateTime64(ChSqlaType, SqlaDateTime):
         """
         Date time constructor with precision and timezone parameters if not constructed with TypeDef
         :param precision:   Usually 3/6/9 for mill/micro/nanosecond precision on ClickHouse side
-        :param tz: Timezone string as defined in pytz
+        :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
+            library zoneinfo module. On platforms without system zoneinfo data (notably
+            Windows), install the tzdata package.
         :param type_def: TypeDef from parse_name function
         """
         if not type_def:
             if tz:
-                pytz.timezone(tz)
+                tzutil.resolve_zone(tz)
                 type_def = TypeDef(values=(precision, f"'{tz}'"))
             else:
                 type_def = TypeDef(values=(precision,))
