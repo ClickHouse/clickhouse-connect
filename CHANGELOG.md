@@ -5,6 +5,8 @@
 ## 1.0.0rc1, 2026-04-13
 
 ### Breaking Changes
+- Dropped the `pytz` dependency in favor of the standard library `zoneinfo`. On Windows, `tzdata` is pulled in automatically. On slim Linux containers without a system tzdb, install `pip install clickhouse-connect[tzdata]`.
+- Unknown timezone strings from `query_tz`, `column_tzs`, or the server now surface `zoneinfo.ZoneInfoNotFoundError` internally (previously `pytz.exceptions.UnknownTimeZoneError`). User-visible `ProgrammingError`/log messages suggest the `tzdata` extra. Closes [#714](https://github.com/ClickHouse/clickhouse-connect/issues/714).
 - Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
 - The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
 - Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
@@ -14,7 +16,9 @@
 - Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
 
 ### Bug Fixes
+- Fix Dynamic/JSON column reads when a path's inferred type sorts alphabetically after `"SharedVariant"`. ClickHouse's `DataTypeVariant` constructor sorts its members alphabetically by name, and discriminator bytes on the wire index into that sorted order. The client appended `SharedVariant` to the variant list without sorting, so affected paths were read as the wrong variant. Closes [#712](https://github.com/ClickHouse/clickhouse-connect/issues/712)
 - Fix async streaming race condition that caused unhandled `InvalidStateError` exceptions on early stream termination. When breaking out of an async stream early, `shutdown()` scheduled a `set_result` callback for pending futures via `call_soon_threadsafe`, but `Task.cancel()` could cancel the future before the callback ran. The done-check is now deferred into the callback itself so it sees the actual future state at execution time.
+- SQLAlchemy: Wrap raw SQL strings in `text()` in `ChClickHouseDialect.get_schema_names()` and `get_table_names()`, so `Inspector.get_schema_names()` and `get_table_names()` work on SQLAlchemy 2.x instead of raising `ObjectNotExecutableError`.
 
 ### Development
 - Replaced pylint with [Ruff](https://docs.astral.sh/ruff/) for linting and formatting. Double quotes are now the standard quote style. Bulk formatting commits are listed in `.git-blame-ignore-revs`. CI lint job no longer requires building C extensions or installing project dependencies, significantly reducing lint check time.
