@@ -1,12 +1,10 @@
 import logging
 import re
 from collections.abc import Generator, Sequence
-from datetime import tzinfo
+from datetime import timezone, tzinfo
 from io import IOBase
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal
-
-import pytz
-from pytz.exceptions import UnknownTimeZoneError
+from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import bind_query
@@ -51,7 +49,7 @@ class QueryContext(BaseQueryContext):
         query_formats: dict[str, str] | None = None,
         column_formats: dict[str, str | dict[str, str]] | None = None,
         encoding: str | None = None,
-        server_tz: tzinfo = pytz.UTC,
+        server_tz: tzinfo = timezone.utc,
         use_none: bool | None = None,
         column_oriented: bool | None = None,
         use_numpy: bool | None = None,
@@ -88,7 +86,7 @@ class QueryContext(BaseQueryContext):
         :param max_str_len Limit returned ClickHouse String values to this length, which allows a Numpy
           structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
           String columns will always be object arrays
-        :param query_tz  Either a string or a pytz tzinfo object.  (Strings will be converted to tzinfo objects).
+        :param query_tz  Either a string IANA timezone name or a tzinfo object (strings are resolved via zoneinfo).
           Values for any DateTime or DateTime64 column in the query will be converted to Python datetime.datetime
           objects with the selected timezone
         :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
@@ -121,18 +119,21 @@ class QueryContext(BaseQueryContext):
             raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
         if isinstance(query_tz, str):
             try:
-                query_tz = pytz.timezone(query_tz)
-            except UnknownTimeZoneError as ex:
-                raise ProgrammingError(f"query_tz {query_tz} is not recognized") from ex
+                query_tz = tzutil.resolve_zone(query_tz)
+            except ZoneInfoNotFoundError as ex:
+                raise ProgrammingError(f"query_tz {query_tz} is not recognized; {tzutil.TZDATA_HINT}") from ex
         self.query_tz = query_tz
         if column_tzs is not None:
-            for col_name, timezone in column_tzs.items():
-                if isinstance(timezone, str):
+            resolved_column_tzs = {}
+            for col_name, col_tz in column_tzs.items():
+                if isinstance(col_tz, str):
                     try:
-                        timezone = pytz.timezone(timezone)
-                        column_tzs[col_name] = timezone
-                    except UnknownTimeZoneError as ex:
-                        raise ProgrammingError(f"column_tz {timezone} is not recognized") from ex
+                        resolved_column_tzs[col_name] = tzutil.resolve_zone(col_tz)
+                    except ZoneInfoNotFoundError as ex:
+                        raise ProgrammingError(f"column_tz {col_tz} is not recognized; {tzutil.TZDATA_HINT}") from ex
+                else:
+                    resolved_column_tzs[col_name] = col_tz
+            column_tzs = resolved_column_tzs
         self.column_tzs = column_tzs
         self.column_tz = None
         self.response_tz = None

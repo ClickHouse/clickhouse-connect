@@ -1,8 +1,8 @@
 import os
 import time
+from datetime import timezone
 
 import pytest
-import pytz
 
 from clickhouse_connect.datatypes.format import clear_all_formats
 from clickhouse_connect.driver import tzutil
@@ -14,4 +14,4 @@ time.tzset()
 @pytest.fixture(autouse=True)
 def clean_global_state():
     clear_all_formats()
-    tzutil.local_tz = pytz.UTC
+    tzutil.local_tz = timezone.utc

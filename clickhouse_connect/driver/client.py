@@ -4,15 +4,13 @@ import io
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Generator, Iterable, Sequence
-from datetime import tzinfo
+from datetime import timezone, tzinfo
 from typing import (
     TYPE_CHECKING,
     Any,
     BinaryIO,
 )
-
-import pytz
-from pytz.exceptions import UnknownTimeZoneError
+from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect import common
 from clickhouse_connect.common import version
@@ -187,7 +185,7 @@ class Client(ABC):
 
         # Initialize attributes that will be set during connection
         self.server_version = None
-        self.server_tz = pytz.UTC
+        self.server_tz = timezone.utc
         self.server_settings = {}
 
         if autoconnect:
@@ -197,18 +195,22 @@ class Client(ABC):
             self._deferred_tz_source = resolved_tz_source
 
     def _init_common_settings(self, tz_source: TzSource):
-        self.server_tz, self._dst_safe = pytz.UTC, True
+        self.server_tz, self._dst_safe = timezone.utc, True
         self.server_version, server_tz = tuple(self.command("SELECT version(), timezone()", use_database=False))
         try:
-            server_tz = pytz.timezone(server_tz)
-            server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
-            if tz_source == "auto":
-                self._apply_server_tz = self._dst_safe
-            else:
-                self._apply_server_tz = tz_source == "server"
-            self.server_tz = server_tz
-        except UnknownTimeZoneError:
-            logger.warning("Warning, server is using an unrecognized timezone %s, will use UTC default", server_tz)
+            server_tz_info = tzutil.resolve_zone(server_tz)
+            server_tz_info, self._dst_safe = tzutil.normalize_timezone(server_tz_info)
+            self.server_tz = server_tz_info
+        except ZoneInfoNotFoundError:
+            logger.warning(
+                "Server timezone %s could not be resolved, falling back to UTC; %s",
+                server_tz,
+                tzutil.TZDATA_HINT,
+            )
+        if tz_source == "auto":
+            self._apply_server_tz = self._dst_safe
+        else:
+            self._apply_server_tz = tz_source == "server"
 
         if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
             logger.warning(
@@ -296,11 +298,15 @@ class Client(ABC):
     def _check_tz_change(self, new_tz) -> tzinfo | None:
         if new_tz:
             try:
-                new_tzinfo = pytz.timezone(new_tz)
+                new_tzinfo = tzutil.resolve_zone(new_tz)
                 if new_tzinfo != self.server_tz:
                     return new_tzinfo
-            except UnknownTimeZoneError:
-                logger.warning("Unrecognized timezone %s received from ClickHouse", new_tz)
+            except ZoneInfoNotFoundError:
+                logger.warning(
+                    "Unrecognized timezone %s received from ClickHouse; %s",
+                    new_tz,
+                    tzutil.TZDATA_HINT,
+                )
         return None
 
     @abstractmethod
@@ -634,7 +640,7 @@ class Client(ABC):
           structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
           String columns will always be object arrays
         :param context: An existing QueryContext to be updated with any provided parameter values
-        :param query_tz: Either a string or a pytz tzinfo object.  (Strings will be converted to tzinfo objects).
+        :param query_tz: Either a string IANA timezone name or a tzinfo object (strings are resolved via zoneinfo).
           Values for any DateTime or DateTime64 column in the query will be converted to Python datetime.datetime
           objects with the selected timezone.
         :param column_tzs: A dictionary of column names to tzinfo objects (or strings that will be converted to
