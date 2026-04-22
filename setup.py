@@ -36,11 +36,11 @@ def run_setup(try_c: bool = True):
         with open(os.path.join(project_dir, ".dev_version"), encoding="utf-8") as version_file:
             version = version_file.readline()
     else:
-        with open(os.path.join(project_dir, "clickhouse_connect", "__version__.py"), encoding="utf-8") as version_file:
+        with open(os.path.join(project_dir, "clickhouse_connect", "_version.py"), encoding="utf-8") as version_file:
             file_version = version_file.read().strip()
             match = re.search(r"version\s*=\s*['\"](.+)['\"]", file_version)
             if match is None:
-                raise ValueError(f"invalid version {file_version} in clickhouse_connect/__version__.py")
+                raise ValueError(f"invalid version {file_version} in clickhouse_connect/_version.py")
             version = match.group(1)
 
     setup(
