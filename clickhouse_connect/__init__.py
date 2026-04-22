@@ -1,6 +1,6 @@
 import sys
 
-from clickhouse_connect.__version__ import version as __version__
+from clickhouse_connect._version import version as __version__
 from clickhouse_connect.driver import create_async_client, create_client
 
 if sys.version_info < (3, 10):  # noqa: UP036

@@ -40,7 +40,7 @@ The supported method of passing ClickHouse server settings is to prefix such arg
 - Replaced pylint with [Ruff](https://docs.astral.sh/ruff/) for linting and formatting. Double quotes are now the standard quote style. Bulk formatting commits are listed in `.git-blame-ignore-revs`. CI lint job no longer requires building C extensions or installing project dependencies, significantly reducing lint check time.
 
 ### Improvements
-- Package version is now exposed as `clickhouse_connect.__version__` (a string), following Python packaging conventions. The version remains single-sourced from `clickhouse_connect/__version__.py`. Users can access version information via `clickhouse_connect.__version__`, `importlib.metadata.version("clickhouse-connect")`, or the legacy `clickhouse_connect.common.version()` helper.
+- Package version is now exposed as `clickhouse_connect.__version__` (a string), following Python packaging conventions. The version remains single-sourced from `clickhouse_connect/_version.py`. Users can access version information via `clickhouse_connect.__version__`, `importlib.metadata.version("clickhouse-connect")`, or the `clickhouse_connect.common.version()` helper.
 - Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
 - Clearer error message when attempting to use the async client without aiohttp installed.
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.

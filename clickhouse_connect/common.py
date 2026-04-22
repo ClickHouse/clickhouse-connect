@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from clickhouse_connect.__version__ import version as _version_string
+from clickhouse_connect._version import version as _version_string
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
