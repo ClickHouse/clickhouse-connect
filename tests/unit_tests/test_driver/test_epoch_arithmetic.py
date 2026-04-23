@@ -1,9 +1,8 @@
 """Tests for epoch seconds arithmetic helper functions."""
 
 import unittest
+import zoneinfo
 from datetime import datetime, timezone
-
-import pytz
 
 # Try to import from Cython extension, fall back to pure Python if unavailable
 try:
@@ -199,20 +198,20 @@ class TestUtcfromtimestampWithMicroseconds(unittest.TestCase):
 class TestUtcEquivalentTzAwareDatetime(unittest.TestCase):
     """Tests for tzutil.utc_equivalent_tzaware_datetime."""
 
-    def test_with_pytz_utc(self):
-        """Test UTC timezone from pytz."""
-        dt = tzutil.utc_equivalent_tzaware_datetime(1577882096, 0, pytz.UTC)
+    def test_with_utc(self):
+        """Test UTC timezone from datetime.timezone."""
+        dt = tzutil.utc_equivalent_tzaware_datetime(1577882096, 0, timezone.utc)
         self.assertEqual(dt.year, 2020)
         self.assertEqual(dt.month, 1)
         self.assertEqual(dt.day, 1)
         self.assertEqual(dt.hour, 12)
         self.assertEqual(dt.minute, 34)
         self.assertEqual(dt.second, 56)
-        self.assertEqual(dt.tzinfo, pytz.UTC)
+        self.assertEqual(dt.tzinfo, timezone.utc)
 
     def test_with_etc_utc(self):
-        """Test Etc/UTC timezone."""
-        tz = pytz.timezone("Etc/UTC")
+        """Test Etc/UTC timezone from zoneinfo."""
+        tz = zoneinfo.ZoneInfo("Etc/UTC")
         dt = tzutil.utc_equivalent_tzaware_datetime(1577882096, 0, tz)
         self.assertEqual(dt.year, 2020)
         self.assertEqual(dt.month, 1)
@@ -221,29 +220,33 @@ class TestUtcEquivalentTzAwareDatetime(unittest.TestCase):
 
     def test_with_microseconds(self):
         """Test with microseconds."""
-        dt = tzutil.utc_equivalent_tzaware_datetime(1577882096, 123456, pytz.UTC)
+        dt = tzutil.utc_equivalent_tzaware_datetime(1577882096, 123456, timezone.utc)
         self.assertEqual(dt.microsecond, 123456)
-        self.assertEqual(dt.tzinfo, pytz.UTC)
+        self.assertEqual(dt.tzinfo, timezone.utc)
 
 
 class TestIsUtcTimezone(unittest.TestCase):
     """Tests for tzutil.is_utc_timezone."""
 
-    def test_pytz_utc(self):
-        """pytz.UTC should be recognized as UTC."""
-        self.assertTrue(tzutil.is_utc_timezone(pytz.UTC))
+    def test_utc(self):
+        """datetime.timezone.utc should be recognized as UTC."""
+        self.assertTrue(tzutil.is_utc_timezone(timezone.utc))
+
+    def test_zoneinfo_utc(self):
+        """zoneinfo.ZoneInfo('UTC') should be recognized as UTC-equivalent."""
+        self.assertTrue(tzutil.is_utc_timezone(zoneinfo.ZoneInfo("UTC")))
 
     def test_etc_utc(self):
         """Etc/UTC should be recognized as UTC-equivalent."""
-        self.assertTrue(tzutil.is_utc_timezone(pytz.timezone("Etc/UTC")))
+        self.assertTrue(tzutil.is_utc_timezone(zoneinfo.ZoneInfo("Etc/UTC")))
 
     def test_gmt(self):
         """GMT should be recognized as UTC-equivalent."""
-        self.assertTrue(tzutil.is_utc_timezone(pytz.timezone("GMT")))
+        self.assertTrue(tzutil.is_utc_timezone(zoneinfo.ZoneInfo("GMT")))
 
     def test_non_utc_timezone(self):
         """Non-UTC timezone should not be recognized as UTC."""
-        self.assertFalse(tzutil.is_utc_timezone(pytz.timezone("America/New_York")))
+        self.assertFalse(tzutil.is_utc_timezone(zoneinfo.ZoneInfo("America/New_York")))
 
     def test_string_utc(self):
         """String 'UTC' should be recognized."""
