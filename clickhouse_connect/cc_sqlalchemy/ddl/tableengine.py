@@ -11,7 +11,7 @@ from clickhouse_connect.driver.parser import parse_callable
 
 logger = logging.getLogger(__name__)
 
-engine_map: Dict[str, Type['TableEngine']] = {}
+engine_map: Dict[str, Type["TableEngine"]] = {}
 EngineExpr = Union[str, TextClause]
 EngineParam = Optional[Union[EngineExpr, Sequence[EngineExpr]]]
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
@@ -31,8 +31,8 @@ def tuple_expr(expr_name, value: EngineParam):
     :return: formatted parameter string
     """
     if value is None:
-        return ''
-    v = f'{expr_name.strip()}'
+        return ""
+    v = f"{expr_name.strip()}"
     if isinstance(value, (tuple, list)):
         return f" {v} ({','.join(_render_engine_expr(item) for item in value)})"
     return f"{v} {_render_engine_expr(value)}"
@@ -58,6 +58,7 @@ class TableEngine(SchemaEventTarget, Visitable):
     SqlAlchemy Schema element to support ClickHouse table engines.  At the moment provides no real
     functionality other than the CREATE TABLE argument string
     """
+
     arg_names = ()
     quoted_args = set()
     optional_args = set()
@@ -70,7 +71,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         # pylint: disable=no-value-for-parameter
         Visitable.__init__(self)
         self.name = self.__class__.__name__
-        te_name = f'{self.name} Table Engine'
+        te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()
         engine_args = []
         for arg_name in self.arg_names:
@@ -78,26 +79,26 @@ class TableEngine(SchemaEventTarget, Visitable):
             if v is None:
                 if arg_name in self.optional_args:
                     continue
-                raise ValueError(f'Required engine parameter {arg_name} not provided for {te_name}')
+                raise ValueError(f"Required engine parameter {arg_name} not provided for {te_name}")
             if arg_name in self.quoted_args:
                 engine_args.append(f"'{v}'")
             else:
                 engine_args.append(v)
         if engine_args:
-            self.arg_str = f'({", ".join(engine_args)})'
+            self.arg_str = f"({', '.join(engine_args)})"
         params = []
         for param_name in self.eng_params:
             v = kwargs.pop(param_name, None)
             if v is not None:
-                params.append(tuple_expr(param_name.upper().replace('_', ' '), v))
+                params.append(tuple_expr(param_name.upper().replace("_", " "), v))
         settings = kwargs.pop("settings", None)
         self.settings = settings or {}
 
-        self.full_engine = 'Engine ' + self.name
+        self.full_engine = "Engine " + self.name
         if engine_args:
-            self.full_engine += f'({", ".join(engine_args)})'
+            self.full_engine += f"({', '.join(engine_args)})"
         if params:
-            self.full_engine += ' ' + ' '.join(params)
+            self.full_engine += " " + " ".join(params)
         if self.settings:
             settings_expr = ", ".join(f"{k} = {v}" for k, v in self.settings.items())
             self.full_engine += f" SETTINGS {settings_expr}"
@@ -117,7 +118,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         return self.full_engine
 
     def check_primary_keys(self, primary_keys: Sequence):
-        raise SQLAlchemyError(f'Table Engine {self.name} does not support primary keys')
+        raise SQLAlchemyError(f"Table Engine {self.name} does not support primary keys")
 
     def _set_parent(self, parent, **_kwargs):
         parent.engine = self
@@ -150,7 +151,7 @@ class Set(TableEngine):
 
 
 class Dictionary(TableEngine):
-    arg_names = ['dictionary']
+    arg_names = ["dictionary"]
 
     # pylint: disable=unused-argument
     def __init__(self, dictionary: str = None):
@@ -158,7 +159,7 @@ class Dictionary(TableEngine):
 
 
 class Merge(TableEngine):
-    arg_names = ['db_name, tables_regexp']
+    arg_names = ["db_name, tables_regexp"]
 
     # pylint: disable=unused-argument
     def __init__(self, db_name: str = None, tables_regexp: str = None):
@@ -166,7 +167,7 @@ class Merge(TableEngine):
 
 
 class File(TableEngine):
-    arg_names = ['fmt']
+    arg_names = ["fmt"]
 
     # pylint: disable=unused-argument
     def __init__(self, fmt: str = None):
@@ -174,12 +175,11 @@ class File(TableEngine):
 
 
 class Distributed(TableEngine):
-    arg_names = ['cluster', 'database', 'table', 'sharding_key', 'policy_name']
-    optional_args = {'sharding_key', 'policy_name'}
+    arg_names = ["cluster", "database", "table", "sharding_key", "policy_name"]
+    optional_args = {"sharding_key", "policy_name"}
 
     # pylint: disable=unused-argument
-    def __init__(self, cluster: str = None, database: str = None, table=None,
-                 sharding_key: str = None, policy_name: str = None):
+    def __init__(self, cluster: str = None, database: str = None, table=None, sharding_key: str = None, policy_name: str = None):
         super().__init__(locals())
 
 
@@ -187,11 +187,17 @@ class MergeTree(TableEngine):
     eng_params = ["order_by", "partition_by", "primary_key", "sample_by", "ttl"]
 
     # pylint: disable=unused-argument
-    def __init__(self, order_by: EngineParam = None, primary_key: EngineParam = None,
-                 partition_by: EngineParam = None, sample_by: EngineParam = None,
-                 ttl: Optional[EngineExpr] = None, settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
         if order_by is None and primary_key is None:
-            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         super().__init__(locals())
 
 
@@ -208,86 +214,121 @@ class AggregatingMergeTree(MergeTree):
 
 
 class ReplacingMergeTree(TableEngine):
-    arg_names = ['version', 'is_deleted']
+    arg_names = ["version", "is_deleted"]
     optional_args = set(arg_names)
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, ver: str = None, version: str = None,
-                 is_deleted: str = None, order_by: EngineParam = None,
-                 primary_key: EngineParam = None, partition_by: EngineParam = None,
-                 sample_by: EngineParam = None, ttl: Optional[EngineExpr] = None,
-                 settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        ver: str = None,
+        version: str = None,
+        is_deleted: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
         if order_by is None and primary_key is None:
-            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         kwargs = {
-            'version': version or ver,
-            'is_deleted': is_deleted,
-            'order_by': order_by,
-            'primary_key': primary_key,
-            'partition_by': partition_by,
-            'sample_by': sample_by,
-            'ttl': ttl,
-            'settings': settings,
+            "version": version or ver,
+            "is_deleted": is_deleted,
+            "order_by": order_by,
+            "primary_key": primary_key,
+            "partition_by": partition_by,
+            "sample_by": sample_by,
+            "ttl": ttl,
+            "settings": settings,
         }
         super().__init__(kwargs)
 
 
 class CollapsingMergeTree(TableEngine):
-    arg_names = ['sign']
+    arg_names = ["sign"]
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, sign: str = None, order_by: EngineParam = None,
-                 primary_key: EngineParam = None, partition_by: EngineParam = None,
-                 sample_by: EngineParam = None, ttl: Optional[EngineExpr] = None,
-                 settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        sign: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
         if order_by is None and primary_key is None:
-            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         super().__init__(locals())
 
 
 class VersionedCollapsingMergeTree(TableEngine):
-    arg_names = ['sign', 'version']
+    arg_names = ["sign", "version"]
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, sign: str = None, version: str = None,
-                 order_by: EngineParam = None, primary_key: EngineParam = None,
-                 partition_by: EngineParam = None, sample_by: EngineParam = None,
-                 ttl: Optional[EngineExpr] = None, settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        sign: str = None,
+        version: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
         if order_by is None and primary_key is None:
-            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         super().__init__(locals())
 
 
 class GraphiteMergeTree(TableEngine):
-    arg_names = ['config_section']
+    arg_names = ["config_section"]
+    quoted_args = set(arg_names)
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, config_section: str = None, version: str = None,
-                 order_by: EngineParam = None, primary_key: EngineParam = None,
-                 partition_by: EngineParam = None, sample_by: EngineParam = None,
-                 ttl: Optional[EngineExpr] = None, settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        config_section: str = None,
+        version: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
         if order_by is None and primary_key is None:
-            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         super().__init__(locals())
 
 
 class ReplicatedMergeTree(TableEngine):
-    arg_names = ['zk_path', 'replica']
+    arg_names = ["zk_path", "replica"]
     quoted_args = set(arg_names)
     optional_args = quoted_args
     eng_params = MergeTree.eng_params
 
     # pylint: disable=unused-argument
-    def __init__(self, order_by: EngineParam = None, primary_key: EngineParam = None,
-                 partition_by: EngineParam = None, sample_by: EngineParam = None,
-                 zk_path: str = None, replica: str = None,
-                 ttl: Optional[EngineExpr] = None, settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str = None,
+        replica: str = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
         if order_by is None and primary_key is None:
-            raise ArgumentError(None, 'Either PRIMARY KEY or ORDER BY must be specified')
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         super().__init__(locals())
 
 
@@ -297,6 +338,103 @@ class ReplicatedAggregatingMergeTree(ReplicatedMergeTree):
 
 class ReplicatedSummingMergeTree(ReplicatedMergeTree):
     pass
+
+
+class ReplicatedReplacingMergeTree(TableEngine):
+    arg_names = ["zk_path", "replica", "ver"]
+    quoted_args = {"zk_path", "replica"}
+    optional_args = {"zk_path", "replica", "ver"}
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(
+        self,
+        ver: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str = None,
+        replica: str = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        super().__init__(locals())
+
+
+class ReplicatedCollapsingMergeTree(TableEngine):
+    arg_names = ["zk_path", "replica", "sign"]
+    quoted_args = {"zk_path", "replica"}
+    optional_args = {"zk_path", "replica"}
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(
+        self,
+        sign: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str = None,
+        replica: str = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        super().__init__(locals())
+
+
+class ReplicatedVersionedCollapsingMergeTree(TableEngine):
+    arg_names = ["zk_path", "replica", "sign", "version"]
+    quoted_args = {"zk_path", "replica"}
+    optional_args = {"zk_path", "replica"}
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(
+        self,
+        sign: str = None,
+        version: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str = None,
+        replica: str = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        super().__init__(locals())
+
+
+class ReplicatedGraphiteMergeTree(TableEngine):
+    arg_names = ["zk_path", "replica", "config_section"]
+    quoted_args = {"zk_path", "replica", "config_section"}
+    optional_args = {"zk_path", "replica"}
+    eng_params = MergeTree.eng_params
+
+    # pylint: disable=unused-argument
+    def __init__(
+        self,
+        config_section: str = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str = None,
+        replica: str = None,
+        ttl: Optional[EngineExpr] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ):
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        super().__init__(locals())
 
 
 class SharedReplacingMergeTree(ReplacingMergeTree):
@@ -325,15 +463,11 @@ def _strip_string_quotes(value: Any) -> Any:
     return value
 
 
-def _parse_positional_engine_args(full_engine: str, engine_cls: Type['TableEngine']) -> Dict[str, Any]:
+def _parse_positional_engine_args(full_engine: str, engine_cls: Type["TableEngine"]) -> Dict[str, Any]:
     if not engine_cls.arg_names:
         return {}
     _, arg_values, _ = parse_callable(full_engine)
-    return {
-        arg_name: _strip_string_quotes(arg_value)
-        for arg_name, arg_value in zip(engine_cls.arg_names, arg_values)
-        if arg_value != ""
-    }
+    return {arg_name: _strip_string_quotes(arg_value) for arg_name, arg_value in zip(engine_cls.arg_names, arg_values) if arg_value != ""}
 
 
 def _find_clause_markers(sql: str) -> list[tuple[int, str]]:
@@ -382,7 +516,7 @@ def _parse_keyword_engine_clauses(clause_sql: str) -> Dict[str, Any]:
     return params
 
 
-def _parse_engine_params(full_engine: str, engine_cls: Type['TableEngine']) -> Dict[str, Any]:
+def _parse_engine_params(full_engine: str, engine_cls: Type["TableEngine"]) -> Dict[str, Any]:
     """Extract engine parameters from a full_engine expression for repr().
 
     Parses both positional constructor args (e.g. the ``version`` in
@@ -412,8 +546,8 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
     try:
         engine_cls = engine_map[name]
     except KeyError:
-        if not name.startswith('System'):
-            logger.warning('Engine %s not found', name)
+        if not name.startswith("System"):
+            logger.warning("Engine %s not found", name)
         return None
 
     # Map Shared* back to the base engine and discard Cloud-internal positional args.
@@ -421,7 +555,7 @@ def build_engine(full_engine: str) -> Optional[TableEngine]:
     # own positional args, e.g. SharedReplacingMergeTree('/path', '{replica}', ver).
     base_name = name
     if name.startswith("Shared"):
-        base_name = name[len("Shared"):]
+        base_name = name[len("Shared") :]
         base_cls = engine_map.get(base_name)
         if base_cls is not None:
             engine_cls = base_cls

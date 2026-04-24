@@ -1,8 +1,6 @@
 import array
 
 import numpy as np
-
-# pylint: disable=no-name-in-module
 from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 from clickhouse_connect.driverc.dataconv import build_lc_nullable_column as c_build_lc_nullable_column
 from clickhouse_connect.driverc.dataconv import build_nullable_column as c_build_nullable_column

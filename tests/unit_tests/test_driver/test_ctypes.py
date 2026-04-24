@@ -11,7 +11,10 @@ def runtime_state(use_c: str | None = None):
     else:
         env["CLICKHOUSE_CONNECT_USE_C"] = use_c
     result = subprocess.run(
-        [sys.executable, "-c", """
+        [
+            sys.executable,
+            "-c",
+            """
 import json
 from clickhouse_connect.driver.ctypes import RespBuffCls, data_conv, numpy_conv
 print(json.dumps({
@@ -19,7 +22,8 @@ print(json.dumps({
     "data_conv": data_conv.__name__,
     "numpy_conv": numpy_conv.__name__,
 }))
-"""],
+""",
+        ],
         capture_output=True,
         check=True,
         env=env,

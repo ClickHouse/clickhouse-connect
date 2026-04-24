@@ -1,18 +1,7 @@
 repos:
-  - repo: local
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.8
     hooks:
-      - id: pylint-clickhouse-connect
-        name: pylint (clickhouse_connect)
-        entry: pylint
-        language: system
-        types: [python]
-        pass_filenames: true
-        files: ^clickhouse_connect/.*\.py$
-
-      - id: pylint-tests
-        name: pylint (tests)
-        entry: pylint
-        language: system
-        types: [python]
-        pass_filenames: true
-        files: ^tests/.*\.py$
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

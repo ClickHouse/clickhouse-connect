@@ -45,7 +45,7 @@ def test_percent_in_non_parameterized_query():
     compiled_sql = compiled.string
 
     # SQLAlchemy should have doubled the % for pyformat
-    assert '%%g' in compiled_sql
+    assert "%%g" in compiled_sql
 
     # Now simulate what the dialect's do_execute_no_params does:
     # cursor.execute(compiled_sql)  -- no parameters
@@ -53,8 +53,8 @@ def test_percent_in_non_parameterized_query():
     cursor.execute(compiled_sql)
 
     actual_query = client.query.call_args[0][0]
-    assert '%g' in actual_query
-    assert '%%g' not in actual_query
+    assert "%g" in actual_query
+    assert "%%g" not in actual_query
 
 
 def test_percent_in_parameterized_query():
@@ -67,19 +67,19 @@ def test_percent_in_parameterized_query():
     compiled_sql = compiled.string
 
     # Should have %(d)s for the bind param and %%g for the literal %
-    assert '%(d)s' in compiled_sql
-    assert '%%g' in compiled_sql
+    assert "%(d)s" in compiled_sql
+    assert "%%g" in compiled_sql
 
     # Simulate do_execute with parameters (as SQLAlchemy would call it)
     cursor, client = _make_cursor()
-    cursor.execute(compiled_sql, {'d': '2010-01-04'})
+    cursor.execute(compiled_sql, {"d": "2010-01-04"})
 
     # Parameters are passed through; finalize_query in the driver handles
     # both %(d)s substitution and %% -> % unescaping via Python's % operator
     actual_query = client.query.call_args[0][0]
     actual_params = client.query.call_args[0][1]
     assert actual_query == compiled_sql
-    assert actual_params == {'d': '2010-01-04'}
+    assert actual_params == {"d": "2010-01-04"}
 
 
 def test_format_datetime_full_pattern():
@@ -101,4 +101,4 @@ def test_preparer_double_percents_enabled():
     (the default for pyformat paramstyle), rather than disabling it."""
     dialect = _make_dialect()
     preparer = dialect.preparer(dialect)
-    assert preparer._double_percents is True  # pylint: disable=protected-access
+    assert preparer._double_percents is True

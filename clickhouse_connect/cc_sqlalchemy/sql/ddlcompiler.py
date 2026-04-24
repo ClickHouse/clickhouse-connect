@@ -9,8 +9,8 @@ from sqlalchemy.sql.compiler import DDLCompiler
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
-from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
+from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import quote_identifier
 
 
@@ -112,12 +112,11 @@ def column_specification(dialect, column: Column) -> str:
 
 # pylint: disable=no-self-use
 class ChDDLCompiler(DDLCompiler):
-
     def visit_create_schema(self, create, **_):
-        return f'CREATE DATABASE {quote_identifier(create.element)}'
+        return f"CREATE DATABASE {quote_identifier(create.element)}"
 
     def visit_drop_schema(self, drop, **_):
-        return f'DROP DATABASE {quote_identifier(drop.element)}'
+        return f"DROP DATABASE {quote_identifier(drop.element)}"
 
     def visit_create_table(self, create, **_):
         table = create.element
@@ -129,12 +128,11 @@ class ChDDLCompiler(DDLCompiler):
         engine = getattr(table, "engine", None) or ClickHouseDDLHelper.get_option(table, "engine")
         if engine is None:
             raise CompileError(
-                f"ClickHouse table '{table.name}' requires an engine — "
-                f"specify e.g. MergeTree(order_by='id') as a table argument"
+                f"ClickHouse table '{table.name}' requires an engine — specify e.g. MergeTree(order_by='id') as a table argument"
             )
-        text = f'CREATE TABLE{if_not_exists} {format_table(table)} ('
-        text += ', '.join([self.get_column_specification(c.element) for c in create.columns])
-        return text + ') ' + engine.compile()
+        text = f"CREATE TABLE{if_not_exists} {format_table(table)} ("
+        text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
+        return text + ") " + engine.compile()
 
     def _visit_create_dictionary(self, create, dictionary, if_not_exists: str):
         text = f"CREATE DICTIONARY{if_not_exists} {format_table(dictionary)} ("

@@ -119,7 +119,6 @@ def get_dictionary_metadata(connection, table_name: str, schema: Optional[str] =
 
 
 class ChInspector(Inspector):
-
     # pylint: disable=too-many-locals
     def reflect_table(
         self,
@@ -137,10 +136,10 @@ class ChInspector(Inspector):
             reflected_columns = self.get_columns(table.name, schema)
 
         for col in reflected_columns:
-            name = col.pop('name')
+            name = col.pop("name")
             if (include_columns and name not in include_columns) or (exclude_columns and name in exclude_columns):
                 continue
-            col_type = col.pop('type')
+            col_type = col.pop("type")
             col_args = {key: value for key, value in col.items() if value is not None}
             table.append_column(sa_schema.Column(name, col_type, **col_args))
         if table_metadata.engine == "Dictionary":
