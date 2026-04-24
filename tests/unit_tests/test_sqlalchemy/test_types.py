@@ -112,3 +112,28 @@ def test_tuple_variadic_with_uuid():
 def test_tuple_both_positional_and_kwarg_raises():
     with pytest.raises(ArgumentError):
         Tuple(UInt32, elements=[UInt64])
+
+
+def test_tuple_zero_args_does_not_crash():
+    """
+    Regression: SQLAlchemy's dialect_impl -> adapt -> constructor_copy path
+    can call Tuple() with no arguments (get_cls_kwargs can't introspect
+    keyword-only args that follow *args, so it returns an empty set). The
+    constructor must accept that cleanly instead of iterating None.
+    """
+    # Must not raise.
+    Tuple()
+
+
+def test_tuple_adapt_preserves_type_def():
+    """
+    Regression: SQLAlchemy's dialect_impl calls adapt() to get a dialect-local
+    impl instance. The adapted instance must carry the same type_def so the
+    rendered type (used elsewhere in compilation and result mapping) matches
+    the source. Our adapt override copies state via __dict__ since SA's
+    default constructor_copy can't see our signature's keyword-only args.
+    """
+    source = Tuple(UInt32, UInt64)
+    adapted = source.adapt(type(source))
+    assert adapted.type_def == source.type_def
+    assert adapted.name == source.name

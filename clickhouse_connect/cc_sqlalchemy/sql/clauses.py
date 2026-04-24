@@ -1,7 +1,7 @@
 from sqlalchemy import and_, true
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.base import Immutable
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.elements import ColumnElement, Label
 from sqlalchemy.sql.selectable import FromClause, Join
 from sqlalchemy.sql.visitors import InternalTraversal
 
@@ -108,16 +108,27 @@ def _compile_array_join(element, compiler, **kw):
     Registered via @compiles so any compiler that encounters an ArrayJoin in a
     FROM list can render it, including the default StrSQLCompiler that walks
     FROMs for statement introspection.
+
+    Label handling: when a column is a SQLAlchemy Label (built with
+    `expr.label("name")`), the label becomes the ARRAY JOIN alias. Downstream
+    code references the aliased column by name (e.g. `column("name")`), so
+    dropping the label would break query semantics. An explicit alias= argument
+    on array_join() / .array_join() still takes precedence.
     """
+
     kw.pop("asfrom", None)
     kw.pop("from_linter", None)
     left = compiler.process(element.left, asfrom=True, **kw)
     join_type = "LEFT ARRAY JOIN" if element.is_left else "ARRAY JOIN"
     parts = []
-    for col, alias in element.array_columns:
-        col_text = compiler.process(col, **kw)
-        if alias is not None:
-            col_text += f" AS {compiler.preparer.quote(alias)}"
+    for col, explicit_alias in element.array_columns:
+        if explicit_alias is None and isinstance(col, Label):
+            body_text = compiler.process(col.element, **kw)
+            col_text = f"{body_text} AS {compiler.preparer.quote(col.name)}"
+        else:
+            col_text = compiler.process(col, **kw)
+            if explicit_alias is not None:
+                col_text += f" AS {compiler.preparer.quote(explicit_alias)}"
         parts.append(col_text)
     return f"{left} {join_type} {', '.join(parts)}"
 

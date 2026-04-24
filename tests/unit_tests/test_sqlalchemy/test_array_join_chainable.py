@@ -1,11 +1,12 @@
 import pytest
-from sqlalchemy import Column, MetaData, Table, select
+from sqlalchemy import Column, MetaData, Table, column, func, select
 from sqlalchemy.dialects import registry
 
 # Import sql module so Select.array_join / Select.left_array_join monkey-patches are installed.
 import clickhouse_connect.cc_sqlalchemy.sql  # noqa: F401
 from clickhouse_connect.cc_sqlalchemy import dialect_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array, String, UInt32
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin
 
 dialect = registry.load(dialect_name)()
 metadata = MetaData()
@@ -121,6 +122,33 @@ def test_array_join_chainable_works_without_explicit_dialect_compile():
     froms = stmt.get_final_froms()
     assert len(froms) == 1
     # The final-wrapped FROM is still the ArrayJoin (generative copy preserved).
-    from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin
 
     assert isinstance(froms[0], ArrayJoin)
+
+
+def test_array_join_preserves_labeled_expressions():
+    """A SQLAlchemy Label on an ARRAY JOIN column renders as the ARRAY JOIN alias so
+    downstream `column(name)` references bind to the aliased column.
+    """
+    md = MetaData()
+    t = Table("rows", md, Column("id", UInt32), Column("payload", String))
+    stmt = select(t.c.id, column("item"), column("item_index")).left_array_join(
+        func.JSONExtractArrayRaw(column("payload")).label("item"),
+        func.arrayEnumerate(func.JSONExtractArrayRaw(column("payload"))).label("item_index"),
+    )
+    sql = compile_sql(stmt)
+    assert "AS `item`" in sql, f"label dropped: {sql}"
+    assert "AS `item_index`" in sql, f"label dropped: {sql}"
+
+
+def test_array_join_explicit_alias_overrides_label():
+    """Explicit alias= argument wins over the expression's own .label()."""
+    md = MetaData()
+    t = Table("rows2", md, Column("id", UInt32), Column("payload", String))
+    stmt = select(t.c.id).left_array_join(
+        func.JSONExtractArrayRaw(column("payload")).label("from_label"),
+        alias="from_alias_arg",
+    )
+    sql = compile_sql(stmt)
+    assert "AS `from_alias_arg`" in sql
+    assert "AS `from_label`" not in sql

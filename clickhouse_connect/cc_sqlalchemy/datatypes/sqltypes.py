@@ -490,6 +490,13 @@ class Tuple(ChSqlaType, UserDefinedType):
         :param elements: sequence of ChSqlaType instance or class to use as tuple element types
         :param type_def: TypeDef from parse_name function
         """
+        if type_def is None and not args and elements is None:
+            # SA's dialect_impl -> adapt -> constructor_copy calls cls() with no
+            # arguments because get_cls_kwargs can't introspect keyword-only
+            # args that follow *args. Fall back to EMPTY_TYPE_DEF so construction
+            # doesn't crash; the adapt() override below ensures actual adapted
+            # Tuple instances get their real type_def restored.
+            type_def = EMPTY_TYPE_DEF
         if not type_def:
             if args and elements is not None:
                 raise ArgumentError("Cannot specify both positional elements and the 'elements' kwarg")
@@ -498,6 +505,15 @@ class Tuple(ChSqlaType, UserDefinedType):
             values = [et() if callable(et) else et for et in elements]
             type_def = TypeDef(values=tuple(v.name for v in values))
         super().__init__(type_def)
+
+    def adapt(self, cls, **kw):
+        # SA's default constructor_copy can't see our keyword-only args behind
+        # *args (get_cls_kwargs returns an empty set), so it would call cls()
+        # with no state and produce an empty Tuple. Skip it and copy state
+        # directly from the source instance.
+        inst = cls.__new__(cls)
+        inst.__dict__.update(self.__dict__)
+        return inst
 
 
 class JSON(ChSqlaType, UserDefinedType):
