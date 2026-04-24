@@ -260,15 +260,11 @@ _TIMEZONE_SENTINEL = object()
 
 
 def _resolve_tz_alias(tz, timezone):
-    """
-    Resolve the tz/timezone kwarg alias. Accepts `tz=` or `timezone=` (a SQLAlchemy-style alias
-    matching clickhouse-sqlalchemy naming). Returns the concrete zone string or None.
+    """Resolve `tz=` / `timezone=` alias (clickhouse-sqlalchemy naming). Returns the zone string or None.
 
-    `timezone=False` is silently mapped to None because SQLAlchemy's own type-adaptation
-    machinery passes `timezone=False` when cloning DateTime types (inherited from
-    SqlaDateTime.timezone which defaults to False). User-facing `timezone=True` is rejected
-    because the tz-aware-without-concrete-zone semantics don't map to ClickHouse's required
-    IANA zone string.
+    timezone=False maps silently to None: SQLAlchemy's type-adaptation passes it when cloning
+    DateTime (inherited from SqlaDateTime.timezone default). timezone=True is rejected because
+    ClickHouse requires a concrete IANA zone.
     """
     if timezone is not _TIMEZONE_SENTINEL:
         if timezone is True:
@@ -286,15 +282,7 @@ def _resolve_tz_alias(tz, timezone):
 
 class DateTime(ChSqlaType, SqlaDateTime):
     def __init__(self, tz: str = None, type_def: TypeDef = None, timezone=_TIMEZONE_SENTINEL):
-        """
-        Date time constructor with optional ClickHouse timezone parameter if not constructed with TypeDef
-        :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
-            library zoneinfo module. On platforms without system zoneinfo data (notably
-            Windows), install the tzdata package.
-        :param type_def: TypeDef from parse_name function
-        :param timezone: Alias for `tz` matching SQLAlchemy/clickhouse-sqlalchemy naming. Must be
-            a named IANA zone string; boolean values are rejected.
-        """
+        """tz / timezone: IANA zone string (resolved via zoneinfo; install `tzdata` on Windows)."""
         tz = _resolve_tz_alias(tz, timezone)
         if not type_def:
             if tz:
@@ -308,16 +296,7 @@ class DateTime(ChSqlaType, SqlaDateTime):
 
 class DateTime64(ChSqlaType, SqlaDateTime):
     def __init__(self, precision: int = None, tz: str = None, type_def: TypeDef = None, timezone=_TIMEZONE_SENTINEL):
-        """
-        Date time constructor with precision and timezone parameters if not constructed with TypeDef
-        :param precision:   Usually 3/6/9 for mill/micro/nanosecond precision on ClickHouse side
-        :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
-            library zoneinfo module. On platforms without system zoneinfo data (notably
-            Windows), install the tzdata package.
-        :param type_def: TypeDef from parse_name function
-        :param timezone: Alias for `tz` matching SQLAlchemy/clickhouse-sqlalchemy naming. Must be
-            a named IANA zone string; boolean values are rejected.
-        """
+        """precision: 3/6/9 for ms/us/ns. tz / timezone: IANA zone string."""
         tz = _resolve_tz_alias(tz, timezone)
         if not type_def:
             if tz:
@@ -482,20 +461,11 @@ class Tuple(ChSqlaType, UserDefinedType):
         elements: Sequence[ChSqlaType | type[ChSqlaType]] = None,
         type_def: TypeDef = None,
     ):
-        """
-        Tuple constructor that can take a list of element types if not constructed from a TypeDef.
-        Elements may be passed as variadic positional args (e.g. Tuple(UInt32, UUID)) or via
-        the `elements` kwarg (e.g. Tuple(elements=[UInt32, UUID])), but not both.
-        :param args: variadic element types (ChSqlaType instances or classes)
-        :param elements: sequence of ChSqlaType instance or class to use as tuple element types
-        :param type_def: TypeDef from parse_name function
-        """
+        """Tuple(UInt32, UUID) variadic form or Tuple(elements=[UInt32, UUID]) list form, not both."""
         if type_def is None and not args and elements is None:
-            # SA's dialect_impl -> adapt -> constructor_copy calls cls() with no
-            # arguments because get_cls_kwargs can't introspect keyword-only
-            # args that follow *args. Fall back to EMPTY_TYPE_DEF so construction
-            # doesn't crash; the adapt() override below ensures actual adapted
-            # Tuple instances get their real type_def restored.
+            # SA's dialect_impl -> adapt -> constructor_copy can call cls() with no args
+            # because get_cls_kwargs doesn't see keyword-only args behind *args.
+            # adapt() below preserves the real type_def; this branch just avoids a crash.
             type_def = EMPTY_TYPE_DEF
         if not type_def:
             if args and elements is not None:
@@ -507,10 +477,8 @@ class Tuple(ChSqlaType, UserDefinedType):
         super().__init__(type_def)
 
     def adapt(self, cls, **kw):
-        # SA's default constructor_copy can't see our keyword-only args behind
-        # *args (get_cls_kwargs returns an empty set), so it would call cls()
-        # with no state and produce an empty Tuple. Skip it and copy state
-        # directly from the source instance.
+        # Bypass SA's constructor_copy: it can't see keyword-only args behind *args and
+        # would produce an empty Tuple. Copy state directly.
         inst = cls.__new__(cls)
         inst.__dict__.update(self.__dict__)
         return inst

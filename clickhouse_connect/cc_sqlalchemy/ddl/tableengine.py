@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Sequence
-from typing import Any, Optional, Union
+from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
@@ -15,8 +15,8 @@ from clickhouse_connect.driver.parser import parse_callable
 logger = logging.getLogger(__name__)
 
 engine_map: dict[str, type["TableEngine"]] = {}
-EngineExpr = Union[str, TextClause, Column]
-EngineParam = Optional[EngineExpr | Sequence[EngineExpr]]
+EngineExpr = str | TextClause | Column
+EngineParam = EngineExpr | Sequence[EngineExpr] | None
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
 
 

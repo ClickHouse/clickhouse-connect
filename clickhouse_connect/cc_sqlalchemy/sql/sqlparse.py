@@ -1,6 +1,3 @@
-from typing import Optional
-
-
 def walk_sql(sql: str, start: int = 0):
     """Yield (index, char, depth) for unquoted chars, tracking paren depth."""
     depth = 0
@@ -54,7 +51,7 @@ def split_top_level(sql: str, delimiter: str = ",") -> list[str]:
     return parts
 
 
-def find_top_level_clause(sql: str, clauses: tuple[str, ...]) -> tuple[int, Optional[str]]:
+def find_top_level_clause(sql: str, clauses: tuple[str, ...]) -> tuple[int, str | None]:
     """Find the first occurrence of any *clause* at top nesting level."""
     upper_sql = sql.upper()
     for i, _char, depth in walk_sql(sql):

@@ -103,19 +103,11 @@ class ArrayJoin(Immutable, FromClause):
 
 @compiles(ArrayJoin)
 def _compile_array_join(element, compiler, **kw):
-    """Render an ArrayJoin FromClause.
-
-    Registered via @compiles so any compiler that encounters an ArrayJoin in a
-    FROM list can render it, including the default StrSQLCompiler that walks
-    FROMs for statement introspection.
-
-    Label handling: when a column is a SQLAlchemy Label (built with
-    `expr.label("name")`), the label becomes the ARRAY JOIN alias. Downstream
-    code references the aliased column by name (e.g. `column("name")`), so
-    dropping the label would break query semantics. An explicit alias= argument
-    on array_join() / .array_join() still takes precedence.
+    """Render an ArrayJoin FromClause. Registered via @compiles so any compiler
+    (including the default StrSQLCompiler used for statement introspection) can
+    render it. A SQLAlchemy Label becomes the ARRAY JOIN alias so downstream
+    `column("name")` references bind; an explicit alias= argument overrides.
     """
-
     kw.pop("asfrom", None)
     kw.pop("from_linter", None)
     left = compiler.process(element.left, asfrom=True, **kw)
@@ -338,19 +330,14 @@ def ch_join(
 
 
 class PreWhereClause:
-    """State container for ClickHouse PREWHERE, stored on a Select by the
-    .prewhere() chainable and consumed by the dialect compiler.
-    """
+    """State container for ClickHouse PREWHERE, stored on a Select and rendered by the dialect compiler."""
 
     def __init__(self, whereclause):
         self.whereclause = whereclause
 
 
 class LimitByClause:
-    """State container for ClickHouse LIMIT BY (top-N per group), stored on a
-    Select by the .limit_by() chainable and consumed by the dialect compiler.
-    Renders as `LIMIT [offset,] limit BY by_clauses`.
-    """
+    """State container for ClickHouse LIMIT BY (top-N per group). Renders as `LIMIT [offset,] limit BY by_clauses`."""
 
     def __init__(self, by_clauses, limit, offset=None):
         self.by_clauses = tuple(by_clauses)
@@ -359,38 +346,18 @@ class LimitByClause:
 
 
 class Lambda(ColumnElement):
-    """ClickHouse lambda expression for higher-order functions like arrayMap,
-    arrayFilter, arraySort.
+    """ClickHouse lambda expression for higher-order functions (arrayMap, arrayFilter, arraySort).
 
-    Explicit form: Lambda(params, body). `params` is a single parameter name
-    string or a list/tuple of parameter name strings. `body` is any
-    SQLAlchemy ColumnElement built with the usual expression language (use
-    `sqlalchemy.column(name)` to reference lambda params by name, or build an
-    expression however you like — the compiler renders the body text verbatim
-    as the lambda return).
+    Lambda(params, body) where params is a parameter name string or a list/tuple
+    of parameter names, and body is any SQLAlchemy ColumnElement. Use
+    `sqlalchemy.column(name)` to reference lambda params inside body. Renders as
+    `param -> body` for one param, `(p1, p2) -> body` for multiple.
 
-    Renders as `param -> body` for one param, `(p1, p2) -> body` for multiple.
+    Intentionally does NOT introspect Python lambdas (too brittle across
+    closures and default args). Pass an explicit ColumnElement body instead.
 
-    Note: this is intentionally NOT an introspection of a Python lambda. The
-    AST-based form in clickhouse-sqlalchemy is brittle across closures and
-    default args. Use an explicit ColumnElement body instead.
-
-    Examples:
-        from sqlalchemy import column, func
-        from clickhouse_connect.cc_sqlalchemy import Lambda
-
-        # arrayMap(x -> x * 2, numbers)
+    Example:
         func.arrayMap(Lambda('x', column('x') * 2), table.c.numbers)
-
-        # arrayFilter(x -> x > 0, values)
-        func.arrayFilter(Lambda('x', column('x') > 0), table.c.values)
-
-        # arrayMap((k, v) -> concat(k, '=', v), keys, values)
-        func.arrayMap(
-            Lambda(['k', 'v'], func.concat(column('k'), literal('='), column('v'))),
-            table.c.keys,
-            table.c.values,
-        )
     """
 
     __visit_name__ = "lambda_expr"
@@ -410,19 +377,14 @@ class Lambda(ColumnElement):
                 raise TypeError("Lambda parameter names must be strings")
             if not p.isidentifier():
                 raise ValueError(f"Lambda parameter name '{p}' is not a valid identifier")
-        # Attribute name intentionally avoids `.params` because ColumnElement.params
-        # is a bind-parameter method on the SQLAlchemy base class.
+        # Not `self.params`: ColumnElement.params is a bind-parameter method on the base class.
         self.param_names = param_list
         self.body = body
 
 
 @compiles(Lambda)
 def _compile_lambda(element, compiler, **kw):
-    """Render a Lambda ColumnElement as ClickHouse lambda syntax.
-
-    Registered via @compiles so any compiler that encounters a Lambda in a
-    statement walk can render it, including the default StrSQLCompiler.
-    """
+    """Render a Lambda as ClickHouse lambda syntax via @compiles so any compiler can render it."""
     body_text = compiler.process(element.body, **kw)
     if len(element.param_names) == 1:
         return f"{element.param_names[0]} -> {body_text}"

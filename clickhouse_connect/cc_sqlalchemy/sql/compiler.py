@@ -7,12 +7,9 @@ from clickhouse_connect.cc_sqlalchemy.sql import format_table
 
 
 def _find_outermost_marker(text, markers):
-    """Return the earliest index at which any of `markers` appears at paren
-    depth 0, skipping string literals. -1 if no marker matches at depth 0.
-
-    Used to splice PREWHERE into a rendered SELECT body without matching
-    markers that appear inside nested subqueries (which are always wrapped
-    in parentheses).
+    """Earliest index in `text` where any of `markers` appears at paren depth 0, skipping
+    string literals (single-quoted) and backtick-quoted identifiers. -1 if no match.
+    Used to splice PREWHERE into a SELECT body without matching subquery clauses.
     """
     depth = 0
     i = 0
@@ -275,6 +272,8 @@ class ChStatementCompiler(SQLCompiler):
             else:
                 result = result[:insert_at] + prewhere_segment + result[insert_at:]
 
+        # LIMIT BY: SA calls limit_clause() only when there's a regular LIMIT/OFFSET.
+        # Without one, it's never called, so append the LIMIT BY here instead.
         ch_limit_by = getattr(select, "_ch_limit_by", None)
         if ch_limit_by is not None and not select._has_row_limiting_clause:
             result += self._render_ch_limit_by(ch_limit_by, kwargs)

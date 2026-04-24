@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy.exc import CompileError
@@ -46,7 +46,7 @@ class ClickHouseDDLHelper:
         return cls.get_option(table, f"dictionary_{name}")
 
     @staticmethod
-    def explicit_column_nullable(column: Column) -> Optional[bool]:
+    def explicit_column_nullable(column: Column) -> bool | None:
         user_defined = getattr(column, "_user_defined_nullable", None)
         if isinstance(user_defined, bool):
             return user_defined
@@ -84,13 +84,13 @@ class ClickHouseDDLHelper:
         return type_.__class__(type_def=TypeDef(wrappers, type_def.keys, type_def.values))
 
     @staticmethod
-    def render_settings(settings: Optional[dict[str, Any]]) -> str:
+    def render_settings(settings: dict[str, Any] | None) -> str:
         if not settings:
             return ""
         return ", ".join(f"{key} = {ClickHouseDDLHelper._render_setting_value(value)}" for key, value in settings.items())
 
     @staticmethod
-    def render_comment(comment: Optional[str]) -> str:
+    def render_comment(comment: str | None) -> str:
         if comment is None:
             return "''"
         escaped = comment.replace("'", "''")
