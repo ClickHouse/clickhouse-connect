@@ -1,6 +1,7 @@
 from sqlalchemy import and_, true
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.base import Immutable
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import FromClause, Join
 from sqlalchemy.sql.visitors import InternalTraversal
 
@@ -323,3 +324,96 @@ def ch_join(
         _is_cross=cross,
         using=using,
     )
+
+
+class PreWhereClause:
+    """State container for ClickHouse PREWHERE, stored on a Select by the
+    .prewhere() chainable and consumed by the dialect compiler.
+    """
+
+    def __init__(self, whereclause):
+        self.whereclause = whereclause
+
+
+class LimitByClause:
+    """State container for ClickHouse LIMIT BY (top-N per group), stored on a
+    Select by the .limit_by() chainable and consumed by the dialect compiler.
+    Renders as `LIMIT [offset,] limit BY by_clauses`.
+    """
+
+    def __init__(self, by_clauses, limit, offset=None):
+        self.by_clauses = tuple(by_clauses)
+        self.limit = limit
+        self.offset = offset
+
+
+class Lambda(ColumnElement):
+    """ClickHouse lambda expression for higher-order functions like arrayMap,
+    arrayFilter, arraySort.
+
+    Explicit form: Lambda(params, body). `params` is a single parameter name
+    string or a list/tuple of parameter name strings. `body` is any
+    SQLAlchemy ColumnElement built with the usual expression language (use
+    `sqlalchemy.column(name)` to reference lambda params by name, or build an
+    expression however you like — the compiler renders the body text verbatim
+    as the lambda return).
+
+    Renders as `param -> body` for one param, `(p1, p2) -> body` for multiple.
+
+    Note: this is intentionally NOT an introspection of a Python lambda. The
+    AST-based form in clickhouse-sqlalchemy is brittle across closures and
+    default args. Use an explicit ColumnElement body instead.
+
+    Examples:
+        from sqlalchemy import column, func
+        from clickhouse_connect.cc_sqlalchemy import Lambda
+
+        # arrayMap(x -> x * 2, numbers)
+        func.arrayMap(Lambda('x', column('x') * 2), table.c.numbers)
+
+        # arrayFilter(x -> x > 0, values)
+        func.arrayFilter(Lambda('x', column('x') > 0), table.c.values)
+
+        # arrayMap((k, v) -> concat(k, '=', v), keys, values)
+        func.arrayMap(
+            Lambda(['k', 'v'], func.concat(column('k'), literal('='), column('v'))),
+            table.c.keys,
+            table.c.values,
+        )
+    """
+
+    __visit_name__ = "lambda_expr"
+
+    def __init__(self, params, body):
+        super().__init__()
+        if isinstance(params, str):
+            param_list = (params,)
+        elif isinstance(params, (list, tuple)):
+            if not params:
+                raise ValueError("Lambda requires at least one parameter name")
+            param_list = tuple(params)
+        else:
+            raise TypeError("Lambda params must be a string or a list/tuple of strings")
+        for p in param_list:
+            if not isinstance(p, str):
+                raise TypeError("Lambda parameter names must be strings")
+            if not p.isidentifier():
+                raise ValueError(f"Lambda parameter name '{p}' is not a valid identifier")
+        # Attribute name intentionally avoids `.params` because ColumnElement.params
+        # is a bind-parameter method on the SQLAlchemy base class.
+        self.param_names = param_list
+        self.body = body
+
+
+@compiles(Lambda)
+def _compile_lambda(element, compiler, **kw):
+    """Render a Lambda ColumnElement as ClickHouse lambda syntax.
+
+    Registered via @compiles so any compiler that encounters a Lambda in a
+    statement walk can render it, including the default StrSQLCompiler.
+    """
+    body_text = compiler.process(element.body, **kw)
+    if len(element.param_names) == 1:
+        return f"{element.param_names[0]} -> {body_text}"
+    params_text = ", ".join(element.param_names)
+    return f"({params_text}) -> {body_text}"

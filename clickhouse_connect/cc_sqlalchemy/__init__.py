@@ -7,7 +7,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
 from clickhouse_connect.cc_sqlalchemy.ddl import tableengine as engines
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.sql import final, sample
-from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin, ClickHouseJoin, array_join, ch_join
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin, ClickHouseJoin, Lambda, array_join, ch_join
 from clickhouse_connect.dbapi.cursor import Cursor
 
 registry.register("clickhouse", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
@@ -27,6 +27,7 @@ __all__ = [
     "ArrayJoin",
     "ch_join",
     "ClickHouseJoin",
+    "Lambda",
     "final",
     "sample",
     "Dictionary",

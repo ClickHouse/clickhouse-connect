@@ -6,6 +6,43 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 
 
+def _find_outermost_marker(text, markers):
+    """Return the earliest index at which any of `markers` appears at paren
+    depth 0, skipping string literals. -1 if no marker matches at depth 0.
+
+    Used to splice PREWHERE into a rendered SELECT body without matching
+    markers that appear inside nested subqueries (which are always wrapped
+    in parentheses).
+    """
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "'" or c == "`":
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif depth == 0:
+            for marker in markers:
+                if text.startswith(marker, i):
+                    return i
+        i += 1
+    return -1
+
+
 def _resolve_ch_type_name(sqla_type):
     """Resolve a SQLAlchemy type instance to a ClickHouse type name string.
 
@@ -221,11 +258,41 @@ class ChStatementCompiler(SQLCompiler):
             prev = getattr(self, "_ch_from_modifiers", None)
             self._ch_from_modifiers = mods
             try:
-                return super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
+                result = super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
             finally:
                 self._ch_from_modifiers = prev
+        else:
+            result = super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
 
-        return super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
+        ch_prewhere = getattr(select, "_ch_prewhere", None)
+        if ch_prewhere is not None:
+            prewhere_text = self.process(ch_prewhere.whereclause, **kwargs)
+            prewhere_segment = f" \nPREWHERE {prewhere_text}"
+            markers = (" \nWHERE ", " GROUP BY ", " \nHAVING ", " ORDER BY ", "\n LIMIT ")
+            insert_at = _find_outermost_marker(result, markers)
+            if insert_at == -1:
+                result = result + prewhere_segment
+            else:
+                result = result[:insert_at] + prewhere_segment + result[insert_at:]
+
+        ch_limit_by = getattr(select, "_ch_limit_by", None)
+        if ch_limit_by is not None and not select._has_row_limiting_clause:
+            result += self._render_ch_limit_by(ch_limit_by, kwargs)
+
+        return result
+
+    def _render_ch_limit_by(self, ch_limit_by, kw):
+        by_text = ", ".join(self.process(col, **kw) for col in ch_limit_by.by_clauses)
+        offset_prefix = f"{ch_limit_by.offset}, " if ch_limit_by.offset is not None else ""
+        return f"\n LIMIT {offset_prefix}{ch_limit_by.limit} BY {by_text}"
+
+    def limit_clause(self, select, **kw):
+        text = ""
+        ch_limit_by = getattr(select, "_ch_limit_by", None)
+        if ch_limit_by is not None:
+            text += self._render_ch_limit_by(ch_limit_by, kw)
+        text += super().limit_clause(select, **kw)
+        return text
 
     def visit_table(self, table, asfrom=False, iscrud=False, ashint=False, fromhints=None, enclosing_alias=None, **kwargs):
         result = super().visit_table(

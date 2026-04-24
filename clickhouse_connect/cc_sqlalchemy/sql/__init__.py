@@ -1,6 +1,7 @@
 from sqlalchemy import Table
 from sqlalchemy.sql.selectable import FromClause, Select
 
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import PreWhereClause
 from clickhouse_connect.driver.binding import quote_identifier
 
 # Dialect name used for non-rendering statement hints that only serve to
@@ -166,8 +167,68 @@ def _select_left_array_join(self: Select, *cols, alias=None) -> Select:
     return _apply_array_join(self, cols, alias, is_left=True)
 
 
+def prewhere(select_stmt, whereclause):
+    """Apply ClickHouse PREWHERE to a Select.
+
+    PREWHERE is a ClickHouse read optimization that filters before loading
+    non-filter columns. Semantically equivalent to WHERE, evaluated earlier.
+
+    Multiple calls compose with AND: select(t).prewhere(a).prewhere(b) renders
+    as PREWHERE a AND b, matching WHERE semantics.
+    """
+    from sqlalchemy import and_
+
+    if not isinstance(select_stmt, Select):
+        raise TypeError("prewhere() expects a SQLAlchemy Select instance")
+
+    existing = getattr(select_stmt, "_ch_prewhere", None)
+    combined = and_(existing.whereclause, whereclause) if existing is not None else whereclause
+
+    # with_statement_hint for cache-key uniqueness only (the hint dialect
+    # _CH_MODIFIER_DIALECT is never rendered by any real compiler). The hint
+    # key must be derived from the whereclause's content, not id(), so two
+    # equivalent statements share a compiled-statement cache entry.
+    new_stmt = select_stmt.with_statement_hint(f"PREWHERE:{str(combined)}", dialect_name=_CH_MODIFIER_DIALECT)
+    new_stmt._ch_prewhere = PreWhereClause(combined)
+    return new_stmt
+
+
+def limit_by(select_stmt, by_clauses, limit, offset=None):
+    """Apply ClickHouse LIMIT BY (top-N per group) to a Select.
+
+    Renders as `LIMIT [offset,] limit BY by_clauses`. Unlike the regular LIMIT,
+    this returns up to `limit` rows per distinct combination of by_clauses,
+    making it a top-N-per-group primitive.
+    """
+    from clickhouse_connect.cc_sqlalchemy.sql.clauses import LimitByClause
+
+    if not isinstance(select_stmt, Select):
+        raise TypeError("limit_by() expects a SQLAlchemy Select instance")
+
+    by_tuple = tuple(by_clauses)
+    if not by_tuple:
+        raise ValueError("limit_by() requires at least one by_clause")
+
+    # Hint key derived from the stable structural identity of by_clauses so
+    # equivalent statements share a compiled-statement cache entry.
+    by_key = ",".join(str(c) for c in by_tuple)
+    new_stmt = select_stmt.with_statement_hint(f"LIMIT_BY:{limit}:{offset}:{by_key}", dialect_name=_CH_MODIFIER_DIALECT)
+    new_stmt._ch_limit_by = LimitByClause(by_tuple, limit, offset)
+    return new_stmt
+
+
+def _select_prewhere(self, whereclause):
+    return prewhere(self, whereclause)
+
+
+def _select_limit_by(self, by_clauses, limit, offset=None):
+    return limit_by(self, by_clauses, limit, offset)
+
+
 # Monkey-patch the select class to add final and sample methods
 Select.sample = _select_sample
 Select.final = _select_final
 Select.array_join = _select_array_join
 Select.left_array_join = _select_left_array_join
+Select.prewhere = _select_prewhere
+Select.limit_by = _select_limit_by
