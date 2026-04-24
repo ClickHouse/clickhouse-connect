@@ -190,7 +190,7 @@ def test_alembic_column_operations_live(test_engine: Engine, test_db: str, ch_na
     table_name = ch_name("alembic_probe")
 
     with test_engine.begin() as conn:
-        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` " "(`id` String) ENGINE MergeTree ORDER BY id"))
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (`id` String) ENGINE MergeTree ORDER BY id"))
 
         context = MigrationContext.configure(
             connection=conn,
