@@ -37,8 +37,6 @@ def test_lambda_array_map_single_param():
     stmt = select(func.arrayMap(Lambda("x", column("x") * 2), data.c.nums).label("doubled"))
     sql = compile_sql(stmt)
     assert "arrayMap(" in sql
-    # Lambda rendering starts with `x -> ` — identifiers inside the body may
-    # be backtick-quoted by the ClickHouse preparer.
     assert "x -> " in sql
     assert "x -> x * 2" in _strip_backticks(sql)
 
@@ -67,9 +65,7 @@ def test_lambda_body_is_func_call():
 
 
 def test_lambda_renders_under_both_compilers():
-    """The @compiles(Lambda) fallback must render under both the ClickHouse
-    dialect compiler and SA's default StrSQLCompiler.
-    """
+    """Lambda renders identically under the dialect compiler and the default StrSQLCompiler."""
     stmt = select(func.arrayMap(Lambda("x", column("x") * 2), data.c.nums).label("doubled"))
     dialect_sql = compile_sql(stmt)
     default_sql = compile_default(stmt)

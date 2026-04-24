@@ -85,14 +85,9 @@ def test_datetime_timezone_true_raises():
 
 
 def test_datetime_timezone_false_is_noop():
-    """
-    SQLAlchemy's type-adaptation machinery passes timezone=False when cloning DateTime types
-    (inherited from SqlaDateTime.timezone default). We silently accept it as equivalent to no
-    zone rather than raising, so our type survives SA's internal copy/adapt calls.
-    """
+    """timezone=False is silently accepted; SA passes it during type cloning."""
     assert ChDateTime(timezone=False).name == ChDateTime().name
     assert DateTime64(3, timezone=False).name == DateTime64(3).name
-    # tz= still wins if passed alongside timezone=False
     assert ChDateTime(tz="UTC", timezone=False).name == ChDateTime(tz="UTC").name
 
 
@@ -115,24 +110,12 @@ def test_tuple_both_positional_and_kwarg_raises():
 
 
 def test_tuple_zero_args_does_not_crash():
-    """
-    Regression: SQLAlchemy's dialect_impl -> adapt -> constructor_copy path
-    can call Tuple() with no arguments (get_cls_kwargs can't introspect
-    keyword-only args that follow *args, so it returns an empty set). The
-    constructor must accept that cleanly instead of iterating None.
-    """
-    # Must not raise.
+    """Tuple() with no args returns an empty Tuple instead of crashing."""
     Tuple()
 
 
 def test_tuple_adapt_preserves_type_def():
-    """
-    Regression: SQLAlchemy's dialect_impl calls adapt() to get a dialect-local
-    impl instance. The adapted instance must carry the same type_def so the
-    rendered type (used elsewhere in compilation and result mapping) matches
-    the source. Our adapt override copies state via __dict__ since SA's
-    default constructor_copy can't see our signature's keyword-only args.
-    """
+    """Tuple.adapt() preserves the source instance's type_def."""
     source = Tuple(UInt32, UInt64)
     adapted = source.adapt(type(source))
     assert adapted.type_def == source.type_def

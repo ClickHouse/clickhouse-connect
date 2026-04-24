@@ -31,7 +31,6 @@ def test_single_column_array_join():
     assert "ARRAY JOIN" in sql
     assert "LEFT ARRAY JOIN" not in sql
     assert "`names`" in sql
-    # The wrapped table should not appear twice in the FROM clause
     assert sql.count("products") == 1 or "FROM products ARRAY JOIN" in sql.replace("`", "")
 
 
@@ -111,25 +110,15 @@ def test_multi_column_alias_must_be_list_when_multiple_cols():
 
 
 def test_array_join_chainable_works_without_explicit_dialect_compile():
-    """Regression: the @compiles(ArrayJoin) fallback must load as soon as the
-    package is imported, not only when compiler.py is touched. Otherwise
-    `select(...).left_array_join(...).final()` raises UnsupportedCompilationError
-    because .final() walks the FROM list via StrSQLCompiler.
-    """
+    """`.left_array_join(...).final()` resolves without a dialect compile."""
     stmt = select(products.c.id).left_array_join(products.c.names).final()
-    # Must not raise — get_final_froms internally dispatches through the
-    # default StrSQLCompiler, which needs the @compiles(ArrayJoin) fallback.
     froms = stmt.get_final_froms()
     assert len(froms) == 1
-    # The final-wrapped FROM is still the ArrayJoin (generative copy preserved).
-
     assert isinstance(froms[0], ArrayJoin)
 
 
 def test_array_join_preserves_labeled_expressions():
-    """A SQLAlchemy Label on an ARRAY JOIN column renders as the ARRAY JOIN alias so
-    downstream `column(name)` references bind to the aliased column.
-    """
+    """A SQLAlchemy Label on an ARRAY JOIN column becomes the ARRAY JOIN alias."""
     md = MetaData()
     t = Table("rows", md, Column("id", UInt32), Column("payload", String))
     stmt = select(t.c.id, column("item"), column("item_index")).left_array_join(
