@@ -25,7 +25,6 @@ def _apply_dictionary_metadata(table, popped):
         table.kwargs["clickhouse_dictionary_primary_key"] = popped["primary_key"]
 
 
-# pylint: disable=abstract-method,too-many-ancestors
 class Dictionary(Table):
     """
     Represents a ClickHouse Dictionary.

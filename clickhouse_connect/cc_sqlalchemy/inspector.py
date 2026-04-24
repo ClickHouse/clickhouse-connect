@@ -1,7 +1,7 @@
 import ast
 import re
 from collections.abc import Collection
-from typing import Any, Optional
+from typing import Any
 
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import text
@@ -18,7 +18,7 @@ from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
 )
 
 
-def _database_name(connection, schema: Optional[str]) -> str:
+def _database_name(connection, schema: str | None) -> str:
     if schema:
         return schema
     return connection.execute(text("SELECT currentDatabase()")).scalar()
@@ -40,7 +40,7 @@ def get_engine(connection, table_name, schema=None):
     return build_engine(row.engine_full)
 
 
-def get_dictionary_create_sql(connection, table_name: str, schema: Optional[str] = None) -> str:
+def get_dictionary_create_sql(connection, table_name: str, schema: str | None = None) -> str:
     create_sql = connection.execute(text(f"SHOW CREATE DICTIONARY {full_table(table_name, schema)}")).scalar()
     return create_sql or ""
 
@@ -85,7 +85,7 @@ def _parse_dictionary_column(definition: str) -> dict[str, Any]:
     return column
 
 
-def get_dictionary_columns(connection, table_name: str, schema: Optional[str] = None) -> list[dict[str, Any]]:
+def get_dictionary_columns(connection, table_name: str, schema: str | None = None) -> list[dict[str, Any]]:
     create_sql = get_dictionary_create_sql(connection, table_name, schema)
     if not create_sql:
         return []
@@ -96,7 +96,7 @@ def get_dictionary_columns(connection, table_name: str, schema: Optional[str] = 
     return [_parse_dictionary_column(column_sql) for column_sql in split_top_level(column_block)]
 
 
-def get_dictionary_metadata(connection, table_name: str, schema: Optional[str] = None) -> dict[str, Any]:
+def get_dictionary_metadata(connection, table_name: str, schema: str | None = None) -> dict[str, Any]:
     create_sql = get_dictionary_create_sql(connection, table_name, schema)
     if not create_sql:
         return {}
@@ -119,12 +119,11 @@ def get_dictionary_metadata(connection, table_name: str, schema: Optional[str] =
 
 
 class ChInspector(Inspector):
-    # pylint: disable=too-many-locals
     def reflect_table(
         self,
         table,
         *_args,
-        include_columns: Optional[Collection[str]] = None,
+        include_columns: Collection[str] | None = None,
         exclude_columns: Collection[str] = (),
         **_kwargs,
     ):

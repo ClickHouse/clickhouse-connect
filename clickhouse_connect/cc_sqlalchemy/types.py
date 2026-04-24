@@ -1,3 +1,1 @@
-# pylint: disable=wildcard-import,unused-wildcard-import
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import __all__
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *  # noqa: F401, F403

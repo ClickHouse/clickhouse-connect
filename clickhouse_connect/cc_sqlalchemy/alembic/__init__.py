@@ -10,7 +10,6 @@ from clickhouse_connect.cc_sqlalchemy.alembic.utils import (
     prevent_empty_migrations,
 )
 
-
 __all__ = [
     "patch_alembic_version",
     "clickhouse_writer",

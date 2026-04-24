@@ -28,8 +28,6 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
 
 logging.getLogger("alembic").setLevel(logging.WARNING)
 
-# pylint: disable=protected-access,redefined-outer-name
-
 
 def _name(prefix: str) -> str:
     return f"{prefix}_{random.randint(100000, 999999)}_{int(time.time() * 1000)}"
@@ -51,11 +49,11 @@ def ch_name(test_engine, test_db):
         for name in created:
             try:
                 conn.execute(text(f"DROP DICTIONARY IF EXISTS `{test_db}`.`{name}`"))
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 pass
             try:
                 conn.execute(text(f"DROP TABLE IF EXISTS `{test_db}`.`{name}`"))
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 pass
         _drop_version_table(conn, test_db)
 

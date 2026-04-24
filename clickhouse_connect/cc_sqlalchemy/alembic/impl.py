@@ -19,7 +19,6 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
 from clickhouse_connect.driver.binding import quote_identifier
 
 
-# pylint: disable=protected-access,unused-argument,no-self-use
 class ClickHouseImpl(DefaultImpl):
     __dialect__ = "clickhousedb"
     transactional_ddl = False
@@ -108,7 +107,6 @@ class ClickHouseImpl(DefaultImpl):
             sql.extend(["SETTINGS", settings])
         self._exec(text(" ".join(sql)))
 
-    # pylint: disable=too-many-arguments,too-many-locals
     def alter_column(
         self,
         table_name: str,

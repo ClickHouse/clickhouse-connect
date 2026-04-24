@@ -1,4 +1,5 @@
-from typing import Any, Callable, FrozenSet, Optional
+from collections.abc import Callable
+from typing import Any
 
 from alembic.operations.ops import MigrationScript
 from alembic.runtime.migration import MigrationContext
@@ -9,11 +10,11 @@ from clickhouse_connect.cc_sqlalchemy.alembic.adapter import (
 
 
 def make_include_name(
-    include_schemas: Optional[FrozenSet[str]] = None, exclude_mv_pattern: str = "_mv", default_schema: str = "default"
+    include_schemas: frozenset[str] | None = None, exclude_mv_pattern: str = "_mv", default_schema: str = "default"
 ) -> Callable:
     """Factory for include_name callback"""
 
-    def include_name_callback(name: Optional[str], type_: str, parent_names: dict) -> bool:
+    def include_name_callback(name: str | None, type_: str, parent_names: dict) -> bool:
         if type_ == "schema":
             schema_name = name if name else default_schema
             if include_schemas is not None:
@@ -34,15 +35,14 @@ def make_include_name(
 
 
 def make_include_object(
-    exclude_tables: Optional[FrozenSet[str]] = None,
-    include_schemas: Optional[FrozenSet[str]] = None,
+    exclude_tables: frozenset[str] | None = None,
+    include_schemas: frozenset[str] | None = None,
     exclude_mv_pattern: str = "_mv",
-    base_include_object_fn: Optional[Callable] = None,
+    base_include_object_fn: Callable | None = None,
 ) -> Callable:
     """Factory for include_object callback"""
 
-    # pylint: disable=too-many-return-statements
-    def include_object_callback(object_: Any, name: Optional[str], type_: str, reflected: bool, compare_to: Any) -> bool:
+    def include_object_callback(object_: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
         if base_include_object_fn and not base_include_object_fn(object_, name, type_, reflected, compare_to):
             return False
 

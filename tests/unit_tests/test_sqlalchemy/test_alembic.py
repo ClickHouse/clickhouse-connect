@@ -27,8 +27,6 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
-# pylint: disable=protected-access
-
 
 def test_ddl_compiler():
     dialect = ClickHouseDialect()
@@ -120,7 +118,6 @@ def test_reflected_engine_repr_is_safe():
     assert repr(engine) == "MergeTree(order_by='id')"
 
 
-# pylint: disable=eval-used
 def test_reflected_engine_repr_round_trips():
     """Reflected engines must produce repr() that evals back into a valid engine."""
 

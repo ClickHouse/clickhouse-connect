@@ -75,7 +75,6 @@ class TableEngine(SchemaEventTarget, Visitable):
         engine_map[cls.__name__] = cls
 
     def __init__(self, kwargs):
-        # pylint: disable=no-value-for-parameter
         Visitable.__init__(self)
         self.name = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
@@ -160,7 +159,6 @@ class Set(TableEngine):
 class Dictionary(TableEngine):
     arg_names = ["dictionary"]
 
-    # pylint: disable=unused-argument
     def __init__(self, dictionary: str = None):
         super().__init__(locals())
 
@@ -168,7 +166,6 @@ class Dictionary(TableEngine):
 class Merge(TableEngine):
     arg_names = ["db_name, tables_regexp"]
 
-    # pylint: disable=unused-argument
     def __init__(self, db_name: str = None, tables_regexp: str = None):
         super().__init__(locals())
 
@@ -176,7 +173,6 @@ class Merge(TableEngine):
 class File(TableEngine):
     arg_names = ["fmt"]
 
-    # pylint: disable=unused-argument
     def __init__(self, fmt: str = None):
         super().__init__(locals())
 
@@ -185,7 +181,6 @@ class Distributed(TableEngine):
     arg_names = ["cluster", "database", "table", "sharding_key", "policy_name"]
     optional_args = {"sharding_key", "policy_name"}
 
-    # pylint: disable=unused-argument
     def __init__(self, cluster: str = None, database: str = None, table=None, sharding_key: str = None, policy_name: str = None):
         super().__init__(locals())
 
@@ -193,7 +188,6 @@ class Distributed(TableEngine):
 class MergeTree(TableEngine):
     eng_params = ["order_by", "partition_by", "primary_key", "sample_by", "ttl"]
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         order_by: EngineParam = None,
@@ -225,7 +219,6 @@ class ReplacingMergeTree(TableEngine):
     optional_args = set(arg_names)
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         ver: str = None,
@@ -257,7 +250,6 @@ class CollapsingMergeTree(TableEngine):
     arg_names = ["sign"]
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         sign: str = None,
@@ -277,7 +269,6 @@ class VersionedCollapsingMergeTree(TableEngine):
     arg_names = ["sign", "version"]
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         sign: str = None,
@@ -299,7 +290,6 @@ class GraphiteMergeTree(TableEngine):
     quoted_args = set(arg_names)
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         config_section: str = None,
@@ -322,7 +312,6 @@ class ReplicatedMergeTree(TableEngine):
     optional_args = quoted_args
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         order_by: EngineParam = None,
@@ -353,7 +342,6 @@ class ReplicatedReplacingMergeTree(TableEngine):
     optional_args = {"zk_path", "replica", "ver"}
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         ver: str = None,
@@ -377,7 +365,6 @@ class ReplicatedCollapsingMergeTree(TableEngine):
     optional_args = {"zk_path", "replica"}
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         sign: str = None,
@@ -401,7 +388,6 @@ class ReplicatedVersionedCollapsingMergeTree(TableEngine):
     optional_args = {"zk_path", "replica"}
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         sign: str = None,
@@ -426,7 +412,6 @@ class ReplicatedGraphiteMergeTree(TableEngine):
     optional_args = {"zk_path", "replica"}
     eng_params = MergeTree.eng_params
 
-    # pylint: disable=unused-argument
     def __init__(
         self,
         config_section: str = None,
@@ -537,7 +522,6 @@ def _parse_engine_params(full_engine: str, engine_cls: type["TableEngine"]) -> d
     return params
 
 
-# pylint: disable=protected-access
 def build_engine(full_engine: str) -> TableEngine | None:
     """
     Factory function to create TableEngine class from ClickHouse full_engine expression.

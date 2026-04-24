@@ -8,8 +8,6 @@ from alembic.util import DispatchPriority, PriorityDispatchResult
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 
-# pylint: disable=protected-access,unused-argument,consider-using-f-string
-
 
 def patch_alembic_version(context: MigrationContext):
     """
@@ -71,16 +69,16 @@ def render_clickhouse_column(column, autogen_context: AutogenContext) -> str:
     if column.comment:
         opts.append(("comment", repr(column.comment)))
 
-    return "%(prefix)sColumn(%(name)r, %(type)s, %(args)s%(kwargs)s)" % {
-        "prefix": render._sqlalchemy_autogenerate_prefix(autogen_context),
-        "name": render._ident(column.name),
-        "type": render._repr_type(column.type, autogen_context),
-        "args": ", ".join(str(arg) for arg in args) + ", " if args else "",
-        "kwargs": ", ".join(
+    return "{prefix}Column({name!r}, {type}, {args}{kwargs})".format(
+        prefix=render._sqlalchemy_autogenerate_prefix(autogen_context),
+        name=render._ident(column.name),
+        type=render._repr_type(column.type, autogen_context),
+        args=", ".join(str(arg) for arg in args) + ", " if args else "",
+        kwargs=", ".join(
             [f"{key}={value}" for key, value in opts]
             + [f"{key}={render._render_potential_expr(value, autogen_context)}" for key, value in column.kwargs.items()]
         ),
-    }
+    )
 
 
 @render.renderers.dispatch_for(ops.CreateTableOp, replace=True)
@@ -100,25 +98,22 @@ def render_create_table(autogen_context: AutogenContext, op: ops.CreateTableOp) 
     else:
         args_sql = ",\n".join(args)
 
-    rendered = "%(prefix)screate_table(%(table_name)r,\n%(args)s" % {
-        "table_name": render._ident(op.table_name),
-        "prefix": render._alembic_autogenerate_prefix(autogen_context),
-        "args": args_sql,
-    }
+    prefix = render._alembic_autogenerate_prefix(autogen_context)
+    rendered = f"{prefix}create_table({render._ident(op.table_name)!r},\n{args_sql}"
     if op.schema:
-        rendered += ",\nschema=%r" % render._ident(op.schema)
+        rendered += f",\nschema={render._ident(op.schema)!r}"
 
     if table.comment:
-        rendered += ",\ncomment=%r" % render._ident(table.comment)
+        rendered += f",\ncomment={render._ident(table.comment)!r}"
 
     if table.info:
         rendered += f",\ninfo={table.info!r}"
 
     for key in sorted(op.kw):
-        rendered += ",\n%s=%r" % (key.replace(" ", "_"), op.kw[key])
+        rendered += f",\n{key.replace(' ', '_')}={op.kw[key]!r}"
 
     if op.if_not_exists is not None:
-        rendered += ",\nif_not_exists=%r" % bool(op.if_not_exists)
+        rendered += f",\nif_not_exists={bool(op.if_not_exists)!r}"
 
     rendered += "\n)"
     return rendered
@@ -127,37 +122,29 @@ def render_create_table(autogen_context: AutogenContext, op: ops.CreateTableOp) 
 @render.renderers.dispatch_for(ops.AddColumnOp, replace=True)
 def render_add_column(autogen_context: AutogenContext, op: ops.AddColumnOp) -> str:
     schema, table_name, column, if_not_exists = op.schema, op.table_name, op.column, op.if_not_exists
+    prefix = render._alembic_autogenerate_prefix(autogen_context)
+    rendered_column = render_clickhouse_column(column, autogen_context)
     if autogen_context._has_batch:
-        template = "%(prefix)sadd_column(%(column)s)"
-    else:
-        template = "%(prefix)sadd_column(%(table_name)r, %(column)s"
-        if schema:
-            template += ", schema=%(schema)r"
-        if if_not_exists is not None:
-            template += ", if_not_exists=%(if_not_exists)r"
-        template += ")"
-    return template % {
-        "prefix": render._alembic_autogenerate_prefix(autogen_context),
-        "table_name": table_name,
-        "column": render_clickhouse_column(column, autogen_context),
-        "schema": schema,
-        "if_not_exists": if_not_exists,
-    }
+        return f"{prefix}add_column({rendered_column})"
+    rendered = f"{prefix}add_column({table_name!r}, {rendered_column}"
+    if schema:
+        rendered += f", schema={schema!r}"
+    if if_not_exists is not None:
+        rendered += f", if_not_exists={if_not_exists!r}"
+    return rendered + ")"
 
 
 @render.renderers.dispatch_for(ops.DropTableOp, replace=True)
 def render_drop_table(autogen_context: AutogenContext, op: ops.DropTableOp) -> str:
-    rendered = "%(prefix)sdrop_table(%(table_name)r" % {
-        "prefix": render._alembic_autogenerate_prefix(autogen_context),
-        "table_name": render._ident(op.table_name),
-    }
+    prefix = render._alembic_autogenerate_prefix(autogen_context)
+    rendered = f"{prefix}drop_table({render._ident(op.table_name)!r}"
     arguments = []
     if op.schema:
-        arguments.append("schema=%r" % render._ident(op.schema))
+        arguments.append(f"schema={render._ident(op.schema)!r}")
     if op.if_exists is not None:
-        arguments.append("if_exists=%r" % bool(op.if_exists))
+        arguments.append(f"if_exists={bool(op.if_exists)!r}")
     for key in sorted(op.table_kw):
-        arguments.append("%s=%r" % (key.replace(" ", "_"), op.table_kw[key]))
+        arguments.append(f"{key.replace(' ', '_')}={op.table_kw[key]!r}")
     if arguments:
         rendered += ",\n" + ",\n".join(arguments)
     rendered += ")"

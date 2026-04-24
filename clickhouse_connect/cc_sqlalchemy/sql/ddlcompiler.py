@@ -110,7 +110,6 @@ def column_specification(dialect, column: Column) -> str:
     return compiler.get_column_specification(column)
 
 
-# pylint: disable=no-self-use
 class ChDDLCompiler(DDLCompiler):
     def visit_create_schema(self, create, **_):
         return f"CREATE DATABASE {quote_identifier(create.element)}"

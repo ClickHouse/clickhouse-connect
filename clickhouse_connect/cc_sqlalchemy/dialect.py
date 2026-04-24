@@ -1,7 +1,7 @@
+import sqlalchemy.schema as sa_schema
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import NoSuchTableError
-import sqlalchemy.schema as sa_schema
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
