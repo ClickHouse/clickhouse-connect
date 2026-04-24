@@ -1,9 +1,12 @@
+import ast
+
 import sqlalchemy as db
 from sqlalchemy.sql.ddl import CreateTable
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime, UInt32, UInt64
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Date, DateTime, UInt32, UInt64
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     GraphiteMergeTree,
+    MergeTree,
     ReplacingMergeTree,
     ReplicatedCollapsingMergeTree,
     ReplicatedGraphiteMergeTree,
@@ -150,3 +153,55 @@ def test_graphite_merge_tree_quoting():
     table = db.Table("graphite_mt", metadata, db.Column("key", UInt64), GraphiteMergeTree(config_section="graphite_rollup", order_by="key"))
     ddl = str(CreateTable(table).compile("", dialect=dialect))
     assert ddl == graphite_mt_ddl
+
+
+column_partition_by_ddl = """\
+CREATE TABLE `events` (`id` UInt64, `partition_date` Date) Engine MergeTree ORDER BY id PARTITION BY `partition_date`\
+"""
+
+
+def test_column_accepted_as_partition_by():
+    metadata = db.MetaData()
+    col = db.Column("partition_date", Date)
+    table = db.Table(
+        "events",
+        metadata,
+        db.Column("id", UInt64),
+        col,
+        MergeTree(partition_by=col, order_by="id"),
+    )
+    ddl = str(CreateTable(table).compile("", dialect=dialect))
+    assert ddl == column_partition_by_ddl
+
+
+column_order_by_tuple_ddl = """\
+CREATE TABLE `events2` (`id` UInt64, `ts` DateTime) Engine MergeTree  ORDER BY (`ts`,`id`)\
+"""
+
+
+def test_column_tuple_accepted_as_order_by():
+    metadata = db.MetaData()
+    id_col = db.Column("id", UInt64)
+    ts_col = db.Column("ts", DateTime)
+    table = db.Table(
+        "events2",
+        metadata,
+        id_col,
+        ts_col,
+        MergeTree(order_by=(ts_col, id_col)),
+    )
+    ddl = str(CreateTable(table).compile("", dialect=dialect))
+    assert ddl == column_order_by_tuple_ddl
+
+
+def test_repr_engine_value_column_roundtrip():
+    some_column = db.Column("some_column_name", UInt64)
+    engine = MergeTree(partition_by=some_column, order_by="id")
+    rendered = repr(engine)
+    assert "partition_by='some_column_name'" in rendered
+    assert "Column(" not in rendered
+    # Strip "MergeTree(" prefix and trailing ")" to get the args
+    assert rendered.startswith("MergeTree(")
+    assert rendered.endswith(")")
+    # Assert the full expression parses as valid Python syntax (re-importable)
+    ast.parse(rendered)

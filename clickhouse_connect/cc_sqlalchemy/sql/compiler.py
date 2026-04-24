@@ -2,7 +2,6 @@ from sqlalchemy.exc import CompileError
 from sqlalchemy.sql import elements, sqltypes
 from sqlalchemy.sql.compiler import SQLCompiler
 
-from clickhouse_connect.cc_sqlalchemy import ArrayJoin
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 
@@ -113,23 +112,7 @@ class ChStatementCompiler(SQLCompiler):
 
         return v
 
-    def visit_array_join(self, array_join_clause, asfrom=False, from_linter=None, **kw):
-        left = self.process(array_join_clause.left, asfrom=True, from_linter=from_linter, **kw)
-        join_type = "LEFT ARRAY JOIN" if array_join_clause.is_left else "ARRAY JOIN"
-
-        parts = []
-        for col, alias in array_join_clause.array_columns:
-            col_text = self.process(col, **kw)
-            if alias is not None:
-                col_text += f" AS {self.preparer.quote(alias)}"
-            parts.append(col_text)
-
-        return f"{left} {join_type} {', '.join(parts)}"
-
     def visit_join(self, join, **kw):
-        if isinstance(join, ArrayJoin):
-            return self.visit_array_join(join, **kw)
-
         left = self.process(join.left, **kw)
         right = self.process(join.right, **kw)
         onclause = join.onclause

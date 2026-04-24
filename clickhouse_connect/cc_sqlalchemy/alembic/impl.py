@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 
 from alembic.ddl.impl import DefaultImpl
 from alembic.util import CommandError
@@ -35,7 +35,7 @@ class ClickHouseImpl(DefaultImpl):
         self,
         *,
         version_table: str,
-        version_table_schema: Optional[str],
+        version_table_schema: str | None,
         version_table_pk: bool,
         **_kw: Any,
     ) -> Table:
@@ -70,8 +70,8 @@ class ClickHouseImpl(DefaultImpl):
         table_name: str,
         column: Column,
         *,
-        schema: Optional[str] = None,
-        if_not_exists: Optional[bool] = None,
+        schema: str | None = None,
+        if_not_exists: bool | None = None,
         **kw: Any,
     ) -> None:
         sql = [
@@ -95,8 +95,8 @@ class ClickHouseImpl(DefaultImpl):
         table_name: str,
         column: Column,
         *,
-        schema: Optional[str] = None,
-        if_exists: Optional[bool] = None,
+        schema: str | None = None,
+        if_exists: bool | None = None,
         **kw: Any,
     ) -> None:
         sql = ["ALTER TABLE", full_table(table_name, schema), "DROP COLUMN"]
@@ -114,19 +114,19 @@ class ClickHouseImpl(DefaultImpl):
         table_name: str,
         column_name: str,
         *,
-        nullable: Optional[bool] = None,
+        nullable: bool | None = None,
         server_default=False,
-        name: Optional[str] = None,
+        name: str | None = None,
         type_=None,
-        schema: Optional[str] = None,
-        autoincrement: Optional[bool] = None,
+        schema: str | None = None,
+        autoincrement: bool | None = None,
         comment=False,
-        existing_comment: Optional[str] = None,
+        existing_comment: str | None = None,
         existing_type=None,
         existing_server_default=None,
-        existing_nullable: Optional[bool] = None,
-        existing_autoincrement: Optional[bool] = None,
-        if_exists: Optional[bool] = None,
+        existing_nullable: bool | None = None,
+        existing_autoincrement: bool | None = None,
+        if_exists: bool | None = None,
         **kw: Any,
     ) -> None:
         if autoincrement is not None or existing_autoincrement is not None:
@@ -217,13 +217,13 @@ class ClickHouseImpl(DefaultImpl):
         version_value = self._compile_clause(list(values.values())[0])
         where_clause = self._compile_version_where(construct)
         self._exec(text(f"INSERT INTO {self._version_table_name} (version_num) VALUES ({version_value})"))
-        self._exec(text(f"ALTER TABLE {self._version_table_name} DELETE WHERE {where_clause} " "SETTINGS mutations_sync = 2"))
+        self._exec(text(f"ALTER TABLE {self._version_table_name} DELETE WHERE {where_clause} SETTINGS mutations_sync = 2"))
         return SimpleNamespace(rowcount=1)
 
     def _exec_version_delete(self, construct: Delete, execution_options=None):
         where_clause = self._compile_version_where(construct)
         return super()._exec(
-            text(f"ALTER TABLE {self._version_table_name} DELETE WHERE {where_clause} " "SETTINGS mutations_sync = 2"),
+            text(f"ALTER TABLE {self._version_table_name} DELETE WHERE {where_clause} SETTINGS mutations_sync = 2"),
             execution_options=execution_options,
         )
 
@@ -276,8 +276,8 @@ class ClickHouseImpl(DefaultImpl):
         self,
         table_name: str,
         column_name: str,
-        comment: Optional[str],
-        schema: Optional[str],
+        comment: str | None,
+        schema: str | None,
         settings: str,
     ) -> str:
         sql = [
@@ -292,7 +292,7 @@ class ClickHouseImpl(DefaultImpl):
         return " ".join(sql)
 
     @staticmethod
-    def _normalize_default(default: Optional[str]) -> Optional[str]:
+    def _normalize_default(default: str | None) -> str | None:
         if default is None:
             return None
         return default.strip()

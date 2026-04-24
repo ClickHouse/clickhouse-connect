@@ -32,6 +32,13 @@ def _resolve_target(select_stmt: Select, table: FromClause | None, method_name: 
             raise ValueError(f"{method_name}() is ambiguous for statements with multiple FROM clauses. Specify the table explicitly.")
         target = froms[0]
 
+    # Unwrap ArrayJoin so FINAL/SAMPLE apply to the underlying table that the
+    # compiler will actually render, not the ArrayJoin FromClause wrapper.
+    from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin as _ArrayJoin
+
+    while isinstance(target, _ArrayJoin):
+        target = target.left
+
     if not isinstance(target, FromClause):
         raise TypeError("table must be a SQLAlchemy FromClause when provided")
 
@@ -107,6 +114,60 @@ def _select_sample(self: Select, sample_value: str | int | float, table: FromCla
     return sample(self, sample_value=sample_value, table=table)
 
 
+def _apply_array_join(select_stmt: Select, cols, alias, is_left: bool) -> Select:
+    """Wrap the single FROM of a Select in an ARRAY JOIN / LEFT ARRAY JOIN clause.
+
+    Returns a new Select whose FROM target has been replaced with an
+    ArrayJoin FromClause. The wrapped source is hidden from the FROM list
+    via ArrayJoin._hide_froms so the compiler does not render it twice.
+    """
+    from clickhouse_connect.cc_sqlalchemy.sql.clauses import array_join as make_array_join
+
+    if not isinstance(select_stmt, Select):
+        raise TypeError("array_join() expects a SQLAlchemy Select instance")
+
+    if not cols:
+        raise ValueError("array_join() requires at least one array column")
+
+    froms = select_stmt.get_final_froms()
+    if not froms:
+        raise ValueError("array_join() requires the Select to have a FROM clause to wrap.")
+    if len(froms) > 1:
+        raise ValueError(
+            "array_join() is ambiguous for statements with multiple FROM clauses. "
+            "Use the module-level array_join(left, array_column, ...) with select_from() instead."
+        )
+    target = froms[0]
+
+    columns = list(cols)
+    if len(columns) == 1:
+        array_column = columns[0]
+        alias_arg = alias
+    else:
+        array_column = columns
+        if alias is None:
+            alias_arg = None
+        elif isinstance(alias, (list, tuple)):
+            alias_arg = list(alias)
+        else:
+            raise ValueError("alias must be a list/tuple matching the number of columns when multiple columns are provided")
+
+    aj = make_array_join(target, array_column, alias=alias_arg, is_left=is_left)
+    return select_stmt.select_from(aj)
+
+
+def _select_array_join(self: Select, *cols, alias=None) -> Select:
+    """Select.array_join(*cols, alias=None) — generative ARRAY JOIN helper."""
+    return _apply_array_join(self, cols, alias, is_left=False)
+
+
+def _select_left_array_join(self: Select, *cols, alias=None) -> Select:
+    """Select.left_array_join(*cols, alias=None) — generative LEFT ARRAY JOIN helper."""
+    return _apply_array_join(self, cols, alias, is_left=True)
+
+
 # Monkey-patch the select class to add final and sample methods
 Select.sample = _select_sample
 Select.final = _select_final
+Select.array_join = _select_array_join
+Select.left_array_join = _select_left_array_join

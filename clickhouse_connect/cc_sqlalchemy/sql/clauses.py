@@ -1,4 +1,5 @@
 from sqlalchemy import and_, true
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.base import Immutable
 from sqlalchemy.sql.selectable import FromClause, Join
 from sqlalchemy.sql.visitors import InternalTraversal
@@ -97,6 +98,27 @@ class ArrayJoin(Immutable, FromClause):
 
         self.left = clone(self.left, **kw)
         self.array_columns = [(clone(col, **kw), alias) for col, alias in self.array_columns]
+
+
+@compiles(ArrayJoin)
+def _compile_array_join(element, compiler, **kw):
+    """Render an ArrayJoin FromClause.
+
+    Registered via @compiles so any compiler that encounters an ArrayJoin in a
+    FROM list can render it, including the default StrSQLCompiler that walks
+    FROMs for statement introspection.
+    """
+    kw.pop("asfrom", None)
+    kw.pop("from_linter", None)
+    left = compiler.process(element.left, asfrom=True, **kw)
+    join_type = "LEFT ARRAY JOIN" if element.is_left else "ARRAY JOIN"
+    parts = []
+    for col, alias in element.array_columns:
+        col_text = compiler.process(col, **kw)
+        if alias is not None:
+            col_text += f" AS {compiler.preparer.quote(alias)}"
+        parts.append(col_text)
+    return f"{left} {join_type} {', '.join(parts)}"
 
 
 def array_join(left, array_column, alias=None, is_left=False):

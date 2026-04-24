@@ -1,25 +1,30 @@
 import logging
-from typing import Any, Dict, Optional, Sequence, Type, Union
+from collections.abc import Sequence
+from typing import Any, Optional, Union
 
+from sqlalchemy import Column
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.visitors import Visitable
 
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.parser import parse_callable
 
 logger = logging.getLogger(__name__)
 
-engine_map: Dict[str, Type["TableEngine"]] = {}
-EngineExpr = Union[str, TextClause]
-EngineParam = Optional[Union[EngineExpr, Sequence[EngineExpr]]]
+engine_map: dict[str, type["TableEngine"]] = {}
+EngineExpr = Union[str, TextClause, Column]
+EngineParam = Optional[EngineExpr | Sequence[EngineExpr]]
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
 
 
 def _render_engine_expr(value: EngineExpr) -> str:
     if isinstance(value, TextClause):
         return value.text
+    if isinstance(value, Column):
+        return quote_identifier(value.name)
     return value
 
 
@@ -43,6 +48,8 @@ def repr_engine_value(value: Any) -> str:
         return repr(value)
     if isinstance(value, TextClause):
         return f"sa.text({value.text!r})"
+    if isinstance(value, Column):
+        return repr(value.name)
     if isinstance(value, tuple):
         items = ", ".join(repr_engine_value(item) for item in value)
         if len(value) == 1:
@@ -193,8 +200,8 @@ class MergeTree(TableEngine):
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -228,8 +235,8 @@ class ReplacingMergeTree(TableEngine):
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -258,8 +265,8 @@ class CollapsingMergeTree(TableEngine):
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -279,8 +286,8 @@ class VersionedCollapsingMergeTree(TableEngine):
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -301,8 +308,8 @@ class GraphiteMergeTree(TableEngine):
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -324,8 +331,8 @@ class ReplicatedMergeTree(TableEngine):
         sample_by: EngineParam = None,
         zk_path: str = None,
         replica: str = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -356,8 +363,8 @@ class ReplicatedReplacingMergeTree(TableEngine):
         sample_by: EngineParam = None,
         zk_path: str = None,
         replica: str = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -380,8 +387,8 @@ class ReplicatedCollapsingMergeTree(TableEngine):
         sample_by: EngineParam = None,
         zk_path: str = None,
         replica: str = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -405,8 +412,8 @@ class ReplicatedVersionedCollapsingMergeTree(TableEngine):
         sample_by: EngineParam = None,
         zk_path: str = None,
         replica: str = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -429,8 +436,8 @@ class ReplicatedGraphiteMergeTree(TableEngine):
         sample_by: EngineParam = None,
         zk_path: str = None,
         replica: str = None,
-        ttl: Optional[EngineExpr] = None,
-        settings: Optional[Dict[str, Any]] = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
     ):
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
@@ -463,7 +470,7 @@ def _strip_string_quotes(value: Any) -> Any:
     return value
 
 
-def _parse_positional_engine_args(full_engine: str, engine_cls: Type["TableEngine"]) -> Dict[str, Any]:
+def _parse_positional_engine_args(full_engine: str, engine_cls: type["TableEngine"]) -> dict[str, Any]:
     if not engine_cls.arg_names:
         return {}
     _, arg_values, _ = parse_callable(full_engine)
@@ -483,8 +490,8 @@ def _find_clause_markers(sql: str) -> list[tuple[int, str]]:
     return markers
 
 
-def _parse_settings_clause(raw_settings: str) -> Dict[str, Any]:
-    settings: Dict[str, Any] = {}
+def _parse_settings_clause(raw_settings: str) -> dict[str, Any]:
+    settings: dict[str, Any] = {}
     for pair in split_top_level(raw_settings):
         if "=" not in pair:
             continue
@@ -498,8 +505,8 @@ def _parse_settings_clause(raw_settings: str) -> Dict[str, Any]:
     return settings
 
 
-def _parse_keyword_engine_clauses(clause_sql: str) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
+def _parse_keyword_engine_clauses(clause_sql: str) -> dict[str, Any]:
+    params: dict[str, Any] = {}
     markers = _find_clause_markers(clause_sql)
     for index, (start, clause) in enumerate(markers):
         value_start = start + len(clause)
@@ -516,7 +523,7 @@ def _parse_keyword_engine_clauses(clause_sql: str) -> Dict[str, Any]:
     return params
 
 
-def _parse_engine_params(full_engine: str, engine_cls: Type["TableEngine"]) -> Dict[str, Any]:
+def _parse_engine_params(full_engine: str, engine_cls: type["TableEngine"]) -> dict[str, Any]:
     """Extract engine parameters from a full_engine expression for repr().
 
     Parses both positional constructor args (e.g. the ``version`` in
@@ -531,7 +538,7 @@ def _parse_engine_params(full_engine: str, engine_cls: Type["TableEngine"]) -> D
 
 
 # pylint: disable=protected-access
-def build_engine(full_engine: str) -> Optional[TableEngine]:
+def build_engine(full_engine: str) -> TableEngine | None:
     """
     Factory function to create TableEngine class from ClickHouse full_engine expression.
 

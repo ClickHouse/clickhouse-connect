@@ -256,15 +256,46 @@ class Date32(ChSqlaType, SqlaDate):
     pass
 
 
+_TIMEZONE_SENTINEL = object()
+
+
+def _resolve_tz_alias(tz, timezone):
+    """
+    Resolve the tz/timezone kwarg alias. Accepts `tz=` or `timezone=` (a SQLAlchemy-style alias
+    matching clickhouse-sqlalchemy naming). Returns the concrete zone string or None.
+
+    `timezone=False` is silently mapped to None because SQLAlchemy's own type-adaptation
+    machinery passes `timezone=False` when cloning DateTime types (inherited from
+    SqlaDateTime.timezone which defaults to False). User-facing `timezone=True` is rejected
+    because the tz-aware-without-concrete-zone semantics don't map to ClickHouse's required
+    IANA zone string.
+    """
+    if timezone is not _TIMEZONE_SENTINEL:
+        if timezone is True:
+            raise ArgumentError(
+                "timezone=True is not supported for ClickHouse DateTime types; "
+                "pass a named IANA zone string such as timezone='UTC' or timezone='America/New_York'"
+            )
+        if timezone is False:
+            return tz
+        if tz is not None:
+            raise ArgumentError("Cannot specify both 'tz' and 'timezone'; they are aliases")
+        return timezone
+    return tz
+
+
 class DateTime(ChSqlaType, SqlaDateTime):
-    def __init__(self, tz: str = None, type_def: TypeDef = None):
+    def __init__(self, tz: str = None, type_def: TypeDef = None, timezone=_TIMEZONE_SENTINEL):
         """
         Date time constructor with optional ClickHouse timezone parameter if not constructed with TypeDef
         :param tz: IANA timezone key (e.g. "UTC", "America/New_York"). Resolved via the standard
             library zoneinfo module. On platforms without system zoneinfo data (notably
             Windows), install the tzdata package.
         :param type_def: TypeDef from parse_name function
+        :param timezone: Alias for `tz` matching SQLAlchemy/clickhouse-sqlalchemy naming. Must be
+            a named IANA zone string; boolean values are rejected.
         """
+        tz = _resolve_tz_alias(tz, timezone)
         if not type_def:
             if tz:
                 tzutil.resolve_zone(tz)
@@ -276,7 +307,7 @@ class DateTime(ChSqlaType, SqlaDateTime):
 
 
 class DateTime64(ChSqlaType, SqlaDateTime):
-    def __init__(self, precision: int = None, tz: str = None, type_def: TypeDef = None):
+    def __init__(self, precision: int = None, tz: str = None, type_def: TypeDef = None, timezone=_TIMEZONE_SENTINEL):
         """
         Date time constructor with precision and timezone parameters if not constructed with TypeDef
         :param precision:   Usually 3/6/9 for mill/micro/nanosecond precision on ClickHouse side
@@ -284,7 +315,10 @@ class DateTime64(ChSqlaType, SqlaDateTime):
             library zoneinfo module. On platforms without system zoneinfo data (notably
             Windows), install the tzdata package.
         :param type_def: TypeDef from parse_name function
+        :param timezone: Alias for `tz` matching SQLAlchemy/clickhouse-sqlalchemy naming. Must be
+            a named IANA zone string; boolean values are rejected.
         """
+        tz = _resolve_tz_alias(tz, timezone)
         if not type_def:
             if tz:
                 tzutil.resolve_zone(tz)
@@ -444,15 +478,23 @@ class Tuple(ChSqlaType, UserDefinedType):
 
     def __init__(
         self,
+        *args,
         elements: Sequence[ChSqlaType | type[ChSqlaType]] = None,
         type_def: TypeDef = None,
     ):
         """
-        Tuple constructor that can take a list of element types if not constructed from a TypeDef
+        Tuple constructor that can take a list of element types if not constructed from a TypeDef.
+        Elements may be passed as variadic positional args (e.g. Tuple(UInt32, UUID)) or via
+        the `elements` kwarg (e.g. Tuple(elements=[UInt32, UUID])), but not both.
+        :param args: variadic element types (ChSqlaType instances or classes)
         :param elements: sequence of ChSqlaType instance or class to use as tuple element types
         :param type_def: TypeDef from parse_name function
         """
         if not type_def:
+            if args and elements is not None:
+                raise ArgumentError("Cannot specify both positional elements and the 'elements' kwarg")
+            if args:
+                elements = args
             values = [et() if callable(et) else et for et in elements]
             type_def = TypeDef(values=tuple(v.name for v in values))
         super().__init__(type_def)
