@@ -58,10 +58,11 @@ A shallow clone of the ClickHouse server source should live at `.server-src/`, p
 
 Server investigation work is much higher quality with the actual server source available locally. If you need it and it is missing, try to set it up before continuing.
 
-- If `.server-src/` or `.server-ref` is missing, tell the user that server investigation is best done against the real server source and that you recommend setting it up. Then try to create them. If the user has not specified a version, default to the most recent stable ClickHouse release tag. Write that tag to `.server-ref` and do a shallow clone of `https://github.com/ClickHouse/ClickHouse` at that tag into `.server-src/`.
+- If `.server-src/` or `.server-ref` is missing, tell the user that server investigation is best done against the real server source and that you recommend setting it up. Then try to create them. If the user has not specified a version, default to the most recent stable ClickHouse release tag. Write that tag to `.server-ref` and do a shallow clone of `https://github.com/ClickHouse/ClickHouse` at that tag into `.server-src/`. Example: `git clone --depth 1 --branch <tag> https://github.com/ClickHouse/ClickHouse.git .server-src` followed by writing `<tag>` to `.server-ref`.
 - If you cannot set them up for any reason, tell the user plainly. You may continue without the local source, but flag in your answer that the investigation was done without it and the result is less reliable.
 - Do not silently re-clone an existing `.server-src/` and do not fall back to reading GitHub ad hoc when a local checkout is present.
-- If the user asks you to investigate against a different version, tell them the current `.server-ref` tag and ask whether to switch before proceeding.
+- If the user asks you to investigate against a different version, tell them the current `.server-ref` tag and ask whether to switch before proceeding. **Switch in place, do not blow away the existing checkout.** Inside `.server-src/`, run `git fetch --depth 1 origin tag <new-tag>` and then `git checkout <new-tag>`, and write `<new-tag>` to `.server-ref`. This reuses the existing `.git` directory and is much faster than re-cloning, especially when bouncing between tags.
+- Re-cloning `.server-src/` from scratch is a last resort, reserved for cases where the existing checkout is corrupt or in an unrecoverable state. Tell the user before doing it. Do not treat it as routine.
 - Cite the tag explicitly in your answer, for example: "at v26.3.9.8-lts, `JSONEachRowRowInputFormat::readRow` does X".
 
 ### Navigation
@@ -70,29 +71,29 @@ Before grepping blindly through the server tree, read `.agents/server-map.md`. I
 
 If the map's pointers do not exist at the pinned tag, flag it plainly and tell the user before writing code that assumes them.
 
-### Always delegate server C++ reading to a sub-agent
+### Always delegate server C++ reading to the `clickhouse-server-reader` sub-agent
 
 ClickHouse is a large C++ codebase. Reading it directly in the main conversation bloats context fast and crowds out the client-side code you are actually changing. Delegate it.
+
+The project ships a custom sub-agent definition at `.claude/agents/clickhouse-server-reader.md` that owns the discipline (citation rules, confirmed vs inferred, tag resolution, navigation via `.agents/server-map.md`). Use it for all server source reading.
 
 Default workflow:
 
 1. In the main conversation, identify the **specific questions** you need answered about server behavior. Examples: "how is a `Decimal(76, 10)` value laid out on the wire", "does `JSONEachRow` emit trailing newlines on empty result sets", "what is the exact null-mask byte order for `Nullable(LowCardinality(String))`".
-2. Look up the relevant entry points in `.agents/server-map.md`.
-3. Spawn a sub-agent with a focused prompt that includes:
-   - The pinned tag from `.server-ref`.
-   - The specific questions, one at a time.
-   - A short list of files or directories from the map worth starting with.
-   - An instruction to cite files and function or class names, and to mark each answer as **confirmed** (read the function body) or **inferred** (only read a signature, comment, or test).
-4. Work from the sub-agent's summary. Do not pull raw C++ into the main thread.
-5. If the summary is insufficient, send a follow-up question to the same sub-agent rather than reading the code yourself.
+2. Spawn the `clickhouse-server-reader` sub-agent with those questions. Keep the prompt focused on the questions themselves. The sub-agent already knows to read `.server-ref`, consult `.agents/server-map.md`, cite tag and paths, and mark each claim as **confirmed** or **inferred**.
+3. Work from the sub-agent's summary. Do not pull raw C++ into the main thread.
+4. If the summary is insufficient, send a follow-up question to the same sub-agent rather than reading the code yourself.
+5. If the sub-agent flags that a question was unusually subtle and its read was uncertain, re-spawn it with a stronger model rather than guessing.
 
 The main thread should stay focused on the client change. The sub-agent eats the C++ context.
 
-### What your answer must contain
+### What the final answer must contain
 
-- The resolved server tag you compared against.
-- Specific server paths and function or class names you relied on. Do not cite line numbers; they rot.
-- A clear distinction between **confirmed** (you read the function body) and **inferred** (you only read a signature, comment, or test name).
+When you reconcile the sub-agent's findings into your reply to the user, preserve:
+
+- The resolved server tag the sub-agent compared against.
+- The specific server paths and function or class names it relied on. No line numbers, they rot.
+- The sub-agent's **confirmed** vs **inferred** distinction. Do not collapse them.
 - Specific client-side file and line references for the behavior you are reconciling.
 
 ## Change Style
