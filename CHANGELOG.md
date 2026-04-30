@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
+
 ## 1.0.0rc1, 2026-04-22
 
 ### Breaking Changes
