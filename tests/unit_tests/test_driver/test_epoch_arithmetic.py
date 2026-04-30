@@ -7,10 +7,7 @@ from datetime import datetime, timezone
 # Try to import from Cython extension, fall back to pure Python if unavailable
 try:
     from clickhouse_connect.driverc.dataconv import epoch_seconds_to_components
-
-    CYTHON_AVAILABLE = True
 except ImportError:
-    CYTHON_AVAILABLE = False
     epoch_seconds_to_components = None
 
 from clickhouse_connect.driver import tzutil
