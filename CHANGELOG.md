@@ -8,6 +8,10 @@
 - Order-of-magnitude faster fixed-width numeric inserts from numpy arrays, with significantly lower peak memory. A new Cython `write_native_col` helper writes 1-D C-contiguous numpy arrays of matching dtype directly into the output buffer via `memcpy`, avoiding the per-element conversion the previous path required.
 - Significantly faster `Decimal` and `BigDecimal` reads. The decode path no longer constructs intermediate strings per row, building values directly from the integer column via `Decimal.scaleb`.
 
+### Bug Fixes
+- Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
+
+
 ## 1.0.0rc1, 2026-04-22
 
 ### Breaking Changes

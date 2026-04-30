@@ -1857,11 +1857,12 @@ class AsyncClient(Client):
                 await self._error_handler(response)
 
             except aiohttp.ServerConnectionError as e:
-                if "Connection reset" in str(e) or "Remote end closed" in str(e) or "Cannot connect" in str(e):
+                msg = str(e)
+                if "Connection reset" in msg or "Remote end closed" in msg or "Cannot connect" in msg or "Server disconnected" in msg:
                     if attempts == 1:
                         logger.debug("Retrying after connection error from remote host")
                         continue
-                raise OperationalError(f"Network Error: {str(e)}") from e
+                raise OperationalError(f"Network Error: {msg}") from e
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 raise OperationalError(f"Network Error: {str(e)}") from e
