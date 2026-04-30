@@ -50,13 +50,14 @@ def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: st
         buff = struct.Struct(f"<{len(column)}{code}")
         dest += buff.pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        col_msg = ""
-        if col_name:
-            col_msg = f" for source column `{col_name}`"
-        raise DataError(
-            f"Unable to create Python array{col_msg}.  This is usually caused by trying to insert None "
-            + "values into a ClickHouse column that is not Nullable"
-        ) from ex
+        col_msg = f" for column `{col_name}`" if col_name else ""
+        if isinstance(ex, OverflowError):
+            error_detail = "value out of range"
+        elif isinstance(ex, TypeError):
+            error_detail = "type mismatch (usually None in non-Nullable column)"
+        else:
+            error_detail = type(ex).__name__
+        raise DataError(f"Unable to create native array{col_msg}: {error_detail}") from ex
 
 
 def write_uint64(value: int, dest: MutableSequence):
