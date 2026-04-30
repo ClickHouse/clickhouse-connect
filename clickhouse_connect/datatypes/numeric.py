@@ -373,19 +373,9 @@ class Decimal(ClickHouseType):
         column = source.read_array(self._array_type, num_rows)
         dec = decimal.Decimal
         scale = self.scale
-        prec = self.prec
         if scale == 0:
-            return [dec(str(x)) for x in column]
-        new_col = []
-        app = new_col.append
-        for x in column:
-            if x >= 0:
-                digits = str(x).rjust(prec, "0")
-                app(dec(f"{digits[:-scale]}.{digits[-scale:]}"))
-            else:
-                digits = str(-x).rjust(prec, "0")
-                app(dec(f"-{digits[:-scale]}.{digits[-scale:]}"))
-        return new_col
+            return [dec(x) for x in column]
+        return [dec(x).scaleb(-scale) for x in column]
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         with decimal.localcontext() as dec_ctx:
@@ -409,23 +399,21 @@ class BigDecimal(Decimal, registered=False):
     def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext, _read_state: Any):
         dec = decimal.Decimal
         scale = self.scale
-        prec = self.prec
         column = []
         app = column.append
         sz = self.byte_size
         ifb = int.from_bytes
         if scale == 0:
             for _ in range(num_rows):
-                app(dec(str(ifb(source.read_bytes(sz), "little", signed=True))))
+                app(dec(ifb(source.read_bytes(sz), "little", signed=True)))
             return column
-        for _ in range(num_rows):
-            x = ifb(source.read_bytes(sz), "little", signed=True)
-            if x >= 0:
-                digits = str(x).rjust(prec, "0")
-                app(dec(f"{digits[:-scale]}.{digits[-scale:]}"))
-            else:
-                digits = str(-x).rjust(prec, "0")
-                app(dec(f"-{digits[:-scale]}.{digits[-scale:]}"))
+        # localcontext with ctx.prec = self.prec is required because scaleb()
+        # rounds to context precision. Default prec is 28 which would silently
+        # truncate Decimal128 (prec up to 38) and Decimal256 (prec up to 76) values.
+        with decimal.localcontext() as ctx:
+            ctx.prec = self.prec
+            for _ in range(num_rows):
+                app(dec(ifb(source.read_bytes(sz), "little", signed=True)).scaleb(-scale))
         return column
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, _ctx):
