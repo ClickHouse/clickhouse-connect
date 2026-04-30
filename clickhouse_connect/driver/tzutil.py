@@ -99,24 +99,24 @@ def is_utc_timezone(tz: tzinfo | str | None) -> bool:
     return tz.tzname(None) in UTC_EQUIVALENTS
 
 
-def utc_equivalent_tzaware_datetime(ts: float, microseconds: int, tz_info: tzinfo) -> datetime:
-    """Build a UTC-equivalent timezone-aware datetime using arithmetic.
+def utc_equivalent_tzaware_datetime(ts: int, microseconds: int, tz_info: tzinfo) -> datetime:
+    """Build a UTC-equivalent timezone-aware datetime via epoch arithmetic.
 
     For UTC-equivalent timezones (UTC, Etc/UTC, GMT, etc.), construct the datetime
     using epoch arithmetic rather than datetime.fromtimestamp(), then attach the
     timezone. This avoids timezone conversion machinery that's unnecessary for UTC.
 
+    Sub-second precision must be supplied via the microseconds argument; the ts
+    value is interpreted as integer seconds.
+
     Args:
-        ts: Unix timestamp (seconds since epoch)
-        microseconds: Microsecond component
+        ts: Integer Unix timestamp (seconds since epoch)
+        microseconds: Microsecond component (0-999999)
         tz_info: A UTC-equivalent timezone object
 
     Returns:
         Timezone-aware datetime in the specified timezone
     """
-    if not isinstance(ts, float):
-        ts = float(ts)
-
     seconds = int(ts)
 
     days = seconds // 86400
@@ -132,22 +132,19 @@ def utc_equivalent_tzaware_datetime(ts: float, microseconds: int, tz_info: tzinf
     return datetime(year, month, day, hour, minute, second, microseconds, tzinfo=tz_info)
 
 
-def utcfromtimestamp_with_microseconds(ts: float, microseconds: int = 0) -> datetime:
-    """Convert Unix timestamp to naive UTC datetime with explicit microseconds.
+def utcfromtimestamp_with_microseconds(ts: int, microseconds: int = 0) -> datetime:
+    """Convert integer Unix timestamp to naive UTC datetime with explicit microseconds.
 
-    This is more efficient than calling utcfromtimestamp() and then .replace(microsecond=...)
+    More efficient than calling utcfromtimestamp() and then .replace(microsecond=...)
     because it constructs the datetime once with all components.
 
     Args:
-        ts: Unix timestamp (seconds since epoch)
+        ts: Integer Unix timestamp (seconds since epoch)
         microseconds: Microsecond component (0-999999)
 
     Returns:
         Naive UTC datetime with specified microseconds
     """
-    if not isinstance(ts, float):
-        ts = float(ts)
-
     seconds = int(ts)
 
     days = seconds // 86400
@@ -163,12 +160,13 @@ def utcfromtimestamp_with_microseconds(ts: float, microseconds: int = 0) -> date
     return datetime(year, month, day, hour, minute, second, microseconds)
 
 
-def utcfromtimestamp(ts: float) -> datetime:
-    """Convert Unix timestamp to naive UTC datetime using arithmetic, avoiding
-    the expensive datetime.fromtimestamp() + replace() round-trip."""
-    if not isinstance(ts, float):
-        ts = float(ts)
+def utcfromtimestamp(ts: int) -> datetime:
+    """Convert integer Unix timestamp to naive UTC datetime via epoch arithmetic.
 
+    Avoids the expensive datetime.fromtimestamp() + replace() round-trip. Sub-second
+    precision is not supported; pass an integer number of seconds. For sub-second
+    inputs, use utcfromtimestamp_with_microseconds.
+    """
     seconds = int(ts)
 
     days = seconds // 86400
