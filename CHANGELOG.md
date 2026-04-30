@@ -29,9 +29,9 @@
 - Clearer error message when attempting to use the async client without aiohttp installed.
 - The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
 - Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
-- Date/time read hot paths were optimized. `DateTime` now uses epoch-arithmetic fast paths for naive UTC and UTC-equivalent timezones, `DateTime64` uses dedicated helper paths for naive UTC and timezone-aware decoding, and the Cython implementation now includes a dedicated naive UTC `DateTime64` loop. Also fixes Cython `DateTime` conversion bugs and expands epoch-arithmetic test coverage.
-- `DateTime` and `DateTime64` Cython read paths now construct `datetime` objects directly via the CPython datetime C API, bypassing the intermediate component tuple and the Python-level `datetime(...)` constructor.
-- Native read/write hot paths were optimized in both the Cython and Python fallback paths. This includes faster Cython string deserialization for common UTF-8 cases, lower-overhead `Array` and `Map` materialization, a shared `build_map_columns` helper for `Map` inserts, and a shared `write_native_col` helper for fixed-width numeric inserts. The Cython `write_native_col` path also adds a direct memcpy fast path for compatible 1-D C-contiguous numpy arrays.
+- Order-of-magnitude faster `DateTime` and `DateTime64` reads for naive UTC and UTC-equivalent timezones. The Cython read paths now decode via epoch arithmetic and construct `datetime` objects directly via the CPython datetime C API, bypassing `datetime.fromtimestamp` and the Python-level `datetime(...)` constructor. Also fixes Cython `DateTime` conversion bugs and expands epoch-arithmetic test coverage.
+- Significantly faster `Map` reads and writes. The read path avoids materializing an intermediate pair tuple, with the win scaling with entries per row. The write path moves into a new Cython `build_map_columns` helper.
+- Order-of-magnitude faster fixed-width numeric inserts from numpy arrays, with significantly lower peak memory. A new Cython `write_native_col` helper writes 1-D C-contiguous numpy arrays of matching dtype directly into the output buffer via `memcpy`, avoiding the per-element conversion the previous path required.
 
 ## 0.15.1, 2026-03-30
 
