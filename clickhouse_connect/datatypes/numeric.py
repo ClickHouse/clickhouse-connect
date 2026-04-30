@@ -19,6 +19,10 @@ class IntBase(ArrayType, registered=False):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
+        np = options.np
+        if np is not None and isinstance(column, np.ndarray) and column.dtype.kind in ("i", "u"):
+            data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
+            return
         if self.nullable:
             first = next((x for x in column if x is not None), None)
             if isinstance(first, int):
@@ -188,6 +192,10 @@ class Float(ArrayType, registered=False):
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
+            return
+        np = options.np
+        if np is not None and isinstance(column, np.ndarray) and column.dtype.kind == "f":
+            data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
             return
         if self.nullable:
             first = next((x for x in column if x is not None), None)
