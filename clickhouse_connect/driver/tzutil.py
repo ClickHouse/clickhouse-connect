@@ -218,7 +218,7 @@ def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
         year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
         if years == 4 or cycles100 == 4:
             return year - 1, 12, 31
-        if years == 3 and (year == 2000 or year % 100 != 0):
+        if years == 3 and (year % 400 == 0 or year % 100 != 0):
             m_list = month_days_leap
         else:
             m_list = month_days

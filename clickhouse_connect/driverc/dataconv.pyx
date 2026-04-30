@@ -161,7 +161,7 @@ cpdef inline object epoch_days_to_date(int days):
         year = (cycles << 2) + cycles400 * 400 + cycles100 * 100  + years + 1601
         if years == 4 or cycles100 == 4:
             return date(year - 1, 12, 31)
-        if years == 3 and (year == 2000 or year % 100 != 0):
+        if years == 3 and (year % 400 == 0 or year % 100 != 0):
             m_list = MONTH_DAYS_LEAP
         else:
             m_list = MONTH_DAYS
@@ -220,7 +220,7 @@ cdef inline void _epoch_days_to_components_c(int days, int* out_year, int* out_m
             out_month[0] = 12
             out_day[0] = 31
             return
-        if years == 3 and (year == 2000 or year % 100 != 0):
+        if years == 3 and (year % 400 == 0 or year % 100 != 0):
             m_list = MONTH_DAYS_LEAP
         else:
             m_list = MONTH_DAYS
