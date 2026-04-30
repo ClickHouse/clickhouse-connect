@@ -183,20 +183,12 @@ cdef class ResponseBuffer:
                     shift += 7
 
             buf = self.read_bytes_c(sz)
-            if encoding == utf8:
-                # Fast path for UTF-8 encoding
-                try:
-                    v = PyUnicode_Decode(buf, sz, utf8, errors)
-                except UnicodeDecodeError:
-                    v = PyBytes_FromStringAndSize(buf, sz).hex()
-            elif encoding:
-                # Generic encoding path
+            if encoding:
                 try:
                     v = PyUnicode_Decode(buf, sz, encoding, errors)
                 except UnicodeDecodeError:
                     v = PyBytes_FromStringAndSize(buf, sz).hex()
             else:
-                # Raw bytes path
                 v = PyBytes_FromStringAndSize(buf, sz)
             PyTuple_SET_ITEM(column, x, v)
             Py_INCREF(v)
@@ -239,11 +231,6 @@ cdef class ResponseBuffer:
             buf = self.read_bytes_c(sz)
             if null_map[x]:
                 v = null_obj
-            elif encoding == utf8:
-                try:
-                    v = PyUnicode_Decode(buf, sz, utf8, errors)
-                except UnicodeDecodeError:
-                    v = PyBytes_FromStringAndSize(buf, sz).hex()
             elif encoding:
                 try:
                     v = PyUnicode_Decode(buf, sz, encoding, errors)
