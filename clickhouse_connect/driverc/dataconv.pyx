@@ -321,18 +321,22 @@ def read_uuid_col(ResponseBuffer buffer, unsigned long long num_rows):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def read_datetime64_naive_col(object column: Sequence, unsigned long long prec):
-    """Read DateTime64 column with naive UTC using epoch arithmetic.
+def read_datetime64_naive_col(object column: Sequence, unsigned long long prec, tz: tzinfo = None):
+    """Read DateTime64 column using epoch arithmetic, for naive UTC or UTC-equivalent timezones.
 
-    Constructs datetime objects directly from epoch seconds components,
-    avoiding per-row calls to tzutil helpers.
+    Constructs datetime objects directly from epoch seconds components via the
+    CPython datetime C API. When tz is None, the result is naive. When tz is a
+    UTC-equivalent timezone (UTC, Etc/UTC, GMT, etc.), the same arithmetic path
+    is used and the tz is attached to the constructed datetime.
 
     Args:
         column: Sequence of integer ticks
         prec: Precision divisor (10**scale)
+        tz: Optional UTC-equivalent timezone to attach. Must be None or UTC-equivalent
+            (no DST or offset conversion is performed by this function).
 
     Returns:
-        Tuple of datetime objects with microseconds, no timezone
+        Tuple of datetime objects with microseconds, naive when tz is None
     """
     cdef unsigned long long x = 0
     cdef unsigned long long num_rows = len(column)
@@ -345,7 +349,7 @@ def read_datetime64_naive_col(object column: Sequence, unsigned long long prec):
         seconds, fractional_ticks = divmod(ticks, prec)
         microseconds = (fractional_ticks * 1000000) // prec
 
-        v = _epoch_to_datetime(seconds, microseconds, None)
+        v = _epoch_to_datetime(seconds, microseconds, tz)
         PyTuple_SET_ITEM(result, x, v)
         Py_INCREF(v)
 
@@ -529,15 +533,15 @@ def write_native_col(str code, column, bytearray dest, object col_name=None) -> 
     """
     Write a column of fixed-width values directly into dest bytearray.
     Fast-paths C-contiguous numpy arrays with matching dtype via memcpy.
-    Falls back to array.array for Python sequences.
+    Falls back to struct.pack for Python sequences.
     """
     cdef Py_ssize_t old_size = PyByteArray_GET_SIZE(dest)
     cdef Py_buffer view
-    cdef object arr
     cdef object dtype
     cdef str byteorder
     cdef str expected_kind
     cdef object np
+    cdef Py_ssize_t num_rows
 
     # Numpy fast path: check if array is 1-D, contiguous, matching kind+size, little-endian
     np = options.np
@@ -566,9 +570,10 @@ def write_native_col(str code, column, bytearray dest, object col_name=None) -> 
                 PyBuffer_Release(&view)
             return 0
 
-    # Python list/tuple fallback: array.array for fast C-level conversion
+    # General fallback: struct.pack with C-level argument unpacking, then append to dest.
+    num_rows = len(column)
     try:
-        arr = array.array(code, column)
+        dest += struct.Struct(f"<{num_rows}{code}").pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
         col_msg = f" for column `{str(col_name)}`" if col_name else ""
         error_detail = type(ex).__name__
@@ -579,14 +584,6 @@ def write_native_col(str code, column, bytearray dest, object col_name=None) -> 
         raise DataError(
             f"Unable to create native array{col_msg}: {error_detail}"
         ) from ex
-
-    # Write the array.array data directly to the bytearray
-    PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
-    try:
-        PyByteArray_Resize(dest, old_size + view.len)
-        memcpy(PyByteArray_AS_STRING(dest) + old_size, view.buf, view.len)
-    finally:
-        PyBuffer_Release(&view)
     return 0
 
 

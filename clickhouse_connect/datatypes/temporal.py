@@ -250,20 +250,9 @@ class DateTime64(DateTimeBase):
         return self._read_binary_naive(column)
 
     def _read_binary_tz(self, column: Sequence, tz_info: tzinfo):
-        prec = self.prec
-
-        # Fast path for UTC-equivalent timezones: use arithmetic instead of fromtimestamp
         if tzutil.is_utc_timezone(tz_info):
-            new_col = []
-            app = new_col.append
-            for ticks in column:
-                seconds, fractional_ticks = divmod(ticks, prec)
-                microseconds = (fractional_ticks * 1000000) // prec
-                dt = tzutil.utc_equivalent_tzaware_datetime(seconds, microseconds, tz_info)
-                app(dt)
-            return new_col
-        else:
-            return data_conv.read_datetime64_tz_col(column, prec, tz_info)
+            return data_conv.read_datetime64_naive_col(column, self.prec, tz_info)
+        return data_conv.read_datetime64_tz_col(column, self.prec, tz_info)
 
     def _read_binary_naive(self, column: Sequence):
         return data_conv.read_datetime64_naive_col(column, self.prec)
