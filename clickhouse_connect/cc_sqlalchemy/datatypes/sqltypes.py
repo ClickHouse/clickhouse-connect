@@ -91,9 +91,9 @@ class Float64(ChSqlaType, Float):
 
 
 class Bool(ChSqlaType, SqlaBoolean):
-    def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF):
+    def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF, **kwargs):
         ChSqlaType.__init__(self, type_def)
-        SqlaBoolean.__init__(self)
+        SqlaBoolean.__init__(self, **kwargs)
 
 
 class Boolean(Bool):
