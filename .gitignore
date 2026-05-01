@@ -28,3 +28,7 @@ test.env
 
 # C extensions
 *.pyd
+
+# Local ClickHouse server source checkout for agent reference (see AGENTS.md)
+/.server-src/
+.server-ref
