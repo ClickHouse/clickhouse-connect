@@ -2,9 +2,16 @@
 
 ## UNRELEASED
 
+### Improvements
+- Order-of-magnitude faster `DateTime` and `DateTime64` reads for naive UTC and UTC-equivalent timezones. The Cython read paths now decode via epoch arithmetic and construct `datetime` objects directly via the CPython datetime C API, bypassing `datetime.fromtimestamp` and the Python-level `datetime(...)` constructor. Also fixes Cython `DateTime` conversion bugs and expands epoch-arithmetic test coverage.
+- Significantly faster `Map` reads and writes. The read path avoids materializing an intermediate pair tuple, with the win scaling with entries per row. The write path moves into a new Cython `build_map_columns` helper.
+- Order-of-magnitude faster fixed-width numeric inserts from numpy arrays, with significantly lower peak memory. A new Cython `write_native_col` helper writes 1-D C-contiguous numpy arrays of matching dtype directly into the output buffer via `memcpy`, avoiding the per-element conversion the previous path required.
+- Significantly faster `Decimal` and `BigDecimal` reads. The decode path no longer constructs intermediate strings per row, building values directly from the integer column via `Decimal.scaleb`.
+
 ### Bug Fixes
 - Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
 - SQLAlchemy `Bool` type now accepts and forwards `**kwargs` to the underlying `SqlaBoolean` constructor. SQLAlchemy's `SchemaType` machinery passes internal kwargs (e.g., `_create_events`) when copying or adapting the type during ORM model use or `Table.to_metadata()`, which previously raised a `TypeError`. Fixes [#705](https://github.com/ClickHouse/clickhouse-connect/issues/705)
+
 
 ## 1.0.0rc1, 2026-04-22
 
