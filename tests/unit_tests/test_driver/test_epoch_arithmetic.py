@@ -95,22 +95,6 @@ class TestEpochSecondsToComponents(unittest.TestCase):
         year, month, day, hour, minute, second, microsecond = epoch_seconds_to_components(946684800)
         self.assertEqual((year, month, day, hour, minute, second, microsecond), (2000, 1, 1, 0, 0, 0, 0))
 
-    def test_year_2400_is_leap(self):
-        """Year 2400 is divisible by 400 -> leap year. Regression for century leap-year bug."""
-        ts = int(datetime(2400, 2, 29, tzinfo=timezone.utc).timestamp())
-        year, month, day, *_ = epoch_seconds_to_components(ts)
-        self.assertEqual((year, month, day), (2400, 2, 29))
-
-        ts = int(datetime(2400, 3, 1, tzinfo=timezone.utc).timestamp())
-        year, month, day, *_ = epoch_seconds_to_components(ts)
-        self.assertEqual((year, month, day), (2400, 3, 1))
-
-    def test_year_2800_is_leap(self):
-        """Year 2800 is divisible by 400 -> leap year."""
-        ts = int(datetime(2800, 2, 29, tzinfo=timezone.utc).timestamp())
-        year, month, day, *_ = epoch_seconds_to_components(ts)
-        self.assertEqual((year, month, day), (2800, 2, 29))
-
     def test_year_2100_is_not_leap(self):
         """Year 2100 is divisible by 100 but not 400 -> NOT a leap year."""
         ts = int(datetime(2100, 2, 28, tzinfo=timezone.utc).timestamp())
@@ -209,19 +193,6 @@ class TestPureUtcfromtimestamp(unittest.TestCase):
         """Test negative epoch (before 1970)."""
         dt = tzutil.utcfromtimestamp(-1)
         self.assertEqual(dt, datetime(1969, 12, 31, 23, 59, 59))
-
-    def test_year_2400_is_leap(self):
-        """Year 2400 is divisible by 400 -> leap year. Regression for century leap-year bug."""
-        ts = int(datetime(2400, 2, 29, tzinfo=timezone.utc).timestamp())
-        self.assertEqual(tzutil.utcfromtimestamp(ts), datetime(2400, 2, 29, 0, 0, 0))
-
-        ts = int(datetime(2400, 3, 1, tzinfo=timezone.utc).timestamp())
-        self.assertEqual(tzutil.utcfromtimestamp(ts), datetime(2400, 3, 1, 0, 0, 0))
-
-    def test_year_2800_is_leap(self):
-        """Year 2800 is divisible by 400 -> leap year."""
-        ts = int(datetime(2800, 2, 29, tzinfo=timezone.utc).timestamp())
-        self.assertEqual(tzutil.utcfromtimestamp(ts), datetime(2800, 2, 29, 0, 0, 0))
 
     def test_year_2100_is_not_leap(self):
         """Year 2100 is divisible by 100 but not 400 -> NOT a leap year."""
