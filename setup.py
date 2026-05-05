@@ -55,7 +55,7 @@ def run_setup(try_c: bool = True):
         url="https://github.com/ClickHouse/clickhouse-connect",
         packages=find_packages(exclude=["tests*"]),
         python_requires=">=3.10,<3.15",
-        license="Apache License 2.0",
+        license="Apache-2.0",
         install_requires=[
             "certifi",
             "urllib3>=1.26",
