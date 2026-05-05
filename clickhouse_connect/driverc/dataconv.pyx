@@ -343,11 +343,13 @@ def read_datetime64_naive_col(object column: Sequence, unsigned long long prec, 
     cdef object result = PyTuple_New(num_rows), v
     cdef long long ticks, seconds, fractional_ticks
     cdef unsigned long long microseconds
+    cdef long long prec_signed = <long long>prec
 
     for x in range(num_rows):
         ticks = column[x]
-        seconds, fractional_ticks = divmod(ticks, prec)
-        microseconds = (fractional_ticks * 1000000) // prec
+        seconds = ticks // prec_signed
+        fractional_ticks = ticks - seconds * prec_signed
+        microseconds = (fractional_ticks * 1000000) // prec_signed
 
         v = _epoch_to_datetime(seconds, microseconds, tz)
         PyTuple_SET_ITEM(result, x, v)
@@ -378,11 +380,13 @@ def read_datetime64_tz_col(object column: Sequence, unsigned long long prec, tzi
     cdef long long ticks, seconds, fractional_ticks
     cdef unsigned long long microseconds
     cdef object dt_from = datetime.fromtimestamp
+    cdef long long prec_signed = <long long>prec
 
     for x in range(num_rows):
         ticks = column[x]
-        seconds, fractional_ticks = divmod(ticks, prec)
-        microseconds = (fractional_ticks * 1000000) // prec
+        seconds = ticks // prec_signed
+        fractional_ticks = ticks - seconds * prec_signed
+        microseconds = (fractional_ticks * 1000000) // prec_signed
 
         v = dt_from(seconds, tzinfo)
         if microseconds != 0:
