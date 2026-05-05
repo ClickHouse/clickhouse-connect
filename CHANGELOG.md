@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.0.0rc2, 2026-05-05
+
 ### Improvements
 - Order-of-magnitude faster `DateTime` and `DateTime64` reads for naive UTC and UTC-equivalent timezones. The Cython read paths now decode via epoch arithmetic and construct `datetime` objects directly via the CPython datetime C API, bypassing `datetime.fromtimestamp` and the Python-level `datetime(...)` constructor. Also fixes Cython `DateTime` conversion bugs and expands epoch-arithmetic test coverage.
 - Significantly faster `Map` reads and writes. The read path avoids materializing an intermediate pair tuple, with the win scaling with entries per row. The write path moves into a new Cython `build_map_columns` helper.
