@@ -9,6 +9,7 @@ from sqlalchemy import Column, MetaData, String, Table, text
 from sqlalchemy.sql.dml import Delete, Update
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Enum as ChSqlaEnum
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -200,9 +201,16 @@ class ClickHouseImpl(DefaultImpl):
         return self._normalize_default(rendered_inspector_default) != self._normalize_default(rendered_metadata_default)
 
     def render_type(self, type_obj, autogen_context):
-        if isinstance(type_obj, ChSqlaType):
-            return str(type_obj.name)
-        return False
+        if not isinstance(type_obj, ChSqlaType):
+            return False
+        if isinstance(type_obj, ChSqlaEnum):
+            keys = list(type_obj.type_def.keys)
+            values = list(type_obj.type_def.values)
+            rendered = f"{type_obj.__class__.__name__}(keys={keys!r}, values={values!r})"
+            for wrapper in reversed(type_obj.type_def.wrappers):
+                rendered = f"{wrapper}({rendered})"
+            return rendered
+        return str(type_obj.name)
 
     def _exec_version_update(self, construct: Update, execution_options=None):
         # Alembic emits a normal SQLAlchemy Update here, but ClickHouse version tracking

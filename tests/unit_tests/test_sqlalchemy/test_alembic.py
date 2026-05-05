@@ -219,6 +219,41 @@ def test_render_type_uses_clickhouse_names():
     assert context.impl.render_type(types.DateTime64(3, "UTC"), None) == "DateTime64(3, 'UTC')"
 
 
+def test_render_type_enum_emits_valid_python():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+
+    enum8 = types.Enum8(keys=["new", "accepted"], values=[0, 1])
+    rendered_enum8 = context.impl.render_type(enum8, None)
+    assert rendered_enum8 == "Enum8(keys=['new', 'accepted'], values=[0, 1])"
+
+    enum16 = types.Enum16(keys=["pending", "complete"], values=[300, 600])
+    rendered_enum16 = context.impl.render_type(enum16, None)
+    assert rendered_enum16 == "Enum16(keys=['pending', 'complete'], values=[300, 600])"
+
+    nullable_enum = types.Nullable(types.Enum8(keys=["new", "accepted"], values=[0, 1]))
+    rendered_nullable = context.impl.render_type(nullable_enum, None)
+    assert rendered_nullable == "Nullable(Enum8(keys=['new', 'accepted'], values=[0, 1]))"
+
+    namespace = {}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(rendered_enum8, namespace)
+    assert rebuilt.name == enum8.name
+    rebuilt_nullable = eval(rendered_nullable, namespace)
+    assert rebuilt_nullable.name == nullable_enum.name
+
+
+def test_render_type_enum_with_special_chars_in_keys():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+
+    enum_special = types.Enum8(keys=["it's", "a-b", "with space"], values=[0, 1, 2])
+    rendered = context.impl.render_type(enum_special, None)
+
+    namespace = {}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(rendered, namespace)
+    assert rebuilt.name == enum_special.name
+
+
 def test_explicit_nullable_column_renders_nullable_type():
     dialect = ClickHouseDialect()
     metadata = MetaData()
