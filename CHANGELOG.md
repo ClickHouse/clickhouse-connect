@@ -11,6 +11,7 @@
 ### Bug Fixes
 - Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
 - SQLAlchemy `Bool` type now accepts and forwards `**kwargs` to the underlying `SqlaBoolean` constructor. SQLAlchemy's `SchemaType` machinery passes internal kwargs (e.g., `_create_events`) when copying or adapting the type during ORM model use or `Table.to_metadata()`, which previously raised a `TypeError`. Fixes [#705](https://github.com/ClickHouse/clickhouse-connect/issues/705)
+- SQLAlchemy: `CreateDatabase` with `engine="Replicated"` now emits a closing `)` after the `(zoo_path, shard, replica)` arguments, fixing previously invalid DDL on this path. The same arguments and the `system.tables` lookup in `get_engine` now go through bound parameters and the existing `format_str` helper instead of raw f-string interpolation.
 
 
 ## 1.0.0rc1, 2026-04-22
