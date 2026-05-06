@@ -1,5 +1,6 @@
 import logging
 
+import aiohttp
 import pytest
 
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
@@ -65,3 +66,71 @@ def test_successful_connection(client_factory, call):
     # Simple query to verify connection works
     result = call(client.command, "SELECT 1")
     assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_async_retry_on_server_disconnected(test_native_async_client, mocker):
+    """
+    aiohttp raises ServerDisconnectedError when the server (or an upstream load
+    balancer) closes a pooled keep-alive connection between requests. The first
+    request that reuses the stale connection sees "Server disconnected" and is
+    safely retried on a fresh connection.
+    """
+    real_request = test_native_async_client._session.request
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise aiohttp.ServerDisconnectedError()
+        return await real_request(*args, **kwargs)
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+
+    result = await test_native_async_client.query("SELECT 13")
+
+    assert attempts == 2
+    assert result.result_rows[0][0] == 13
+
+
+@pytest.mark.asyncio
+async def test_async_server_disconnected_raises_after_retry(test_native_async_client, mocker):
+    """
+    If the disconnect is not transient and the retry also fails, the error must
+    still surface as OperationalError so callers can react.
+    """
+    mocker.patch.object(
+        test_native_async_client._session,
+        "request",
+        side_effect=aiohttp.ServerDisconnectedError(),
+    )
+
+    with pytest.raises(OperationalError) as excinfo:
+        await test_native_async_client.query("SELECT 13")
+
+    assert "Server disconnected" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, aiohttp.ServerDisconnectedError)
+
+
+@pytest.mark.asyncio
+async def test_async_retry_on_connection_reset(test_native_async_client, mocker):
+    """
+    Pre-existing retry behavior for "Connection reset" errors must still hold.
+    """
+    real_request = test_native_async_client._session.request
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise aiohttp.ServerDisconnectedError("Connection reset by peer")
+        return await real_request(*args, **kwargs)
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+
+    result = await test_native_async_client.query("SELECT 79")
+
+    assert attempts == 2
+    assert result.result_rows[0][0] == 79
