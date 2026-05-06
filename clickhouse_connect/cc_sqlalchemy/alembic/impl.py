@@ -8,9 +8,12 @@ from alembic.util import CommandError
 from sqlalchemy import Column, MetaData, String, Table, text
 from sqlalchemy.sql.dml import Delete, Update
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array as ChSqlaArray
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Enum as ChSqlaEnum
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Map as ChSqlaMap
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
@@ -18,6 +21,32 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     column_specification,
 )
 from clickhouse_connect.driver.binding import quote_identifier
+
+
+def _render_ch_type(type_obj):
+    """Render a ChSqlaType as valid Python source for autogen migrations"""
+    wrappers = type_obj.type_def.wrappers
+    if isinstance(type_obj, ChSqlaEnum):
+        keys = list(type_obj.type_def.keys)
+        values = list(type_obj.type_def.values)
+        rendered = f"{type_obj.__class__.__name__}(keys={keys!r}, values={values!r})"
+    elif isinstance(type_obj, ChSqlaArray):
+        rendered = f"Array({_render_inner(type_obj.type_def.values[0])})"
+    elif isinstance(type_obj, ChSqlaMap):
+        key, value = type_obj.type_def.values
+        rendered = f"Map({_render_inner(key)}, {_render_inner(value)})"
+    elif isinstance(type_obj, ChSqlaTuple):
+        elements = ", ".join(_render_inner(v) for v in type_obj.type_def.values)
+        rendered = f"Tuple({elements})"
+    else:
+        return str(type_obj.name)
+    for wrapper in reversed(wrappers):
+        rendered = f"{wrapper}({rendered})"
+    return rendered
+
+
+def _render_inner(name):
+    return _render_ch_type(sqla_type_from_name(name))
 
 
 class ClickHouseImpl(DefaultImpl):
@@ -203,14 +232,7 @@ class ClickHouseImpl(DefaultImpl):
     def render_type(self, type_obj, autogen_context):
         if not isinstance(type_obj, ChSqlaType):
             return False
-        if isinstance(type_obj, ChSqlaEnum):
-            keys = list(type_obj.type_def.keys)
-            values = list(type_obj.type_def.values)
-            rendered = f"{type_obj.__class__.__name__}(keys={keys!r}, values={values!r})"
-            for wrapper in reversed(type_obj.type_def.wrappers):
-                rendered = f"{wrapper}({rendered})"
-            return rendered
-        return str(type_obj.name)
+        return _render_ch_type(type_obj)
 
     def _exec_version_update(self, construct: Update, execution_options=None):
         # Alembic emits a normal SQLAlchemy Update here, but ClickHouse version tracking

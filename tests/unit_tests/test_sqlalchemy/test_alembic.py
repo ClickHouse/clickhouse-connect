@@ -254,6 +254,40 @@ def test_render_type_enum_with_special_chars_in_keys():
     assert rebuilt.name == enum_special.name
 
 
+def test_render_type_containers_with_enum_emit_valid_python():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    enum8 = types.Enum8(keys=["new", "accepted"], values=[0, 1])
+    enum_kwarg = "Enum8(keys=['new', 'accepted'], values=[0, 1])"
+
+    cases = {
+        types.Array(enum8): f"Array({enum_kwarg})",
+        types.Map(types.String, enum8): f"Map(String, {enum_kwarg})",
+        types.Tuple(types.UInt32, enum8): f"Tuple(UInt32, {enum_kwarg})",
+        types.Array(types.Nullable(enum8)): f"Array(Nullable({enum_kwarg}))",
+        types.Array(types.LowCardinality(enum8)): f"Array(LowCardinality({enum_kwarg}))",
+        types.Array(types.Array(enum8)): f"Array(Array({enum_kwarg}))",
+        types.Map(enum8, types.Array(enum8)): f"Map({enum_kwarg}, Array({enum_kwarg}))",
+    }
+
+    namespace = {}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    for type_obj, expected in cases.items():
+        rendered = context.impl.render_type(type_obj, None)
+        assert rendered == expected, f"{type_obj.name}: {rendered!r} != {expected!r}"
+        rebuilt = eval(rendered, namespace)
+        assert rebuilt.name == type_obj.name
+
+
+def test_render_type_non_enum_containers_use_clickhouse_names():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+
+    assert context.impl.render_type(types.Array(types.UInt32), None) == "Array(UInt32)"
+    assert context.impl.render_type(types.Map(types.String, types.UInt32), None) == "Map(String, UInt32)"
+    assert context.impl.render_type(types.Tuple(types.UInt32, types.String), None) == "Tuple(UInt32, String)"
+    assert context.impl.render_type(types.Array(types.Nullable(types.String)), None) == "Array(Nullable(String))"
+    assert context.impl.render_type(types.Array(types.DateTime64(3, "UTC")), None) == "Array(DateTime64(3, 'UTC'))"
+
+
 def test_explicit_nullable_column_renders_nullable_type():
     dialect = ClickHouseDialect()
     metadata = MetaData()
