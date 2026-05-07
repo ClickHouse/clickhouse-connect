@@ -13,7 +13,7 @@ import uuid
 import zlib
 import zoneinfo
 from base64 import b64encode
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Sequence
 from datetime import timezone, tzinfo
 from importlib import import_module
 from importlib.metadata import version as dist_version
@@ -1556,9 +1556,17 @@ class AsyncClient(Client):
 
         loop = asyncio.get_running_loop()
 
-        streaming_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
+        active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
+        active_source.start_producer()
 
-        streaming_source.start_producer()
+        async def rebuild_body():
+            nonlocal active_source
+            await active_source.close()
+            context.current_row = 0
+            context.current_block = 0
+            active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
+            active_source.start_producer()
+            return active_source.async_generator()
 
         headers = {"Content-Type": "application/octet-stream"}
         if context.compression:
@@ -1571,10 +1579,16 @@ class AsyncClient(Client):
         headers = dict_copy(headers, context.transport_settings)
 
         try:
-            response = await self._raw_request(streaming_source.async_generator(), params, headers=headers, server_wait=False)
+            response = await self._raw_request(
+                active_source.async_generator(),
+                params,
+                headers=headers,
+                server_wait=False,
+                retry_body=rebuild_body,
+            )
             logger.debug("Context insert response code: %d", response.status)
         except Exception:
-            await streaming_source.close()
+            await active_source.close()
 
             if context.insert_exception:
                 ex = context.insert_exception
@@ -1582,7 +1596,7 @@ class AsyncClient(Client):
                 raise ex from None
             raise
         finally:
-            await streaming_source.close()
+            await active_source.close()
             context.data = None
 
         return QuerySummary(self._summary(response))
@@ -1772,6 +1786,7 @@ class AsyncClient(Client):
         stream=False,
         server_wait=True,
         retries: int = 0,
+        retry_body: Callable[[], Awaitable[Any]] | None = None,
     ) -> aiohttp.ClientResponse:
         if self._session is None:
             raise ProgrammingError(
@@ -1860,8 +1875,13 @@ class AsyncClient(Client):
                 msg = str(e)
                 if "Connection reset" in msg or "Remote end closed" in msg or "Cannot connect" in msg or "Server disconnected" in msg:
                     if attempts == 1:
-                        logger.debug("Retrying after connection error from remote host")
-                        continue
+                        if retry_body is not None:
+                            data = await retry_body()
+                            logger.debug("Retrying after connection error with rebuilt body")
+                            continue
+                        if data is None or isinstance(data, (bytes, bytearray, str, dict)):
+                            logger.debug("Retrying after connection error from remote host")
+                            continue
                 raise OperationalError(f"Network Error: {msg}") from e
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:

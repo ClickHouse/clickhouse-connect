@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Fix intermittent `Code: 62. Empty query. (SYNTAX_ERROR)` on inserts when a pooled keep-alive connection is reset between attempts. The retry path now rebuilds the insert body instead of replaying an already-drained generator. Affects both sync and async clients. Closes [#731](https://github.com/ClickHouse/clickhouse-connect/issues/731)
+
 ## 1.0.0rc2, 2026-05-05
 
 ### Improvements
