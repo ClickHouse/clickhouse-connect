@@ -1561,7 +1561,7 @@ class AsyncClient(Client):
 
         async def rebuild_body():
             nonlocal active_source
-            await active_source.close()
+            await active_source.close(timeout=None)
             context.current_row = 0
             context.current_block = 0
             active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
