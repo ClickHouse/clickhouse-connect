@@ -261,3 +261,13 @@ class ChStatementCompiler(SQLCompiler):
             if mods and alias in mods:
                 result += " " + mods[alias]
         return result
+
+    def visit_ilike_op_binary(self, binary, operator, **kw):
+        left = self.process(binary.left, **kw)
+        right = self.process(binary.right, **kw)
+        return f"{left} ILIKE {right}"
+
+    def visit_not_ilike_op_binary(self, binary, operator, **kw):
+        left = self.process(binary.left, **kw)
+        right = self.process(binary.right, **kw)
+        return f"{left} NOT ILIKE {right}"
