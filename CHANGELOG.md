@@ -4,10 +4,15 @@
 
 ## 1.1.0a2, 2026-05-07
 
-Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers.
+Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers, rebased on `1.0.0rc3` so the insert-retry fix from rc3 is also included.
 
 ### Bug Fixes
 - SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
+
+## 1.0.0rc3, 2026-05-07
+
+### Bug Fixes
+- Fix intermittent `Code: 62. Empty query. (SYNTAX_ERROR)` on inserts when a pooled keep-alive connection is reset between attempts. The retry path now rebuilds the insert body instead of replaying an already-drained generator. Affects both sync and async clients. Closes [#731](https://github.com/ClickHouse/clickhouse-connect/issues/731)
 
 ## 1.1.0a1, 2026-05-06
 

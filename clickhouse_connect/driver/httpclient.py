@@ -357,13 +357,25 @@ class HttpClient(Client):
             headers["Content-Encoding"] = context.compression
         block_gen = self._transform.build_insert(context)
 
+        def rebuild_block_gen():
+            context.current_row = 0
+            context.current_block = 0
+            return self._transform.build_insert(context)
+
         params = {}
         if self.database:
             params["database"] = self.database
         params.update(self._validate_settings(context.settings))
         headers = dict_copy(headers, context.transport_settings)
         try:
-            response = self._raw_request(block_gen, params, headers, error_handler=error_handler, server_wait=False)
+            response = self._raw_request(
+                block_gen,
+                params,
+                headers,
+                error_handler=error_handler,
+                server_wait=False,
+                retry_body=rebuild_block_gen,
+            )
             logger.debug("Context insert response code: %d, content: %s", response.status, response.data)
             return QuerySummary(self._summary(response))
         finally:
@@ -509,6 +521,7 @@ class HttpClient(Client):
         server_wait: bool = True,
         fields: dict[str, tuple] | None = None,
         error_handler: Callable = None,
+        retry_body: Callable[[], Any] | None = None,
     ) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
@@ -555,12 +568,17 @@ class HttpClient(Client):
             try:
                 response = self.http.request(method, url, **kwargs)
             except HTTPError as ex:
-                if isinstance(ex.__context__, ConnectionResetError):
+                if isinstance(ex.__context__, ConnectionResetError) and attempts == 1:
                     # The server closed the connection, probably because the Keep Alive has expired
                     # We should be safe to retry, as ClickHouse should not have processed anything on a connection
                     # that it killed.  We also only retry this once, as multiple disconnects are unlikely to be
                     # related to the Keep Alive settings
-                    if attempts == 1:
+                    body = kwargs.get("body")
+                    if retry_body is not None:
+                        kwargs["body"] = retry_body()
+                        logger.debug("Retrying remotely closed connection with rebuilt body")
+                        continue
+                    if body is None or isinstance(body, (bytes, bytearray, str)):
                         logger.debug("Retrying remotely closed connection")
                         continue
                 logger.warning("Unexpected Http Driver Exception")

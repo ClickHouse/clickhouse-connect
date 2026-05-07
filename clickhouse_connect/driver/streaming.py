@@ -303,11 +303,15 @@ class StreamingInsertSource:
                 except Exception:
                     pass
 
-    async def close(self):
+    async def close(self, timeout: float | None = 1.0):
+        """Shut down the queue and wait for the producer thread to terminate. Pass ``timeout=None`` to wait without a deadline."""
         self.queue.shutdown()
         if self._producer_future and not self._producer_future.done():
             try:
-                await asyncio.wait_for(self._producer_future, timeout=1.0)
+                if timeout is None:
+                    await self._producer_future
+                else:
+                    await asyncio.wait_for(asyncio.shield(self._producer_future), timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning("Insert producer did not finish within timeout")
             except Exception:
