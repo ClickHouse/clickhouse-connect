@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+## 1.1.0a2, 2026-05-07
+
+Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers.
+
 ### Bug Fixes
 - SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
 
