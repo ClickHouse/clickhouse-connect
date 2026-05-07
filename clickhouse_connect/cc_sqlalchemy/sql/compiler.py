@@ -238,30 +238,48 @@ class ChStatementCompiler(SQLCompiler):
             **kw,
         )
 
+    def _ch_modifier_attr(self, select, compile_state, attr, default):
+        """Read a CH modifier attribute."""
+        val = getattr(select, attr, None)
+        if val is not None:
+            return val
+        if compile_state is not None:
+            orig = getattr(compile_state, "select_statement", None)
+            if orig is not None and orig is not select:
+                return getattr(orig, attr, default)
+        return default
+
     def _compose_select_body(self, text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs):
-        ch_final = getattr(select, "_ch_final", set())
-        ch_sample = getattr(select, "_ch_sample", {})
+        ch_final = self._ch_modifier_attr(select, compile_state, "_ch_final", set())
+        ch_sample = self._ch_modifier_attr(select, compile_state, "_ch_sample", {})
+        ch_prewhere = self._ch_modifier_attr(select, compile_state, "_ch_prewhere", None)
+        ch_limit_by = self._ch_modifier_attr(select, compile_state, "_ch_limit_by", None)
 
-        if ch_final or ch_sample:
-            mods = {}
-            for target in ch_final | set(ch_sample):
-                parts = []
-                if target in ch_final:
-                    parts.append("FINAL")
-                if target in ch_sample:
-                    parts.append(f"SAMPLE {ch_sample[target]}")
-                mods[target] = " ".join(parts)
+        prev_lb = getattr(self, "_ch_active_limit_by", None)
+        self._ch_active_limit_by = ch_limit_by
 
-            prev = getattr(self, "_ch_from_modifiers", None)
-            self._ch_from_modifiers = mods
-            try:
+        try:
+            if ch_final or ch_sample:
+                mods = {}
+                for target in ch_final | set(ch_sample):
+                    parts = []
+                    if target in ch_final:
+                        parts.append("FINAL")
+                    if target in ch_sample:
+                        parts.append(f"SAMPLE {ch_sample[target]}")
+                    mods[target] = " ".join(parts)
+
+                prev = getattr(self, "_ch_from_modifiers", None)
+                self._ch_from_modifiers = mods
+                try:
+                    result = super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
+                finally:
+                    self._ch_from_modifiers = prev
+            else:
                 result = super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
-            finally:
-                self._ch_from_modifiers = prev
-        else:
-            result = super()._compose_select_body(text, select, compile_state, inner_columns, froms, byfrom, toplevel, kwargs)
+        finally:
+            self._ch_active_limit_by = prev_lb
 
-        ch_prewhere = getattr(select, "_ch_prewhere", None)
         if ch_prewhere is not None:
             prewhere_text = self.process(ch_prewhere.whereclause, **kwargs)
             prewhere_segment = f" \nPREWHERE {prewhere_text}"
@@ -274,7 +292,6 @@ class ChStatementCompiler(SQLCompiler):
 
         # LIMIT BY: SA calls limit_clause() only when there's a regular LIMIT/OFFSET.
         # Without one, it's never called, so append the LIMIT BY here instead.
-        ch_limit_by = getattr(select, "_ch_limit_by", None)
         if ch_limit_by is not None and not select._has_row_limiting_clause:
             result += self._render_ch_limit_by(ch_limit_by, kwargs)
 
@@ -288,6 +305,8 @@ class ChStatementCompiler(SQLCompiler):
     def limit_clause(self, select, **kw):
         text = ""
         ch_limit_by = getattr(select, "_ch_limit_by", None)
+        if ch_limit_by is None:
+            ch_limit_by = getattr(self, "_ch_active_limit_by", None)
         if ch_limit_by is not None:
             text += self._render_ch_limit_by(ch_limit_by, kw)
         text += super().limit_clause(select, **kw)

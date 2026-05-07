@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
+
 ## 1.1.0a1, 2026-05-06
 
 This is an **alpha preview** of the upcoming 1.1.0 release, published from the alembic integration branch for early testing. It includes everything in 1.0.0rc2 plus the items below. The new SQLAlchemy and Alembic APIs introduced here may change before 1.1.0 final.
