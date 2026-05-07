@@ -2,8 +2,10 @@ import logging
 
 import aiohttp
 import pytest
+import urllib3.exceptions
 
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
+from clickhouse_connect.driver.options import pd
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -134,3 +136,75 @@ async def test_async_retry_on_connection_reset(test_native_async_client, mocker)
 
     assert attempts == 2
     assert result.result_rows[0][0] == 79
+
+
+def _install_one_shot_reset_mock(client, client_mode, mocker):
+    """Drain and reset the first generator-bodied request, then defer to the real transport."""
+    attempts = [0]
+
+    if client_mode == "sync":
+        real_request = client.http.request
+
+        def flaky_request(method, url, **kwargs):
+            body = kwargs.get("body")
+            if body is not None and not isinstance(body, (bytes, bytearray, str)):
+                attempts[0] += 1
+                if attempts[0] == 1:
+                    for _ in body:
+                        pass
+                    try:
+                        raise ConnectionResetError("Connection reset by peer")
+                    except ConnectionResetError:
+                        raise urllib3.exceptions.ProtocolError("Connection aborted.")  # noqa: B904
+            return real_request(method, url, **kwargs)
+
+        mocker.patch.object(client.http, "request", side_effect=flaky_request)
+    else:
+        real_request = client._session.request
+
+        async def flaky_request(*args, **kwargs):
+            data = kwargs.get("data")
+            if data is not None and hasattr(data, "__aiter__"):
+                attempts[0] += 1
+                if attempts[0] == 1:
+                    async for _ in data:
+                        pass
+                    raise aiohttp.ServerDisconnectedError("Connection reset by peer")
+            return await real_request(*args, **kwargs)
+
+        mocker.patch.object(client._session, "request", side_effect=flaky_request)
+
+    return lambda: attempts[0]
+
+
+def test_insert_retry_on_connection_reset(param_client, call, client_mode, table_context, mocker):
+    """Insert retries and succeeds when the first attempt is hit by a connection reset."""
+    with table_context("insert_retry_reset", ["key Int32", "name String"]):
+        attempts = _install_one_shot_reset_mock(param_client, client_mode, mocker)
+
+        call(
+            param_client.insert,
+            "insert_retry_reset",
+            [[13, "user_1"], [79, "user_2"]],
+            column_names=["key", "name"],
+        )
+        assert attempts() == 2
+
+        rows = call(param_client.query, "SELECT key, name FROM insert_retry_reset ORDER BY key").result_rows
+        assert rows == [(13, "user_1"), (79, "user_2")]
+
+
+def test_insert_df_retry_on_connection_reset(param_client, call, client_mode, table_context, mocker):
+    """insert_df retries and succeeds when the first attempt is hit by a connection reset."""
+    if pd is None:
+        pytest.skip("pandas not available")
+
+    with table_context("insert_df_retry_reset", ["key Int32", "name String"]):
+        attempts = _install_one_shot_reset_mock(param_client, client_mode, mocker)
+
+        df = pd.DataFrame({"key": [13, 79], "name": ["user_1", "user_2"]})
+        call(param_client.insert_df, "insert_df_retry_reset", df)
+        assert attempts() == 2
+
+        rows = call(param_client.query, "SELECT key, name FROM insert_df_retry_reset ORDER BY key").result_rows
+        assert rows == [(13, "user_1"), (79, "user_2")]
