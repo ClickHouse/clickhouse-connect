@@ -19,6 +19,10 @@ pip install clickhouse-connect
 
 ClickHouse Connect requires Python 3.10 or higher.
 
+#### Upgrading from 0.x
+
+The 1.0 release includes breaking changes. If you are upgrading from a 0.15.x or earlier release, see [MIGRATION.md](MIGRATION.md) for a guide to the changes and their replacements.
+
 ### Superset Connectivity
 
 ClickHouse Connect is fully integrated with Apache Superset. Previous versions of ClickHouse Connect utilized a

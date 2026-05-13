@@ -2,6 +2,12 @@
 
 ## UNRELEASED
 
+## 1.0.0, 2026-05-13
+
+No code changes since `1.0.0rc3`. See the `1.0.0rc1`, `1.0.0rc2`, and `1.0.0rc3` entries below for the full set of changes included in the 1.0.0 release.
+
+Upgrading from a 0.15.x or earlier release? See [MIGRATION.md](MIGRATION.md) for a guide to the breaking changes and their replacements.
+
 ## 1.0.0rc3, 2026-05-07
 
 ### Bug Fixes
