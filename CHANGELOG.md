@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Async client: `ca_cert="certifi"` shorthand now resolves to `certifi.where()`, matching the sync client. Previously the async path passed the literal string to `ssl_context.load_verify_locations`, producing `FileNotFoundError`. Closes [#742](https://github.com/ClickHouse/clickhouse-connect/issues/742)
+
 ## 1.0.0, 2026-05-13
 
 No code changes since `1.0.0rc3`. See the `1.0.0rc1`, `1.0.0rc2`, and `1.0.0rc3` entries below for the full set of changes included in the 1.0.0 release.
