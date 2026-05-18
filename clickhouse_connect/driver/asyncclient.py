@@ -231,7 +231,7 @@ class AsyncClient(Client):
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
             elif ca_cert:
-                ssl_context.load_verify_locations(ca_cert)
+                ssl_context.load_verify_locations(httputil.resolve_ca_cert(ca_cert))
             if client_cert:
                 ssl_context.load_cert_chain(client_cert, client_cert_key)
 
