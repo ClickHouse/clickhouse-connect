@@ -20,10 +20,10 @@ jobs:
       CIBW_SKIP: '*-musllinux* pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
       CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-x86-manylinux
           path: ./wheelhouse/*.whl
@@ -35,10 +35,10 @@ jobs:
       CIBW_SKIP: '*-manylinux* pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
       CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-x86-musllinux
           path: ./wheelhouse/*.whl
@@ -51,14 +51,14 @@ jobs:
       CIBW_SKIP: '*-musllinux* cp38-* cp39-* cp313t-*'
       CIBW_ENABLE: 'cpython-freethreading'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: all
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-aarch64-manylinux
           path: ./wheelhouse/*.whl
@@ -71,14 +71,14 @@ jobs:
       CIBW_SKIP: '*-manylinux* cp38-* cp39-* cp313t-*'
       CIBW_ENABLE: 'cpython-freethreading'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: all
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-aarch64-musllinux
           path: ./wheelhouse/*.whl
@@ -91,14 +91,14 @@ jobs:
       CIBW_BUILD: 'pp310-*'
       CIBW_ENABLE: 'pypy pypy-eol'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: all
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-aarch64-pypy
           path: ./wheelhouse/*.whl
@@ -111,12 +111,12 @@ jobs:
       CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
       CIBW_SKIP: 'pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
         env:
           CIBW_ARCHS_MACOS: x86_64 arm64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-macos
           path: ./wheelhouse/*.whl
@@ -129,10 +129,10 @@ jobs:
       CIBW_ENABLE: 'pypy pypy-eol cpython-freethreading'
       CIBW_SKIP: 'pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-windows
           path: ./wheelhouse/*.whl
@@ -150,9 +150,9 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ inputs.publish_type != 'build' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python (3.12)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: 3.12
       - name: Install Dependencies
@@ -164,7 +164,7 @@ jobs:
           rm -rf dist 
           python setup.py sdist
       - name: Retrieve wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: build-*
           merge-multiple: true
