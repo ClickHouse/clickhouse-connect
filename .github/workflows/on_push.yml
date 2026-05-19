@@ -30,9 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Ruff
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install Ruff
@@ -50,16 +50,14 @@ jobs:
     name: Bare Install Test (no extras)
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Start ClickHouse (latest) in Docker
-        uses: hoverkraft-tech/compose-action@v2.0.0
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
-        with:
-          compose-file: 'docker-compose.yml'
-          down-flags: '--volumes'
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install only core dependencies (no extras)
@@ -69,6 +67,11 @@ jobs:
           pip install certifi urllib3 zstandard lz4
       - name: Bare import test and basic query
         run: python tests/test_bare_install.py
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   tests:
     runs-on: ubuntu-latest
@@ -82,34 +85,31 @@ jobs:
           - '3.13'
           - '3.14'
         clickhouse-version:
-          - '25.3' # LTS
           - '25.8' # LTS
-          - '25.12' # Stable
-          - '26.1' # Stable
           - '26.2' # Stable
+          - '26.3' # LTS
+          - '26.4' # Stable
         use-c:
           - '1'
         include:
           - python-version: '3.10'
-            clickhouse-version: '25.3'
+            clickhouse-version: '25.8'
             use-c: '0'
           - python-version: '3.14'
-            clickhouse-version: '26.2'
+            clickhouse-version: '26.4'
             use-c: '0'
 
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Start ClickHouse (version - ${{ matrix.clickhouse-version }}) in Docker
-        uses: hoverkraft-tech/compose-action@v2.0.0
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ matrix.clickhouse-version }}
-        with:
-          compose-file: 'docker-compose.yml'
-          down-flags: '--volumes'
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install pip
@@ -131,6 +131,11 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest -n 4 tests
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   pandas-3x-compat-test:
     runs-on: ubuntu-latest
@@ -138,16 +143,14 @@ jobs:
     name: Pandas 3.x Compatibility Tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Start ClickHouse (version - latest) in Docker
-        uses: hoverkraft-tech/compose-action@v2.0.0
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
-        with:
-          compose-file: 'docker-compose.yml'
-          down-flags: '--volumes'
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install pip
@@ -169,6 +172,11 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest -n 4 tests/unit_tests/test_pandas.py tests/integration_tests/test_pandas.py tests/integration_tests/test_async_features.py -k "pandas or arrow"
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   sqlalchemy-1x-compat-test:
     runs-on: ubuntu-latest
@@ -176,16 +184,14 @@ jobs:
     name: SQLAlchemy 1.x Compatibility Tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Start ClickHouse (version - latest) in Docker
-        uses: hoverkraft-tech/compose-action@v2.0.0
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
-        with:
-          compose-file: 'docker-compose.yml'
-          down-flags: '--volumes'
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Install pip
@@ -207,6 +213,11 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
         run: pytest -n 4 tests/integration_tests/test_sqlalchemy
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   check-secret:
     runs-on: ubuntu-latest
@@ -237,9 +248,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
