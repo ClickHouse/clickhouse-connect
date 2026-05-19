@@ -84,9 +84,9 @@ async def test_context_manager_cleanup(test_config):
         result = await client.query("SELECT 1")
         assert result.result_rows[0][0] == 1
 
-    assert client._session is None or client._session.closed
+    assert client._session is None
 
-    with pytest.raises((RuntimeError, OperationalError)):
+    with pytest.raises((ProgrammingError, RuntimeError, OperationalError)):
         await client.query("SELECT 1")
 
 
@@ -287,3 +287,137 @@ async def test_async_insert_df_arrow(test_config, table_context: Callable):
             await client.insert_df_arrow("test_async_df_arrow_i", df)
             res = await client.query("SELECT * FROM test_async_df_arrow_i ORDER BY i64")
             assert res.result_rows == [(51, 421, "b"), (78, None, "a")]
+
+
+@pytest.mark.asyncio
+async def test_close_connections_replaces_session_atomically(test_config):
+    """Test close_connections() installs the new session before closing the old."""
+    async with await get_async_client(**make_client_config(test_config)) as client:
+        old_session = client._session
+        await client.close_connections()
+        assert client._session is not None
+        assert not client._session.closed
+        assert client._session is not old_session
+        assert old_session.closed
+
+
+@pytest.mark.asyncio
+async def test_close_clears_session_reference(test_config):
+    """Test close() must clear self._session so post-close calls fail cleanly."""
+    client = await get_async_client(**make_client_config(test_config))
+    await client.query("SELECT 1")
+    await client.close()
+    assert client._session is None
+    with pytest.raises(ProgrammingError):
+        await client.query("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_queries_survive_pool_reset(test_config):
+    """Test concurrent queries complete without errors across direct close_connections() calls."""
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
+        stop = asyncio.Event()
+
+        async def worker(idx: int) -> int:
+            count = 0
+            while not stop.is_set():
+                result = await client.query(f"SELECT {idx}, {count}")
+                assert result.result_rows[0] == (idx, count)
+                count += 1
+                await asyncio.sleep(0.01)
+            return count
+
+        async def pool_resetter() -> None:
+            while not stop.is_set():
+                await asyncio.sleep(0.3)
+                await client.close_connections()
+
+        workers = [asyncio.create_task(worker(i)) for i in range(6)]
+        resetter = asyncio.create_task(pool_resetter())
+
+        await asyncio.sleep(2.0)
+        stop.set()
+
+        worker_counts = await asyncio.gather(*workers)
+        await resetter
+        assert all(c > 0 for c in worker_counts)
+
+
+@pytest.mark.asyncio
+async def test_long_query_survives_pool_reset(test_config):
+    """Test a SELECT sleep(1) on the old session completes even when close_connections() rotates the pool mid-flight."""
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
+
+        async def reset_after_delay():
+            await asyncio.sleep(0.2)
+            await client.close_connections()
+
+        long_task = asyncio.create_task(client.query("SELECT sleep(1), 79"))
+        reset_task = asyncio.create_task(reset_after_delay())
+
+        result = await long_task
+        await reset_task
+        assert result.result_rows[0][1] == 79
+
+
+@pytest.mark.asyncio
+async def test_ping_survives_pool_reset(test_config):
+    """Test ping() takes the lease and doesn't fail when close_connections() rotates the pool."""
+    async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
+        stop = asyncio.Event()
+
+        async def pinger() -> int:
+            count = 0
+            while not stop.is_set():
+                assert await client.ping() is True
+                count += 1
+                await asyncio.sleep(0.01)
+            return count
+
+        async def pool_resetter() -> None:
+            while not stop.is_set():
+                await asyncio.sleep(0.05)
+                await client.close_connections()
+
+        pingers = [asyncio.create_task(pinger()) for _ in range(4)]
+        resetter = asyncio.create_task(pool_resetter())
+
+        await asyncio.sleep(1.5)
+        stop.set()
+
+        counts = await asyncio.gather(*pingers)
+        await resetter
+        assert all(c > 0 for c in counts)
+
+
+@pytest.mark.asyncio
+async def test_max_connection_age_trigger_path(test_config):
+    """Test the max_connection_age auto-reset path."""
+    from clickhouse_connect import common as cc_common
+
+    original = cc_common.get_setting("max_connection_age")
+    cc_common.set_setting("max_connection_age", 1)
+    try:
+        async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
+            initial_session = client._session
+            await client.query("SELECT 1")
+            await asyncio.sleep(1.2)
+
+            stop = asyncio.Event()
+
+            async def worker(idx: int) -> int:
+                count = 0
+                while not stop.is_set():
+                    result = await client.query(f"SELECT {idx}, {count}, sleep(0.1)")
+                    assert result.result_rows[0][:2] == (idx, count)
+                    count += 1
+                return count
+
+            workers = [asyncio.create_task(worker(i)) for i in range(4)]
+            await asyncio.sleep(1.5)
+            stop.set()
+            counts = await asyncio.gather(*workers)
+            assert all(c > 0 for c in counts)
+            assert client._session is not initial_session
+    finally:
+        cc_common.set_setting("max_connection_age", original)
