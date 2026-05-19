@@ -368,7 +368,7 @@ class AsyncClient(Client):
             self.server_version, server_tz_str = tuple(row)
             try:
                 server_tz = tzutil.resolve_zone(server_tz_str)
-                server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz)
+                server_tz, self._dst_safe = tzutil.normalize_timezone(server_tz, trust_fixed_offset=True)
                 self.server_tz = server_tz
             except zoneinfo.ZoneInfoNotFoundError:
                 logger.warning(
