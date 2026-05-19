@@ -1,3 +1,5 @@
+from datetime import timedelta, timezone
+
 from clickhouse_connect.datatypes.container import Nested
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
 
@@ -40,3 +42,19 @@ def test_named_tuple():
     assert tuple_type.name == "Tuple(Int64, String)"
     tuple_type = gfn("Tuple(`key` Int64, `value` String)")
     assert tuple_type.name == "Tuple(`key` Int64, `value` String)"
+
+
+def test_datetime_fixed_offset_timezone():
+    """DateTime('Fixed/UTC+05:30:00') is emitted by ClickHouse servers without IANA tzdb."""
+    dt_type = gfn("DateTime('Fixed/UTC+05:30:00')")
+    assert dt_type.tzinfo == timezone(timedelta(hours=5, minutes=30))
+
+
+def test_datetime_fixed_offset_negative_timezone():
+    dt_type = gfn("DateTime('Fixed/UTC-03:00:00')")
+    assert dt_type.tzinfo == timezone(timedelta(hours=-3))
+
+
+def test_datetime64_fixed_offset_timezone():
+    dt64_type = gfn("DateTime64(3, 'Fixed/UTC+05:30:00')")
+    assert dt64_type.tzinfo == timezone(timedelta(hours=5, minutes=30))
