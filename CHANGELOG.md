@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.0.1, 2026-05-19
+
 ### Bug Fixes
 - Recognize `Fixed/UTC±HH:MM:SS` timezones emitted by ClickHouse servers without an IANA tz database (in column types, `X-ClickHouse-Timezone`, and `SELECT timezone()`). Previously raised `ProgrammingError` on any column read, parameter bind, or client init touching one. The exact `±24:00:00` boundary remains rejected because Python's `datetime.timezone` cannot represent it. Closes [#702](https://github.com/ClickHouse/clickhouse-connect/issues/702).
 - Async client: drain in-flight requests before closing the underlying aiohttp session. Sharing a single `AsyncClient` across concurrent coroutines previously raised `RuntimeError: Session is closed` (and related `Connection reset` / `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` cascades) whenever `max_connection_age` triggered a pool rotation while other tasks had requests in flight. `close_connections()` now installs the new session before retiring the old one, and waits for outstanding requests (including streaming responses) to release their lease before tearing it down. `close()` clears `self._session` so post-close calls fail with `ProgrammingError` instead of leaking aiohttp's `RuntimeError`. Closes [#744](https://github.com/ClickHouse/clickhouse-connect/issues/744)
