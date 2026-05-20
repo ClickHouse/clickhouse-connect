@@ -41,7 +41,7 @@ def quote_identifier(identifier: str) -> str:
 
 
 def _is_validly_quoted(identifier: str, quote: str) -> bool:
-    # Accepts backslash escaping (\` or \") and doubled-quote escaping (`` or "").
+    # Accepts backslash escapes (\X) and doubled-quote escapes (`` or "").
     i, end = 1, len(identifier) - 1
     while i < end:
         c = identifier[i]
