@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- `quote_identifier` now re-escapes inputs that start and end with `` ` `` or `"` but contain unescaped inner occurrences of the same quote character, instead of passing them through unchanged. Validly pre-quoted identifiers like backslash or doubled-quote escaping still pass through untouched. Closes [#737](https://github.com/ClickHouse/clickhouse-connect/issues/737).
+
 ## 1.0.1, 2026-05-19
 
 ### Bug Fixes
