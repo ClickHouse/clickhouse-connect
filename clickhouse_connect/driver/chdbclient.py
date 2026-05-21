@@ -447,10 +447,13 @@ class ChdbClient(Client):
         tmp = tempfile.NamedTemporaryFile(suffix=f".{fmt.lower()}", delete=False)
         try:
             try:
-                if isinstance(insert_block, (bytes, bytearray)):
+                if isinstance(insert_block, (bytes, bytearray, memoryview)):
                     tmp.write(bytes(insert_block))
                 elif isinstance(insert_block, str):
                     tmp.write(insert_block.encode())
+                elif hasattr(insert_block, "to_pybytes"):
+                    # pyarrow.Buffer and friends — buffer protocol holder
+                    tmp.write(insert_block.to_pybytes())
                 elif hasattr(insert_block, "read"):
                     while True:
                         chunk = insert_block.read(1 << 20)

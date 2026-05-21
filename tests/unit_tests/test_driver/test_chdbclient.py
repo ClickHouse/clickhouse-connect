@@ -256,6 +256,140 @@ def test_set_access_token_silent_noop(client):
     client.set_access_token("not-a-real-token")  # must not raise
 
 
+# ---- pyarrow / numpy round-trips ----
+
+
+def test_query_arrow(client):
+    pytest.importorskip("pyarrow")
+    client.command("CREATE TABLE arrow_q (id UInt32, name String) ENGINE = Memory")
+    client.insert("arrow_q", [[13, "user_1"], [79, "user_2"]], column_names=["id", "name"])
+    table = client.query_arrow("SELECT id, name FROM arrow_q ORDER BY id")
+    assert table.column_names == ["id", "name"]
+    assert table.column("id").to_pylist() == [13, 79]
+    assert table.column("name").to_pylist() == ["user_1", "user_2"]
+
+
+def test_query_arrow_stream(client):
+    pytest.importorskip("pyarrow")
+    client.command("CREATE TABLE arrow_qs (id UInt32) ENGINE = Memory")
+    client.insert("arrow_qs", [[i] for i in range(20)], column_names=["id"])
+    with client.query_arrow_stream("SELECT id FROM arrow_qs SETTINGS max_block_size = 5") as stream:
+        batches = list(stream)
+    assert sum(b.num_rows for b in batches) == 20
+
+
+def test_insert_arrow_round_trip(client):
+    pa = pytest.importorskip("pyarrow")
+    client.command("CREATE TABLE arrow_ins (id UInt32, name String) ENGINE = Memory")
+    table = pa.table({"id": pa.array([13, 79], type=pa.uint32()), "name": pa.array(["user_1", "user_2"])})
+    client.insert_arrow("arrow_ins", table)
+    r = client.query("SELECT id, name FROM arrow_ins ORDER BY id")
+    assert r.result_rows == [(13, "user_1"), (79, "user_2")]
+
+
+def test_query_np(client):
+    pytest.importorskip("numpy")
+    client.command("CREATE TABLE np_q (id UInt32, v Float64) ENGINE = Memory")
+    client.insert("np_q", [[13, 1.5], [79, 2.5]], column_names=["id", "v"])
+    arr = client.query_np("SELECT id, v FROM np_q ORDER BY id")
+    assert list(arr["id"]) == [13, 79]
+    assert list(arr["v"]) == [1.5, 2.5]
+
+
+def test_query_np_stream(client):
+    pytest.importorskip("numpy")
+    client.command("CREATE TABLE np_qs (id UInt32) ENGINE = Memory")
+    client.insert("np_qs", [[i] for i in range(20)], column_names=["id"])
+    with client.query_np_stream("SELECT id FROM np_qs SETTINGS max_block_size = 7") as stream:
+        chunks = list(stream)
+    assert sum(len(c) for c in chunks) == 20
+
+
+# ---- additional streaming flavors ----
+
+
+def test_query_column_block_stream(client):
+    client.command("CREATE TABLE col_stream (id UInt32, v String) ENGINE = Memory")
+    client.insert("col_stream", [[i, f"row_{i}"] for i in range(15)], column_names=["id", "v"])
+    with client.query_column_block_stream("SELECT id, v FROM col_stream SETTINGS max_block_size = 5") as stream:
+        blocks = list(stream)
+    # Each block is column-oriented: a tuple of columns
+    total_rows = sum(len(block[0]) for block in blocks)
+    assert total_rows == 15
+
+
+def test_query_rows_stream(client):
+    client.command("CREATE TABLE rows_stream (id UInt32) ENGINE = Memory")
+    client.insert("rows_stream", [[i] for i in range(10)], column_names=["id"])
+    with client.query_rows_stream("SELECT id FROM rows_stream ORDER BY id") as stream:
+        rows = list(stream)
+    assert [r[0] for r in rows] == list(range(10))
+
+
+# ---- insert variations ----
+
+
+def test_insert_column_oriented(client):
+    client.command("CREATE TABLE col_oriented (id UInt32, v Float64) ENGINE = Memory")
+    columns = [[13, 79, 103], [1.5, 2.5, 3.5]]
+    client.insert("col_oriented", columns, column_names=["id", "v"], column_oriented=True)
+    r = client.query("SELECT id, v FROM col_oriented ORDER BY id")
+    assert r.result_rows == [(13, 1.5), (79, 2.5), (103, 3.5)]
+
+
+def test_reusable_insert_context(client):
+    client.command("CREATE TABLE reuse_ctx (id UInt32, name String) ENGINE = Memory")
+    ctx = client.create_insert_context("reuse_ctx", column_names=["id", "name"])
+    client.insert(data=[[13, "first"]], context=ctx)
+    client.insert(data=[[79, "second"]], context=ctx)
+    r = client.query("SELECT id, name FROM reuse_ctx ORDER BY id")
+    assert r.result_rows == [(13, "first"), (79, "second")]
+
+
+# ---- database parameter ----
+
+
+def test_database_parameter_switches_default():
+    c = clickhouse_connect.get_client(interface="chdb")
+    try:
+        c.command("CREATE DATABASE other_db")
+        c.command("CREATE TABLE other_db.scoped (id UInt32) ENGINE = Memory")
+        c.command("INSERT INTO other_db.scoped VALUES (13)")
+    finally:
+        c.close()
+    # Note: chdb :memory: is per-connection, so this test only checks the USE
+    # mechanism — can't cross sessions on :memory:. Instead verify USE works inline:
+    c2 = clickhouse_connect.get_client(interface="chdb")
+    try:
+        c2.command("CREATE DATABASE scoped_test")
+        c2.command("USE scoped_test")
+        c2.command("CREATE TABLE local_t (id UInt32) ENGINE = Memory")
+        # unqualified reference should resolve into scoped_test
+        c2.command("INSERT INTO local_t VALUES (13)")
+        assert c2.query("SELECT count() FROM local_t").result_rows[0][0] == 1
+        assert c2.query("SELECT count() FROM scoped_test.local_t").result_rows[0][0] == 1
+    finally:
+        c2.close()
+
+
+def test_database_param_forwarded_to_use(tmp_path):
+    db = str(tmp_path / "dbparam.db")
+    # First connection creates DB + table
+    a = clickhouse_connect.get_client(interface="chdb", chdb_path=db)
+    try:
+        a.command("CREATE DATABASE analytics")
+        a.command("CREATE TABLE analytics.events (id UInt32) ENGINE = MergeTree ORDER BY id")
+        a.command("INSERT INTO analytics.events VALUES (13)")
+    finally:
+        a.close()
+    # Second connection uses the database= kwarg; unqualified table reference must work
+    b = clickhouse_connect.get_client(interface="chdb", chdb_path=db, database="analytics")
+    try:
+        assert b.query("SELECT count() FROM events").result_rows[0][0] == 1
+    finally:
+        b.close()
+
+
 # ---- DBAPI on top of chdb ----
 
 
@@ -272,6 +406,26 @@ def test_dbapi_cursor_round_trip():
             rows = cur.fetchall()
             assert rows == [(13, "user_1"), (79, "user_2")]
             assert [c[0] for c in cur.description] == ["id", "name"]
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+
+
+def test_dbapi_executemany():
+    import clickhouse_connect.dbapi as dbapi
+
+    conn = dbapi.connect(interface="chdb")
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("CREATE TABLE dba_many (id UInt32, name String) ENGINE = Memory")
+            cur.executemany(
+                "INSERT INTO dba_many (id, name) VALUES",
+                [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}, {"id": 103, "name": "user_3"}],
+            )
+            cur.execute("SELECT id, name FROM dba_many ORDER BY id")
+            assert cur.fetchall() == [(13, "user_1"), (79, "user_2"), (103, "user_3")]
         finally:
             cur.close()
     finally:
