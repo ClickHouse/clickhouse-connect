@@ -983,7 +983,13 @@ class AsyncClient(Client):
         try:
             url = f"{self.url}/ping"
             timeout = aiohttp.ClientTimeout(total=3.0)
-            async with session.get(url, timeout=timeout) as response:
+            get_kwargs: dict[str, Any] = {"timeout": timeout}
+            if self.server_host_name:
+                get_kwargs["headers"] = {"Host": self.server_host_name}
+                if self._ssl_context is not None:
+                    get_kwargs["ssl"] = self._ssl_context
+                    get_kwargs["server_hostname"] = self.server_host_name
+            async with session.get(url, **get_kwargs) as response:
                 return 200 <= response.status < 300
         except (aiohttp.ClientError, asyncio.TimeoutError):
             logger.debug("ping failed", exc_info=True)
@@ -1945,6 +1951,9 @@ class AsyncClient(Client):
                 # Construct full URL (aiohttp doesn't have base_url)
                 url = f"{self.url}/"
                 request_kwargs = {"method": method, "url": url, "params": final_params, "headers": req_headers}
+                if self.server_host_name and self._ssl_context is not None:
+                    request_kwargs["ssl"] = self._ssl_context
+                    request_kwargs["server_hostname"] = self.server_host_name
                 if hasattr(self, "_proxy_url") and self._proxy_url:
                     request_kwargs["proxy"] = self._proxy_url
                 if files:
