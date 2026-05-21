@@ -1996,15 +1996,11 @@ class AsyncClient(Client):
                     if attempts < max_attempts:
                         if retry_body is not None:
                             data = await retry_body()
-                            logger.debug(
-                                "Retrying after connection error with rebuilt body (attempt %s/%s)", attempts, max_attempts
-                            )
+                            logger.debug("Retrying after connection error with rebuilt body (attempt %s/%s)", attempts, max_attempts)
                             await asyncio.sleep(0.1 * attempts)
                             continue
                         if data is None or isinstance(data, (bytes, bytearray, str, dict)):
-                            logger.debug(
-                                "Retrying after connection error from remote host (attempt %s/%s)", attempts, max_attempts
-                            )
+                            logger.debug("Retrying after connection error from remote host (attempt %s/%s)", attempts, max_attempts)
                             await asyncio.sleep(0.1 * attempts)
                             continue
                 raise OperationalError(f"Network Error: {msg}") from e
