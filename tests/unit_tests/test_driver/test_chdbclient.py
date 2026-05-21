@@ -172,6 +172,32 @@ def test_set_client_setting_persists(client):
     assert client.get_client_setting("max_block_size") == "1000"
 
 
+def _read_session_setting(client, name: str) -> str:
+    body = client.raw_query(f"SELECT value FROM system.settings WHERE name = '{name}'", fmt="TabSeparated")
+    return body.decode().strip()
+
+
+def test_command_per_call_setting_does_not_leak(client):
+    before = _read_session_setting(client, "max_block_size")
+    client.command("SELECT 1", settings={"max_block_size": 13})
+    after = _read_session_setting(client, "max_block_size")
+    assert after == before, f"max_block_size leaked: before={before!r} after={after!r}"
+
+
+def test_command_per_call_setting_restored_on_error(client):
+    before = _read_session_setting(client, "max_block_size")
+    with pytest.raises(DatabaseError):
+        client.command("SELECT bad_function()", settings={"max_block_size": 13})
+    after = _read_session_setting(client, "max_block_size")
+    assert after == before, f"max_block_size leaked after error: before={before!r} after={after!r}"
+
+
+def test_command_restores_previously_set_value(client):
+    client.set_client_setting("max_block_size", 7)
+    client.command("SELECT 1", settings={"max_block_size": 13})
+    assert _read_session_setting(client, "max_block_size") == "7"
+
+
 # ---- streaming ----
 
 

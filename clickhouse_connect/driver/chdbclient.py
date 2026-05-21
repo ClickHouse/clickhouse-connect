@@ -39,36 +39,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# HTTP-only kwargs accepted (and ignored) so users can switch interface without
-# editing the rest of their connection config.
-_HTTP_ONLY_KWARGS = frozenset(
-    {
-        "compress",
-        "compression",
-        "connect_timeout",
-        "send_receive_timeout",
-        "client_name",
-        "verify",
-        "ca_cert",
-        "client_cert",
-        "client_cert_key",
-        "session_id",
-        "pool_mgr",
-        "http_proxy",
-        "https_proxy",
-        "tls_mode",
-        "proxy_path",
-        "form_encode_query_params",
-        "rename_response_column",
-        "autogenerate_session_id",
-        "autogenerate_query_id",
-        "connector_limit",
-        "connector_limit_per_host",
-        "keepalive_timeout",
-        "server_host_name",
-    }
-)
-
 
 class _BytesSource:
     """
@@ -106,20 +76,14 @@ def _format_error_message(message: str) -> str:
 
 
 def _build_conn_string(chdb_path: str, chdb_options: dict[str, Any] | None) -> str:
-    if not chdb_path or chdb_path in (":memory:", "memory"):
-        path = ":memory:"
-    elif chdb_path.startswith("file:"):
-        return chdb_path
-    else:
-        path = chdb_path
+    path = chdb_path or ":memory:"
     if not chdb_options:
         return path
     from urllib.parse import urlencode
 
     query = urlencode({k: str(v) for k, v in chdb_options.items()})
-    if path == ":memory:":
-        return f"file::memory:?{query}"
-    return f"file:{path}?{query}"
+    sep = "&" if "?" in path else "?"
+    return f"{path}{sep}{query}"
 
 
 class ChdbClient(Client):
@@ -139,8 +103,6 @@ class ChdbClient(Client):
         "wait_end_of_query",
         "buffer_size",
         "role",
-    }
-    optional_transport_settings: set[str] = {
         "send_progress_in_http_headers",
         "http_headers_progress_interval_ms",
         "enable_http_compression",
@@ -150,10 +112,9 @@ class ChdbClient(Client):
         self,
         chdb_path: str = ":memory:",
         chdb_options: dict[str, Any] | None = None,
-        database: str = "__default__",
+        database: str | None = None,
         settings: dict[str, Any] | None = None,
         query_limit: int = 0,
-        query_retries: int = 0,
         tz_source: TzSource | None = None,
         tz_mode: TzMode | None = None,
         show_clickhouse_errors: bool | None = None,
@@ -166,11 +127,6 @@ class ChdbClient(Client):
             import chdb
         except ImportError as ex:
             raise ImportError("chdb backend requires the chdb package. Install with: pip install 'clickhouse-connect[chdb]'") from ex
-
-        for key in ignored:
-            if key in _HTTP_ONLY_KWARGS:
-                continue
-            logger.warning("ChdbClient: ignoring unrecognized kwarg %r", key)
 
         self._chdb_path = chdb_path or ":memory:"
         self._chdb_options = dict(chdb_options) if chdb_options else {}
@@ -194,7 +150,7 @@ class ChdbClient(Client):
             database=database,
             uri=self.uri,
             query_limit=coerce_int(query_limit),
-            query_retries=coerce_int(query_retries),
+            query_retries=0,
             server_host_name=None,
             tz_source=tz_source,
             tz_mode=tz_mode,
@@ -236,7 +192,7 @@ class ChdbClient(Client):
             str_v = self._validate_setting(k, v, invalid_action)
             if str_v is None:
                 continue
-            if k in self.valid_transport_settings or k in self.optional_transport_settings:
+            if k in self.valid_transport_settings:
                 continue
             out[k] = str_v
         return out
@@ -256,6 +212,39 @@ class ChdbClient(Client):
                 self._conn.query(f"SET {key} = {value}", "TabSeparated")
         except Exception as ex:  # noqa: BLE001
             logger.debug("Failed to apply SET %s=%s to chdb session: %s", key, value, ex)
+
+    def _snapshot_settings(self, keys: Sequence[str]) -> dict[str, tuple[str, bool]]:
+        """Read current value and 'changed' flag for each key from system.settings.
+
+        Returns a dict: {name -> (value, was_explicitly_set)}.
+        """
+        if not keys:
+            return {}
+        quoted = ", ".join(f"'{k}'" for k in keys)
+        body = self._exec_raw_query(
+            f"SELECT name, value, changed FROM system.settings WHERE name IN ({quoted})",
+            "TabSeparated",
+        )
+        result: dict[str, tuple[str, bool]] = {}
+        if body:
+            for line in body.decode().rstrip("\n").split("\n"):
+                parts = line.split("\t")
+                if len(parts) == 3:
+                    name, value, changed = parts
+                    result[name] = (value, changed == "1")
+        return result
+
+    def _restore_settings(self, snapshot: dict[str, tuple[str, bool]]) -> None:
+        """Restore settings to the state captured by `_snapshot_settings`."""
+        for name, (value, was_changed) in snapshot.items():
+            try:
+                if was_changed:
+                    self._persist_setting(name, value)
+                else:
+                    with self._lock:
+                        self._conn.query(f"SET {name} = DEFAULT", "TabSeparated")
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to restore setting %s after command()", name, exc_info=True)
 
     def _exec_raw_query(self, sql: str, fmt: str = "Native") -> bytes:
         """Run a query against chdb under the per-client lock and return raw bytes."""
@@ -283,7 +272,7 @@ class ChdbClient(Client):
         if str_value is None:
             return
         self._client_settings[key] = str_value
-        if key in self.valid_transport_settings or key in self.optional_transport_settings:
+        if key in self.valid_transport_settings:
             return
         self._persist_setting(key, str_value)
 
@@ -333,8 +322,6 @@ class ChdbClient(Client):
         final_query, _ = bind_query(query, parameters, self.server_tz)
         if isinstance(final_query, bytes):
             final_query = final_query.decode()
-        if fmt:
-            final_query = f"{final_query}\n FORMAT {fmt}"
         final_query = self._append_settings_clause(final_query, self._filter_per_call_settings(settings))
         return self._exec_raw_query(final_query, fmt or "Native")
 
@@ -353,8 +340,6 @@ class ChdbClient(Client):
         final_query, _ = bind_query(query, parameters, self.server_tz)
         if isinstance(final_query, bytes):
             final_query = final_query.decode()
-        if fmt:
-            final_query = f"{final_query}\n FORMAT {fmt}"
         final_query = self._append_settings_clause(final_query, self._filter_per_call_settings(settings))
         self._ensure_open()
         # Acquire the lock for the lifetime of the streaming read so concurrent
@@ -389,12 +374,19 @@ class ChdbClient(Client):
                 data_str = data
             cmd = f"{cmd}\n{data_str}"
         per_call = self._filter_per_call_settings(settings)
-        # ClickHouse DDL doesn't accept a SETTINGS clause; apply per-call settings to the
-        # chdb session via SET before running the command. Client-level settings are
-        # already applied at set time, so no extra work needed for them.
-        for k, v in per_call.items():
-            self._persist_setting(k, v)
-        body = self._exec_raw_query(cmd, self._format_for_command())
+        # ClickHouse DDL doesn't accept a SETTINGS clause; apply per-call settings to
+        # the chdb session via SET before running the command, then restore them
+        # afterwards so they don't leak into the session.
+        snapshot: dict[str, tuple[str, bool]] = {}
+        if per_call:
+            snapshot = self._snapshot_settings(list(per_call.keys()))
+            for k, v in per_call.items():
+                self._persist_setting(k, v)
+        try:
+            body = self._exec_raw_query(cmd, self._format_for_command())
+        finally:
+            if snapshot:
+                self._restore_settings(snapshot)
         if not body:
             return QuerySummary({})
         try:
