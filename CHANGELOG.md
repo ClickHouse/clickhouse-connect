@@ -3,7 +3,7 @@
 ## UNRELEASED
 
 ### New Features
-- Add an in-process `chdb` backend. `clickhouse_connect.get_client(interface="chdb")` (and `get_async_client`) returns a client backed by the embedded ClickHouse engine via the `chdb` Python package, with no server required. Install with `pip install 'clickhouse-connect[chdb]'`. The existing `NativeTransform` byte parser is reused, so type handling, DB-API, and SQLAlchemy paths work unchanged. Linux and macOS only; HTTP-only kwargs (auth, TLS, proxy, retry) and `external_data` are no-ops or not supported.
+- Add an in-process `chdb` backend. `clickhouse_connect.get_client(interface="chdb")` (and `get_async_client`) returns a client backed by the embedded ClickHouse engine via the `chdb` Python package, with no server required.
 
 ### Bug Fixes
 - Async client: `ca_cert="certifi"` shorthand now resolves to `certifi.where()`, matching the sync client. Previously the async path passed the literal string to `ssl_context.load_verify_locations`, producing `FileNotFoundError`. Closes [#742](https://github.com/ClickHouse/clickhouse-connect/issues/742)

@@ -59,6 +59,7 @@ def run_setup(try_c: bool = True):
         install_requires=[
             "certifi",
             "urllib3>=1.26",
+            'chdb>=4.1.7; sys_platform != "win32"',
             'tzdata; sys_platform == "win32"',
             'zstandard; python_version<"3.14"',
             'zstandard>=0.25.0; python_version>="3.14"',
@@ -75,7 +76,6 @@ def run_setup(try_c: bool = True):
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.8.0"],
-            "chdb": ["chdb>=4.1.7"],
         },
         tests_require=["pytest"],
         entry_points={

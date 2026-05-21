@@ -1,19 +1,4 @@
-import importlib.util
-
 import clickhouse_connect
-
-
-def test_chdb_backend_missing_dep_raises_clean_error():
-    """Without chdb installed, interface='chdb' must raise a clean ImportError."""
-    if importlib.util.find_spec("chdb") is not None:
-        print("chdb is installed; skipping missing-dep error path check")
-        return
-    try:
-        clickhouse_connect.get_client(interface="chdb")
-    except ImportError as ex:
-        assert "chdb" in str(ex), f"expected chdb in error message, got: {ex}"
-        return
-    raise AssertionError("Expected ImportError when chdb is not installed")
 
 
 def test_bare_install():
@@ -35,5 +20,4 @@ def test_bare_install():
 
 
 if __name__ == "__main__":
-    test_chdb_backend_missing_dep_raises_clean_error()
     test_bare_install()

@@ -123,10 +123,7 @@ class ChdbClient(Client):
         if sys.platform.startswith("win"):
             raise NotSupportedError("chdb backend is not supported on Windows")
 
-        try:
-            import chdb
-        except ImportError as ex:
-            raise ImportError("chdb backend requires the chdb package. Install with: pip install 'clickhouse-connect[chdb]'") from ex
+        import chdb
 
         self._chdb_path = chdb_path or ":memory:"
         self._chdb_options = dict(chdb_options) if chdb_options else {}
@@ -246,12 +243,17 @@ class ChdbClient(Client):
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to restore setting %s after command()", name, exc_info=True)
 
-    def _exec_raw_query(self, sql: str, fmt: str = "Native") -> bytes:
+    @staticmethod
+    def _strip_param_prefix(bind_params: dict[str, Any]) -> dict[str, Any]:
+        """chdb's `params` kwarg expects bare names (`x`); bind_query produces `param_x`."""
+        return {(k[6:] if k.startswith("param_") else k): v for k, v in bind_params.items()} if bind_params else {}
+
+    def _exec_raw_query(self, sql: str, fmt: str = "Native", params: dict[str, Any] | None = None) -> bytes:
         """Run a query against chdb under the per-client lock and return raw bytes."""
         self._ensure_open()
         with self._lock:
             try:
-                result = self._conn.query(sql, fmt)
+                result = self._conn.query(sql, fmt, params=params or {})
             except Exception as ex:  # noqa: BLE001
                 raise self._wrap_exception(ex) from ex
             return result.bytes() if hasattr(result, "bytes") else bytes(result)
@@ -293,15 +295,16 @@ class ChdbClient(Client):
         final_query = self._prep_query(context)
         if isinstance(final_query, bytes):
             final_query = final_query.decode()
+        params = self._strip_param_prefix(context.bind_params)
         if context.is_insert:
             # INSERT ... VALUES carries its data inline and has no result block to parse;
             # appending `FORMAT Native` to a VALUES statement is a syntax error.
             sql = self._append_settings_clause(final_query, self._filter_per_call_settings(context.settings))
-            self._exec_raw_query(sql, "TabSeparated")
+            self._exec_raw_query(sql, "TabSeparated", params=params)
             return QueryResult([])
         sql = f"{final_query}\n FORMAT Native"
         sql = self._append_settings_clause(sql, self._filter_per_call_settings(context.settings))
-        data = self._exec_raw_query(sql, "Native")
+        data = self._exec_raw_query(sql, "Native", params=params)
         byte_source = RespBuffCls(_BytesSource(data))
         query_result = self._transform.parse_response(byte_source, context)
         query_result.summary = {}
@@ -319,11 +322,11 @@ class ChdbClient(Client):
     ) -> bytes:
         if external_data is not None:
             raise NotSupportedError("external_data is not supported by the chdb backend")
-        final_query, _ = bind_query(query, parameters, self.server_tz)
+        final_query, bound = bind_query(query, parameters, self.server_tz)
         if isinstance(final_query, bytes):
             final_query = final_query.decode()
         final_query = self._append_settings_clause(final_query, self._filter_per_call_settings(settings))
-        return self._exec_raw_query(final_query, fmt or "Native")
+        return self._exec_raw_query(final_query, fmt or "Native", params=self._strip_param_prefix(bound))
 
     def raw_stream(
         self,
@@ -337,16 +340,17 @@ class ChdbClient(Client):
     ) -> io.IOBase:
         if external_data is not None:
             raise NotSupportedError("external_data is not supported by the chdb backend")
-        final_query, _ = bind_query(query, parameters, self.server_tz)
+        final_query, bound = bind_query(query, parameters, self.server_tz)
         if isinstance(final_query, bytes):
             final_query = final_query.decode()
         final_query = self._append_settings_clause(final_query, self._filter_per_call_settings(settings))
+        params = self._strip_param_prefix(bound)
         self._ensure_open()
         # Acquire the lock for the lifetime of the streaming read so concurrent
         # callers don't interleave queries on the same chdb connection.
         self._lock.acquire()
         try:
-            streaming = self._conn.send_query(final_query, fmt or "Native")
+            streaming = self._conn.send_query(final_query, fmt or "Native", params=params or {})
         except Exception as ex:  # noqa: BLE001
             self._lock.release()
             raise self._wrap_exception(ex) from ex
@@ -364,9 +368,10 @@ class ChdbClient(Client):
     ) -> str | int | Sequence[str] | QuerySummary:
         if external_data is not None:
             raise NotSupportedError("external_data is not supported by the chdb backend")
-        cmd, _ = bind_query(cmd, parameters, self.server_tz)
+        cmd, bound = bind_query(cmd, parameters, self.server_tz)
         if isinstance(cmd, bytes):
             cmd = cmd.decode()
+        params = self._strip_param_prefix(bound)
         if data is not None:
             if isinstance(data, bytes):
                 data_str = data.decode()
@@ -383,7 +388,7 @@ class ChdbClient(Client):
             for k, v in per_call.items():
                 self._persist_setting(k, v)
         try:
-            body = self._exec_raw_query(cmd, self._format_for_command())
+            body = self._exec_raw_query(cmd, self._format_for_command(), params=params)
         finally:
             if snapshot:
                 self._restore_settings(snapshot)

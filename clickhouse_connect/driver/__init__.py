@@ -340,12 +340,7 @@ def _create_chdb_client(
     generic_args: dict[str, Any] | None,
     kwargs: dict[str, Any],
 ) -> Client:
-    try:
-        from clickhouse_connect.driver.chdbclient import ChdbClient
-    except ImportError as ex:
-        if ex.name and ex.name.startswith("chdb"):
-            raise ImportError("chdb backend requires the chdb package. Install with: pip install 'clickhouse-connect[chdb]'") from ex
-        raise
+    from clickhouse_connect.driver.chdbclient import ChdbClient
 
     settings = dict(settings or {})
     if generic_args:
@@ -367,12 +362,7 @@ def _create_chdb_async_client(
     generic_args: dict[str, Any] | None,
     kwargs: dict[str, Any],
 ):
-    try:
-        from clickhouse_connect.driver.chdbasync import AsyncChdbClient
-    except ImportError as ex:
-        if ex.name and ex.name.startswith("chdb"):
-            raise ImportError("chdb backend requires the chdb package. Install with: pip install 'clickhouse-connect[chdb]'") from ex
-        raise
+    from clickhouse_connect.driver.chdbasync import AsyncChdbClient
 
     sync_client = _create_chdb_client(database=database, settings=settings, generic_args=generic_args, kwargs=kwargs)
     return AsyncChdbClient(sync_client)  # type: ignore[arg-type]
