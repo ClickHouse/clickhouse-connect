@@ -10,8 +10,10 @@ dtype, and result conversion machinery is reused.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -19,6 +21,7 @@ from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 from clickhouse_connect import common
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import bind_query, quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_int
@@ -27,6 +30,7 @@ from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     NotSupportedError,
     ProgrammingError,
+    StreamFailureError,
 )
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
@@ -38,6 +42,26 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+_columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
+
+# chdb's `send_query` emits each ClickHouse block as a self-contained encoding in the
+# requested format. For formats that have row-level (or block-level) self-description
+# and no global header/footer/file structure, concatenating chunks yields a valid
+# stream the caller's parser can consume directly. Other formats (Arrow, Parquet,
+# JSON, *WithNames variants, ...) would emit duplicated headers / multiple file
+# markers per chunk, which is not a valid larger stream. For those we fall back to a
+# single non-streaming query so the result is one well-formed payload.
+_STREAM_SAFE_FORMATS = frozenset(
+    {
+        "Native",
+        "TabSeparated",
+        "TSV",
+        "CSV",
+        "RowBinary",
+        "JSONEachRow",
+    }
+)
 
 
 class _BytesSource:
@@ -65,6 +89,58 @@ class _BytesSource:
         return None
 
 
+class _ChdbStreamSource:
+    """
+    Source for `ResponseBuffer` backed by a chdb `StreamingResult`. Yields each
+    block's bytes and translates chdb's mid-stream RuntimeError into the
+    `StreamFailureError` clickhouse-connect callers expect.
+    """
+
+    __slots__ = ("_sr", "_lock", "_released", "last_message", "exception_tag")
+
+    def __init__(self, streaming_result, lock: threading.Lock):
+        self._sr = streaming_result
+        self._lock = lock
+        self._released = False
+        self.last_message = None
+        self.exception_tag = None
+
+    @property
+    def gen(self):
+        def _gen():
+            try:
+                while True:
+                    try:
+                        chunk = next(self._sr)
+                    except StopIteration:
+                        return
+                    except Exception as ex:  # noqa: BLE001
+                        raise StreamFailureError(_format_error_message(str(ex))) from ex
+                    payload = chunk.bytes() if hasattr(chunk, "bytes") else bytes(chunk)
+                    if payload:
+                        yield payload
+            finally:
+                self.close()
+
+        return _gen()
+
+    def close(self):
+        if self._released:
+            return
+        self._released = True
+        try:
+            close = getattr(self._sr, "close", None)
+            if close:
+                close()
+        except Exception:  # noqa: BLE001
+            logger.debug("Error closing chdb StreamingResult", exc_info=True)
+        finally:
+            try:
+                self._lock.release()
+            except RuntimeError:
+                pass
+
+
 def _format_error_message(message: str) -> str:
     """Extract a clean ClickHouse exception message from a chdb error string."""
     if not message:
@@ -73,6 +149,48 @@ def _format_error_message(message: str) -> str:
     if idx > 0:
         return message[idx:].strip()
     return message.strip()
+
+
+def _drain_to_bytes(block) -> bytes:
+    """Collect any supported insert_block shape into a single bytes value."""
+    if isinstance(block, (bytes, bytearray, memoryview)):
+        return bytes(block)
+    if isinstance(block, str):
+        return block.encode()
+    if hasattr(block, "to_pybytes"):
+        return block.to_pybytes()
+    if hasattr(block, "read"):
+        return block.read()
+    parts = []
+    for chunk in block:
+        parts.append(chunk if isinstance(chunk, (bytes, bytearray)) else chunk.encode())
+    return b"".join(parts)
+
+
+def _decompress(data: bytes, encoding: str) -> bytes:
+    if encoding == "lz4":
+        import lz4.frame
+
+        return lz4.frame.decompress(data)
+    if encoding == "zstd":
+        import zstandard
+
+        return zstandard.ZstdDecompressor().decompress(data)
+    if encoding == "gzip":
+        import gzip
+
+        return gzip.decompress(data)
+    if encoding == "br":
+        try:
+            import brotli
+        except ImportError as ex:
+            raise NotSupportedError("brotli is required to decompress 'br' for chdb raw_insert") from ex
+        return brotli.decompress(data)
+    if encoding == "deflate":
+        import zlib
+
+        return zlib.decompress(data)
+    raise NotSupportedError(f"Unsupported compression {encoding!r} for chdb raw_insert")
 
 
 def _build_conn_string(chdb_path: str, chdb_options: dict[str, Any] | None) -> str:
@@ -92,6 +210,7 @@ class ChdbClient(Client):
     # HTTP-style transport settings: accepted by setting validation but stripped
     # before being forwarded to chdb (they have no in-process equivalent).
     valid_transport_settings: set[str] = {
+        "database",
         "client_protocol_version",
         "session_id",
         "session_timeout",
@@ -194,10 +313,29 @@ class ChdbClient(Client):
             out[k] = str_v
         return out
 
-    def _append_settings_clause(self, sql: str, settings: dict[str, str]) -> str:
+    @staticmethod
+    def _quote_setting_value(value: str) -> str:
+        """SQL-quote a setting value so chdb sees the expected literal type.
+
+        Without quotes chdb parses bare numeric-looking strings as UInt64; if the
+        setting is actually String-typed (e.g. `insert_deduplication_token`) this
+        triggers `Bad get: has UInt64, requested String`. ClickHouse coerces
+        single-quoted literals back to numeric types where needed, so quoting
+        unconditionally is safe.
+        """
+        escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
+
+    def _append_settings_clause(self, sql, settings):
         if not settings:
             return sql
-        extras = ", ".join(f"{k} = {v}" for k, v in settings.items())
+        extras = ", ".join(f"{k} = {self._quote_setting_value(v)}" for k, v in settings.items())
+        if isinstance(sql, bytes):
+            # raw_query can receive a bytes SQL when binary parameter substitution
+            # produced non-UTF-8 byte sequences. chdb accepts bytes natively, so
+            # keep the bytes path and append the settings clause as bytes too.
+            sep = b", " if b" SETTINGS " in sql.upper() else b" SETTINGS "
+            return sql + sep + extras.encode()
         if " SETTINGS " in sql.upper():
             return f"{sql}, {extras}"
         return f"{sql} SETTINGS {extras}"
@@ -206,7 +344,7 @@ class ChdbClient(Client):
         """Apply a setting to the underlying chdb session via SET."""
         try:
             with self._lock:
-                self._conn.query(f"SET {key} = {value}", "TabSeparated")
+                self._conn.query(f"SET {key} = {self._quote_setting_value(value)}", "TabSeparated")
         except Exception as ex:  # noqa: BLE001
             logger.debug("Failed to apply SET %s=%s to chdb session: %s", key, value, ex)
 
@@ -296,6 +434,11 @@ class ChdbClient(Client):
         if isinstance(final_query, bytes):
             final_query = final_query.decode()
         params = self._strip_param_prefix(context.bind_params)
+        if not context.is_insert and _columns_only_re.search(context.uncommented_query):
+            # chdb emits zero Native bytes for a LIMIT 0 query, so the Native parser
+            # would return an empty result with no column metadata. Fetch the schema
+            # via JSON instead, matching the HTTP client's columns-only fast path.
+            return self._fetch_columns_only(context, final_query, params)
         if context.is_insert:
             # INSERT ... VALUES carries its data inline and has no result block to parse;
             # appending `FORMAT Native` to a VALUES statement is a syntax error.
@@ -304,11 +447,46 @@ class ChdbClient(Client):
             return QueryResult([])
         sql = f"{final_query}\n FORMAT Native"
         sql = self._append_settings_clause(sql, self._filter_per_call_settings(context.settings))
-        data = self._exec_raw_query(sql, "Native", params=params)
-        byte_source = RespBuffCls(_BytesSource(data))
+        if context.streaming:
+            # Use chdb's streaming `send_query` so mid-execution engine errors
+            # (e.g. throwIf, division by zero on row N) surface during result
+            # iteration as `StreamFailureError`, matching HTTP's contract. The
+            # non-streaming `conn.query` would raise eagerly and lose lazy-error
+            # semantics — we only opt into that for true streaming results, since
+            # holding the per-client lock for the lifetime of a non-iterated
+            # QueryResult would deadlock subsequent calls.
+            self._ensure_open()
+            self._lock.acquire()
+            try:
+                streaming = self._conn.send_query(sql, "Native", params=params or {})
+            except Exception as ex:  # noqa: BLE001
+                self._lock.release()
+                raise self._wrap_exception(ex) from ex
+            byte_source = RespBuffCls(_ChdbStreamSource(streaming, self._lock))
+        else:
+            data = self._exec_raw_query(sql, "Native", params=params)
+            byte_source = RespBuffCls(_BytesSource(data))
         query_result = self._transform.parse_response(byte_source, context)
         query_result.summary = {}
         return query_result
+
+    def _fetch_columns_only(self, context: QueryContext, final_query: str, params: dict[str, Any]) -> QueryResult:
+        sql = self._append_settings_clause(f"{final_query}\n FORMAT JSON", self._filter_per_call_settings(context.settings))
+        body = self._exec_raw_query(sql, "JSON", params=params)
+        meta = json.loads(body)["meta"]
+        renamer = context.column_renamer
+        names: list[str] = []
+        types = []
+        for col in meta:
+            name = col["name"]
+            if renamer is not None:
+                try:
+                    name = renamer(name)
+                except Exception as ex:  # noqa: BLE001
+                    logger.debug("Failed to rename column %s: %s", name, ex)
+            names.append(name)
+            types.append(get_from_name(col["type"]))
+        return QueryResult([], None, tuple(names), tuple(types))
 
     def raw_query(
         self,
@@ -323,10 +501,11 @@ class ChdbClient(Client):
         if external_data is not None:
             raise NotSupportedError("external_data is not supported by the chdb backend")
         final_query, bound = bind_query(query, parameters, self.server_tz)
-        if isinstance(final_query, bytes):
-            final_query = final_query.decode()
+        # chdb's conn.query accepts both str and bytes; preserve bytes when binary
+        # parameter substitution (e.g. `$xx$` placeholders) yields non-UTF-8 SQL.
         final_query = self._append_settings_clause(final_query, self._filter_per_call_settings(settings))
-        return self._exec_raw_query(final_query, fmt or "Native", params=self._strip_param_prefix(bound))
+        # HTTP path defaults to server's TabSeparated when no fmt is provided.
+        return self._exec_raw_query(final_query, fmt or "TabSeparated", params=self._strip_param_prefix(bound))
 
     def raw_stream(
         self,
@@ -345,12 +524,19 @@ class ChdbClient(Client):
             final_query = final_query.decode()
         final_query = self._append_settings_clause(final_query, self._filter_per_call_settings(settings))
         params = self._strip_param_prefix(bound)
+        output_fmt = fmt or "TabSeparated"
+        if output_fmt not in _STREAM_SAFE_FORMATS:
+            # Formats with global structure (Arrow IPC, Parquet, JSON, *WithNames, ...)
+            # can't be assembled from chdb's per-block chunks. Fetch as a single
+            # well-formed payload and wrap as an in-memory stream.
+            data = self._exec_raw_query(final_query, output_fmt, params=params)
+            return io.BytesIO(data)
         self._ensure_open()
         # Acquire the lock for the lifetime of the streaming read so concurrent
         # callers don't interleave queries on the same chdb connection.
         self._lock.acquire()
         try:
-            streaming = self._conn.send_query(final_query, fmt or "Native", params=params or {})
+            streaming = self._conn.send_query(final_query, output_fmt, params=params or {})
         except Exception as ex:  # noqa: BLE001
             self._lock.release()
             raise self._wrap_exception(ex) from ex
@@ -435,8 +621,14 @@ class ChdbClient(Client):
     ) -> QuerySummary:
         if insert_block is None or not table:
             raise ProgrammingError("raw_insert requires a table and insert_block")
-        if compression:
-            raise NotSupportedError("compression is not supported for raw_insert in chdb mode. Provide uncompressed bytes.")
+        if compression and compression != "identity":
+            # HTTP carries this via Content-Encoding so the server decompresses.
+            # chdb has no equivalent input stage, so the caller's pre-compressed
+            # bytes must be drained and decompressed in the client before being
+            # written to the INFILE temp file.
+            insert_block = _drain_to_bytes(insert_block)
+            insert_block = _decompress(insert_block, compression)
+            compression = None
 
         fmt = fmt or self._write_format
         cols = ""
@@ -466,8 +658,11 @@ class ChdbClient(Client):
             finally:
                 tmp.close()
 
-            sql = f"INSERT INTO {table}{cols} FROM INFILE '{tmp.name}' FORMAT {fmt}"
-            sql = self._append_settings_clause(sql, self._filter_per_call_settings(settings))
+            per_call = self._filter_per_call_settings(settings)
+            settings_clause = (
+                f" SETTINGS {', '.join(f'{k} = {self._quote_setting_value(v)}' for k, v in per_call.items())}" if per_call else ""
+            )
+            sql = f"INSERT INTO {table}{cols} FROM INFILE '{tmp.name}'{settings_clause} FORMAT {fmt}"
             self._exec_raw_query(sql, "TabSeparated")
             return QuerySummary({})
         finally:
@@ -516,8 +711,11 @@ class ChdbClient(Client):
                 tmp.close()
 
             cols = ", ".join(quote_identifier(c) for c in context.column_names)
-            sql = f"INSERT INTO {context.table} ({cols}) FROM INFILE '{tmp.name}' FORMAT Native"
-            sql = self._append_settings_clause(sql, self._filter_per_call_settings(context.settings))
+            per_call = self._filter_per_call_settings(context.settings)
+            settings_clause = (
+                f" SETTINGS {', '.join(f'{k} = {self._quote_setting_value(v)}' for k, v in per_call.items())}" if per_call else ""
+            )
+            sql = f"INSERT INTO {context.table} ({cols}) FROM INFILE '{tmp.name}'{settings_clause} FORMAT Native"
             self._exec_raw_query(sql, "TabSeparated")
             return QuerySummary({})
         finally:
@@ -563,6 +761,13 @@ class _ChdbStreamFile(io.RawIOBase):
             except StopIteration:
                 self._eof = True
                 return b""
+            except Exception as ex:  # noqa: BLE001
+                # chdb wraps mid-stream engine errors as RuntimeError. Surface them
+                # as StreamFailureError so callers can catch them with the same
+                # exception type used by the HTTP backend's mid-stream failures.
+                msg = _format_error_message(str(ex))
+                self._eof = True
+                raise StreamFailureError(msg) from ex
             payload = chunk.bytes() if hasattr(chunk, "bytes") else bytes(chunk)
             if payload:
                 return payload

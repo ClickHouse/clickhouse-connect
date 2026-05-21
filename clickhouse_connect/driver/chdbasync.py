@@ -310,5 +310,5 @@ class AsyncChdbClient(Client):
     async def create_insert_context(self, *args, **kwargs) -> InsertContext:  # type: ignore[override]
         return await self._run(lambda: self._sync.create_insert_context(*args, **kwargs))
 
-    async def create_query_context(self, *args, **kwargs) -> QueryContext:  # type: ignore[override]
-        return await self._run(lambda: self._sync.create_query_context(*args, **kwargs))
+    def create_query_context(self, *args, **kwargs) -> QueryContext:
+        return self._sync.create_query_context(*args, **kwargs)

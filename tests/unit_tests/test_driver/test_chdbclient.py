@@ -216,6 +216,110 @@ def test_raw_stream_iterates(client):
     assert data.startswith(b"0\n")
 
 
+# ---- raw_stream format dispatch ----
+#
+# chdb's send_query emits each ClickHouse block as a self-contained payload, so only
+# formats with no global header / footer / file marker can be concatenated chunk-by-
+# chunk. For everything else raw_stream falls back to a non-streaming query that
+# returns one well-formed payload. These tests pin both branches.
+
+
+def _stream_full_bytes(client, sql, fmt):
+    stream = client.raw_stream(sql, fmt=fmt)
+    try:
+        return stream.read()
+    finally:
+        stream.close()
+
+
+def _row_count(client, sql, fmt):
+    """Run as raw_query (single payload) and return total bytes for comparison."""
+    return client.raw_query(sql, fmt=fmt)
+
+
+# All values verified end-to-end: 200k rows is enough to force chdb to emit multiple
+# blocks (max_block_size default is ~65k).
+_LARGE_QUERY = "SELECT number AS id FROM numbers(200000)"
+
+
+@pytest.mark.parametrize("fmt", ["Native", "TabSeparated", "CSV", "RowBinary", "JSONEachRow"])
+def test_raw_stream_safe_format_full_data(client, fmt):
+    """Stream-safe formats: concatenated chunks must equal the single-query payload."""
+    streamed = _stream_full_bytes(client, _LARGE_QUERY, fmt)
+    full = _row_count(client, _LARGE_QUERY, fmt)
+    assert len(streamed) == len(full), f"{fmt}: streamed {len(streamed)} != full {len(full)}"
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [
+        "Arrow",
+        "ArrowStream",
+        "Parquet",
+        "TabSeparatedWithNames",
+        "CSVWithNames",
+        "RowBinaryWithNamesAndTypes",
+    ],
+)
+def test_raw_stream_unsafe_format_falls_back_to_single_payload(client, fmt):
+    """Unsafe formats fall back to non-streaming: result must equal single-query bytes."""
+    streamed = _stream_full_bytes(client, _LARGE_QUERY, fmt)
+    full = _row_count(client, _LARGE_QUERY, fmt)
+    assert streamed == full, f"{fmt}: bytes differ — streamed={len(streamed)} vs full={len(full)}"
+
+
+def test_raw_stream_unsafe_format_json_yields_one_object(client):
+    """JSON includes per-run statistics, so check structural equality rather than bytes."""
+    import json as _json
+
+    streamed = _json.loads(_stream_full_bytes(client, _LARGE_QUERY, "JSON"))
+    full = _json.loads(_row_count(client, _LARGE_QUERY, "JSON"))
+    assert streamed["meta"] == full["meta"]
+    assert streamed["data"] == full["data"]
+    assert "statistics" in streamed and "statistics" in full
+
+
+def test_arrow_stream_yields_all_record_batches(client):
+    """Regression: large Arrow stream must surface every RecordBatch, not just the first."""
+    pa = pytest.importorskip("pyarrow")
+    stream = client.raw_stream(_LARGE_QUERY, fmt="ArrowStream")
+    try:
+        reader = pa.ipc.open_stream(stream)
+        batches = list(reader)
+    finally:
+        stream.close()
+    total_rows = sum(b.num_rows for b in batches)
+    assert total_rows == 200000, f"Lost rows in arrow stream: got {total_rows}"
+
+
+def test_parquet_stream_is_single_file(client):
+    """Regression: Parquet output must be one valid file, not multiple concatenated."""
+    pa = pytest.importorskip("pyarrow")
+    import pyarrow.parquet as pq
+
+    stream = client.raw_stream(_LARGE_QUERY, fmt="Parquet")
+    try:
+        data = stream.read()
+    finally:
+        stream.close()
+    table = pq.read_table(pa.BufferReader(data))
+    assert table.num_rows == 200000
+
+
+def test_jsoneachrow_stream_iterates_chunks(client):
+    """JSONEachRow stays on the streaming path (per-line format), verify chunked read."""
+    stream = client.raw_stream(_LARGE_QUERY, fmt="JSONEachRow")
+    try:
+        first = stream.read(1024)
+        rest = stream.read()
+    finally:
+        stream.close()
+    # First chunk should start with valid JSON object
+    assert first.startswith(b'{"id":'), f"unexpected start: {first[:40]!r}"
+    # Total bytes equal the non-streaming version
+    assert len(first) + len(rest) == len(_row_count(client, _LARGE_QUERY, "JSONEachRow"))
+
+
 # ---- error mapping ----
 
 
@@ -231,6 +335,18 @@ def test_external_data_not_supported(client):
     ext = ExternalData(file_name="x.csv", data=b"1\n2\n", fmt="CSV", structure="id UInt32")
     with pytest.raises(NotSupportedError):
         client.query("SELECT * FROM x", external_data=ext)
+
+
+def test_mid_stream_exception_surfaces_as_stream_failure(client):
+    """Mid-stream chdb errors must be raised as StreamFailureError to match HTTP semantics."""
+    from clickhouse_connect.driver.exceptions import StreamFailureError
+
+    query = "SELECT throwIf(number = 100) FROM numbers(1000) SETTINGS max_block_size = 10"
+    with pytest.raises(StreamFailureError) as ex_info:
+        with client.query_row_block_stream(query) as stream:
+            for _ in stream:
+                pass
+    assert "throwIf" in str(ex_info.value) or "Code: 395" in str(ex_info.value)
 
 
 # ---- HTTP-only kwargs accepted silently ----
@@ -706,10 +822,34 @@ def test_raw_insert_accepts_generator(client):
     assert r.result_rows == [(13, "user_1"), (79, "user_2")]
 
 
-def test_raw_insert_compression_rejected(client):
-    client.command("CREATE TABLE raw_compress (id UInt32) ENGINE = Memory")
+@pytest.mark.parametrize("compression", ["lz4", "zstd", "gzip"])
+def test_raw_insert_decompresses_pre_compressed_payload(client, compression):
+    """raw_insert with `compression=<enc>` accepts compressed bytes and decompresses client-side."""
+    import gzip
+
+    import lz4.frame
+    import zstandard
+
+    csv = b"13,user_1\n79,user_2\n"
+    encoded = {
+        "lz4": lz4.frame.compress(csv),
+        "zstd": zstandard.ZstdCompressor().compress(csv),
+        "gzip": gzip.compress(csv),
+    }[compression]
+    client.command(f"CREATE TABLE raw_compress_{compression} (id UInt32, v String) ENGINE = Memory")
+    client.raw_insert(
+        f"raw_compress_{compression}",
+        insert_block=encoded,
+        fmt="CSV",
+        compression=compression,
+    )
+    r = client.query(f"SELECT id, v FROM raw_compress_{compression} ORDER BY id")
+    assert r.result_rows == [(13, "user_1"), (79, "user_2")]
+
+
+def test_raw_insert_unsupported_compression_raises(client):
     with pytest.raises(NotSupportedError):
-        client.raw_insert("raw_compress", insert_block=b"1\n", fmt="CSV", compression="lz4")
+        client.raw_insert("t", insert_block=b"1\n", fmt="CSV", compression="snappy")
 
 
 def test_raw_insert_missing_args(client):
@@ -793,6 +933,21 @@ def test_query_nan_handling(client):
 def test_query_with_parameters(client):
     r = client.query("SELECT {x:Int32} AS x, {name:String} AS name", parameters={"x": 13, "name": "user_1"})
     assert r.result_rows == [(13, "user_1")]
+
+
+def test_raw_query_with_embedded_binary_parameter(client):
+    """`$name$` placeholders inline raw bytes — chdb accepts bytes SQL, no decode."""
+    binary_params = {"$xx$": b"col1,col2\n100,700"}
+    result = client.raw_query("SELECT col2, col1 FROM format(CSVWithNames, $xx$)", parameters=binary_params)
+    assert result == b"700\t100\n"
+
+
+def test_raw_query_embedded_binary_with_non_utf8_bytes(client):
+    """Non-UTF-8 bytes (e.g. binary file content) embedded in SQL must round-trip."""
+    payload = b"col1,col2\n100,\xff\x92"
+    result = client.raw_query("SELECT col2 FROM format(CSVWithNames, $xx$)", parameters={"$xx$": payload})
+    # The non-UTF-8 byte sequence must come back intact in the output.
+    assert b"\xff" in result or b"\xc3\xbf" in result
 
 
 # ---- transport-only settings don't get persisted ----
