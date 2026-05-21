@@ -70,13 +70,22 @@ def test_successful_connection(client_factory, call):
     assert result == 1
 
 
+@pytest.mark.parametrize(
+    "disconnect_exc",
+    [aiohttp.ServerDisconnectedError(), aiohttp.ServerDisconnectedError("Connection reset by peer")],
+    ids=["bare", "connection_reset"],
+)
+@pytest.mark.parametrize("disconnect_count", [1, 2])
 @pytest.mark.asyncio
-async def test_async_retry_on_server_disconnected(test_native_async_client, mocker):
+async def test_async_retry_on_server_disconnected(test_native_async_client, mocker, disconnect_count, disconnect_exc):
     """
     aiohttp raises ServerDisconnectedError when the server (or an upstream load
-    balancer) closes a pooled keep-alive connection between requests. The first
-    request that reuses the stale connection sees "Server disconnected" and is
-    safely retried on a fresh connection.
+    balancer) closes pooled keep-alive connections between requests. A burst of
+    drops can leave several stale sockets in the pool, so the first retry can
+    still pick up a bad one. The async client must keep retrying up to
+    query_retries so the query succeeds as long as a healthy connection
+    eventually becomes available. Both the bare default message and the
+    "Connection reset" variant must trigger the retry path.
     """
     real_request = test_native_async_client._session.request
     attempts = 0
@@ -84,15 +93,15 @@ async def test_async_retry_on_server_disconnected(test_native_async_client, mock
     async def flaky_request(*args, **kwargs):
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
-            raise aiohttp.ServerDisconnectedError()
+        if attempts <= disconnect_count:
+            raise disconnect_exc
         return await real_request(*args, **kwargs)
 
     mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
 
     result = await test_native_async_client.query("SELECT 13")
 
-    assert attempts == 2
+    assert attempts == disconnect_count + 1
     assert result.result_rows[0][0] == 13
 
 
@@ -113,29 +122,6 @@ async def test_async_server_disconnected_raises_after_retry(test_native_async_cl
 
     assert "Server disconnected" in str(excinfo.value)
     assert isinstance(excinfo.value.__cause__, aiohttp.ServerDisconnectedError)
-
-
-@pytest.mark.asyncio
-async def test_async_retry_on_connection_reset(test_native_async_client, mocker):
-    """
-    Pre-existing retry behavior for "Connection reset" errors must still hold.
-    """
-    real_request = test_native_async_client._session.request
-    attempts = 0
-
-    async def flaky_request(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise aiohttp.ServerDisconnectedError("Connection reset by peer")
-        return await real_request(*args, **kwargs)
-
-    mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
-
-    result = await test_native_async_client.query("SELECT 79")
-
-    assert attempts == 2
-    assert result.result_rows[0][0] == 79
 
 
 def _install_one_shot_reset_mock(client, client_mode, mocker):
