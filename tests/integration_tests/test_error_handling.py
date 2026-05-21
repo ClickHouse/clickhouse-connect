@@ -124,6 +124,35 @@ async def test_async_server_disconnected_raises_after_retry(test_native_async_cl
     assert isinstance(excinfo.value.__cause__, aiohttp.ServerDisconnectedError)
 
 
+@pytest.mark.parametrize("disconnect_count", [1, 2])
+def test_sync_retry_on_connection_reset(test_client, mocker, disconnect_count):
+    """
+    urllib3 raises ProtocolError("Connection aborted.") with ConnectionResetError
+    as __context__ when a pooled keep-alive connection has been closed by the
+    server. The sync client must keep retrying up to query_retries so the query
+    succeeds as long as a healthy connection eventually becomes available.
+    """
+    real_request = test_client.http.request
+    attempts = 0
+
+    def flaky_request(method, url, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= disconnect_count:
+            try:
+                raise ConnectionResetError("Connection reset by peer")
+            except ConnectionResetError:
+                raise urllib3.exceptions.ProtocolError("Connection aborted.")  # noqa: B904
+        return real_request(method, url, **kwargs)
+
+    mocker.patch.object(test_client.http, "request", side_effect=flaky_request)
+
+    result = test_client.query("SELECT 13")
+
+    assert attempts == disconnect_count + 1
+    assert result.result_rows[0][0] == 13
+
+
 def _install_one_shot_reset_mock(client, client_mode, mocker):
     """Drain and reset the first generator-bodied request, then defer to the real transport."""
     attempts = [0]
