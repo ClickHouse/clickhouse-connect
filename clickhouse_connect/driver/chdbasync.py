@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import logging
 from collections.abc import Generator, Iterable, Sequence
 from datetime import tzinfo
 from typing import TYPE_CHECKING, Any, BinaryIO
@@ -32,8 +31,6 @@ if TYPE_CHECKING:
     import polars
     import pyarrow
 
-logger = logging.getLogger(__name__)
-
 
 class AsyncChdbClient(Client):
     """
@@ -42,9 +39,6 @@ class AsyncChdbClient(Client):
     executor. Sync-only methods (settings, min_version) are passed through
     directly.
     """
-
-    valid_transport_settings: set[str] = ChdbClient.valid_transport_settings
-    optional_transport_settings: set[str] = ChdbClient.optional_transport_settings
 
     def __init__(self, sync: ChdbClient):
         self._sync = sync
@@ -75,9 +69,7 @@ class AsyncChdbClient(Client):
 
     async def _run(self, func, *args, **kwargs):
         loop = asyncio.get_running_loop()
-        if kwargs:
-            return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
-        return await loop.run_in_executor(None, func, *args)
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
     # ---- sync passthroughs (no I/O) ----
 
@@ -315,13 +307,8 @@ class AsyncChdbClient(Client):
         await self.close()
         return False
 
-    # Some helper methods on Client (like create_insert_context, create_query_context)
-    # do synchronous local work and call self.query/self.command for schema lookup. We
-    # can't await inside a sync method, so users should normally rely on insert/query
-    # which we already async-wrap.
+    async def create_insert_context(self, *args, **kwargs) -> InsertContext:  # type: ignore[override]
+        return await self._run(lambda: self._sync.create_insert_context(*args, **kwargs))
 
-    def create_insert_context(self, *args, **kwargs):
-        return self._sync.create_insert_context(*args, **kwargs)
-
-    def create_query_context(self, *args, **kwargs):
-        return self._sync.create_query_context(*args, **kwargs)
+    async def create_query_context(self, *args, **kwargs) -> QueryContext:  # type: ignore[override]
+        return await self._run(lambda: self._sync.create_query_context(*args, **kwargs))

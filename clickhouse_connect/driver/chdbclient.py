@@ -15,12 +15,10 @@ import os
 import sys
 import tempfile
 import threading
-import uuid
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 from clickhouse_connect import common
-from clickhouse_connect.driver import options
 from clickhouse_connect.driver.binding import bind_query, quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_int
@@ -95,48 +93,6 @@ class _BytesSource:
 
     def close(self):
         return None
-
-
-class _ChunkIterSource:
-    """Source backed by an iterator of byte chunks, used for streaming reads."""
-
-    __slots__ = ("_chunks", "last_message", "exception_tag")
-
-    def __init__(self, chunks):
-        self._chunks = iter(chunks)
-        self.last_message = None
-        self.exception_tag = None
-
-    @property
-    def gen(self):
-        return self._chunks
-
-    def close(self):
-        try:
-            close = getattr(self._chunks, "close", None)
-            if close:
-                close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-# Module globals used to expose user-provided Python objects (DataFrames, PyArrow
-# tables) to chdb's `Python(name)` table function. chdb walks frames and module
-# globals looking for the bare name passed to `Python(...)`, so we register
-# objects under a uuid-suffixed name and clean up afterwards.
-_chdb_ref_lock = threading.Lock()
-
-
-def _register_chdb_object(obj) -> str:
-    name = f"_chdb_ref_{uuid.uuid4().hex}"
-    with _chdb_ref_lock:
-        globals()[name] = obj
-    return name
-
-
-def _unregister_chdb_object(name: str) -> None:
-    with _chdb_ref_lock:
-        globals().pop(name, None)
 
 
 def _format_error_message(message: str) -> str:
@@ -468,13 +424,6 @@ class ChdbClient(Client):
     def data_insert(self, context: InsertContext) -> QuerySummary:
         if context.empty:
             return QuerySummary()
-
-        # DataFrame fast path: hand the DataFrame to chdb directly via the
-        # `Python(name)` table function. This skips serialization and disk I/O.
-        if self._can_use_dataframe_fast_path(context):
-            df = context.data
-            return self._insert_dataframe_fast(context, df)
-
         return self._insert_via_infile(context)
 
     def raw_insert(
@@ -542,35 +491,6 @@ class ChdbClient(Client):
         self.close()
 
     # ---- insert implementations ----------------------------------------
-
-    def _can_use_dataframe_fast_path(self, context: InsertContext) -> bool:
-        if options.pd is None:
-            return False
-        data = context.data
-        if not isinstance(data, options.pd.DataFrame):
-            return False
-        return True
-
-    def _insert_dataframe_fast(self, context: InsertContext, df) -> QuerySummary:
-        # Reorder/rename DataFrame columns to match the target schema so the
-        # `SELECT * FROM Python(df)` projection lines up with the destination.
-        try:
-            chdb_df = df[list(context.column_names)] if list(df.columns) != list(context.column_names) else df
-        except KeyError as ex:
-            raise ProgrammingError(f"DataFrame is missing target column {ex}") from None
-
-        ref_name = _register_chdb_object(chdb_df)
-        try:
-            sql = (
-                f"INSERT INTO {context.table} ({', '.join(quote_identifier(c) for c in context.column_names)}) "
-                f"SELECT * FROM Python({ref_name})"
-            )
-            sql = self._append_settings_clause(sql, self._filter_per_call_settings(context.settings))
-            self._exec_raw_query(sql, "TabSeparated")
-        finally:
-            _unregister_chdb_object(ref_name)
-            context.data = None
-        return QuerySummary({})
 
     def _insert_via_infile(self, context: InsertContext) -> QuerySummary:
         tmp = tempfile.NamedTemporaryFile(suffix=".native", delete=False)

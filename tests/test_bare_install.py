@@ -4,11 +4,7 @@ import clickhouse_connect
 
 
 def test_chdb_backend_missing_dep_raises_clean_error():
-    """Without chdb installed, requesting interface='chdb' must surface a clean ImportError.
-
-    The bare install CI job deliberately omits the chdb extra, so this verifies the friendly
-    error path. If chdb happens to be importable (local dev), this assertion is skipped.
-    """
+    """Without chdb installed, interface='chdb' must raise a clean ImportError."""
     if importlib.util.find_spec("chdb") is not None:
         print("chdb is installed; skipping missing-dep error path check")
         return
@@ -22,8 +18,6 @@ def test_chdb_backend_missing_dep_raises_clean_error():
 
 def test_bare_install():
     """Bare install test to validate the package works with only core dependencies"""
-    test_chdb_backend_missing_dep_raises_clean_error()
-
     client = clickhouse_connect.get_client()
 
     ver = client.command("SELECT version()")

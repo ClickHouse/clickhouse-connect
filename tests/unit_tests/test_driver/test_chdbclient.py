@@ -131,7 +131,7 @@ def test_insert_row_data(client):
     assert r.result_rows == [(13, "user_1"), (79, "user_2")]
 
 
-def test_insert_dataframe_fast_path(client):
+def test_insert_dataframe(client):
     pd = pytest.importorskip("pandas")
     client.command("CREATE TABLE df_insert_test (id UInt32, v Float64) ENGINE = Memory")
     df = pd.DataFrame({"id": [13, 79, 103], "v": [1.5, 2.5, 3.5]})
@@ -289,7 +289,7 @@ def test_async_client_gather_serializes_without_error():
     asyncio.run(run())
 
 
-def test_async_dataframe_fast_path():
+def test_async_dataframe_insert():
     pd = pytest.importorskip("pandas")
 
     async def run():

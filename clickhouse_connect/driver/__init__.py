@@ -343,7 +343,7 @@ def _create_chdb_client(
     try:
         from clickhouse_connect.driver.chdbclient import ChdbClient
     except ImportError as ex:
-        if ex.name == "chdb" or (ex.name and ex.name.startswith("chdb")):
+        if ex.name and ex.name.startswith("chdb"):
             raise ImportError("chdb backend requires the chdb package. Install with: pip install 'clickhouse-connect[chdb]'") from ex
         raise
 
@@ -370,7 +370,7 @@ def _create_chdb_async_client(
     try:
         from clickhouse_connect.driver.chdbasync import AsyncChdbClient
     except ImportError as ex:
-        if ex.name == "chdb" or (ex.name and ex.name.startswith("chdb")):
+        if ex.name and ex.name.startswith("chdb"):
             raise ImportError("chdb backend requires the chdb package. Install with: pip install 'clickhouse-connect[chdb]'") from ex
         raise
 
