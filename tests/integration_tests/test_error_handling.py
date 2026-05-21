@@ -153,6 +153,30 @@ def test_sync_retry_on_connection_reset(test_client, mocker, disconnect_count):
     assert result.result_rows[0][0] == 13
 
 
+@pytest.mark.parametrize("disconnect_count", [1, 2])
+def test_sync_raw_query_retry_on_connection_reset(test_client, mocker, disconnect_count):
+    """Sync raw_query drains query_retries on stale-connection bursts, same as the regular query path."""
+    real_request = test_client.http.request
+    attempts = 0
+
+    def flaky_request(method, url, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= disconnect_count:
+            try:
+                raise ConnectionResetError("Connection reset by peer")
+            except ConnectionResetError:
+                raise urllib3.exceptions.ProtocolError("Connection aborted.")  # noqa: B904
+        return real_request(method, url, **kwargs)
+
+    mocker.patch.object(test_client.http, "request", side_effect=flaky_request)
+
+    result = test_client.raw_query("SELECT 13")
+
+    assert attempts == disconnect_count + 1
+    assert result.strip() == b"13"
+
+
 def _install_one_shot_reset_mock(client, client_mode, mocker):
     """Drain and reset the first generator-bodied request, then defer to the real transport."""
     attempts = [0]

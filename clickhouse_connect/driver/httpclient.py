@@ -619,7 +619,9 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         body, params, fields = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        return self._raw_request(body, params, fields=fields, headers=transport_settings).data
+        return self._raw_request(
+            body, params, fields=fields, headers=transport_settings, retries=self.query_retries
+        ).data
 
     def raw_stream(
         self,
@@ -635,7 +637,15 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         body, params, fields = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        return self._raw_request(body, params, fields=fields, stream=True, server_wait=False, headers=transport_settings)
+        return self._raw_request(
+            body,
+            params,
+            fields=fields,
+            stream=True,
+            server_wait=False,
+            headers=transport_settings,
+            retries=self.query_retries,
+        )
 
     def _prep_raw_query(
         self,
