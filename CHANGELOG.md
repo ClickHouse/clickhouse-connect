@@ -2,12 +2,34 @@
 
 ## UNRELEASED
 
+### Compatibility
+- Async client now requires `aiohttp>=3.9.0`. This is required to support TLS SNI override via `server_host_name`, because aiohttp added the per-request `server_hostname` option in 3.9.
+
+### Bug Fixes
+- Async client: `server_host_name` now also overrides the TLS SNI / certificate hostname, matching the sync client. Previously the async path only applied it to the HTTP `Host` header, so connecting to host A while presenting SNI B (the 0.x `pool_mgr=urllib3.PoolManager(server_hostname=...)` pattern, useful for ClickHouse Cloud VPC endpoints reached via external DNS) was not expressible against the new aiohttp-based client. Both `_raw_request` and `ping()` now pass `ssl=self._ssl_context, server_hostname=self.server_host_name` per request when an SSL context is in use. Closes [#752](https://github.com/ClickHouse/clickhouse-connect/issues/752).
+- Drain the full `retries` budget on connection-error retries in `_raw_request` instead of only retrying once. Previously both the sync and async clients gated network-error retries on `attempts == 1`, so two consecutive `aiohttp.ServerDisconnectedError`s (or `ConnectionResetError`s on the sync path) surfaced as `OperationalError` even when `query_retries` would have allowed another attempt. Read paths now drain `query_retries`; insert/command paths still get one retry (`retries=0` callers). Sync `raw_query` and `raw_stream` (the foundation for `query_arrow` / `query_arrow_stream`) now also pass `query_retries` so they match their async counterparts. Adds a `0.1 * attempts` backoff between connection-error retries to match the 429/503/504 branch. Closes [#754](https://github.com/ClickHouse/clickhouse-connect/issues/754).
+- `quote_identifier` now re-escapes inputs that start and end with `` ` `` or `"` but contain unescaped inner occurrences of the same quote character, instead of passing them through unchanged. Validly pre-quoted identifiers like backslash or doubled-quote escaping still pass through untouched. Closes [#737](https://github.com/ClickHouse/clickhouse-connect/issues/737).
+
 ## 1.1.0a2, 2026-05-07
 
 Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers, rebased on `1.0.0rc3` so the insert-retry fix from rc3 is also included.
 
 ### Bug Fixes
 - SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
+
+## 1.0.1, 2026-05-19
+
+### Bug Fixes
+- Recognize `Fixed/UTC±HH:MM:SS` timezones emitted by ClickHouse servers without an IANA tz database (in column types, `X-ClickHouse-Timezone`, and `SELECT timezone()`). Previously raised `ProgrammingError` on any column read, parameter bind, or client init touching one. The exact `±24:00:00` boundary remains rejected because Python's `datetime.timezone` cannot represent it. Closes [#702](https://github.com/ClickHouse/clickhouse-connect/issues/702).
+- Async client: drain in-flight requests before closing the underlying aiohttp session. Sharing a single `AsyncClient` across concurrent coroutines previously raised `RuntimeError: Session is closed` (and related `Connection reset` / `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` cascades) whenever `max_connection_age` triggered a pool rotation while other tasks had requests in flight. `close_connections()` now installs the new session before retiring the old one, and waits for outstanding requests (including streaming responses) to release their lease before tearing it down. `close()` clears `self._session` so post-close calls fail with `ProgrammingError` instead of leaking aiohttp's `RuntimeError`. Closes [#744](https://github.com/ClickHouse/clickhouse-connect/issues/744)
+- Async client: `ca_cert="certifi"` shorthand now resolves to `certifi.where()`, matching the sync client. Previously the async path passed the literal string to `ssl_context.load_verify_locations`, producing `FileNotFoundError`. Closes [#742](https://github.com/ClickHouse/clickhouse-connect/issues/742)
+- Fix SQLAlchemy dialect rendering for `ILIKE` and `NOT ILIKE` expressions to use native ClickHouse syntax instead of the generic SQLAlchemy `lower(...) LIKE lower(...)` fallback.
+
+## 1.0.0, 2026-05-13
+
+No code changes since `1.0.0rc3`. See the `1.0.0rc1`, `1.0.0rc2`, and `1.0.0rc3` entries below for the full set of changes included in the 1.0.0 release.
+
+Upgrading from a 0.15.x or earlier release? See [MIGRATION.md](MIGRATION.md) for a guide to the breaking changes and their replacements.
 
 ## 1.0.0rc3, 2026-05-07
 

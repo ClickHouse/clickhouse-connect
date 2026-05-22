@@ -75,7 +75,7 @@ def run_setup(try_c: bool = True):
             "orjson": ["orjson"],
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
-            "async": ["aiohttp>=3.8.0"],
+            "async": ["aiohttp>=3.9.0"],
         },
         tests_require=["pytest"],
         entry_points={
