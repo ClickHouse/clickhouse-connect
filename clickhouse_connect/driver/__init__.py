@@ -159,6 +159,14 @@ def create_client(
       limits. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect Client instance
     """
+    if interface == "chdb":
+        return _create_chdb_client(
+            database=database,
+            settings=settings,
+            generic_args=generic_args,
+            kwargs=kwargs,
+        )
+
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
@@ -264,6 +272,14 @@ async def create_async_client(
       limits. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect AsyncClient instance
     """
+    if interface == "chdb":
+        return _create_chdb_async_client(
+            database=database,
+            settings=settings,
+            generic_args=generic_args,
+            kwargs=kwargs,
+        )
+
     try:
         from clickhouse_connect.driver.asyncclient import AsyncClient as _AsyncClient
     except ModuleNotFoundError as ex:
@@ -315,3 +331,38 @@ async def create_async_client(
     )
     await client._initialize()
     return client
+
+
+def _create_chdb_client(
+    *,
+    database: str,
+    settings: dict[str, Any] | None,
+    generic_args: dict[str, Any] | None,
+    kwargs: dict[str, Any],
+) -> Client:
+    from clickhouse_connect.driver.chdbclient import ChdbClient
+
+    settings = dict(settings or {})
+    if generic_args:
+        for name, value in generic_args.items():
+            if name.startswith("ch_"):
+                name = name[3:]
+            settings[name] = value
+    return ChdbClient(
+        database=database,
+        settings=settings,
+        **kwargs,
+    )
+
+
+def _create_chdb_async_client(
+    *,
+    database: str,
+    settings: dict[str, Any] | None,
+    generic_args: dict[str, Any] | None,
+    kwargs: dict[str, Any],
+):
+    from clickhouse_connect.driver.chdbasync import AsyncChdbClient
+
+    sync_client = _create_chdb_client(database=database, settings=settings, generic_args=generic_args, kwargs=kwargs)
+    return AsyncChdbClient(sync_client)  # type: ignore[arg-type]

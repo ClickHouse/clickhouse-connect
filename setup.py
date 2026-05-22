@@ -59,6 +59,7 @@ def run_setup(try_c: bool = True):
         install_requires=[
             "certifi",
             "urllib3>=1.26",
+            'chdb>=4.1.7; sys_platform != "win32"',
             'tzdata; sys_platform == "win32"',
             'zstandard; python_version<"3.14"',
             'zstandard>=0.25.0; python_version>="3.14"',
