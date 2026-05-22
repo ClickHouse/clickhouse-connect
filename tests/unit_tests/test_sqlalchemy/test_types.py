@@ -1,7 +1,22 @@
+import pytest
 from sqlalchemy import DateTime, Integer
+from sqlalchemy.exc import ArgumentError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name, sqla_type_map
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Bool, DateTime64, Int64, LowCardinality, Nullable, QBit, String
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
+    UUID,
+    Bool,
+    DateTime64,
+    Int64,
+    LowCardinality,
+    Nullable,
+    QBit,
+    String,
+    Tuple,
+    UInt32,
+    UInt64,
+)
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime as ChDateTime
 
 
 def test_mapping():
@@ -49,3 +64,65 @@ def test_qbit():
 
     qbit_f64 = sqla_type_from_name("QBit(Float64, 1536)")
     assert qbit_f64.name == "QBit(Float64, 1536)"
+
+
+def test_datetime_timezone_alias():
+    assert ChDateTime(timezone="UTC").name == ChDateTime(tz="UTC").name
+
+
+def test_datetime64_timezone_alias():
+    assert DateTime64(3, timezone="America/New_York").name == DateTime64(3, tz="America/New_York").name
+
+
+def test_datetime_both_tz_and_timezone_raises():
+    with pytest.raises(ArgumentError):
+        ChDateTime(tz="UTC", timezone="UTC")
+    with pytest.raises(ArgumentError):
+        DateTime64(3, tz="UTC", timezone="UTC")
+
+
+def test_datetime_timezone_true_raises():
+    with pytest.raises(ArgumentError) as exc_info:
+        ChDateTime(timezone=True)
+    assert "zone" in str(exc_info.value).lower()
+    with pytest.raises(ArgumentError) as exc_info:
+        DateTime64(3, timezone=True)
+    assert "zone" in str(exc_info.value).lower()
+
+
+def test_datetime_timezone_false_is_noop():
+    """timezone=False is silently accepted; SA passes it during type cloning."""
+    assert ChDateTime(timezone=False).name == ChDateTime().name
+    assert DateTime64(3, timezone=False).name == DateTime64(3).name
+    assert ChDateTime(tz="UTC", timezone=False).name == ChDateTime(tz="UTC").name
+
+
+def test_tuple_variadic():
+    assert Tuple(UInt32, UInt64).name == Tuple(elements=[UInt32, UInt64]).name
+
+
+def test_tuple_variadic_single():
+    tup = Tuple(UInt32)
+    assert tup.name == Tuple(elements=[UInt32]).name
+
+
+def test_tuple_variadic_with_uuid():
+    assert Tuple(UInt32, UUID, UInt64).name == Tuple(elements=[UInt32, UUID, UInt64]).name
+
+
+def test_tuple_both_positional_and_kwarg_raises():
+    with pytest.raises(ArgumentError):
+        Tuple(UInt32, elements=[UInt64])
+
+
+def test_tuple_zero_args_does_not_crash():
+    """Tuple() with no args returns an empty Tuple instead of crashing."""
+    Tuple()
+
+
+def test_tuple_adapt_preserves_type_def():
+    """Tuple.adapt() preserves the source instance's type_def."""
+    source = Tuple(UInt32, UInt64)
+    adapted = source.adapt(type(source))
+    assert adapted.type_def == source.type_def
+    assert adapted.name == source.name

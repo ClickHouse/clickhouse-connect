@@ -9,6 +9,16 @@
 - Async client: `server_host_name` now also overrides the TLS SNI / certificate hostname, matching the sync client. Previously the async path only applied it to the HTTP `Host` header, so connecting to host A while presenting SNI B (the 0.x `pool_mgr=urllib3.PoolManager(server_hostname=...)` pattern, useful for ClickHouse Cloud VPC endpoints reached via external DNS) was not expressible against the new aiohttp-based client. Both `_raw_request` and `ping()` now pass `ssl=self._ssl_context, server_hostname=self.server_host_name` per request when an SSL context is in use. Closes [#752](https://github.com/ClickHouse/clickhouse-connect/issues/752).
 - Drain the full `retries` budget on connection-error retries in `_raw_request` instead of only retrying once. Previously both the sync and async clients gated network-error retries on `attempts == 1`, so two consecutive `aiohttp.ServerDisconnectedError`s (or `ConnectionResetError`s on the sync path) surfaced as `OperationalError` even when `query_retries` would have allowed another attempt. Read paths now drain `query_retries`; insert/command paths still get one retry (`retries=0` callers). Sync `raw_query` and `raw_stream` (the foundation for `query_arrow` / `query_arrow_stream`) now also pass `query_retries` so they match their async counterparts. Adds a `0.1 * attempts` backoff between connection-error retries to match the 429/503/504 branch. Closes [#754](https://github.com/ClickHouse/clickhouse-connect/issues/754).
 - `quote_identifier` now re-escapes inputs that start and end with `` ` `` or `"` but contain unescaped inner occurrences of the same quote character, instead of passing them through unchanged. Validly pre-quoted identifiers like backslash or doubled-quote escaping still pass through untouched. Closes [#737](https://github.com/ClickHouse/clickhouse-connect/issues/737).
+- SQLAlchemy: quote string-valued engine and operation settings as ClickHouse string literals when rendering `SETTINGS` clauses. Previously settings like `MergeTree(settings={"storage_policy": "hot_cold"})` or `op.add_column(..., clickhouse_settings={"mutations_sync": "2"})` emitted unquoted SQL (`storage_policy = hot_cold`), which ClickHouse rejected. Numeric and boolean settings are unchanged.
+- SQLAlchemy: preserve engine `settings` on reflection. `build_engine()` previously hardcoded `engine.settings = {}` even when the reflected DDL contained a `SETTINGS` clause, so callers reading `engine.settings` after reflection saw an empty dict. `settings` is now populated from the parsed engine kwargs, decoding ClickHouse string-literal escapes (`\\`, `\'`, `\n`, etc.) and preserving float-valued settings as floats — round-trip parity with the construction path.
+- SQLAlchemy: `Inspector` error messages from `get_table_metadata()` now report the resolved database name i.e. from `currentDatabase()` when `schema` was not provided instead of literal `None`.
+
+## 1.1.0a2, 2026-05-07
+
+Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers, rebased on `1.0.0rc3` so the insert-retry fix from rc3 is also included.
+
+### Bug Fixes
+- SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
 
 ## 1.0.1, 2026-05-19
 
@@ -29,6 +39,23 @@ Upgrading from a 0.15.x or earlier release? See [MIGRATION.md](MIGRATION.md) for
 ### Bug Fixes
 - Fix intermittent `Code: 62. Empty query. (SYNTAX_ERROR)` on inserts when a pooled keep-alive connection is reset between attempts. The retry path now rebuilds the insert body instead of replaying an already-drained generator. Affects both sync and async clients. Closes [#731](https://github.com/ClickHouse/clickhouse-connect/issues/731)
 
+## 1.1.0a1, 2026-05-06
+
+This is an **alpha preview** of the upcoming 1.1.0 release, published from the alembic integration branch for early testing. It includes everything in 1.0.0rc2 plus the items below. The new SQLAlchemy and Alembic APIs introduced here may change before 1.1.0 final.
+
+### Improvements
+- **SQLAlchemy: Alembic migration support.** Full Alembic integration for ClickHouse schema migrations: autogeneration of migration scripts from SQLAlchemy metadata, upgrade/downgrade lifecycle, and round-tripping of ClickHouse-specific DDL. Supported operations include create/drop table, add/alter/drop/rename column, type and nullability changes, defaults, comments, `IF EXISTS` guards, column placement with `AFTER`, and operation-level `clickhouse_settings`. ClickHouse table engines (`MergeTree`, `ReplacingMergeTree`, etc.) and dictionaries are preserved through the migration lifecycle. Install via `pip install clickhouse-connect[alembic]`. See `clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md` for an end-to-end walkthrough.
+- **SQLAlchemy: ClickHouse `Dictionary` type support.** Reflect, create, and drop ClickHouse dictionaries through SQLAlchemy and Alembic.
+- **SQLAlchemy: `PREWHERE`, `LIMIT BY`, and lambda expressions** are now available as chainable Select constructs for ClickHouse-specific query shapes.
+- **SQLAlchemy: Multi-column `ARRAY JOIN` label preservation.** `ARRAY JOIN` aliases now survive through compilation, fixing label-loss issues with parallel array expansion.
+- **SQLAlchemy: Migration shim for `clickhouse-sqlalchemy` users.** New `cc_sqlalchemy.types` and `cc_sqlalchemy.engines` import-compatible modules ease migration from `clickhouse-sqlalchemy`. See `clickhouse_connect/cc_sqlalchemy/MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md`.
+- **SQLAlchemy 1.4 and 2.x compatibility improvements** across the dialect and DDL compiler paths.
+- **Inspector: cloud quirk reflection fixes** for ClickHouse Cloud-specific schema reflection edge cases.
+- **DDL compiler improvements** including better handling of nested container types and Tuple adaptation.
+
+### Bug Fixes
+- Fix Alembic autogenerated migrations rendering enum types (including nested container types) with the correct ClickHouse-compatible representation.
+
 ## 1.0.0rc2, 2026-05-05
 
 ### Improvements
@@ -41,7 +68,6 @@ Upgrading from a 0.15.x or earlier release? See [MIGRATION.md](MIGRATION.md) for
 - Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
 - SQLAlchemy `Bool` type now accepts and forwards `**kwargs` to the underlying `SqlaBoolean` constructor. SQLAlchemy's `SchemaType` machinery passes internal kwargs (e.g., `_create_events`) when copying or adapting the type during ORM model use or `Table.to_metadata()`, which previously raised a `TypeError`. Fixes [#705](https://github.com/ClickHouse/clickhouse-connect/issues/705)
 - SQLAlchemy: `CreateDatabase` with `engine="Replicated"` now emits a closing `)` after the `(zoo_path, shard, replica)` arguments, fixing previously invalid DDL on this path. The same arguments and the `system.tables` lookup in `get_engine` now go through bound parameters and the existing `format_str` helper instead of raw f-string interpolation.
-
 
 ## 1.0.0rc1, 2026-04-22
 
