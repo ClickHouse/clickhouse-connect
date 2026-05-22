@@ -13,6 +13,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     ReplicatedMergeTree,
     ReplicatedReplacingMergeTree,
     ReplicatedVersionedCollapsingMergeTree,
+    build_engine,
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
@@ -205,3 +206,56 @@ def test_repr_engine_value_column_roundtrip():
     assert rendered.endswith(")")
     # Assert the full expression parses as valid Python syntax (re-importable)
     ast.parse(rendered)
+
+
+def test_engine_settings_string_value_quoted():
+    engine = MergeTree(order_by="id", settings={"storage_policy": "hot_cold"})
+    compiled = engine.compile()
+    assert "SETTINGS storage_policy = 'hot_cold'" in compiled
+
+
+def test_engine_settings_string_value_escapes_inner_quote():
+    engine = MergeTree(order_by="id", settings={"comment_like": "it's fine"})
+    compiled = engine.compile()
+    assert r"comment_like = 'it\'s fine'" in compiled
+
+
+def test_engine_settings_mixed_types():
+    engine = MergeTree(
+        order_by="id",
+        settings={"index_granularity": 1024, "storage_policy": "default", "allow_nullable_key": True},
+    )
+    compiled = engine.compile()
+    assert "index_granularity = 1024" in compiled
+    assert "storage_policy = 'default'" in compiled
+    assert "allow_nullable_key = 1" in compiled
+
+
+def test_reflected_engine_preserves_settings():
+    engine = build_engine("MergeTree ORDER BY id SETTINGS index_granularity = 1024, storage_policy = 'hot_cold'")
+    assert engine is not None
+    assert engine.settings == {"index_granularity": 1024, "storage_policy": "hot_cold"}
+
+
+def test_reflected_settings_decode_clickhouse_backslash_escapes():
+    engine = build_engine(r"MergeTree ORDER BY id SETTINGS comment_like = 'it\'s \"fine\"\nok'")
+    assert engine is not None
+    assert engine.settings == {"comment_like": 'it\'s "fine"\nok'}
+
+
+def test_reflected_settings_float_value_preserved_as_float():
+    engine = build_engine("MergeTree ORDER BY id SETTINGS ratio_of_defaults_for_sparse_serialization = 0.9")
+    assert engine is not None
+    assert engine.settings == {"ratio_of_defaults_for_sparse_serialization": 0.9}
+    # And re-rendering must keep it numeric, not quoted.
+    assert "= 0.9" in engine.full_engine
+    assert "= '0.9'" not in engine.full_engine
+
+
+def test_engine_settings_string_value_roundtrip():
+    original = MergeTree(order_by="id", settings={"comment_like": "it's fine"})
+    # full_engine carries an "Engine " prefix; system.tables.engine_full does not.
+    engine_full = original.full_engine.removeprefix("Engine ")
+    reflected = build_engine(engine_full)
+    assert reflected is not None
+    assert reflected.settings == original.settings

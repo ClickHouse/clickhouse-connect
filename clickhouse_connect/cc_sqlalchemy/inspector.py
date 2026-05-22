@@ -25,13 +25,14 @@ def _database_name(connection, schema: str | None) -> str:
 
 
 def get_table_metadata(connection, table_name, schema=None):
+    database = _database_name(connection, schema)
     result_set = connection.execute(
         text("SELECT engine, engine_full FROM system.tables WHERE database = :database AND name = :table_name"),
-        {"database": _database_name(connection, schema), "table_name": table_name},
+        {"database": database, "table_name": table_name},
     )
     row = next(result_set, None)
     if not row:
-        raise NoResultFound(f"Table {schema}.{table_name} does not exist")
+        raise NoResultFound(f"Table {database}.{table_name} does not exist")
     return row
 
 

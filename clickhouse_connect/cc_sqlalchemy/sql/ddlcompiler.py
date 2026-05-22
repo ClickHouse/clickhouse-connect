@@ -11,7 +11,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.datatypes.base import TypeDef
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 
 class ClickHouseDDLHelper:
@@ -100,9 +100,9 @@ class ClickHouseDDLHelper:
     def _render_setting_value(value: Any) -> str:
         if isinstance(value, bool):
             return "1" if value else "0"
-        if isinstance(value, str):
-            return value
-        return str(value)
+        if isinstance(value, (int, float)):
+            return str(value)
+        return format_str(str(value))
 
 
 def column_specification(dialect, column: Column) -> str:

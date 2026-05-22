@@ -580,3 +580,11 @@ def test_clickhouse_writer_adds_template_imports():
 
 def test_set_type_nullable_accepts_type_classes():
     assert str(ClickHouseImpl._set_type_nullable(types.UInt32, True).name) == "Nullable(UInt32)"
+
+
+def test_clickhouse_settings_string_value_quoted():
+    from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
+
+    rendered = ClickHouseDDLHelper.render_settings({"mutations_sync": "2", "alter_sync": 2})
+    assert "mutations_sync = '2'" in rendered
+    assert "alter_sync = 2" in rendered

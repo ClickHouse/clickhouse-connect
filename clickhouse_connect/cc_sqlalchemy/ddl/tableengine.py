@@ -9,7 +9,7 @@ from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.visitors import Visitable
 
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.binding import format_str, quote_identifier
 from clickhouse_connect.driver.parser import parse_callable
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,14 @@ def _render_engine_expr(value: EngineExpr) -> str:
     if isinstance(value, Column):
         return quote_identifier(value.name)
     return value
+
+
+def _render_setting_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return format_str(str(value))
 
 
 def tuple_expr(expr_name, value: EngineParam):
@@ -106,7 +114,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         if params:
             self.full_engine += " " + " ".join(params)
         if self.settings:
-            settings_expr = ", ".join(f"{k} = {v}" for k, v in self.settings.items())
+            settings_expr = ", ".join(f"{k} = {_render_setting_value(v)}" for k, v in self.settings.items())
             self.full_engine += f" SETTINGS {settings_expr}"
 
     def __repr__(self):
@@ -475,6 +483,24 @@ def _find_clause_markers(sql: str) -> list[tuple[int, str]]:
     return markers
 
 
+_CH_STRING_ESCAPES = {"\\": "\\", "'": "'", '"': '"', "`": "`", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "0": "\0"}
+
+
+def _decode_ch_string_literal(literal: str) -> str:
+    inner = literal[1:-1].replace("''", "'")
+    out: list[str] = []
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch == "\\" and i + 1 < len(inner):
+            out.append(_CH_STRING_ESCAPES.get(inner[i + 1], inner[i + 1]))
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def _parse_settings_clause(raw_settings: str) -> dict[str, Any]:
     settings: dict[str, Any] = {}
     for pair in split_top_level(raw_settings):
@@ -483,8 +509,17 @@ def _parse_settings_clause(raw_settings: str) -> dict[str, Any]:
         key, value = pair.split("=", 1)
         key = key.strip()
         value = value.strip()
+        if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+            settings[key] = _decode_ch_string_literal(value)
+            continue
         try:
             settings[key] = int(value)
+            continue
+        except ValueError:
+            pass
+        try:
+            settings[key] = float(value)
+            continue
         except ValueError:
             settings[key] = value
     return settings
@@ -560,7 +595,7 @@ def build_engine(full_engine: str) -> TableEngine | None:
     engine.name = base_name
     engine.full_engine = full_engine
     engine._orig_kwargs = _parse_engine_params(full_engine, engine_cls)
-    engine.settings = {}
+    engine.settings = dict(engine._orig_kwargs.get("settings") or {})
     return engine
 
 
