@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.1.0, 2026-05-26
+
 ### Compatibility
 - Async client now requires `aiohttp>=3.9.0`. This is required to support TLS SNI override via `server_host_name`, because aiohttp added the per-request `server_hostname` option in 3.9.
 - SQLAlchemy: the `alembic` extra now requires `alembic>=1.16` (previously `>=1.9`) so the documented `IF EXISTS` / `IF NOT EXISTS` Alembic operation kwargs are available.
