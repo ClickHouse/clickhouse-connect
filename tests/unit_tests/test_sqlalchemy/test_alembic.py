@@ -1,11 +1,13 @@
 from io import StringIO
 
+import pytest
 from alembic.autogenerate import render
 from alembic.autogenerate.api import AutogenContext
 from alembic.ddl.impl import DefaultImpl
-from alembic.operations import ops
+from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import Column, Integer, MetaData, String, Table, literal_column, text
+from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
@@ -377,13 +379,7 @@ def test_alembic_impl_version_table_sql():
 
 
 def test_version_table_schema_desync():
-    """Regression: when include_schemas causes ClickHouseImpl to auto-detect
-    version_table_schema, the _version Table built by Alembic has schema=None
-    because the opts mutation happens after Alembic captures the value.
-
-    The version-table UPDATE/DELETE interception must still work despite the
-    schema mismatch between the Table object and the context_opts.
-    """
+    """Version-table UPDATE/DELETE is intercepted as INSERT + ALTER...DELETE when the version Table has schema=None and context_opts.version_table_schema is set."""
     buffer = StringIO()
     # Simulate what happens when include_schemas=True auto-sets the schema
     opts = {"version_table": "alembic_version", "version_table_schema": "mydb"}
@@ -410,6 +406,88 @@ def test_version_table_schema_desync():
     assert "INSERT INTO" in sql
     assert "ALTER TABLE" in sql
     assert "DELETE WHERE" in sql
+
+
+def test_alembic_operations_add_column_passes_clickhouse_settings():
+    """op.add_column forwards clickhouse_settings to the impl and emits ALTER TABLE ... ADD COLUMN ... SETTINGS ...."""
+    buffer = StringIO()
+    context = MigrationContext.configure(
+        dialect=ClickHouseDialect(),
+        opts={"as_sql": True, "output_buffer": buffer},
+    )
+    op = Operations(context)
+
+    op.add_column(
+        "events",
+        Column(
+            "payload",
+            String,
+            server_default=text("'{}'"),
+            clickhouse_after="id",
+        ),
+        schema="olap",
+        if_not_exists=True,
+        clickhouse_settings={"alter_sync": 2},
+    )
+
+    sql = buffer.getvalue()
+    assert "ALTER TABLE `olap`.`events` ADD COLUMN IF NOT EXISTS `payload` VARCHAR DEFAULT '{}' AFTER `id` SETTINGS alter_sync = 2;" in sql
+
+
+def test_add_column_autogenerate_render_preserves_op_kw():
+    """Programmatic rewrites of AddColumnOp must round-trip clickhouse_settings via op.kw."""
+    metadata = MetaData()
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": metadata})
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+    add_op = ops.AddColumnOp(
+        "events",
+        Column("payload", String, server_default=text("'{}'")),
+        schema="olap",
+        if_not_exists=True,
+        clickhouse_settings={"alter_sync": 2},
+    )
+
+    rendered = render.render_op_text(autogen_context, add_op)
+    assert "clickhouse_settings={'alter_sync': 2}" in rendered
+
+
+def test_alembic_operations_table_comments():
+    """Public table comment operations must use ClickHouse ALTER TABLE syntax."""
+    buffer = StringIO()
+    context = MigrationContext.configure(
+        dialect=ClickHouseDialect(),
+        opts={"as_sql": True, "output_buffer": buffer},
+    )
+    op = Operations(context)
+
+    op.create_table_comment(
+        "events",
+        "Application events table",
+        schema="olap",
+        existing_comment="Old comment",
+    )
+    op.drop_table_comment(
+        "events",
+        schema="olap",
+        existing_comment="Application events table",
+    )
+
+    sql = buffer.getvalue()
+    assert "ALTER TABLE `olap`.`events` MODIFY COMMENT 'Application events table';" in sql
+    assert "ALTER TABLE `olap`.`events` MODIFY COMMENT '';" in sql
+    assert "COMMENT ON TABLE" not in sql
+
+
+def test_get_table_comment_missing_table_raises_no_such_table():
+    class EmptyConnection:
+        def execute(self, statement, parameters):
+            return iter(())
+
+    with pytest.raises(NoSuchTableError):
+        ClickHouseDialect().get_table_comment(EmptyConnection(), "missing_events", schema="olap")
 
 
 def test_alembic_impl_column_operations():

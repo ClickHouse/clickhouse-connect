@@ -137,6 +137,12 @@ class ClickHouseImpl(DefaultImpl):
             sql.extend(["SETTINGS", settings])
         self._exec(text(" ".join(sql)))
 
+    def create_table_comment(self, table: Table) -> None:
+        self._exec(text(self._comment_table_sql(table, table.comment)))
+
+    def drop_table_comment(self, table: Table) -> None:
+        self._exec(text(self._comment_table_sql(table, None)))
+
     def alter_column(
         self,
         table_name: str,
@@ -318,6 +324,17 @@ class ClickHouseImpl(DefaultImpl):
         if settings:
             sql.extend(["SETTINGS", settings])
         return " ".join(sql)
+
+    @staticmethod
+    def _comment_table_sql(table: Table, comment: str | None) -> str:
+        return " ".join(
+            [
+                "ALTER TABLE",
+                full_table(table.name, table.schema),
+                "MODIFY COMMENT",
+                ClickHouseDDLHelper.render_comment(comment),
+            ]
+        )
 
     @staticmethod
     def _normalize_default(default: str | None) -> str | None:

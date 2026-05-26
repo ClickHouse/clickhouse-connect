@@ -1,12 +1,29 @@
 from alembic.autogenerate import render
 from alembic.autogenerate.api import AutogenContext
 from alembic.autogenerate.compare import comparators
-from alembic.operations import ops
+from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
 from alembic.util import DispatchPriority, PriorityDispatchResult
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
+
+
+@Operations.register_operation("add_column")
+class ClickHouseAddColumnOp(ops.AddColumnOp):
+    """Re-registers op.add_column with a **kw signature."""
+
+    @classmethod
+    def add_column(cls, operations, table_name, column, *, schema=None, if_not_exists=None, **kw):
+        return operations.invoke(
+            ops.AddColumnOp(
+                table_name,
+                column,
+                schema=schema,
+                if_not_exists=if_not_exists,
+                **kw,
+            )
+        )
 
 
 def patch_alembic_version(context: MigrationContext):
@@ -131,6 +148,8 @@ def render_add_column(autogen_context: AutogenContext, op: ops.AddColumnOp) -> s
         rendered += f", schema={schema!r}"
     if if_not_exists is not None:
         rendered += f", if_not_exists={if_not_exists!r}"
+    for key in sorted(op.kw):
+        rendered += f", {key}={op.kw[key]!r}"
     return rendered + ")"
 
 
