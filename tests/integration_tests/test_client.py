@@ -6,6 +6,7 @@ from time import sleep
 import pytest
 
 from clickhouse_connect import create_client, datatypes
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
@@ -253,6 +254,31 @@ def test_show_create(param_client, call):
     result = call(param_client.query, "SHOW CREATE TABLE system.tables")
     result.close()
     assert "statement" in result.column_names
+
+
+def test_show_row_policies(param_client, call, table_context: Callable, test_config: TestConfig):
+    if test_config.cloud:
+        pytest.skip("Skipping row policy test in cloud env")
+    if not param_client.min_version("20"):
+        pytest.skip(f"Not supported server version {param_client.server_version}")
+
+    for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+        result = call(param_client.query, statement)
+        assert result.result_rows == [[""]]
+        result.close()
+
+    policy = "test_show_row_policies_policy"
+    with table_context("test_show_row_policies", ["id UInt32"]) as table:
+        target = f"{quote_identifier(param_client.database)}.{table.table}"
+        call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
+        try:
+            assert call(param_client.command, f"SHOW ROW POLICIES ON {target}") == ""
+            assert call(param_client.command, f"SHOW POLICIES ON {target}") == ""
+
+            call(param_client.command, f"CREATE ROW POLICY {policy} ON {target} USING id = 13 TO ALL")
+            assert policy in call(param_client.command, f"SHOW ROW POLICIES ON {target}")
+        finally:
+            call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
 
 
 def test_empty_result(param_client, call):

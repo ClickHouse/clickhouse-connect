@@ -7,7 +7,7 @@ import pytest
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.query import QueryContext, returns_empty_string_on_empty_body
 
 
 def test_copy_context():
@@ -33,6 +33,65 @@ def test_copy_context():
     assert context_copy.settings["max_execution_time"] == 120
     assert context_copy.settings["max_bytes_for_external_group_by"] == 25165824
     assert context_copy.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_2'"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES",
+        "SHOW POLICIES",
+        "show row policies",
+        "  SHOW   ROW   POLICIES  ",
+        "-- comment\nSHOW ROW POLICIES",
+    ],
+)
+def test_bare_row_policy_show_is_command(query):
+    assert QueryContext(query).is_command is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES ON db.table",
+        "SHOW ROW POLICIES policy_1",
+        "SHOW DATABASES",
+        "SHOW TABLES",
+        "SHOW USERS",
+        "SELECT 1",
+        "SHOW",
+    ],
+)
+def test_other_show_queries_are_not_commands(query):
+    assert QueryContext(query).is_command is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES",
+        "SHOW POLICIES",
+        "  SHOW ROW POLICIES ON db.table",
+        "-- comment\nSHOW POLICIES ON db.table",
+        "SHOW ROW POLICIES policy_1",
+    ],
+)
+def test_row_policy_show_empty_body_returns_empty_string(query):
+    assert returns_empty_string_on_empty_body(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        b"SHOW ROW POLICIES",
+        "INSERT INTO t FORMAT TSV",
+        "CREATE TABLE x (id UInt32) ENGINE Memory",
+        "ALTER TABLE x ADD COLUMN y UInt32",
+        "SELECT 1",
+        "SHOW DATABASES",
+    ],
+)
+def test_non_row_policy_show_empty_body_uses_query_summary(query):
+    assert returns_empty_string_on_empty_body(query) is False
 
 
 def test_active_tz_utc_defaults_to_naive():

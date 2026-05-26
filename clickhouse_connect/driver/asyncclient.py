@@ -45,7 +45,14 @@ from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
 from clickhouse_connect.driver.options import check_arrow, check_numpy, check_pandas, check_polars
-from clickhouse_connect.driver.query import QueryContext, QueryResult, TzMode, TzSource, arrow_buffer
+from clickhouse_connect.driver.query import (
+    QueryContext,
+    QueryResult,
+    TzMode,
+    TzSource,
+    arrow_buffer,
+    returns_empty_string_on_empty_body,
+)
 from clickhouse_connect.driver.streaming import StreamingFileAdapter, StreamingInsertSource, StreamingResponseSource
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform
@@ -951,6 +958,8 @@ class AsyncClient(Client):
             _release_lease(response)
 
         if not body:
+            if returns_empty_string_on_empty_body(cmd):
+                return ""
             return QuerySummary(summary)
 
         loop = asyncio.get_running_loop()

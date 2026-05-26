@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Fix `query("SHOW ROW POLICIES")`/`query("SHOW POLICIES")` by routing these non-tabular statements without appending `FORMAT Native`. Empty row-policy `SHOW` command results now return `""` instead of `QuerySummary`. Closes [#761](https://github.com/ClickHouse/clickhouse-connect/issues/761).
+
 ## 1.1.0, 2026-05-26
 
 ### Compatibility
