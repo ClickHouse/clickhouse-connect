@@ -1,11 +1,13 @@
 from io import StringIO
 
+import pytest
 from alembic.autogenerate import render
 from alembic.autogenerate.api import AutogenContext
 from alembic.ddl.impl import DefaultImpl
 from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import Column, Integer, MetaData, String, Table, literal_column, text
+from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
@@ -477,6 +479,15 @@ def test_alembic_operations_table_comments():
     assert "ALTER TABLE `olap`.`events` MODIFY COMMENT 'Application events table';" in sql
     assert "ALTER TABLE `olap`.`events` MODIFY COMMENT '';" in sql
     assert "COMMENT ON TABLE" not in sql
+
+
+def test_get_table_comment_missing_table_raises_no_such_table():
+    class EmptyConnection:
+        def execute(self, statement, parameters):
+            return iter(())
+
+    with pytest.raises(NoSuchTableError):
+        ClickHouseDialect().get_table_comment(EmptyConnection(), "missing_events", schema="olap")
 
 
 def test_alembic_impl_column_operations():

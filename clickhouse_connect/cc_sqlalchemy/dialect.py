@@ -1,7 +1,7 @@
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
-from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.exc import NoResultFound, NoSuchTableError
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
@@ -111,7 +111,10 @@ class ClickHouseDialect(DefaultDialect):
         raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
 
     def get_table_comment(self, connection, table_name, schema=None, **kw):
-        table_metadata = get_table_metadata(connection, table_name, schema)
+        try:
+            table_metadata = get_table_metadata(connection, table_name, schema)
+        except NoResultFound:
+            raise NoSuchTableError(f"{schema}.{table_name}" if schema else table_name) from None
         return {"text": table_metadata.comment or None}
 
     def get_indexes(self, connection, table_name, schema=None, **kw):
