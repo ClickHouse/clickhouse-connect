@@ -1,11 +1,11 @@
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
-from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.exc import NoResultFound, NoSuchTableError
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
-from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector
+from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector, get_table_metadata
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
@@ -26,6 +26,7 @@ class ClickHouseDialect(DefaultDialect):
     supports_native_boolean = True
     supports_statement_cache = False
     supports_comments = True
+    inline_comments = True
     returns_unicode_strings = True
     postfetch_lastrowid = False
     ddl_compiler = ChDDLCompiler
@@ -110,7 +111,11 @@ class ClickHouseDialect(DefaultDialect):
         raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
 
     def get_table_comment(self, connection, table_name, schema=None, **kw):
-        return {"text": None}
+        try:
+            table_metadata = get_table_metadata(connection, table_name, schema)
+        except NoResultFound:
+            raise NoSuchTableError(f"{schema}.{table_name}" if schema else table_name) from None
+        return {"text": table_metadata.comment or None}
 
     def get_indexes(self, connection, table_name, schema=None, **kw):
         return []

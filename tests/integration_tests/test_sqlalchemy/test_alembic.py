@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import Column, MetaData, Table, inspect, literal_column, text
 from sqlalchemy.engine import Engine
@@ -254,6 +255,128 @@ def test_alembic_column_operations_live(test_engine: Engine, test_db: str, ch_na
         assert [column["name"] for column in columns] == ["id"]
 
 
+def test_alembic_create_table_with_table_comment_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+    """Autogen of a Table(..., comment="...") creates it with COMMENT '...', a second autogen against unchanged metadata is a noop, and subsequent updates and drops of the comment apply via ALTER TABLE ... MODIFY COMMENT."""
+    table_name = ch_name("alembic_table_comment")
+    metadata = MetaData(schema=test_db)
+    table = Table(
+        table_name,
+        metadata,
+        Column("id", Int32, nullable=False),
+        MergeTree(order_by="id"),
+        comment="Application events table",
+    )
+
+    with test_engine.connect() as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create with table comment", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        command.upgrade(config, "head")
+
+        create_sql = conn.execute(
+            text("SELECT create_table_query FROM system.tables WHERE database = :database AND name = :table_name"),
+            {"database": test_db, "table_name": table_name},
+        ).scalar()
+        assert "COMMENT 'Application events table'" in create_sql
+
+        noop_revision = command.revision(config, message="table comment noop", autogenerate=True)
+        assert noop_revision is not None
+        assert not isinstance(noop_revision, list)
+        noop_contents = Path(noop_revision.path).read_text(encoding="utf-8")
+        assert "pass" in noop_contents
+        assert "create_table_comment" not in noop_contents
+        command.upgrade(config, "head")
+
+        table.comment = "Updated application events table"
+        update_revision = command.revision(config, message="update table comment", autogenerate=True)
+        assert update_revision is not None
+        assert not isinstance(update_revision, list)
+        update_contents = Path(update_revision.path).read_text(encoding="utf-8")
+        assert "create_table_comment" in update_contents
+        assert "Updated application events table" in update_contents
+        command.upgrade(config, "head")
+
+        updated_comment = conn.execute(
+            text("SELECT comment FROM system.tables WHERE database = :database AND name = :table_name"),
+            {"database": test_db, "table_name": table_name},
+        ).scalar()
+        assert updated_comment == "Updated application events table"
+
+        table.comment = None
+        drop_revision = command.revision(config, message="drop table comment", autogenerate=True)
+        assert drop_revision is not None
+        assert not isinstance(drop_revision, list)
+        drop_contents = Path(drop_revision.path).read_text(encoding="utf-8")
+        assert "drop_table_comment" in drop_contents
+        command.upgrade(config, "head")
+
+        dropped_comment = conn.execute(
+            text("SELECT comment FROM system.tables WHERE database = :database AND name = :table_name"),
+            {"database": test_db, "table_name": table_name},
+        ).scalar()
+        assert dropped_comment == ""
+
+
+def test_alembic_create_table_with_column_comment_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+    """Autogen of a Table whose columns carry comment=... emits an inline COMMENT '...' in CREATE TABLE."""
+    table_name = ch_name("alembic_comment_initial")
+    metadata = MetaData(schema=test_db)
+    Table(
+        table_name,
+        metadata,
+        Column("id", Int32, nullable=False),
+        Column("label", String, nullable=False, comment="Display label"),
+        MergeTree(order_by="id"),
+    )
+
+    with test_engine.connect() as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create with comment", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        command.upgrade(config, "head")
+
+    with test_engine.begin() as conn:
+        create_sql = conn.execute(
+            text("SELECT create_table_query FROM system.tables WHERE database = :database AND name = :table_name"),
+            {"database": test_db, "table_name": table_name},
+        ).scalar()
+        assert "COMMENT 'Display label'" in create_sql
+
+
+def test_alembic_operations_add_column_public_api_live(test_engine: Engine, test_db: str, ch_name):
+    """op.add_column via the public Operations facade with clickhouse_settings adds the column on a live connection."""
+    table_name = ch_name("alembic_op_probe")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (`id` String) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(
+            connection=conn,
+            opts={"version_table": ch_name("alembic_version")},
+        )
+        op = Operations(context)
+
+        op.add_column(
+            table_name,
+            Column(
+                "payload",
+                String(),
+                server_default=text("'{}'"),
+                clickhouse_after="id",
+            ),
+            schema=test_db,
+            if_not_exists=True,
+            clickhouse_settings={"alter_sync": 2},
+        )
+
+        columns = inspect(conn).get_columns(table_name, schema=test_db)
+        assert [column["name"] for column in columns] == ["id", "payload"]
+        payload = next(column for column in columns if column["name"] == "payload")
+        assert str(payload["server_default"]) == "'{}'"
+
+
 def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
     table_name = ch_name("alembic_events")
     metadata = MetaData(schema=test_db)
@@ -439,12 +562,7 @@ def test_alembic_autogenerate_comment_change_live(test_engine: Engine, test_db: 
 
 
 def test_alembic_multi_step_upgrade_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
-    """Regression: multi-step upgrades must update the version table correctly.
-
-    The version table UPDATE was falling through as a raw SQL UPDATE (which
-    ClickHouse rejects) because of a schema mismatch between the _version Table
-    object and the auto-detected version_table_schema in context_opts.
-    """
+    """A second alembic upgrade after the initial migration updates the version table and applies the new revision."""
     table_name = ch_name("alembic_multistep")
     metadata1 = MetaData(schema=test_db)
     Table(
@@ -480,9 +598,7 @@ def test_alembic_multi_step_upgrade_live(test_engine: Engine, test_db: str, tmp_
 
 
 def test_alembic_reflected_replacing_merge_tree_downgrade_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
-    """Regression: reflected engine repr must include positional args so that
-    autogenerated downgrades for dropped tables can recreate the table.
-    """
+    """Downgrade of a dropped ReplacingMergeTree table recreates it from the reflected engine repr in the generated migration."""
     table_name = ch_name("alembic_rmt")
     metadata1 = MetaData(schema=test_db)
     Table(
