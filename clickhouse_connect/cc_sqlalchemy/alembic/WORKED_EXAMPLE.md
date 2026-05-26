@@ -4,14 +4,12 @@ This is a full end-to-end Alembic walkthrough for `clickhouse_connect.cc_sqlalch
 
 ## What is Alembic?
 
-[Alembic](https://alembic.sqlalchemy.org/en/latest/) is a database migration tool for SQLAlchemy that tracks changes in your Python ORM models and generates versioned migration scripts to keep your actual database schema in sync with those models. This gives you a repeatable, reviewable history of schema changes. In practice, that means:
+[Alembic](https://alembic.sqlalchemy.org/en/latest/) is a database migration tool for SQLAlchemy that tracks changes in your SQLAlchemy table definitions or ORM models and generates versioned migration scripts to keep your actual database schema in sync with those definitions. This gives you a repeatable, reviewable history of schema changes. In practice, that means:
 
 - your models describe the schema you want
 - Alembic compares those models to the live database
 - Alembic generates revision files
 - `alembic upgrade` and `alembic downgrade` apply them to your database
-
-## How people normally use it
 
 Alembic does have a Python API, but most users interact with Alembic through the CLI:
 
@@ -45,14 +43,12 @@ You need:
 
 - a running ClickHouse server on `localhost:8123`
 - Python
-- `sqlalchemy`
-- `alembic`
-- `clickhouse-connect`
+- `clickhouse-connect` installed with the `alembic` extra, which pulls in compatible `sqlalchemy` and `alembic` versions
 
-Install them however you normally manage dependencies. for example:
+Install however you normally manage dependencies, for example:
 
 ```bash
-pip install sqlalchemy alembic clickhouse-connect
+pip install "clickhouse-connect[alembic]"
 ```
 
 This guide uses:
@@ -270,6 +266,8 @@ ENGINE = MergeTree
 ORDER BY id
 ```
 
+The exact formatting may differ, and ClickHouse may include default table settings such as `SETTINGS index_granularity = 8192`.
+
 ## Step 11: Insert a few rows
 
 Now that the table exists, let's insert some data:
@@ -447,6 +445,8 @@ ENGINE = MergeTree
 ORDER BY id
 ```
 
+The exact formatting may differ, and ClickHouse may include default table settings such as `SETTINGS index_granularity = 8192`.
+
 ## Step 21: Insert data using the new schema
 
 Now insert rows that use the new column:
@@ -477,9 +477,11 @@ After initial setup, the day-to-day loop is usually relatively simple:
 
 That is the expected Alembic workflow, and it is how this ClickHouse integration is intended to be used.
 
-## Manual migration operations
+## Optional: Manual migration operations
 
-Autogenerate handles the common cases, but you can also write migration operations by hand. Here are some examples of ClickHouse-specific operations you can use in your migration scripts.
+You do not need this section for the main walkthrough. Autogenerate handles the common cases shown above, but you can also write migration operations by hand when you want more control over a specific change.
+
+The examples below use the same `alembic_demo.events` table from the walkthrough.
 
 Add a column with placement and operation-level settings:
 
@@ -496,7 +498,7 @@ op.add_column(
         server_default=text("'{}'"),
         clickhouse_after="id",
     ),
-    schema="analytics",
+    schema="alembic_demo",
     if_not_exists=True,
     clickhouse_settings={"alter_sync": 2},
 )
@@ -508,8 +510,8 @@ Alter a column default:
 op.alter_column(
     "events",
     "payload",
-    schema="analytics",
-    existing_type=types.String(),
+    schema="alembic_demo",
+    existing_type=types.Nullable(types.String()),
     server_default=text("'[]'"),
     clickhouse_settings={"alter_sync": 2},
 )
@@ -521,78 +523,28 @@ Drop a column safely:
 op.drop_column(
     "events",
     "payload",
-    schema="analytics",
+    schema="alembic_demo",
     if_exists=True,
 )
 ```
 
-For DDL that Alembic does not model, use `op.execute(...)` directly:
+For DDL that Alembic does not model, use `op.execute(...)` directly with a raw SQL string.
 
-```python
-op.execute("CREATE MATERIALIZED VIEW ...")
-```
+## What This Example Covered
 
-This is common for materialized views, advanced engine rewrites, data-skipping indexes, and codec/TTL changes on existing columns.
+This walkthrough focused on the parts of the integration most users need first:
 
-## Supported operations
+- creating a ClickHouse table from SQLAlchemy metadata
+- preserving the ClickHouse table engine in generated migrations
+- adding and dropping columns with autogenerate
+- changing a column default and comment
+- applying and rolling back revisions with the Alembic CLI
+- inserting and querying data before and after schema changes
+- using optional manual column operations when autogenerate is not enough
 
-The following operations work with `revision --autogenerate` and `upgrade`:
+## Migrating from `clickhouse_sqlalchemy`
 
-- create / drop table (including ClickHouse engine preservation)
-- create / drop dictionary
-- add / alter / drop / rename column
-- alter column type, nullability, default, and comment
-- generated downgrade support for dropped tables and dictionaries
-
-ClickHouse-specific features supported on that path:
-
-- positional table engines (`MergeTree(order_by=...)`, `ReplacingMergeTree(version=...)`, etc.)
-- engine settings (`settings={"index_granularity": 1024}`)
-- dictionary `SOURCE`, `LAYOUT`, `LIFETIME`, and `PRIMARY KEY`
-- `TextClause` expressions in `partition_by`, `order_by`, and `ttl`
-- column `DEFAULT`, `COMMENT`
-- `ADD COLUMN ... AFTER ...` placement
-- `IF EXISTS` / `IF NOT EXISTS` guards
-- operation-level `clickhouse_settings={"alter_sync": 2}`
-
-DDL that is best handled with `op.execute(...)`:
-
-- engine rewrites of existing tables
-- codec / TTL / materialized / alias diffs on existing columns
-- advanced dictionary rewrites
-- materialized views
-- data-skipping and secondary index DDL
-
-## Dictionary support
-
-Dictionary metadata autogenerates cleanly:
-
-```python
-from sqlalchemy import Column
-from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
-from clickhouse_connect.cc_sqlalchemy import types
-
-dim_lookup = Dictionary(
-    "dim_lookup",
-    metadata,
-    Column("id", types.UInt64()),
-    Column("value", types.String()),
-    source="CLICKHOUSE(TABLE 'system.one')",
-    layout="FLAT",
-    lifetime="MIN 0 MAX 10",
-    primary_key="id",
-)
-```
-
-## Compatibility with clickhouse_sqlalchemy
-
-If you are migrating from `clickhouse_sqlalchemy`, the following compatibility shims are available:
-
-- `from clickhouse_connect.cc_sqlalchemy import engines` (replaces `from clickhouse_sqlalchemy import engines`)
-- `from clickhouse_connect.cc_sqlalchemy import types` (replaces `from clickhouse_sqlalchemy import types`)
-- `ReplacingMergeTree(version=..., is_deleted=...)` accepts both the new keyword names and the legacy `ver=` alias
-
-The migration work usually consists of updating imports and the SQLAlchemy URL (`clickhousedb://...`) rather than redesigning the migration flow.
+If you are coming from [`clickhouse_sqlalchemy`](https://github.com/xzkostyan/clickhouse-sqlalchemy), see [MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md](../MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md) for the import and URL changes you need.
 
 ## Summary
 

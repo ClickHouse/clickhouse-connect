@@ -131,7 +131,10 @@ class ChDDLCompiler(DDLCompiler):
             )
         text = f"CREATE TABLE{if_not_exists} {format_table(table)} ("
         text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
-        return text + ") " + engine.compile()
+        text += ") " + engine.compile()
+        if table.comment:
+            text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, sqltypes.STRINGTYPE)}"
+        return text
 
     def _visit_create_dictionary(self, create, dictionary, if_not_exists: str):
         text = f"CREATE DICTIONARY{if_not_exists} {format_table(dictionary)} ("

@@ -63,7 +63,7 @@ autogeneration of migration scripts from SQLAlchemy metadata. ClickHouse table e
 
 Supported operations include create/drop table, add/alter/drop/rename column, type and nullability
 changes, defaults, comments, and ClickHouse-specific features like `IF EXISTS` guards, column
-placement with `AFTER`, and operation-level `clickhouse_settings`.
+placement with `AFTER`, and operation-level `clickhouse_settings` on column add/alter/drop.
 
 To get started, install the Alembic extra:
 
