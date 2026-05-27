@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.1.1, 2026-05-27
+
 ### Bug Fixes
 - Async client: `ping()` now routes through the configured proxy, matching `_raw_request`. Previously the proxy was omitted, so `ping()` falsely returned `False` on networks where the server was only reachable via the proxy. Closes [#757](https://github.com/ClickHouse/clickhouse-connect/issues/757).
 - Fix `query("SHOW ROW POLICIES")`/`query("SHOW POLICIES")` by routing these non-tabular statements without appending `FORMAT Native`. Empty row-policy `SHOW` command results now return `""` instead of `QuerySummary`. Closes [#761](https://github.com/ClickHouse/clickhouse-connect/issues/761).
