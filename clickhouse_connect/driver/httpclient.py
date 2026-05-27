@@ -46,6 +46,8 @@ columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
 ex_header = "X-ClickHouse-Exception-Code"
 ex_tag_header = "X-ClickHouse-Exception-Tag"
 
+_REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+
 
 class HttpClient(Client):
     params = {}
@@ -576,7 +578,8 @@ class HttpClient(Client):
                 # retries budget when it is larger (e.g. query_retries for reads), so that
                 # bursts of stale pooled connections can be drained before giving up.
                 max_attempts = max(2, retries + 1)
-                if isinstance(ex.__context__, ConnectionResetError) and attempts < max_attempts:
+                remote_close = isinstance(ex.__context__, _REMOTE_CLOSE_ERRORS) or isinstance(ex.__cause__, _REMOTE_CLOSE_ERRORS)
+                if remote_close and attempts < max_attempts:
                     # The server closed the connection, probably because the Keep Alive has expired.
                     # We should be safe to retry, as ClickHouse should not have processed anything on
                     # a connection that it killed.
@@ -590,6 +593,7 @@ class HttpClient(Client):
                         logger.debug("Retrying remotely closed connection (attempt %s/%s)", attempts, max_attempts)
                         time.sleep(0.1 * attempts)
                         continue
+                logger.debug("Non-retryable HTTP transport error type=%s", type(ex).__name__)
                 logger.warning("Unexpected Http Driver Exception")
                 err_url = f" ({self.url})" if self.show_clickhouse_errors else ""
                 raise OperationalError(f"Error {ex} executing HTTP request attempt {attempts}{err_url}") from ex

@@ -152,6 +152,21 @@ def _release_lease(response: aiohttp.ClientResponse | None) -> None:
         release()
 
 
+_REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+
+
+def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
+    if isinstance(error, (aiohttp.ServerTimeoutError, aiohttp.ClientConnectorError, aiohttp.ServerFingerprintMismatch)):
+        return False
+    if isinstance(error, aiohttp.ServerDisconnectedError):
+        return True
+    if isinstance(error, _REMOTE_CLOSE_ERRORS):
+        return True
+    if isinstance(error.__cause__, _REMOTE_CLOSE_ERRORS):
+        return True
+    return isinstance(error.__context__, _REMOTE_CLOSE_ERRORS)
+
+
 class AsyncClient(Client):
     valid_transport_settings = {
         "database",
@@ -2003,9 +2018,9 @@ class AsyncClient(Client):
                         continue
                 await self._error_handler(response)
 
-            except aiohttp.ServerConnectionError as e:
+            except aiohttp.ClientConnectionError as e:
                 msg = str(e)
-                if "Connection reset" in msg or "Remote end closed" in msg or "Cannot connect" in msg or "Server disconnected" in msg:
+                if _is_retryable_async_connection_error(e):
                     # Always allow at least one retry on a clean connection error so a single stale
                     # keep-alive socket doesn't surface to the caller, and additionally honor the
                     # retries budget when it is larger (e.g. query_retries for reads), so that
@@ -2021,6 +2036,7 @@ class AsyncClient(Client):
                             logger.debug("Retrying after connection error from remote host (attempt %s/%s)", attempts, max_attempts)
                             await asyncio.sleep(0.1 * attempts)
                             continue
+                logger.debug("Non-retryable aiohttp connection error type=%s", type(e).__name__)
                 raise OperationalError(f"Network Error: {msg}") from e
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
