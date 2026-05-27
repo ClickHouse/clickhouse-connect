@@ -149,7 +149,9 @@ _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
 
 
 def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
-    if isinstance(error, aiohttp.ServerConnectionError):
+    if isinstance(error, (aiohttp.ServerTimeoutError, aiohttp.ClientConnectorError, aiohttp.ServerFingerprintMismatch)):
+        return False
+    if isinstance(error, aiohttp.ServerDisconnectedError):
         return True
     if isinstance(error, _REMOTE_CLOSE_ERRORS):
         return True
@@ -2025,6 +2027,7 @@ class AsyncClient(Client):
                             logger.debug("Retrying after connection error from remote host (attempt %s/%s)", attempts, max_attempts)
                             await asyncio.sleep(0.1 * attempts)
                             continue
+                logger.debug("Non-retryable aiohttp connection error type=%s", type(e).__name__)
                 raise OperationalError(f"Network Error: {msg}") from e
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:

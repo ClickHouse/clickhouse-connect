@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 
 import aiohttp
 import pytest
@@ -20,6 +21,15 @@ def _client_connection_reset_error() -> aiohttp.ClientConnectionError:
     if error_class is None:
         pytest.skip("aiohttp.ClientConnectionResetError is not available")
     return error_class(104, "Connection reset by peer")
+
+
+def _client_connector_reset_error() -> aiohttp.ClientConnectorError:
+    error = aiohttp.ClientConnectorError(
+        SimpleNamespace(host="localhost", port=8123, ssl=True),
+        ConnectionResetError(104, "Connection reset by peer"),
+    )
+    error.__cause__ = error.os_error
+    return error
 
 
 def test_wrong_port_error_message(client_factory, test_config: TestConfig):
@@ -175,15 +185,40 @@ async def test_async_retry_on_remote_close_client_connection_error(test_native_a
     assert result.result_rows[0][0] == 13
 
 
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        pytest.param(
+            lambda: aiohttp.ClientConnectionError("generic connection failure"),
+            id="generic_connection_error",
+        ),
+        pytest.param(
+            lambda: aiohttp.SocketTimeoutError("Timeout on reading data from socket"),
+            id="socket_timeout",
+        ),
+        pytest.param(
+            lambda: aiohttp.ConnectionTimeoutError("Connection timeout to host http://localhost:8123/"),
+            id="connection_timeout",
+        ),
+        pytest.param(
+            _client_connector_reset_error,
+            id="connector_reset_error",
+        ),
+        pytest.param(
+            lambda: aiohttp.ServerFingerprintMismatch(b"expected", b"got", "localhost", 8123),
+            id="fingerprint_mismatch",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_async_client_connection_error_without_remote_close_is_not_retried(test_native_async_client, mocker):
-    """Does not retry generic aiohttp connection errors."""
+async def test_async_non_remote_close_connection_errors_are_not_retried(test_native_async_client, mocker, error_factory):
+    """Does not retry unsafe or non-stale aiohttp connection errors."""
     attempts = 0
 
     async def failing_request(*args, **kwargs):
         nonlocal attempts
         attempts += 1
-        raise aiohttp.ClientConnectionError("generic connection failure")
+        raise error_factory()
 
     mocker.patch.object(test_native_async_client._session, "request", side_effect=failing_request)
 
@@ -191,8 +226,37 @@ async def test_async_client_connection_error_without_remote_close_is_not_retried
         await test_native_async_client.query("SELECT 13")
 
     assert attempts == 1
-    assert "generic connection failure" in str(excinfo.value)
     assert isinstance(excinfo.value.__cause__, aiohttp.ClientConnectionError)
+
+
+@pytest.mark.parametrize(
+    "remote_close_error",
+    [
+        pytest.param(lambda: ConnectionResetError("Connection reset by peer"), id="connection_reset"),
+        pytest.param(lambda: BrokenPipeError("Broken pipe"), id="broken_pipe"),
+    ],
+)
+def test_sync_retry_on_remote_close_error(test_client, mocker, remote_close_error):
+    """urllib3 surfaces stale keep-alive RST/EPIPE as ProtocolError with the OS error chained via __context__."""
+    real_request = test_client.http.request
+    attempts = 0
+
+    def flaky_request(method, url, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            try:
+                raise remote_close_error()
+            except (ConnectionResetError, BrokenPipeError):
+                raise urllib3.exceptions.ProtocolError("Connection aborted.")  # noqa: B904
+        return real_request(method, url, **kwargs)
+
+    mocker.patch.object(test_client.http, "request", side_effect=flaky_request)
+
+    result = test_client.query("SELECT 13")
+
+    assert attempts == 2
+    assert result.result_rows[0][0] == 13
 
 
 @pytest.mark.parametrize("disconnect_count", [1, 2])
