@@ -37,7 +37,7 @@ from clickhouse_connect.driver.httputil import (
     get_response_data,
 )
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryContext, QueryResult, TzSource
+from clickhouse_connect.driver.query import QueryContext, QueryResult, TzSource, returns_empty_string_on_empty_body
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -480,6 +480,8 @@ class HttpClient(Client):
                 return result
             except UnicodeDecodeError:
                 return str(response.data)
+        if returns_empty_string_on_empty_body(cmd):
+            return ""
         return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
