@@ -70,3 +70,31 @@ def test_get_table_names(test_engine: Engine, test_db: str):
     assert isinstance(system_tables, list)
     assert "columns" in system_tables
     assert "fake_table" not in system_tables
+
+
+def test_metadata_reflect_and_primary_keys(test_engine: Engine, test_db: str):
+    """Dialect-level reflection. MetaData.reflect() exercises the
+    Dialect.get_multi_columns -> Dialect.get_columns path (not
+    Inspector.get_columns), which previously raised NotImplementedError.
+    Primary key columns derived from system.columns.is_in_primary_key must
+    also land on the reflected Table, both via MetaData.reflect() and via a
+    direct Table(autoload_with=...) call."""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.reflect_pk_test"))
+        conn.execute(
+            text(
+                f"CREATE TABLE {test_db}.reflect_pk_test (org_id UInt32, id UInt64, payload String) ENGINE MergeTree ORDER BY (org_id, id)"
+            )
+        )
+
+    metadata = db.MetaData(schema=test_db)
+    metadata.reflect(bind=test_engine, only=["reflect_pk_test"])
+    table = metadata.tables[f"{test_db}.reflect_pk_test"]
+
+    assert {c.name for c in table.columns} == {"org_id", "id", "payload"}
+    assert [c.name for c in table.primary_key.columns] == ["org_id", "id"]
+
+    # Direct autoload should also surface the composite PK.
+    table2 = db.Table("reflect_pk_test", db.MetaData(schema=test_db), autoload_with=test_engine)
+    assert [c.name for c in table2.primary_key.columns] == ["org_id", "id"]

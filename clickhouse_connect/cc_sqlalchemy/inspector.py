@@ -121,6 +121,47 @@ def get_dictionary_metadata(connection, table_name: str, schema: str | None = No
     return metadata
 
 
+def get_pk_constraint(connection, table_name: str, schema: str | None = None) -> dict[str, Any]:
+    database = _database_name(connection, schema)
+    result_set = connection.execute(
+        text(
+            "SELECT name FROM system.columns WHERE database = :database AND table = :table_name AND is_in_primary_key = 1 ORDER BY position"
+        ),
+        {"database": database, "table_name": table_name},
+    )
+    return {"constrained_columns": [row.name for row in result_set], "name": None}
+
+
+def get_columns(connection, table_name: str, schema: str | None = None) -> list[dict[str, Any]]:
+    table_metadata = get_table_metadata(connection, table_name, schema)
+    if table_metadata.engine == "Dictionary":
+        return get_dictionary_columns(connection, table_name, schema)
+    table_id = full_table(table_name, schema)
+    result_set = connection.execute(text(f"DESCRIBE TABLE {table_id}"))
+    if not result_set:
+        raise NoResultFound(f"Table {table_id} does not exist")
+    columns = []
+    for row in result_set:
+        sqla_type = sqla_type_from_name(row.type.replace("\n", ""))
+        col = {
+            "name": row.name,
+            "type": sqla_type,
+            "nullable": sqla_type.nullable,
+            "autoincrement": False,
+            "comment": row.comment or None,
+            "clickhouse_codec": row.codec_expression or None,
+            "clickhouse_ttl": text(row.ttl_expression) if row.ttl_expression else None,
+        }
+        if row.default_type == "DEFAULT" and row.default_expression:
+            col["server_default"] = text(row.default_expression)
+        elif row.default_type == "MATERIALIZED" and row.default_expression:
+            col["clickhouse_materialized"] = text(row.default_expression)
+        elif row.default_type == "ALIAS" and row.default_expression:
+            col["clickhouse_alias"] = text(row.default_expression)
+        columns.append(col)
+    return columns
+
+
 class ChInspector(Inspector):
     def reflect_table(
         self,
@@ -137,12 +178,15 @@ class ChInspector(Inspector):
         else:
             reflected_columns = self.get_columns(table.name, schema)
 
+        pk_columns = set(get_pk_constraint(self.bind, table.name, schema)["constrained_columns"])
         for col in reflected_columns:
             name = col.pop("name")
             if (include_columns and name not in include_columns) or (exclude_columns and name in exclude_columns):
                 continue
             col_type = col.pop("type")
             col_args = {key: value for key, value in col.items() if value is not None}
+            if name in pk_columns:
+                col_args["primary_key"] = True
             table.append_column(sa_schema.Column(name, col_type, **col_args))
         if table_metadata.engine == "Dictionary":
             dictionary_metadata = get_dictionary_metadata(self.bind, table.name, schema)
@@ -157,30 +201,4 @@ class ChInspector(Inspector):
             table.kwargs["clickhouse_engine"] = table.engine
 
     def get_columns(self, table_name, schema=None, **_kwargs):
-        table_metadata = get_table_metadata(self.bind, table_name, schema)
-        if table_metadata.engine == "Dictionary":
-            return get_dictionary_columns(self.bind, table_name, schema)
-        table_id = full_table(table_name, schema)
-        result_set = self.bind.execute(text(f"DESCRIBE TABLE {table_id}"))
-        if not result_set:
-            raise NoResultFound(f"Table {table_id} does not exist")
-        columns = []
-        for row in result_set:
-            sqla_type = sqla_type_from_name(row.type.replace("\n", ""))
-            col = {
-                "name": row.name,
-                "type": sqla_type,
-                "nullable": sqla_type.nullable,
-                "autoincrement": False,
-                "comment": row.comment or None,
-                "clickhouse_codec": row.codec_expression or None,
-                "clickhouse_ttl": text(row.ttl_expression) if row.ttl_expression else None,
-            }
-            if row.default_type == "DEFAULT" and row.default_expression:
-                col["server_default"] = text(row.default_expression)
-            elif row.default_type == "MATERIALIZED" and row.default_expression:
-                col["clickhouse_materialized"] = text(row.default_expression)
-            elif row.default_type == "ALIAS" and row.default_expression:
-                col["clickhouse_alias"] = text(row.default_expression)
-            columns.append(col)
-        return columns
+        return get_columns(self.bind, table_name, schema)

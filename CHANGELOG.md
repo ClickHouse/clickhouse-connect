@@ -17,6 +17,9 @@
 - Async client: retry stale keep-alive resets surfaced by aiohttp as `ClientOSError` or `ClientConnectionResetError`, fixing large async inserts on killed pooled connections. Closes [#763](https://github.com/ClickHouse/clickhouse-connect/issues/763).
 - Async client: do not retry aiohttp timeout, connector, or fingerprint errors as these can indicate the request was already delivered or a config issue, not a stale connection.
 - Sync client: also retry stale keep-alive `BrokenPipeError` (in addition to `ConnectionResetError`), matching the async behavior.
+- SQLAlchemy: implement reflection on the dialect itself so `MetaData.reflect()` and `Inspector.get_multi_columns()` work. `get_pk_constraint()` / `get_primary_keys()` now derive primary key columns from `system.columns.is_in_primary_key` instead of returning empty lists.
+- SQLAlchemy: UDT-based types (`UUID`, `IPv4`/`IPv6`, `JSON`, `Nested`, geometry types, `AggregateFunction`, etc.) now return concrete `python_type` classes instead of `None`, matching SQLAlchemy's `TypeEngine.python_type` contract.
+- SQLAlchemy: `Array` now subclasses `sqlalchemy.types.ARRAY` and exposes `item_type`.
 
 ## 1.1.0, 2026-05-26
 
