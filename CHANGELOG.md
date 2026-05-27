@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Async client: retry stale keep-alive resets surfaced by aiohttp as `ClientOSError` or `ClientConnectionResetError`, fixing large async inserts on killed pooled connections. Closes [#763](https://github.com/ClickHouse/clickhouse-connect/issues/763).
+
 ## 1.1.0, 2026-05-26
 
 ### Compatibility

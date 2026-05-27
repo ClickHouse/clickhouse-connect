@@ -9,6 +9,19 @@ from clickhouse_connect.driver.options import pd
 from tests.integration_tests.conftest import TestConfig
 
 
+def _client_os_error_from(cause: ConnectionError) -> aiohttp.ClientOSError:
+    error = aiohttp.ClientOSError(cause.errno, cause.strerror)
+    error.__cause__ = cause
+    return error
+
+
+def _client_connection_reset_error() -> aiohttp.ClientConnectionError:
+    error_class = getattr(aiohttp, "ClientConnectionResetError", None)
+    if error_class is None:
+        pytest.skip("aiohttp.ClientConnectionResetError is not available")
+    return error_class(104, "Connection reset by peer")
+
+
 def test_wrong_port_error_message(client_factory, test_config: TestConfig):
     """
     Test that connecting to the wrong port properly propagates
@@ -124,6 +137,64 @@ async def test_async_server_disconnected_raises_after_retry(test_native_async_cl
     assert isinstance(excinfo.value.__cause__, aiohttp.ServerDisconnectedError)
 
 
+@pytest.mark.parametrize(
+    "disconnect_factory",
+    [
+        pytest.param(
+            lambda: _client_os_error_from(ConnectionResetError(104, "Connection reset by peer")),
+            id="client_os_error_reset_cause",
+        ),
+        pytest.param(
+            lambda: _client_os_error_from(BrokenPipeError(32, "Broken pipe")),
+            id="client_os_error_broken_pipe_cause",
+        ),
+        pytest.param(
+            _client_connection_reset_error,
+            id="client_connection_reset_error",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_retry_on_remote_close_client_connection_error(test_native_async_client, mocker, disconnect_factory):
+    """Retries aiohttp remote-close connection errors when the body can be replayed."""
+    real_request = test_native_async_client._session.request
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise disconnect_factory()
+        return await real_request(*args, **kwargs)
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+
+    result = await test_native_async_client.query("SELECT 13")
+
+    assert attempts == 2
+    assert result.result_rows[0][0] == 13
+
+
+@pytest.mark.asyncio
+async def test_async_client_connection_error_without_remote_close_is_not_retried(test_native_async_client, mocker):
+    """Does not retry generic aiohttp connection errors."""
+    attempts = 0
+
+    async def failing_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise aiohttp.ClientConnectionError("generic connection failure")
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=failing_request)
+
+    with pytest.raises(OperationalError) as excinfo:
+        await test_native_async_client.query("SELECT 13")
+
+    assert attempts == 1
+    assert "generic connection failure" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, aiohttp.ClientConnectionError)
+
+
 @pytest.mark.parametrize("disconnect_count", [1, 2])
 def test_sync_retry_on_connection_reset(test_client, mocker, disconnect_count):
     """
@@ -208,7 +279,7 @@ def _install_one_shot_reset_mock(client, client_mode, mocker):
                 if attempts[0] == 1:
                     async for _ in data:
                         pass
-                    raise aiohttp.ServerDisconnectedError("Connection reset by peer")
+                    raise _client_os_error_from(ConnectionResetError(104, "Connection reset by peer"))
             return await real_request(*args, **kwargs)
 
         mocker.patch.object(client._session, "request", side_effect=flaky_request)
