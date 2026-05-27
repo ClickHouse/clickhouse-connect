@@ -1008,6 +1008,8 @@ class AsyncClient(Client):
             url = f"{self.url}/ping"
             timeout = aiohttp.ClientTimeout(total=3.0)
             get_kwargs: dict[str, Any] = {"timeout": timeout}
+            if self._proxy_url:
+                get_kwargs["proxy"] = self._proxy_url
             if self.server_host_name:
                 get_kwargs["headers"] = {"Host": self.server_host_name}
                 if self._ssl_context is not None:
