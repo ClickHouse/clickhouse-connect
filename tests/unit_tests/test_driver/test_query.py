@@ -94,6 +94,19 @@ def test_non_row_policy_show_empty_body_uses_query_summary(query):
     assert returns_empty_string_on_empty_body(query) is False
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "--sql\nCREATE OR REPLACE TABLE x (a String) ENGINE=MergeTree ORDER BY tuple()",
+        "--anything\nDROP TABLE x",
+        "--sql\n  ALTER TABLE x ADD COLUMN y UInt32",
+        "/*sql*/CREATE TABLE x (a String) ENGINE=Memory",
+    ],
+)
+def test_leading_no_space_comment_is_command(query):
+    assert QueryContext(query).is_command is True
+
+
 def test_active_tz_utc_defaults_to_naive():
     ctx = QueryContext(query_tz=zoneinfo.ZoneInfo("UTC"))
     assert ctx.tz_mode == "naive_utc"
