@@ -121,17 +121,6 @@ def get_dictionary_metadata(connection, table_name: str, schema: str | None = No
     return metadata
 
 
-def get_pk_constraint(connection, table_name: str, schema: str | None = None) -> dict[str, Any]:
-    database = _database_name(connection, schema)
-    result_set = connection.execute(
-        text(
-            "SELECT name FROM system.columns WHERE database = :database AND table = :table_name AND is_in_primary_key = 1 ORDER BY position"
-        ),
-        {"database": database, "table_name": table_name},
-    )
-    return {"constrained_columns": [row.name for row in result_set], "name": None}
-
-
 def get_columns(connection, table_name: str, schema: str | None = None) -> list[dict[str, Any]]:
     table_metadata = get_table_metadata(connection, table_name, schema)
     if table_metadata.engine == "Dictionary":
@@ -178,15 +167,12 @@ class ChInspector(Inspector):
         else:
             reflected_columns = self.get_columns(table.name, schema)
 
-        pk_columns = set(get_pk_constraint(self.bind, table.name, schema)["constrained_columns"])
         for col in reflected_columns:
             name = col.pop("name")
             if (include_columns and name not in include_columns) or (exclude_columns and name in exclude_columns):
                 continue
             col_type = col.pop("type")
             col_args = {key: value for key, value in col.items() if value is not None}
-            if name in pk_columns:
-                col_args["primary_key"] = True
             table.append_column(sa_schema.Column(name, col_type, **col_args))
         if table_metadata.engine == "Dictionary":
             dictionary_metadata = get_dictionary_metadata(self.bind, table.name, schema)

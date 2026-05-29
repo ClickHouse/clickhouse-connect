@@ -8,6 +8,9 @@
 ### Bug Fixes
 - A `datetime` bound to a server-side `{name:DateTime64(...)}` placeholder now keeps its sub-second precision instead of being truncated to seconds. The declared parameter type drives this, so no `_64` name suffix or manual `DT64Param` wrapper is needed, and it applies through `Array` and `Tuple` hints. Plain `DateTime` binds are unchanged. Closes [#739](https://github.com/ClickHouse/clickhouse-connect/issues/739).
 - Strip `--` line comments that have no following space when classifying queries, so a DDL with a leading `--sql`-style comment is routed as a command instead of raising `StreamFailureError`. Closes [#499](https://github.com/ClickHouse/clickhouse-connect/issues/499).
+- SQLAlchemy: implement reflection on the dialect itself so `MetaData.reflect()` and `Inspector.get_multi_columns()` work.
+- SQLAlchemy: UDT-based types (`UUID`, `IPv4`/`IPv6`, `JSON`, `Nested`, geometry types, `AggregateFunction`, etc.) now return concrete `python_type` classes instead of `None`, matching SQLAlchemy's `TypeEngine.python_type` contract.
+- SQLAlchemy: `Array` now subclasses `sqlalchemy.types.ARRAY` and exposes `item_type`.
 
 ## 1.1.1, 2026-05-27
 
@@ -17,9 +20,6 @@
 - Async client: retry stale keep-alive resets surfaced by aiohttp as `ClientOSError` or `ClientConnectionResetError`, fixing large async inserts on killed pooled connections. Closes [#763](https://github.com/ClickHouse/clickhouse-connect/issues/763).
 - Async client: do not retry aiohttp timeout, connector, or fingerprint errors as these can indicate the request was already delivered or a config issue, not a stale connection.
 - Sync client: also retry stale keep-alive `BrokenPipeError` (in addition to `ConnectionResetError`), matching the async behavior.
-- SQLAlchemy: implement reflection on the dialect itself so `MetaData.reflect()` and `Inspector.get_multi_columns()` work. `get_pk_constraint()` / `get_primary_keys()` now derive primary key columns from `system.columns.is_in_primary_key` instead of returning empty lists.
-- SQLAlchemy: UDT-based types (`UUID`, `IPv4`/`IPv6`, `JSON`, `Nested`, geometry types, `AggregateFunction`, etc.) now return concrete `python_type` classes instead of `None`, matching SQLAlchemy's `TypeEngine.python_type` contract.
-- SQLAlchemy: `Array` now subclasses `sqlalchemy.types.ARRAY` and exposes `item_type`.
 
 ## 1.1.0, 2026-05-26
 

@@ -432,7 +432,9 @@ class Array(ChSqlaType, ARRAY):
         ChSqlaType.__init__(self, type_def)
         # Set item_type directly; calling ARRAY.__init__ would reject nested Array(Array(T)),
         # which CH supports natively (CH expresses dimensions via nesting, not a dim count).
+        # as_tuple has no class-level default, so set it here to satisfy ARRAY result processing.
         self.item_type = sqla_type_from_name(type_def.values[0])
+        self.as_tuple = False
 
 
 class Map(ChSqlaType, UserDefinedType):

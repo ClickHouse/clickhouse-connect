@@ -72,13 +72,13 @@ def test_get_table_names(test_engine: Engine, test_db: str):
     assert "fake_table" not in system_tables
 
 
-def test_metadata_reflect_and_primary_keys(test_engine: Engine, test_db: str):
+def test_metadata_reflect(test_engine: Engine, test_db: str):
     """Dialect-level reflection. MetaData.reflect() exercises the
     Dialect.get_multi_columns -> Dialect.get_columns path (not
     Inspector.get_columns), which previously raised NotImplementedError.
-    Primary key columns derived from system.columns.is_in_primary_key must
-    also land on the reflected Table, both via MetaData.reflect() and via a
-    direct Table(autoload_with=...) call."""
+    The dialect does not reflect a primary key: ClickHouse PRIMARY KEY /
+    ORDER BY is not a uniqueness guarantee, so the identity key is left for
+    application code to declare explicitly."""
     common.set_setting("invalid_setting_action", "drop")
     with test_engine.begin() as conn:
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.reflect_pk_test"))
@@ -93,8 +93,9 @@ def test_metadata_reflect_and_primary_keys(test_engine: Engine, test_db: str):
     table = metadata.tables[f"{test_db}.reflect_pk_test"]
 
     assert {c.name for c in table.columns} == {"org_id", "id", "payload"}
-    assert [c.name for c in table.primary_key.columns] == ["org_id", "id"]
+    assert list(table.primary_key.columns) == []
 
-    # Direct autoload should also surface the composite PK.
+    # Direct autoload should also populate columns without a reflected PK.
     table2 = db.Table("reflect_pk_test", db.MetaData(schema=test_db), autoload_with=test_engine)
-    assert [c.name for c in table2.primary_key.columns] == ["org_id", "id"]
+    assert {c.name for c in table2.columns} == {"org_id", "id", "payload"}
+    assert list(table2.primary_key.columns) == []

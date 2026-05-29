@@ -5,7 +5,7 @@ from sqlalchemy.exc import NoResultFound, NoSuchTableError
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
-from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector, get_columns, get_pk_constraint, get_table_metadata
+from clickhouse_connect.cc_sqlalchemy.inspector import ChInspector, get_columns, get_table_metadata
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
@@ -98,10 +98,10 @@ class ClickHouseDialect(DefaultDialect):
         return get_columns(connection, table_name, schema)
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
-        return get_pk_constraint(connection, table_name, schema)["constrained_columns"]
+        return []
 
     def get_pk_constraint(self, connection, table_name, schema=None, **kw):
-        return get_pk_constraint(connection, table_name, schema)
+        return {"constrained_columns": [], "name": None}
 
     def get_foreign_keys(self, connection, table_name, schema=None, **kw):
         return []
