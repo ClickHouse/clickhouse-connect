@@ -61,6 +61,11 @@ class ClickHouseDialect(DefaultDialect):
         ),
     ]
 
+    def __init__(self, server_side_params: bool = False, **kwargs):
+        # Set before super().__init__() so ChIdentifierPreparer can read it when built.
+        self.server_side_params = server_side_params
+        super().__init__(**kwargs)
+
     # SQA 1 compatibility
 
     @classmethod
