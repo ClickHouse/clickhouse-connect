@@ -91,3 +91,14 @@ Then create a client with `clickhouse_connect.get_async_client()`. See the
 
 The documentation for ClickHouse Connect has moved to
 [ClickHouse Docs](https://clickhouse.com/docs/integrations/python)
+
+### Concurrency and Session Ownership
+
+Do not share a session-bound client across concurrent threads or request handlers. Each client should be owned by one thread, one request, or one coroutine at a time, especially when using temporary tables, session settings, or an explicit session_id.
+
+Recommended patterns:
+- Threaded apps: create one client per thread.
+- Web handlers: create one client per request and close it in finally.
+- asyncio apps: use async with await clickhouse_connect.get_async_client(...).
+
+See [examples/concurrency_examples.py](./examples/concurrency_examples.py) for runnable examples.
