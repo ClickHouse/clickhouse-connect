@@ -90,3 +90,10 @@ def test_datetime_64_params(param_client: Client, call):
     dt_params = [DT64Param(v) for v in dt_values]
     result = call(param_client.query, "SELECT %s as string, toDateTime64(%s,6) as dateTime", parameters=dt_params).first_row
     assert result == ("2023-06-01 07:40:02.250306", dt_values[1])
+
+    result = call(param_client.query, "SELECT {d0:DateTime64(6)}, {d1:DateTime64(9)}", parameters={"d0": dt_values[0], "d1": dt_values[1]}).first_row
+    assert result[0] == dt_values[0]
+    assert result[1] == dt_values[1]
+
+    result = call(param_client.query, "SELECT {a1:Array(DateTime64(6))}", parameters={"a1": dt_values}).first_row
+    assert result[0] == dt_values
