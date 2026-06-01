@@ -105,7 +105,7 @@ def _extract_tz_from_type(type_str: str) -> tzinfo | None:
 
 
 def _promote_datetime64(type_str: str, value):
-    """Wrap values bound a DateTime64 hint in DT64Param to preserve precision"""
+    """Wrap values bound to a DateTime64 hint in DT64Param to preserve precision."""
     if value is None or "datetime64" not in type_str.lower():
         return value
     try:
