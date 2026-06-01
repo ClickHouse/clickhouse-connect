@@ -185,6 +185,14 @@ def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name):
         assert rows == [("head",)]
 
 
+def test_alembic_user_agent_integration_tag(test_engine: Engine):
+    with test_engine.begin() as conn:
+        context = MigrationContext.configure(connection=conn)
+        assert isinstance(context.impl, ClickHouseImpl)
+        ua = conn.connection.driver_connection.client.headers["User-Agent"]
+        assert "alembic/" in ua
+
+
 def test_alembic_column_operations_live(test_engine: Engine, test_db: str, ch_name):
     table_name = ch_name("alembic_probe")
 
