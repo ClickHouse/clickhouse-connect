@@ -4,7 +4,7 @@ from collections.abc import Collection
 from typing import Any
 
 import sqlalchemy.schema as sa_schema
-from sqlalchemy import text
+from sqlalchemy import String, bindparam, text
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.exc import NoResultFound
 
@@ -27,7 +27,9 @@ def _database_name(connection, schema: str | None) -> str:
 def get_table_metadata(connection, table_name, schema=None):
     database = _database_name(connection, schema)
     result_set = connection.execute(
-        text("SELECT engine, engine_full, comment FROM system.tables WHERE database = :database AND name = :table_name"),
+        text("SELECT engine, engine_full, comment FROM system.tables WHERE database = :database AND name = :table_name").bindparams(
+            bindparam("database", type_=String()), bindparam("table_name", type_=String())
+        ),
         {"database": database, "table_name": table_name},
     )
     row = next(result_set, None)
