@@ -80,9 +80,7 @@ def _unwrap_outer(type_str: str) -> tuple[str, tuple]:
 
 
 def _extract_tz_from_type(type_str: str) -> tzinfo | None:
-    """Resolve the timezone named in a ClickHouse type hint like DateTime64(6, 'UTC'),
-    unwrapping LowCardinality/Nullable and recursing into Array/Tuple/Map. Returns None
-    if there is no timezone or parsing fails."""
+    """Resolve the timezone named in a ClickHouse type hint."""
     try:
         base_name, values = _unwrap_outer(type_str)
         if base_name.lower() in ("datetime", "datetime64"):
