@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from inspect import signature
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
@@ -75,10 +76,14 @@ def _parse_connection_params(
     return host, username, password, port, database, interface
 
 
-def _validate_access_token(access_token: str | None, username: str | None, password: str) -> None:
-    """Validate that access_token and username/password are not both provided."""
-    if access_token and (username or password != ""):
-        raise ProgrammingError("Cannot use both access_token and username/password")
+def _validate_access_token(
+    access_token: str | None, token_provider: Callable[[], str] | None, username: str | None, password: str
+) -> None:
+    """Validate that token-based and username/password auth are not mixed."""
+    if (access_token or token_provider) and (username or password):
+        raise ProgrammingError("Cannot use both token authentication and username/password")
+    if access_token and token_provider:
+        raise ProgrammingError("Cannot use both access_token and token_provider")
 
 
 def create_client(
@@ -87,6 +92,7 @@ def create_client(
     username: str | None = None,
     password: str = "",
     access_token: str | None = None,
+    token_provider: Callable[[], str] | None = None,
     database: str = "__default__",
     interface: str | None = None,
     port: int = 0,
@@ -106,6 +112,9 @@ def create_client(
       Should not be set if `access_token` is used.
     :param access_token: JWT access token (ClickHouse Cloud feature).
       Should not be set if `username`/`password` are used.
+    :param token_provider: A callable returning a JWT access token (ClickHouse Cloud feature). Called for the initial token and
+      again to refresh it whenever the server rejects the current one.
+      Should not be set if `access_token` or `username`/`password` are used.
     :param database:  The default database for the connection. If not set, ClickHouse Connect will use the
      default database for username.
     :param interface: Must be http or https.  Defaults to http, or to https if port is set to 8443 or 443
@@ -162,7 +171,7 @@ def create_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
-    _validate_access_token(access_token, username, password)
+    _validate_access_token(access_token, token_provider, username, password)
 
     settings = settings or {}
     if interface.startswith("http"):
@@ -178,7 +187,10 @@ def create_client(
                     if name.startswith("ch_"):
                         name = name[3:]
                     settings[name] = value
-        return HttpClient(interface, host, port, username, password, database, access_token, settings=settings, **kwargs)
+        return HttpClient(
+            interface, host, port, username, password, database, access_token,
+            token_provider=token_provider, settings=settings, **kwargs,
+        )
     raise ProgrammingError(f"Unrecognized client type {interface}")
 
 
@@ -188,6 +200,7 @@ async def create_async_client(
     username: str | None = None,
     password: str = "",
     access_token: str | None = None,
+    token_provider: Callable[[], str | Awaitable[str]] | None = None,
     database: str = "__default__",
     interface: str | None = None,
     port: int = 0,
@@ -212,6 +225,8 @@ async def create_async_client(
     :param username: The ClickHouse username. If not set, the default ClickHouse user will be used.
     :param password: The password for username.
     :param access_token: JWT access token.
+    :param token_provider: A callable returning a JWT access token. Called for the initial token and
+      again to refresh it whenever the server rejects the current one.
     :param database:  The default database for the connection. If not set, ClickHouse Connect will use the
      default database for username.
     :param interface: Must be http or https.  Defaults to http, or to https if port is set to 8443 or 443
@@ -280,7 +295,7 @@ async def create_async_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
-    _validate_access_token(access_token, username, password)
+    _validate_access_token(access_token, token_provider, username, password)
 
     settings = settings or {}
     if generic_args:
@@ -307,6 +322,7 @@ async def create_async_client(
         password=password,
         database=database,
         access_token=access_token,
+        token_provider=token_provider,
         settings=settings,
         connector_limit=connector_limit,
         connector_limit_per_host=connector_limit_per_host,

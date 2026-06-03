@@ -44,6 +44,7 @@ from clickhouse_connect.driver.transform import NativeTransform
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
 ex_header = "X-ClickHouse-Exception-Code"
+auth_failed_ex_code = "516"  # ClickHouse AUTHENTICATION_FAILED
 ex_tag_header = "X-ClickHouse-Exception-Tag"
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
@@ -79,6 +80,7 @@ class HttpClient(Client):
         password: str,
         database: str,
         access_token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         compress: bool | str = True,
         query_limit: int = 0,
         query_retries: int = 2,
@@ -150,6 +152,9 @@ class HttpClient(Client):
             else:
                 self.http = default_pool_manager()
 
+        self._token_provider = token_provider
+        if token_provider:
+            access_token = token_provider()
         if access_token:
             self.headers["Authorization"] = f"Bearer {access_token}"
         elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
@@ -532,6 +537,7 @@ class HttpClient(Client):
             data = data.encode()
         headers = dict_copy(self.headers, headers)
         attempts = 0
+        auth_retried = False
         final_params = {}
         if server_wait:
             final_params["wait_end_of_query"] = "1"
@@ -606,6 +612,14 @@ class HttpClient(Client):
                 if attempts > retries:
                     self._error_handler(response, True)
                 logger.debug("Retrying requests with status code %d", response.status)
+            elif self._token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
+                auth_retried = True
+                self.set_access_token(self._token_provider())
+                headers["Authorization"] = self.headers["Authorization"]
+                if retry_body is not None:
+                    kwargs["body"] = retry_body()
+                response.close()
+                logger.debug("Refreshing access token after authentication failure")
             elif error_handler:
                 error_handler(response)
             else:
