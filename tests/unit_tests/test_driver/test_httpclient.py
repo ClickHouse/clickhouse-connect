@@ -1,9 +1,11 @@
 import logging
 from typing import Any
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httpclient import HttpClient, ex_header
@@ -19,6 +21,92 @@ def create_mock_response(status=500, headers=None, data=None):
     response.data = data or b""
     response.close = Mock()  # Mock the close method
     return response
+
+
+class TestHttpClientHeaders:
+    """Test client-level HTTP header configuration."""
+
+    def test_headers_are_available_during_initialization(self):
+        init_headers = {}
+
+        def capture_headers(client, _tz_source):
+            init_headers.update(client.headers)
+
+        with patch.object(Client, "_init_common_settings", autospec=True, side_effect=capture_headers):
+            HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+                headers={
+                    "CF-Access-Client-Id": "test_client_id",
+                    "CF-Access-Client-Secret": "test_client_secret",
+                },
+            )
+
+        assert init_headers["CF-Access-Client-Id"] == "test_client_id"
+        assert init_headers["CF-Access-Client-Secret"] == "test_client_secret"
+        assert "Authorization" in init_headers
+        assert "User-Agent" in init_headers
+
+    def test_request_headers_override_client_headers(self):
+        response = create_mock_response(status=200)
+        pool_mgr = Mock()
+        pool_mgr.request.return_value = response
+
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+                pool_mgr=pool_mgr,
+                headers={"X-Trace": "client", "X-Gateway": "cloudflare"},
+            )
+
+        client._raw_request(b"", {}, headers={"X-Trace": "request"})
+
+        request_headers = pool_mgr.request.call_args.kwargs["headers"]
+        assert request_headers["X-Trace"] == "request"
+        assert request_headers["X-Gateway"] == "cloudflare"
+        assert request_headers["Authorization"] == client.headers["Authorization"]
+        assert request_headers["User-Agent"] == client.headers["User-Agent"]
+
+
+class TestAsyncClientHeaders:
+    """Test async client-level HTTP header configuration."""
+
+    @pytest.mark.asyncio
+    async def test_request_headers_override_client_headers(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+            headers={"X-Trace": "client", "X-Gateway": "cloudflare"},
+        )
+        session = Mock()
+        session.closed = False
+        response = Mock()
+        response.status = 200
+        response.headers = {}
+        session.request = AsyncMock(return_value=response)
+        client._session = session
+
+        await client._raw_request(None, {}, headers={"X-Trace": "request"})
+
+        request_headers = session.request.call_args.kwargs["headers"]
+        assert request_headers["X-Trace"] == "request"
+        assert request_headers["X-Gateway"] == "cloudflare"
+        assert request_headers["Authorization"] == client.headers["Authorization"]
+        assert request_headers["User-Agent"] == client.headers["User-Agent"]
+        assert request_headers["Accept-Encoding"] == client.headers["Accept-Encoding"]
 
 
 class TestHttpClientErrorHandler:

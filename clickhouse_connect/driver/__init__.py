@@ -93,6 +93,7 @@ def create_client(
     secure: bool | str = False,
     dsn: str | None = None,
     settings: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
     **kwargs,
 ) -> Client:
@@ -115,6 +116,9 @@ def create_client(
     :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
       will be extracted from this string if not set otherwise.
     :param settings: ClickHouse server settings to be used with the session/every request
+    :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
+      authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
+      so they can intentionally override headers such as Authorization, User-Agent, or Accept-Encoding.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally.
 
@@ -169,7 +173,9 @@ def create_client(
         if generic_args:
             client_params = signature(HttpClient).parameters
             for name, value in generic_args.items():
-                if name in client_params:
+                if name == "headers":
+                    headers = value
+                elif name in client_params:
                     kwargs[name] = value
                 elif name == "compression":
                     if "compress" not in kwargs:
@@ -178,7 +184,18 @@ def create_client(
                     if name.startswith("ch_"):
                         name = name[3:]
                     settings[name] = value
-        return HttpClient(interface, host, port, username, password, database, access_token, settings=settings, **kwargs)
+        return HttpClient(
+            interface,
+            host,
+            port,
+            username,
+            password,
+            database,
+            access_token,
+            settings=settings,
+            headers=headers,
+            **kwargs,
+        )
     raise ProgrammingError(f"Unrecognized client type {interface}")
 
 
@@ -194,6 +211,7 @@ async def create_async_client(
     secure: bool | str = False,
     dsn: str | None = None,
     settings: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
     connector_limit: int = 100,
     connector_limit_per_host: int = 20,
@@ -221,6 +239,9 @@ async def create_async_client(
     :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
       will be extracted from this string if not set otherwise.
     :param settings: ClickHouse server settings to be used with the session/every request
+    :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
+      authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
+      so they can intentionally override headers such as Authorization, User-Agent, or Accept-Encoding.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
     :param connector_limit: Maximum number of allowable connections to the server
@@ -286,7 +307,9 @@ async def create_async_client(
     if generic_args:
         client_params = signature(_AsyncClient).parameters
         for name, value in generic_args.items():
-            if name in client_params:
+            if name == "headers":
+                headers = value
+            elif name in client_params:
                 kwargs[name] = value
             elif name == "compression":
                 if "compress" not in kwargs:
@@ -308,6 +331,7 @@ async def create_async_client(
         database=database,
         access_token=access_token,
         settings=settings,
+        headers=headers,
         connector_limit=connector_limit,
         connector_limit_per_host=connector_limit_per_host,
         keepalive_timeout=keepalive_timeout,

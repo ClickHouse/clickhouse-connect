@@ -104,6 +104,7 @@ class HttpClient(Client):
         proxy_path: str = "",
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
         """
         Create an HTTP ClickHouse Connect client
@@ -157,6 +158,8 @@ class HttpClient(Client):
 
         self._reported_libs = set()
         self.headers["User-Agent"] = common.build_client_name(client_name)
+        if headers:
+            self.headers.update(headers)
         self._read_format = self._write_format = "Native"
         self._transform = NativeTransform()
 
