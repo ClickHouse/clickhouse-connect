@@ -99,3 +99,26 @@ def test_metadata_reflect(test_engine: Engine, test_db: str):
     table2 = db.Table("reflect_pk_test", db.MetaData(schema=test_db), autoload_with=test_engine)
     assert {c.name for c in table2.columns} == {"org_id", "id", "payload"}
     assert list(table2.primary_key.columns) == []
+
+
+def test_user_declared_primary_key(test_engine: Engine, test_db: str):
+    """A user-declared primary key on a pre-declared column survives reflection."""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.reflect_user_pk_test"))
+        conn.execute(
+            text(
+                f"CREATE TABLE {test_db}.reflect_user_pk_test (org_id UInt32, id UInt64, payload String) "
+                "ENGINE MergeTree ORDER BY (org_id, id)"
+            )
+        )
+
+    table = db.Table(
+        "reflect_user_pk_test",
+        db.MetaData(schema=test_db),
+        db.Column("org_id", UInt32, primary_key=True),
+        db.Column("id", db.BigInteger, primary_key=True),
+        autoload_with=test_engine,
+    )
+    assert [c.name for c in table.primary_key.columns] == ["org_id", "id"]
+    assert {c.name for c in table.columns} == {"org_id", "id", "payload"}
