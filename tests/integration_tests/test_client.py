@@ -141,6 +141,53 @@ def test_dsn_config(test_config: TestConfig):
         client.close()
 
 
+def test_dsn_percent_encoded(test_config: TestConfig):
+    """Test that percent-encoded username, password, and database work correctly in DSN."""
+    from urllib.parse import quote
+
+    # Create a test database with a hyphen to test percent-encoding
+    test_db = f"test_dsn_encoded_{test_config.test_database}"
+    temp_client = create_client(
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+    )
+    try:
+        temp_client.command(f"DROP DATABASE IF EXISTS {test_db}")
+        temp_client.command(f"CREATE DATABASE {test_db}")
+    finally:
+        temp_client.close()
+
+    # Encode the username, password, and database
+    encoded_username = quote(test_config.username)
+    encoded_password = quote(test_config.password)
+    encoded_database = quote(test_db)
+
+    # Create DSN with encoded values
+    dsn = f"http://{encoded_username}:{encoded_password}@{test_config.host}:{test_config.port}/{encoded_database}"
+    client = create_client(dsn=dsn)
+    try:
+        # Test that the connection works
+        result = client.command("SELECT currentDatabase()")
+        assert result == test_db
+        count = client.command("SELECT count() FROM system.tables")
+        assert count >= 0
+    finally:
+        client.close()
+        # Clean up test database
+        cleanup_client = create_client(
+            host=test_config.host,
+            port=test_config.port,
+            username=test_config.username,
+            password=test_config.password,
+        )
+        try:
+            cleanup_client.command(f"DROP DATABASE IF EXISTS {test_db}")
+        finally:
+            cleanup_client.close()
+
+
 def test_no_columns_and_types_when_no_results(param_client, call):
     """In case of no results, the column names and types are not returned when FORMAT Native is set.
     This may cause a lot of confusion.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from inspect import signature
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import clickhouse_connect.driver.ctypes  # noqa: F401 -- side-effect import
 from clickhouse_connect.driver.client import Client
@@ -48,12 +48,12 @@ def _parse_connection_params(
     """Parse and normalize connection parameters including DSN parsing."""
     if dsn:
         parsed = urlparse(dsn)
-        username = username or parsed.username
-        password = password or parsed.password
+        username = username or (unquote(parsed.username) if parsed.username else None)
+        password = password or (unquote(parsed.password) if parsed.password else None)
         host = host or parsed.hostname
         port = port or parsed.port
         if parsed.path and (not database or database == "__default__"):
-            database = parsed.path[1:].split("/")[0]
+            database = unquote(parsed.path[1:].split("/")[0])
         database = database or parsed.path
         for k, v in parse_qs(parsed.query).items():
             kwargs[k] = v[0]
