@@ -200,6 +200,10 @@ def escape_str(value: str):
     return "".join(f"{BS}{c}" if c in must_escape else c for c in value)
 
 
+def escape_bytes(value):
+    return "".join(f"{BS}x{b:02x}" for b in value)
+
+
 def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
     """
     Format Python values in a ClickHouse query
@@ -211,6 +215,8 @@ def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
         return "NULL"
     if isinstance(value, str):
         return format_str(value)
+    if isinstance(value, (bytes, bytearray)):
+        return f"'{escape_bytes(value)}'"
     if isinstance(value, DT64Param):
         return value.format(server_tz, False)
     if isinstance(value, datetime):
@@ -258,6 +264,10 @@ def format_bind_value(value: Any, server_tz: tzinfo = timezone.utc, top_level: b
             # At the top levels, strings must not be surrounded by quotes
             return escape_str(value)
         return format_str(value)
+    if isinstance(value, (bytes, bytearray)):
+        if top_level:
+            return escape_bytes(value)
+        return f"'{escape_bytes(value)}'"
     if isinstance(value, DT64Param):
         return value.format(server_tz, top_level)
     if isinstance(value, datetime):

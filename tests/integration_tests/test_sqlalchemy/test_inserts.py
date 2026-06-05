@@ -4,7 +4,7 @@ from sqlalchemy import MetaData, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import LowCardinality, String, UInt64
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import FixedString, LowCardinality, String, UInt64
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
 from clickhouse_connect.driver import Client
 
@@ -74,6 +74,31 @@ def test_multiple_insert(test_engine: Engine, test_model):
     session.add(model_2)
     session.add(model_3)
     session.commit()
+
+
+def test_bytes_insert(test_engine: Engine, test_db: str, test_table_engine: str):
+    engine_cls = engine_map[test_table_engine]
+    Base = declarative_base(metadata=MetaData(schema=test_db))  # noqa: N806
+
+    class BytesModel(Base):
+        __tablename__ = "bytes_insert_model"
+        __table_args__ = (engine_cls(order_by=["id"]),)
+        id = db.Column(FixedString(12), primary_key=True)
+        data = db.Column(String)
+
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS bytes_insert_model"))
+        Base.metadata.create_all(test_engine)
+
+    fixed = b"j!lUA\xf8\x93q;ky\x00"  # 12 bytes: non-UTF8 and a null byte
+    session = Session(test_engine)
+    session.add(BytesModel(id=fixed, data=b"hello"))
+    session.commit()
+
+    with test_engine.begin() as conn:
+        row = conn.execute(text("SELECT id, data FROM bytes_insert_model")).one()
+    assert row[0] == fixed
+    assert row[1] == "hello"
 
 
 def test_bulk_insert(test_engine: Engine, test_model):
