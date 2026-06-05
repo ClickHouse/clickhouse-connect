@@ -121,6 +121,7 @@ When you reconcile the sub-agent's findings into your reply to the user, preserv
 - Inspect existing tests covering similar areas to make sure you are writing tests in the right style and with the right coverage.
 - Make sure to test both the happy path as well as sad paths. Make sure to cover all relevant edge cases.
 - When testing types, cover the full type matrix: ClickHouse type hints compose and formatting is recursive, so a change to how a value is formatted must be tested across all the shapes it can take: scalar, Array(T), Tuple(...), Array(Tuple(...)),  Nullable(T), and spelling and case variants of the type name.
+- Aim to be complete, but also terse. Don't use two tests to cover what could be done in one.
 - Do not use `42` as the generic representative integer in tests.
 - Do not use names like `alice` or `bob` as generic placeholders.
 - Prefer values like `13`, `79`, `user_1`, and `user_2`, or similarly neutral domain-appropriate values.
