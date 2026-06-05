@@ -113,8 +113,14 @@ When you reconcile the sub-agent's findings into your reply to the user, preserv
 - Limit parentheses.
 - Use single spaces between sentences.
 
-## Test Data
+## Writing Tests
 
+- A bug fix needs a regression test. Write tests that FAIL on the unpatched code and PASS with your fix, and confirm both directions before claiming the fix works.
+- If existing tests break due to your changes, do not edit the tests to make them pass, unless the tests were asserting fundamentally incorrect behavior. If that was the case, call it out explicitly. If you cannot justify the new expected value from the issue or from `Server Behavior Is Authoritative`, your code is wrong, not the test.
+- Derive expected values from the spec and from empirically testing against the server.
+- Inspect existing tests covering similar areas to make sure you are writing tests in the right style and with the right coverage.
+- Make sure to test both the happy path as well as sad paths. Make sure to cover all relevant edge cases.
+- When testing types, cover the full type matrix: ClickHouse type hints compose and formatting is recursive, so a change to how a value is formatted must be tested across all the shapes it can take: scalar, Array(T), Tuple(...), Array(Tuple(...)),  Nullable(T), and spelling and case variants of the type name.
 - Do not use `42` as the generic representative integer in tests.
 - Do not use names like `alice` or `bob` as generic placeholders.
 - Prefer values like `13`, `79`, `user_1`, and `user_2`, or similarly neutral domain-appropriate values.
