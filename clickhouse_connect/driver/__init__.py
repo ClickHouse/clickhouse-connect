@@ -81,6 +81,20 @@ def _validate_access_token(access_token: str | None, username: str | None, passw
         raise ProgrammingError("Cannot use both access_token and username/password")
 
 
+def _pop_headers_arg(headers: Any | None, kwargs: dict[str, Any]) -> Any | None:
+    """Hoist headers parsed through generic kwargs while preserving explicit headers."""
+    if "headers" in kwargs:
+        kwargs_headers = kwargs.pop("headers")
+        if headers is None:
+            headers = kwargs_headers
+    return headers
+
+
+def _validate_headers(headers: Any | None) -> None:
+    if headers is not None and not isinstance(headers, dict):
+        raise ProgrammingError("headers must be a dictionary of HTTP header names and values")
+
+
 def create_client(
     *,
     host: str | None = None,
@@ -166,6 +180,7 @@ def create_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
+    headers = _pop_headers_arg(headers, kwargs)
     _validate_access_token(access_token, username, password)
 
     settings = settings or {}
@@ -174,7 +189,8 @@ def create_client(
             client_params = signature(HttpClient).parameters
             for name, value in generic_args.items():
                 if name == "headers":
-                    headers = value
+                    if headers is None:
+                        headers = value
                 elif name in client_params:
                     kwargs[name] = value
                 elif name == "compression":
@@ -184,6 +200,7 @@ def create_client(
                     if name.startswith("ch_"):
                         name = name[3:]
                     settings[name] = value
+        _validate_headers(headers)
         return HttpClient(
             interface,
             host,
@@ -301,6 +318,7 @@ async def create_async_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
+    headers = _pop_headers_arg(headers, kwargs)
     _validate_access_token(access_token, username, password)
 
     settings = settings or {}
@@ -308,7 +326,8 @@ async def create_async_client(
         client_params = signature(_AsyncClient).parameters
         for name, value in generic_args.items():
             if name == "headers":
-                headers = value
+                if headers is None:
+                    headers = value
             elif name in client_params:
                 kwargs[name] = value
             elif name == "compression":
@@ -322,6 +341,7 @@ async def create_async_client(
     if "autogenerate_session_id" not in kwargs:
         kwargs["autogenerate_session_id"] = False
 
+    _validate_headers(headers)
     client = _AsyncClient(
         interface=interface,
         host=host,

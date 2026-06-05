@@ -4,9 +4,10 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
+from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httpclient import HttpClient, ex_header
 from clickhouse_connect.driver.query import QueryContext
@@ -76,6 +77,24 @@ class TestHttpClientHeaders:
         assert request_headers["Authorization"] == client.headers["Authorization"]
         assert request_headers["User-Agent"] == client.headers["User-Agent"]
 
+    def test_dsn_headers_query_param_must_be_dict(self):
+        with pytest.raises(ProgrammingError, match="headers must be a dictionary"):
+            create_client(dsn="http://localhost:8123/default?headers=not_a_dict")
+
+    def test_explicit_headers_override_dsn_headers_query_param(self):
+        init_headers = {}
+
+        def capture_headers(client, _tz_source):
+            init_headers.update(client.headers)
+
+        with patch.object(Client, "_init_common_settings", autospec=True, side_effect=capture_headers):
+            create_client(
+                dsn="http://localhost:8123/default?headers=not_a_dict",
+                headers={"X-Gateway": "cloudflare"},
+            )
+
+        assert init_headers["X-Gateway"] == "cloudflare"
+
 
 class TestAsyncClientHeaders:
     """Test async client-level HTTP header configuration."""
@@ -107,6 +126,21 @@ class TestAsyncClientHeaders:
         assert request_headers["Authorization"] == client.headers["Authorization"]
         assert request_headers["User-Agent"] == client.headers["User-Agent"]
         assert request_headers["Accept-Encoding"] == client.headers["Accept-Encoding"]
+
+    @pytest.mark.asyncio
+    async def test_dsn_headers_query_param_must_be_dict(self):
+        with pytest.raises(ProgrammingError, match="headers must be a dictionary"):
+            await create_async_client(dsn="http://localhost:8123/default?headers=not_a_dict")
+
+    @pytest.mark.asyncio
+    async def test_explicit_headers_override_dsn_headers_query_param(self):
+        with patch.object(AsyncClient, "_initialize", new=AsyncMock()):
+            client = await create_async_client(
+                dsn="http://localhost:8123/default?headers=not_a_dict",
+                headers={"X-Gateway": "cloudflare"},
+            )
+
+        assert client.headers["X-Gateway"] == "cloudflare"
 
 
 class TestHttpClientErrorHandler:
