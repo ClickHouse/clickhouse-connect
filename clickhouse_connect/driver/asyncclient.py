@@ -2035,6 +2035,8 @@ class AsyncClient(Client):
                         response.close()
                         continue
                 if self._token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
+                    if retry_body is None and not (data is None or isinstance(data, (bytes, bytearray, str, dict))):
+                        await self._error_handler(response)  # non-replayable body, surface the auth error instead of retrying
                     auth_retried = True
                     self.set_access_token(await self._resolve_token())
                     req_headers["Authorization"] = self.headers["Authorization"]
