@@ -226,7 +226,8 @@ async def create_async_client(
     :param password: The password for username.
     :param access_token: JWT access token.
     :param token_provider: A callable returning a JWT access token. Called for the initial token and
-      again to refresh it whenever the server rejects the current one.
+      again to refresh it whenever the server rejects the current one. Because multiple in-flight requests
+      may each trigger a refresh concurrently, the callable must be safe to invoke in parallel.
     :param database:  The default database for the connection. If not set, ClickHouse Connect will use the
      default database for username.
     :param interface: Must be http or https.  Defaults to http, or to https if port is set to 8443 or 443

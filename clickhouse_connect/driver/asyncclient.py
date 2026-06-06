@@ -543,6 +543,8 @@ class AsyncClient(Client):
 
     async def _resolve_token(self) -> str:
         # Run sync providers off the event loop; await async providers.
+        # The provider may be called concurrently if multiple requests get a 516 at the same time;
+        # it must be safe to invoke in parallel (e.g. if it hits an IdP, consider rate limiting).
         result = await asyncio.get_running_loop().run_in_executor(None, self._token_provider)
         if inspect.isawaitable(result):
             result = await result
