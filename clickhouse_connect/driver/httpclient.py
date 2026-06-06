@@ -613,6 +613,9 @@ class HttpClient(Client):
                     self._error_handler(response, True)
                 logger.debug("Retrying requests with status code %d", response.status)
             elif self._token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
+                body = kwargs.get("body")
+                if retry_body is None and not (body is None or isinstance(body, (bytes, bytearray, str))):
+                    self._error_handler(response)  # non-replayable body, surface the auth error instead of retrying
                 auth_retried = True
                 self.set_access_token(self._token_provider())
                 headers["Authorization"] = self.headers["Authorization"]
