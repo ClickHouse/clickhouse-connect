@@ -742,7 +742,12 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         try:
-            response = self.http.request("GET", f"{self.url}/ping", timeout=3, preload_content=True)
+            headers = dict_copy(self.headers)
+            kwargs = {"headers": headers, "timeout": 3, "preload_content": True}
+            if self.server_host_name:
+                kwargs["assert_same_host"] = False
+                headers["Host"] = self.server_host_name
+            response = self.http.request("GET", f"{self.url}/ping", **kwargs)
             return 200 <= response.status < 300
         except HTTPError:
             logger.debug("ping failed", exc_info=True)

@@ -132,7 +132,7 @@ def create_client(
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
-      so they can intentionally override headers such as Authorization, User-Agent, or Accept-Encoding.
+      so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally.
 
@@ -258,7 +258,7 @@ async def create_async_client(
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
-      so they can intentionally override headers such as Authorization, User-Agent, or Accept-Encoding.
+      so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
     :param connector_limit: Maximum number of allowable connections to the server

@@ -77,6 +77,33 @@ class TestHttpClientHeaders:
         assert request_headers["Authorization"] == client.headers["Authorization"]
         assert request_headers["User-Agent"] == client.headers["User-Agent"]
 
+    def test_ping_uses_client_headers(self):
+        response = create_mock_response(status=200)
+        pool_mgr = Mock()
+        pool_mgr.request.return_value = response
+
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+                pool_mgr=pool_mgr,
+                server_host_name="clickhouse.example.com",
+                headers={"X-Gateway": "cloudflare"},
+            )
+
+        assert client.ping() is True
+
+        request_headers = pool_mgr.request.call_args.kwargs["headers"]
+        assert request_headers["X-Gateway"] == "cloudflare"
+        assert request_headers["Authorization"] == client.headers["Authorization"]
+        assert request_headers["User-Agent"] == client.headers["User-Agent"]
+        assert request_headers["Host"] == "clickhouse.example.com"
+        assert pool_mgr.request.call_args.kwargs["assert_same_host"] is False
+
     def test_dsn_headers_query_param_must_be_dict(self):
         with pytest.raises(ProgrammingError, match="headers must be a dictionary"):
             create_client(dsn="http://localhost:8123/default?headers=not_a_dict")
