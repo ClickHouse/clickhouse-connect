@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import inspect
 import io
 import json
 import logging
@@ -60,6 +61,7 @@ from clickhouse_connect.driver.transform import NativeTransform
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
 ex_header = "X-ClickHouse-Exception-Code"
+auth_failed_ex_code = "516"  # ClickHouse AUTHENTICATION_FAILED
 ex_tag_header = "X-ClickHouse-Exception-Tag"
 
 if "br" in available_compression:
@@ -197,6 +199,7 @@ class AsyncClient(Client):
         password: str | None = None,
         database: str | None = None,
         access_token: str | None = None,
+        token_provider: Callable[[], str | Awaitable[str]] | None = None,
         compress: bool | str = True,
         connect_timeout: int = 10,
         send_receive_timeout: int = 300,
@@ -243,6 +246,8 @@ class AsyncClient(Client):
             if isinstance(verify, str) and verify.lower() == "proxy":
                 verify = True
                 tls_mode = tls_mode or "proxy"
+
+        self._token_provider = token_provider  # initial token is resolved in _initialize()
 
         # Priority: access_token > mutual TLS > basic auth
         if client_cert and (tls_mode is None or tls_mode == "mutual"):
@@ -384,6 +389,9 @@ class AsyncClient(Client):
 
         if self._initialized:
             return
+
+        if self._token_provider:
+            self.set_access_token(await self._resolve_token())
 
         try:
             tz_source = self._deferred_tz_source
@@ -535,6 +543,15 @@ class AsyncClient(Client):
 
     def get_client_setting(self, key) -> str | None:
         return self._client_settings.get(key)
+
+    async def _resolve_token(self) -> str:
+        # Run sync providers off the event loop; await async providers.
+        # The provider may be called concurrently if multiple requests get a 516 at the same time;
+        # it must be safe to invoke in parallel (e.g. if it hits an IdP, consider rate limiting).
+        result = await asyncio.get_running_loop().run_in_executor(None, self._token_provider)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
     def set_access_token(self, access_token: str):
         auth_header = self.headers.get("Authorization")
@@ -1953,6 +1970,7 @@ class AsyncClient(Client):
             req_headers["Host"] = self.server_host_name
         query_session = final_params.get("session_id")
         attempts = 0
+        auth_retried = False
 
         while True:
             attempts += 1
@@ -2021,6 +2039,17 @@ class AsyncClient(Client):
                         await asyncio.sleep(0.1 * attempts)
                         response.close()
                         continue
+                if self._token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
+                    if retry_body is None and not (data is None or isinstance(data, (bytes, bytearray, str, dict))):
+                        await self._error_handler(response)  # non-replayable body, surface the auth error instead of retrying
+                    auth_retried = True
+                    self.set_access_token(await self._resolve_token())
+                    req_headers["Authorization"] = self.headers["Authorization"]
+                    if retry_body is not None:
+                        data = await retry_body()
+                    logger.debug("Refreshing access token after authentication failure")
+                    response.close()
+                    continue
                 await self._error_handler(response)
 
             except aiohttp.ClientConnectionError as e:
