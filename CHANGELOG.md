@@ -2,6 +2,22 @@
 
 ## UNRELEASED
 
+## 1.2.0, 2026-06-08
+
+### Improvements
+- SQLAlchemy: opt-in server-side bind parameters via `create_engine(url, server_side_params=True)`. The dialect then emits ClickHouse native `{name:Type}` / `{name:Array(Type)}` placeholders instead of client-side string interpolation. Off by default. Closes [#735](https://github.com/ClickHouse/clickhouse-connect/issues/735).
+- Added a `token_provider` client option (sync and async). It accepts a callable returning an access token string; the callable is invoked once for the initial token and again to fetch a fresh token whenever the server rejects the current one (authentication failure), retrying the request once. Mutually exclusive with `access_token` and `username`/`password`.
+- Added a `headers` option to `create_client`/`create_async_client` for attaching custom HTTP headers to every request, including the initialization queries sent during client creation. Useful for HTTP gateways that require auth headers such as Cloudflare Access service tokens.
+
+### Bug Fixes
+- A `datetime` bound to a server-side `{name:DateTime64(...)}` placeholder now keeps its sub-second precision instead of being truncated to seconds. The declared parameter type drives this, so no `_64` name suffix or manual `DT64Param` wrapper is needed, and it applies through `Array` and `Tuple` hints. Plain `DateTime` binds are unchanged. Closes [#739](https://github.com/ClickHouse/clickhouse-connect/issues/739).
+- Strip `--` line comments that have no following space when classifying queries, so a DDL with a leading `--sql`-style comment is routed as a command instead of raising `StreamFailureError`. Closes [#499](https://github.com/ClickHouse/clickhouse-connect/issues/499).
+- SQLAlchemy: implement reflection on the dialect itself so `MetaData.reflect()` and `Inspector.get_multi_columns()` work.
+- SQLAlchemy: UDT-based types (`UUID`, `IPv4`/`IPv6`, `JSON`, `Nested`, geometry types, `AggregateFunction`, etc.) now return concrete `python_type` classes instead of `None`, matching SQLAlchemy's `TypeEngine.python_type` contract.
+- SQLAlchemy: `Array` now subclasses `sqlalchemy.types.ARRAY` and exposes `item_type`.
+- `bytes`/`bytearray` query parameters now render as ClickHouse string literals (each byte as `\xHH`) instead of the Python repr, fixing inserts into `FixedString`/`String` columns through the SQLAlchemy dialect. Closes [#777](https://github.com/ClickHouse/clickhouse-connect/issues/777).
+- The `dsn` passed to `create_client`/`create_async_client` now percent-decodes the username, password, and database, so credentials containing reserved characters can be supplied URL-encoded (`pass%20word` becomes `pass word`). A literal `%` in a DSN must now be written as `%25`. A DSN with a username and no password now sends an empty password rather than the literal string `None`. Closes [#713](https://github.com/ClickHouse/clickhouse-connect/issues/713).
+
 ## 1.1.1, 2026-05-27
 
 ### Bug Fixes

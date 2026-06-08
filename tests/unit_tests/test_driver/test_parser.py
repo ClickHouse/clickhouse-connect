@@ -60,3 +60,15 @@ LIMIT
 -- 6dcd92a04feb50f14bbcf07c661680ba
 """
     assert remove_sql_comments(sql) == "SELECT \n* FROM benchmark_results  WHERE result = 'True'\n\nLIMIT\n\n2\n\n"
+
+
+def test_remove_comments_no_space_after_dashes():
+    # leading `--sql` comment at start of input
+    assert remove_sql_comments("--sql\nSELECT 1") == "\nSELECT 1"
+    # mid-query comment with no space after the dashes
+    assert remove_sql_comments("SELECT 1--1") == "SELECT 1"
+    # comment running to end of input with no trailing newline
+    assert remove_sql_comments("SELECT 1 --done") == "SELECT 1 "
+    # `--` inside quoted strings is preserved
+    assert remove_sql_comments("SELECT 'a--b'") == "SELECT 'a--b'"
+    assert remove_sql_comments('SELECT "a--b"') == 'SELECT "a--b"'

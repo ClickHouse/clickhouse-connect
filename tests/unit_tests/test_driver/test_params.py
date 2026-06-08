@@ -4,7 +4,14 @@ from datetime import date, datetime, timezone
 import pytest
 
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.binding import _extract_tz_from_type, bind_query, finalize_query, format_bind_value
+from clickhouse_connect.driver.binding import (
+    DT64Param,
+    _extract_tz_from_type,
+    bind_query,
+    finalize_query,
+    format_bind_value,
+    format_query_value,
+)
 
 
 def test_finalize():
@@ -35,10 +42,33 @@ def test_finalize():
         (date(2023, 6, 1), "2023-06-01"),
         (datetime(2023, 6, 1, 20, 4, 5), "2023-06-01 20:04:05"),
         ([date(2023, 6, 1), date(2023, 8, 5)], "['2023-06-01', '2023-08-05']"),
+        (b"AB", r"\x41\x42"),
+        (b"\x00\xf8'", r"\x00\xf8\x27"),
+        ([b"AB"], r"['\x41\x42']"),
+        ((b"AB", "x"), r"('\x41\x42', 'x')"),
     ],
 )
 def test_format_bind_value(value, expected):
     assert format_bind_value(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (b"AB", r"'\x41\x42'"),
+        (bytearray(b"AB"), r"'\x41\x42'"),
+        (b"j!lUA\xf8\x93q;ky\x00", r"'\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00'"),
+        ([b"AB", b"\x00"], r"['\x41\x42', '\x00']"),
+        ((b"AB", 1), r"('\x41\x42', 1)"),
+    ],
+)
+def test_format_query_value_bytes(value, expected):
+    assert format_query_value(value) == expected
+
+
+def test_finalize_bytes():
+    query = finalize_query("INSERT INTO t (id) VALUES (%(id)s)", {"id": b"j!lUA\xf8\x93q;ky\x00"})
+    assert query == r"INSERT INTO t (id) VALUES ('\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00')"
 
 
 class TestBindQueryTimezoneHint:
@@ -50,7 +80,7 @@ class TestBindQueryTimezoneHint:
     def test_datetime64_utc_hint(self):
         query = "SELECT * FROM t WHERE dt >= {dt:DateTime64(6, 'UTC')}"
         _, params = bind_query(query, {"dt": self.dt_utc}, server_tz=self.berlin_tz)
-        assert params["param_dt"] == "2025-01-01 12:00:00"
+        assert params["param_dt"] == "2025-01-01 12:00:00.000000"
 
     def test_datetime_utc_hint(self):
         query = "SELECT * FROM t WHERE dt >= {dt:DateTime('UTC')}"
@@ -65,12 +95,12 @@ class TestBindQueryTimezoneHint:
     def test_no_hint_tz_falls_back_to_server_tz(self):
         query = "SELECT * FROM t WHERE dt >= {dt:DateTime64(6)}"
         _, params = bind_query(query, {"dt": self.dt_utc}, server_tz=self.berlin_tz)
-        assert params["param_dt"] == "2025-01-01 13:00:00"
+        assert params["param_dt"] == "2025-01-01 13:00:00.000000"
 
     def test_nullable_wrapper(self):
         query = "SELECT * FROM t WHERE dt >= {dt:Nullable(DateTime64(6, 'UTC'))}"
         _, params = bind_query(query, {"dt": self.dt_utc}, server_tz=self.berlin_tz)
-        assert params["param_dt"] == "2025-01-01 12:00:00"
+        assert params["param_dt"] == "2025-01-01 12:00:00.000000"
 
     def test_lowcardinality_nullable_wrapper(self):
         query = "SELECT * FROM t WHERE dt >= {dt:LowCardinality(Nullable(DateTime('UTC')))}"
@@ -108,3 +138,77 @@ class TestBindQueryTimezoneHint:
         query = "SELECT * FROM t WHERE dt >= {dt:NotAType!!!}"
         _, params = bind_query(query, {"dt": self.dt_utc}, server_tz=self.berlin_tz)
         assert params["param_dt"] == "2025-01-01 13:00:00"
+
+
+class TestBindQueryDateTime64Precision:
+    """A DateTime64 type hint preserves sub-second precision without a _64 suffix or DT64Param."""
+
+    utc = timezone.utc
+    dt = datetime(2025, 1, 1, 12, 0, 0, 250306, tzinfo=timezone.utc)
+
+    def test_scalar(self):
+        query = "SELECT {dt:DateTime64(6)}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert params["param_dt"] == "2025-01-01 12:00:00.250306"
+
+    def test_plain_datetime_truncates(self):
+        query = "SELECT {dt:DateTime}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert params["param_dt"] == "2025-01-01 12:00:00"
+
+    def test_lowercase_spelling(self):
+        query = "SELECT {dt:Datetime64(6)}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert params["param_dt"] == "2025-01-01 12:00:00.250306"
+
+    def test_nullable_wrapper(self):
+        query = "SELECT {dt:Nullable(DateTime64(9))}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert params["param_dt"] == "2025-01-01 12:00:00.250306"
+
+    def test_lowcardinality_nullable_wrapper(self):
+        query = "SELECT {dt:LowCardinality(Nullable(DateTime64(6)))}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert params["param_dt"] == "2025-01-01 12:00:00.250306"
+
+    def test_none_nullable(self):
+        query = "SELECT {dt:Nullable(DateTime64(6))}"
+        _, params = bind_query(query, {"dt": None}, server_tz=self.utc)
+        assert params["param_dt"] == "\\N"
+
+    def test_array(self):
+        query = "SELECT {dts:Array(DateTime64(6))}"
+        dts = [self.dt, self.dt.replace(microsecond=777722)]
+        _, params = bind_query(query, {"dts": dts}, server_tz=self.utc)
+        assert params["param_dts"] == "['2025-01-01 12:00:00.250306', '2025-01-01 12:00:00.777722']"
+
+    def test_tuple(self):
+        query = "SELECT {val:Tuple(DateTime64(6), String)}"
+        _, params = bind_query(query, {"val": (self.dt, "user_1")}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 12:00:00.250306', 'user_1')"
+
+    def test_array_of_tuple(self):
+        query = "SELECT {vals:Array(Tuple(DateTime64(6), String))}"
+        _, params = bind_query(query, {"vals": [(self.dt, "user_1")]}, server_tz=self.utc)
+        assert params["param_vals"] == "[('2025-01-01 12:00:00.250306', 'user_1')]"
+
+    def test_tz_hint_with_precision(self):
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        query = "SELECT {dt:DateTime64(6, 'Europe/Berlin')}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert params["param_dt"] == self.dt.astimezone(berlin).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    def test_lowercase_tz_hint_preserved(self):
+        query = "SELECT {dt:Datetime64(6, 'UTC')}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=zoneinfo.ZoneInfo("Europe/Berlin"))
+        assert params["param_dt"] == "2025-01-01 12:00:00.250306"
+
+    def test_already_dt64param_not_double_wrapped(self):
+        query = "SELECT {dt:DateTime64(6)}"
+        _, params = bind_query(query, {"dt": DT64Param(self.dt)}, server_tz=self.utc)
+        assert params["param_dt"] == "2025-01-01 12:00:00.250306"
+
+    def test_malformed_hint_does_not_crash(self):
+        query = "SELECT {dt:DateTime64(((}"
+        _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
+        assert "param_dt" in params

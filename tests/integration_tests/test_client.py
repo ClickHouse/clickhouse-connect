@@ -58,6 +58,19 @@ def test_transport_settings(param_client, call):
     assert len(result.result_set) > 0
 
 
+def test_client_headers(client_factory, call):
+    client = client_factory(
+        headers={
+            "CF-Access-Client-Id": "test_client_id",
+            "CF-Access-Client-Secret": "test_client_secret",
+        }
+    )
+
+    assert client.headers["CF-Access-Client-Id"] == "test_client_id"
+    assert client.headers["CF-Access-Client-Secret"] == "test_client_secret"
+    assert call(client.command, "SELECT 79") == 79
+
+
 def test_none_database(param_client, call):
     old_db = param_client.database
     test_db = call(param_client.command, "select currentDatabase()")

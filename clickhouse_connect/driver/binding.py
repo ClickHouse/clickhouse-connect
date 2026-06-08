@@ -68,22 +68,22 @@ def finalize_query(query: str, parameters: Sequence | dict[str, Any] | None, ser
     return query % tuple(format_query_value(v, server_tz) for v in parameters)
 
 
+def _unwrap_outer(type_str: str) -> tuple[str, tuple]:
+    """Strip LowCardinality/Nullable wrappers and return (base_name, args)"""
+    base = type_str.strip()
+    if base[:15].lower() == "lowcardinality(":
+        base = base[15:-1]
+    if base[:9].lower() == "nullable(":
+        base = base[9:-1]
+    base_name, values, _ = parse_callable(base)
+    return base_name, values
+
+
 def _extract_tz_from_type(type_str: str) -> tzinfo | None:
-    """Extract timezone from a ClickHouse type hint like DateTime64(6, 'UTC').
-
-    Handles LowCardinality/Nullable wrappers and container types
-    (Array, Tuple, Map). Returns None if no timezone is found or parsing fails.
-    """
+    """Resolve the timezone named in a ClickHouse type hint."""
     try:
-        base = type_str.strip()
-        if base.startswith("LowCardinality"):
-            base = base[15:-1]
-        if base.startswith("Nullable"):
-            base = base[9:-1]
-
-        base_name, values, _ = parse_callable(base)
-
-        if base_name in ("DateTime", "DateTime64"):
+        base_name, values = _unwrap_outer(type_str)
+        if base_name.lower() in ("datetime", "datetime64"):
             for v in values:
                 if isinstance(v, str) and v.startswith("'") and v.endswith("'"):
                     try:
@@ -102,6 +102,25 @@ def _extract_tz_from_type(type_str: str) -> tzinfo | None:
         return None
     except Exception:
         return None
+
+
+def _promote_datetime64(type_str: str, value):
+    """Wrap values bound to a DateTime64 hint in DT64Param to preserve precision."""
+    if value is None or "datetime64" not in type_str.lower():
+        return value
+    try:
+        base_name, values = _unwrap_outer(type_str)
+        base_name = base_name.lower()
+        if base_name == "datetime64":
+            return DT64Param(value) if isinstance(value, datetime) else value
+        if base_name == "array" and values and isinstance(value, (list, tuple)):
+            inner = str(values[0])
+            return type(value)(_promote_datetime64(inner, x) for x in value)
+        if base_name == "tuple" and isinstance(value, tuple) and len(values) == len(value):
+            return tuple(_promote_datetime64(str(t), x) for t, x in zip(values, value))
+        return value
+    except Exception:
+        return value
 
 
 def bind_query(
@@ -147,6 +166,7 @@ def bind_query(
                     hint_tz = _extract_tz_from_type(type_str)
                     if hint_tz is not None:
                         tz = hint_tz
+                    v = _promote_datetime64(type_str, v)
                 bound_params[f"param_{k}"] = format_bind_value(v, tz)
     else:
         query, bound_params = finalize_query(query, parameters, server_tz), {}
@@ -180,6 +200,10 @@ def escape_str(value: str):
     return "".join(f"{BS}{c}" if c in must_escape else c for c in value)
 
 
+def escape_bytes(value):
+    return "".join(f"{BS}x{b:02x}" for b in value)
+
+
 def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
     """
     Format Python values in a ClickHouse query
@@ -191,6 +215,8 @@ def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
         return "NULL"
     if isinstance(value, str):
         return format_str(value)
+    if isinstance(value, (bytes, bytearray)):
+        return f"'{escape_bytes(value)}'"
     if isinstance(value, DT64Param):
         return value.format(server_tz, False)
     if isinstance(value, datetime):
@@ -238,6 +264,10 @@ def format_bind_value(value: Any, server_tz: tzinfo = timezone.utc, top_level: b
             # At the top levels, strings must not be surrounded by quotes
             return escape_str(value)
         return format_str(value)
+    if isinstance(value, (bytes, bytearray)):
+        if top_level:
+            return escape_bytes(value)
+        return f"'{escape_bytes(value)}'"
     if isinstance(value, DT64Param):
         return value.format(server_tz, top_level)
     if isinstance(value, datetime):
