@@ -4,7 +4,14 @@ from datetime import date, datetime, timezone
 import pytest
 
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.binding import DT64Param, _extract_tz_from_type, bind_query, finalize_query, format_bind_value
+from clickhouse_connect.driver.binding import (
+    DT64Param,
+    _extract_tz_from_type,
+    bind_query,
+    finalize_query,
+    format_bind_value,
+    format_query_value,
+)
 
 
 def test_finalize():
@@ -35,10 +42,33 @@ def test_finalize():
         (date(2023, 6, 1), "2023-06-01"),
         (datetime(2023, 6, 1, 20, 4, 5), "2023-06-01 20:04:05"),
         ([date(2023, 6, 1), date(2023, 8, 5)], "['2023-06-01', '2023-08-05']"),
+        (b"AB", r"\x41\x42"),
+        (b"\x00\xf8'", r"\x00\xf8\x27"),
+        ([b"AB"], r"['\x41\x42']"),
+        ((b"AB", "x"), r"('\x41\x42', 'x')"),
     ],
 )
 def test_format_bind_value(value, expected):
     assert format_bind_value(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (b"AB", r"'\x41\x42'"),
+        (bytearray(b"AB"), r"'\x41\x42'"),
+        (b"j!lUA\xf8\x93q;ky\x00", r"'\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00'"),
+        ([b"AB", b"\x00"], r"['\x41\x42', '\x00']"),
+        ((b"AB", 1), r"('\x41\x42', 1)"),
+    ],
+)
+def test_format_query_value_bytes(value, expected):
+    assert format_query_value(value) == expected
+
+
+def test_finalize_bytes():
+    query = finalize_query("INSERT INTO t (id) VALUES (%(id)s)", {"id": b"j!lUA\xf8\x93q;ky\x00"})
+    assert query == r"INSERT INTO t (id) VALUES ('\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00')"
 
 
 class TestBindQueryTimezoneHint:
