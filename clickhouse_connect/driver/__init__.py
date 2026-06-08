@@ -76,9 +76,7 @@ def _parse_connection_params(
     return host, username, password, port, database, interface
 
 
-def _validate_access_token(
-    access_token: str | None, token_provider: Callable[[], str] | None, username: str | None, password: str
-) -> None:
+def _validate_access_token(access_token: str | None, token_provider: Callable[[], str] | None, username: str | None, password: str) -> None:
     """Validate that token-based and username/password auth are not mixed."""
     if (access_token or token_provider) and (username or password):
         raise ProgrammingError("Cannot use both token authentication and username/password")
@@ -187,9 +185,23 @@ def create_client(
                     if name.startswith("ch_"):
                         name = name[3:]
                     settings[name] = value
+        # token auth may also arrive via generic_args (DB-API connect_args); pop both so neither is passed twice
+        generic_access = kwargs.pop("access_token", None)
+        generic_token = kwargs.pop("token_provider", None)
+        access_token = access_token or generic_access
+        token_provider = token_provider or generic_token
+        _validate_access_token(access_token, token_provider, username, password)
         return HttpClient(
-            interface, host, port, username, password, database, access_token,
-            token_provider=token_provider, settings=settings, **kwargs,
+            interface,
+            host,
+            port,
+            username,
+            password,
+            database,
+            access_token,
+            token_provider=token_provider,
+            settings=settings,
+            **kwargs,
         )
     raise ProgrammingError(f"Unrecognized client type {interface}")
 
@@ -314,6 +326,13 @@ async def create_async_client(
 
     if "autogenerate_session_id" not in kwargs:
         kwargs["autogenerate_session_id"] = False
+
+    # token auth may also arrive via generic_args (DB-API connect_args); pop both so neither is passed twice
+    generic_access = kwargs.pop("access_token", None)
+    generic_token = kwargs.pop("token_provider", None)
+    access_token = access_token or generic_access
+    token_provider = token_provider or generic_token
+    _validate_access_token(access_token, token_provider, username, password)
 
     client = _AsyncClient(
         interface=interface,
