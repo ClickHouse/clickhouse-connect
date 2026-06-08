@@ -227,6 +227,7 @@ class AsyncClient(Client):
         autogenerate_query_id: bool | None = None,
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
@@ -334,6 +335,8 @@ class AsyncClient(Client):
         self._reported_libs = set()
         self._last_pool_reset = None
         self.headers["User-Agent"] = self.headers["User-Agent"].replace("mode:sync;", "mode:async;")
+        if headers:
+            self.headers.update(headers)
 
         # Store aiohttp-specific params for deferred initialization
         self._compress_param = compress

@@ -89,6 +89,20 @@ def _validate_access_token(access_token: str | None, token_provider: Callable[[]
         raise ProgrammingError("Cannot use both access_token and token_provider")
 
 
+def _pop_headers_arg(headers: Any | None, kwargs: dict[str, Any]) -> Any | None:
+    """Hoist headers parsed through generic kwargs while preserving explicit headers."""
+    if "headers" in kwargs:
+        kwargs_headers = kwargs.pop("headers")
+        if headers is None:
+            headers = kwargs_headers
+    return headers
+
+
+def _validate_headers(headers: Any | None) -> None:
+    if headers is not None and not isinstance(headers, dict):
+        raise ProgrammingError("headers must be a dictionary of HTTP header names and values")
+
+
 def create_client(
     *,
     host: str | None = None,
@@ -102,6 +116,7 @@ def create_client(
     secure: bool | str = False,
     dsn: str | None = None,
     settings: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
     **kwargs,
 ) -> Client:
@@ -127,6 +142,9 @@ def create_client(
     :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
       will be extracted from this string if not set otherwise.
     :param settings: ClickHouse server settings to be used with the session/every request
+    :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
+      authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
+      so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally.
 
@@ -174,6 +192,7 @@ def create_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
+    headers = _pop_headers_arg(headers, kwargs)
     _validate_access_token(access_token, token_provider, username, password)
 
     settings = settings or {}
@@ -181,7 +200,10 @@ def create_client(
         if generic_args:
             client_params = signature(HttpClient).parameters
             for name, value in generic_args.items():
-                if name in client_params:
+                if name == "headers":
+                    if headers is None:
+                        headers = value
+                elif name in client_params:
                     kwargs[name] = value
                 elif name == "compression":
                     if "compress" not in kwargs:
@@ -196,6 +218,7 @@ def create_client(
         access_token = access_token or generic_access
         token_provider = token_provider or generic_token
         _validate_access_token(access_token, token_provider, username, password)
+        _validate_headers(headers)
         return HttpClient(
             interface,
             host,
@@ -206,6 +229,7 @@ def create_client(
             access_token,
             token_provider=token_provider,
             settings=settings,
+            headers=headers,
             **kwargs,
         )
     raise ProgrammingError(f"Unrecognized client type {interface}")
@@ -224,6 +248,7 @@ async def create_async_client(
     secure: bool | str = False,
     dsn: str | None = None,
     settings: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
     connector_limit: int = 100,
     connector_limit_per_host: int = 20,
@@ -254,6 +279,9 @@ async def create_async_client(
     :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
       will be extracted from this string if not set otherwise.
     :param settings: ClickHouse server settings to be used with the session/every request
+    :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
+      authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
+      so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
     :param connector_limit: Maximum number of allowable connections to the server
@@ -313,13 +341,17 @@ async def create_async_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
+    headers = _pop_headers_arg(headers, kwargs)
     _validate_access_token(access_token, token_provider, username, password)
 
     settings = settings or {}
     if generic_args:
         client_params = signature(_AsyncClient).parameters
         for name, value in generic_args.items():
-            if name in client_params:
+            if name == "headers":
+                if headers is None:
+                    headers = value
+            elif name in client_params:
                 kwargs[name] = value
             elif name == "compression":
                 if "compress" not in kwargs:
@@ -338,7 +370,7 @@ async def create_async_client(
     access_token = access_token or generic_access
     token_provider = token_provider or generic_token
     _validate_access_token(access_token, token_provider, username, password)
-
+    _validate_headers(headers)
     client = _AsyncClient(
         interface=interface,
         host=host,
@@ -349,6 +381,7 @@ async def create_async_client(
         access_token=access_token,
         token_provider=token_provider,
         settings=settings,
+        headers=headers,
         connector_limit=connector_limit,
         connector_limit_per_host=connector_limit_per_host,
         keepalive_timeout=keepalive_timeout,
