@@ -122,6 +122,8 @@ When you reconcile the sub-agent's findings into your reply to the user, preserv
 - Make sure to test both the happy path as well as sad paths. Make sure to cover all relevant edge cases.
 - When testing types, cover the full type matrix: ClickHouse type hints compose and formatting is recursive, so a change to how a value is formatted must be tested across all the shapes it can take: scalar, Array(T), Tuple(...), Array(Tuple(...)),  Nullable(T), and spelling and case variants of the type name.
 - Aim to be complete, but also terse. Don't use two tests to cover what could be done in one.
+- When possible, use parametrized tests. Express a matrix of cases with `@pytest.mark.parametrize` instead of using near-duplicate test bodies. This is the right place for the type-shape and case-variant coverage above.
+- Client behavior must hold for both the sync and async clients. For integration tests use the `param_client` and call fixtures from `tests/integration_tests/conftest.py`, which run one test body against both transports via the client_mode parameter. See `tests/integration_tests/test_temporal.py` for the pattern. Do not write a sync-only test for a change that touches shared client code.
 - Do not use `42` as the generic representative integer in tests.
 - Do not use names like `alice` or `bob` as generic placeholders.
 - Prefer values like `13`, `79`, `user_1`, and `user_2`, or similarly neutral domain-appropriate values.
