@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import date, datetime, timezone, tzinfo
 from enum import Enum
 from typing import Any
+from urllib.parse import urlencode
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
@@ -190,6 +191,25 @@ def bind_query(
             start = loc
         query += binary_query[start:]
     return query, bound_params
+
+
+# Server-side bind parameters are urlencoded into the request URL. Once the encoded length
+# passes this budget the client routes them through multipart form data instead, keeping
+# oversized payloads out of the URL where proxies (nginx, ALB, CloudFront) reject them with
+# HTTP 414. The threshold leaves ample headroom under common request line limits.
+MAX_URL_BIND_PARAM_LENGTH = 4096
+
+
+def use_form_encoding(query, bind_params: dict[str, str], force_form: bool = False) -> bool:
+    if force_form:
+        return True
+    # Binary binds embed bytes into the query, which the form path cannot round-trip; leave
+    # those on the default path unless form encoding is explicitly requested.
+    if isinstance(query, bytes):
+        return False
+    if not bind_params:
+        return False
+    return len(urlencode(bind_params)) > MAX_URL_BIND_PARAM_LENGTH
 
 
 def format_str(value: str):

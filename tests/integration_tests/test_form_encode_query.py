@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.binding import bind_query, use_form_encoding
 
 
 def test_form_encode_query_basic(client_factory, call, table_context: Callable):
@@ -126,3 +127,35 @@ def test_form_encode_schema_probe_query(client_factory, call, table_context: Cal
         assert result.column_names == ("id", "name", "adjusted_value")
         assert len(result.column_types) == 3
         assert len(result.result_set) == 0
+
+
+def test_auto_form_encode_large_params(client_factory, call):
+    """Large parameter payloads are auto-promoted to form data without enabling the flag"""
+    default_client = client_factory()
+    assert default_client.form_encode_query_params is False
+
+    ids = list(range(3000))
+    query = "SELECT 1 WHERE 0 IN {ids:Array(UInt64)}"
+    final_query, bind_params = bind_query(query, {"ids": ids})
+    # Payload exceeds the URL budget, so the default client must route it through the body
+    assert use_form_encoding(final_query, bind_params) is True
+
+    result = call(
+        default_client.query,
+        "SELECT count() FROM numbers(5000) WHERE number IN {ids:Array(UInt64)}",
+        parameters={"ids": ids},
+    )
+    assert result.first_row[0] == 3000
+
+
+def test_auto_form_encode_raw_query_large_params(client_factory, call):
+    """raw_query auto-promotes large parameter payloads on a default client"""
+    default_client = client_factory()
+
+    ids = list(range(3000))
+    result = call(
+        default_client.raw_query,
+        "SELECT count() FROM numbers(5000) WHERE number IN {ids:Array(UInt64)}",
+        parameters={"ids": ids},
+    )
+    assert b"3000" in result
