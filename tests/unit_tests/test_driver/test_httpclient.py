@@ -311,14 +311,13 @@ class TestHttpClientErrorHandler:
         long_body = "Code: 62. DB::Exception: " + ("x" * 400) + " (SYNTAX_ERROR) (version 26.2.4.23)"
         response = create_mock_response(status=400, headers={ex_header: "62"}, data=long_body.encode())
 
-        setting = common._common_settings["max_error_size"]
-        original = setting.value
-        setting.value = 100
+        original = common.get_setting("max_error_size")
+        common.set_setting("max_error_size", 100)
         try:
             with pytest.raises(DatabaseError) as excinfo:
                 self.client._error_handler(response)
         finally:
-            setting.value = original
+            common.set_setting("max_error_size", original)
 
         assert excinfo.value.code == 62
         assert excinfo.value.name == "SYNTAX_ERROR"
