@@ -106,6 +106,7 @@ class HttpClient(Client):
         proxy_path: str = "",
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
         """
         Create an HTTP ClickHouse Connect client
@@ -162,6 +163,8 @@ class HttpClient(Client):
 
         self._reported_libs = set()
         self.headers["User-Agent"] = common.build_client_name(client_name)
+        if headers:
+            self.headers.update(headers)
         self._read_format = self._write_format = "Native"
         self._transform = NativeTransform()
 
@@ -756,7 +759,12 @@ class HttpClient(Client):
         See BaseClient doc_string for this method
         """
         try:
-            response = self.http.request("GET", f"{self.url}/ping", timeout=3, preload_content=True)
+            headers = dict_copy(self.headers)
+            kwargs = {"headers": headers, "timeout": 3, "preload_content": True}
+            if self.server_host_name:
+                kwargs["assert_same_host"] = False
+                headers["Host"] = self.server_host_name
+            response = self.http.request("GET", f"{self.url}/ping", **kwargs)
             return 200 <= response.status < 300
         except HTTPError:
             logger.debug("ping failed", exc_info=True)
