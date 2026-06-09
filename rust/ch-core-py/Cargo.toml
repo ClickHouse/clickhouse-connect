@@ -1,0 +1,12 @@
+[package]
+name = "ch-core-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_ch_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+ch-core-rs = { path = "../../../ch-core-rs" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
