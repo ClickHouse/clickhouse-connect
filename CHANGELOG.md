@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Improvements
+- Build and publish Windows ARM64 `win_arm64` wheels for CPython 3.10 through 3.14, including the free-threaded 3.14 build. Closes [#785](https://github.com/ClickHouse/clickhouse-connect/issues/785).
+
 ## 1.2.0, 2026-06-08
 
 ### Improvements
