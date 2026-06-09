@@ -45,6 +45,13 @@ def test_command(param_client, call):
     assert int(version.split(".")[0]) >= 19
 
 
+def test_query_error_exposes_structured_code(param_client, call):
+    with pytest.raises(DatabaseError) as excinfo:
+        call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
+    assert excinfo.value.code == 60
+    assert excinfo.value.name == "UNKNOWN_TABLE"
+
+
 def test_client_name(param_client, client_mode):
     user_agent = param_client.headers["User-Agent"]
     assert "test" in user_agent or "param" in user_agent

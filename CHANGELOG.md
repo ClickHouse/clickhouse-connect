@@ -4,6 +4,7 @@
 
 ### Improvements
 - Build and publish Windows ARM64 `win_arm64` wheels for CPython 3.10 through 3.14, including the free-threaded 3.14 build. Closes [#785](https://github.com/ClickHouse/clickhouse-connect/issues/785).
+- Server errors now expose structured fields on the raised exception. `DatabaseError` and `OperationalError` carry a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so callers can branch on `exc.code` instead of parsing the message string. `code` is set even when `show_clickhouse_errors` is disabled. `name` is only set when error detail is enabled. Both default to `None` when unavailable, such as on transport errors. Closes [#786](https://github.com/ClickHouse/clickhouse-connect/issues/786).
 
 ## 1.2.0, 2026-06-08
 
