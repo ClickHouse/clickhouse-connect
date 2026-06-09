@@ -200,7 +200,7 @@ def bind_query(
 MAX_URL_BIND_PARAM_LENGTH = 4096
 
 
-def use_form_encoding(query, bind_params: dict[str, str], force_form: bool = False) -> bool:
+def use_form_encoding(query: str | bytes, bind_params: dict[str, str], force_form: bool = False) -> bool:
     if force_form:
         return True
     # Binary binds embed bytes into the query, which the form path cannot round-trip; leave
