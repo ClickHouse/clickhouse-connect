@@ -67,6 +67,12 @@ def test_use_form_encoding_total_across_params():
     assert use_form_encoding("SELECT 1", params) is True
 
 
+def test_use_form_encoding_percent_expansion_promotes():
+    # Raw length is under the budget but percent-encoding expands each space to %20
+    params = {"param_s": " " * (MAX_URL_BIND_PARAM_LENGTH // 2)}
+    assert use_form_encoding("SELECT 1", params) is True
+
+
 def test_use_form_encoding_binary_query_not_promoted():
     # Binary binds make the query bytes; auto-promotion must not kick in unless forced
     big = {"param_big": "x" * (MAX_URL_BIND_PARAM_LENGTH + 1)}

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import date, datetime, timezone, tzinfo
 from enum import Enum
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
@@ -209,7 +209,12 @@ def use_form_encoding(query, bind_params: dict[str, str], force_form: bool = Fal
         return False
     if not bind_params:
         return False
-    return len(urlencode(bind_params)) > MAX_URL_BIND_PARAM_LENGTH
+    # Raw length is a lower bound on the encoded length, so large payloads short-circuit
+    # without materializing the encoded string.
+    if sum(len(k) + len(str(v)) for k, v in bind_params.items()) > MAX_URL_BIND_PARAM_LENGTH:
+        return True
+    # Measure with quote so spaces count as %20, matching the longer of the two client encodings.
+    return len(urlencode(bind_params, quote_via=quote)) > MAX_URL_BIND_PARAM_LENGTH
 
 
 def format_str(value: str):
