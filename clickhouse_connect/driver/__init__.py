@@ -184,9 +184,10 @@ def create_client(
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
-    :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
-      instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
-      limits. Only available for query operations (not inserts). Default: False
+    :param form_encode_query_params  If True, always send query parameters as form-encoded data in the request body
+      instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
+      avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
+      when this is True. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect Client instance
     """
     host, username, password, port, database, interface = _parse_connection_params(
@@ -320,9 +321,10 @@ async def create_async_client(
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
     :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
-    :param form_encode_query_params  If True, query parameters will be sent as form-encoded data in the request body
-      instead of as URL parameters. This is useful for queries with large parameter sets that might exceed URL length
-      limits. Only available for query operations (not inserts). Default: False
+    :param form_encode_query_params  If True, always send query parameters as form-encoded data in the request body
+      instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
+      avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
+      when this is True. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect AsyncClient instance
     """
     try:
