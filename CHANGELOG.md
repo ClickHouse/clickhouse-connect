@@ -7,6 +7,7 @@
 
 ### Bug Fixes
 - Large query parameter payloads are now automatically sent as form data in the request body instead of the URL query string. Server-side bind parameters were urlencoded into the request URL, so a large `IN` list or a high-dimensional vector embedding could produce a URL that HTTP intermediaries such as nginx, AWS ALB, and CloudFront reject with HTTP 414. The client now routes parameters to the POST body once their encoded length passes a threshold, which keeps the URL small. Setting `form_encode_query_params=True` still forces form encoding for all queries. Queries using binary parameter binds are never promoted automatically and only use form encoding when the flag is set. This does not change the server's per-value size limit, which is governed by `http_max_field_value_size`. Applies to both sync and async clients. Closes [#740](https://github.com/ClickHouse/clickhouse-connect/issues/740).
+- `uuid.UUID`, `IPv4Address`, and `IPv6Address` values nested inside `Array`, `Tuple`, or `Map` server-side bind parameters are now quoted, matching client-side parameter formatting. Previously they rendered unquoted, so an `IN` list of UUIDs bound to `{name:Array(String)}` (as produced by SQLAlchemy `Column.in_` with `server_side_params=True`) was rejected by the server with `Code: 26 ... cannot be parsed as Array(String)`. Closes [#791](https://github.com/ClickHouse/clickhouse-connect/issues/791).
 
 ## 1.2.0, 2026-06-08
 
