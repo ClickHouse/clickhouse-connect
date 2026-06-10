@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
@@ -170,6 +171,77 @@ class TestAsyncClientHeaders:
         assert client.headers["X-Gateway"] == "cloudflare"
 
 
+class TestAsyncClientErrorHandler:
+    """Test the error handling functionality of AsyncClient"""
+
+    @staticmethod
+    def make_client():
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.url = "http://localhost:8123"
+        client.show_clickhouse_errors = True
+        return client
+
+    @staticmethod
+    def make_response(status=500, headers=None, data=b""):
+        response = Mock()
+        response.status = status
+        response.headers = headers or {}
+        response.read = AsyncMock(return_value=data)
+        response.close = Mock()
+        return response
+
+    @pytest.mark.asyncio
+    async def test_error_handler_sets_structured_code_and_name(self):
+        client = self.make_client()
+        response = self.make_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23)",
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            await client._error_handler(response)
+
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        assert "server response:" in str(excinfo.value)
+        response.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_error_handler_code_set_when_errors_disabled(self):
+        client = self.make_client()
+        client.show_clickhouse_errors = False
+        response = self.make_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE)",
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            await client._error_handler(response)
+
+        assert excinfo.value.code == 60
+        assert excinfo.value.name is None
+        assert "UNKNOWN_TABLE" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_error_handler_retried_raises_operational_error(self):
+        client = self.make_client()
+        response = self.make_response(status=503, headers={ex_header: "159"}, data=b"timeout")
+
+        with pytest.raises(OperationalError) as excinfo:
+            await client._error_handler(response, retried=True)
+
+        assert excinfo.value.code == 159
+
+
 class TestHttpClientErrorHandler:
     """Test the error handling functionality of HttpClient"""
 
@@ -207,7 +279,49 @@ class TestHttpClientErrorHandler:
         assert "Received ClickHouse exception, code: 99" in error_msg
         assert "server response: Error executing query" in error_msg
         assert self.client.url in error_msg
+        assert excinfo.value.code == 99
         response.close.assert_called_once()
+
+    def test_error_handler_sets_structured_code_and_name(self):
+        """Code and name are exposed as attributes parsed from the header and body"""
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23)",
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+
+    def test_error_handler_code_none_without_header(self):
+        """Code is None when the server sends no exception header"""
+        response = create_mock_response(status=503, data=b"Service unavailable")
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        assert excinfo.value.code is None
+        assert excinfo.value.name is None
+
+    def test_error_handler_name_parsed_before_truncation(self):
+        """name is parsed from the full body even when max_error_size truncates the message"""
+        long_body = "Code: 62. DB::Exception: " + ("x" * 400) + " (SYNTAX_ERROR) (version 26.2.4.23)"
+        response = create_mock_response(status=400, headers={ex_header: "62"}, data=long_body.encode())
+
+        original = common.get_setting("max_error_size")
+        common.set_setting("max_error_size", 100)
+        try:
+            with pytest.raises(DatabaseError) as excinfo:
+                self.client._error_handler(response)
+        finally:
+            common.set_setting("max_error_size", original)
+
+        assert excinfo.value.code == 62
+        assert excinfo.value.name == "SYNTAX_ERROR"
+        assert "SYNTAX_ERROR" not in str(excinfo.value)  # truncated out of the displayed message
 
     def test_error_handler_without_exception_code(self):
         """Test error handling when only HTTP status is available"""
@@ -261,6 +375,9 @@ class TestHttpClientErrorHandler:
         assert "The ClickHouse server returned an error (for url http://localhost:8123)" in error_msg
         assert "Invalid query" not in error_msg  # Should not include the body
         assert "99" not in error_msg  # Should not include the exception code
+        # Numeric code is still exposed structurally, but the body-derived name is suppressed
+        assert excinfo.value.code == 99
+        assert excinfo.value.name is None
         response.close.assert_called_once()
 
     def test_error_handler_with_unicode_decode_error(self):

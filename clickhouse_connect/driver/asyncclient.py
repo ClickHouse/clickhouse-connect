@@ -41,7 +41,14 @@ from clickhouse_connect.driver.common import StreamContext, coerce_bool, dict_co
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.ctypes import RespBuffCls
-from clickhouse_connect.driver.exceptions import DatabaseError, DataError, OperationalError, ProgrammingError
+from clickhouse_connect.driver.exceptions import (
+    DatabaseError,
+    DataError,
+    OperationalError,
+    ProgrammingError,
+    error_code_from_header,
+    error_name_from_body,
+)
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import ColumnDef, SettingDef
@@ -1892,26 +1899,29 @@ class AsyncClient(Client):
         """
         try:
             body = ""
+            full_body = ""
             try:
                 raw_body = await response.read()
                 encoding = response.headers.get("Content-Encoding")
+                loop = asyncio.get_running_loop()
 
                 if encoding:
-                    loop = asyncio.get_running_loop()
 
                     def decompress_and_decode():
-                        decompressed = decompress_response(raw_body, encoding)
-                        return common.format_error(decompressed.decode(errors="backslashreplace")).strip()
+                        return decompress_response(raw_body, encoding).decode(errors="backslashreplace")
 
-                    body = await loop.run_in_executor(None, decompress_and_decode)
+                    full_body = await loop.run_in_executor(None, decompress_and_decode)
                 else:
-                    loop = asyncio.get_running_loop()
-                    body = await loop.run_in_executor(None, lambda: common.format_error(raw_body.decode(errors="backslashreplace")).strip())
+                    full_body = await loop.run_in_executor(None, lambda: raw_body.decode(errors="backslashreplace"))
+                body = common.format_error(full_body).strip()
             except Exception:
                 logger.warning("Failed to read error response body", exc_info=True)
 
+            err_code = response.headers.get(ex_header)
+            code = error_code_from_header(err_code)
+            name = error_name_from_body(full_body) if self.show_clickhouse_errors else None
+
             if self.show_clickhouse_errors:
-                err_code = response.headers.get(ex_header)
                 if err_code:
                     err_str = f"Received ClickHouse exception, code: {err_code}"
                 else:
@@ -1927,7 +1937,8 @@ class AsyncClient(Client):
         finally:
             response.close()
 
-        raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
+        err_type = OperationalError if retried else DatabaseError
+        raise err_type(err_str, code=code, name=name) from None
 
     async def _raw_request(
         self,

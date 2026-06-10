@@ -24,7 +24,13 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.ctypes import RespBuffCls
-from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
+from clickhouse_connect.driver.exceptions import (
+    DatabaseError,
+    OperationalError,
+    ProgrammingError,
+    error_code_from_header,
+    error_name_from_body,
+)
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import (
     ResponseSource,
@@ -499,14 +505,19 @@ class HttpClient(Client):
         """
         try:
             body = ""
+            full_body = ""
             try:
                 raw_body = get_response_data(response)
-                body = common.format_error(raw_body.decode(errors="backslashreplace")).strip()
+                full_body = raw_body.decode(errors="backslashreplace")
+                body = common.format_error(full_body).strip()
             except Exception:
                 logger.warning("Failed to read error response body", exc_info=True)
 
+            err_code = response.headers.get(ex_header)
+            code = error_code_from_header(err_code)
+            name = error_name_from_body(full_body) if self.show_clickhouse_errors else None
+
             if self.show_clickhouse_errors:
-                err_code = response.headers.get(ex_header)
                 if err_code:
                     err_str = f"Received ClickHouse exception, code: {err_code}"
                 else:
@@ -522,7 +533,8 @@ class HttpClient(Client):
         finally:
             response.close()
 
-        raise OperationalError(err_str) if retried else DatabaseError(err_str) from None
+        err_type = OperationalError if retried else DatabaseError
+        raise err_type(err_str, code=code, name=name) from None
 
     def _raw_request(
         self,
