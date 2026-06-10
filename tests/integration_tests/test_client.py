@@ -45,6 +45,13 @@ def test_command(param_client, call):
     assert int(version.split(".")[0]) >= 19
 
 
+def test_query_error_exposes_structured_code(param_client, call):
+    with pytest.raises(DatabaseError) as excinfo:
+        call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
+    assert excinfo.value.code == 60
+    assert excinfo.value.name == "UNKNOWN_TABLE"
+
+
 def test_client_name(param_client, client_mode):
     user_agent = param_client.headers["User-Agent"]
     assert "test" in user_agent or "param" in user_agent
@@ -56,6 +63,19 @@ def test_transport_settings(param_client, call):
     result = call(param_client.query, "SELECT name,database FROM system.tables", transport_settings={"X-Workload": "ONLINE"})
     assert result.column_names == ("name", "database")
     assert len(result.result_set) > 0
+
+
+def test_client_headers(client_factory, call):
+    client = client_factory(
+        headers={
+            "CF-Access-Client-Id": "test_client_id",
+            "CF-Access-Client-Secret": "test_client_secret",
+        }
+    )
+
+    assert client.headers["CF-Access-Client-Id"] == "test_client_id"
+    assert client.headers["CF-Access-Client-Secret"] == "test_client_secret"
+    assert call(client.command, "SELECT 79") == 79
 
 
 def test_none_database(param_client, call):

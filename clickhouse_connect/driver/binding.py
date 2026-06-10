@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import date, datetime, timezone, tzinfo
 from enum import Enum
 from typing import Any
+from urllib.parse import quote, urlencode
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
@@ -140,9 +141,13 @@ def bind_query(
         for key in binary_binds.keys():
             del params_copy[key]
 
+        matches = external_bind_re.findall(query)
+        placeholder_names = {name for name, _ in matches}
         final_params = {}
         for k, v in params_copy.items():
-            if k.endswith("_64"):
+            # The _64 suffix is a precision hint, not part of the name, unless the
+            # query binds the full name itself.
+            if k.endswith("_64") and k not in placeholder_names:
                 if isinstance(v, datetime):
                     k = k[:-3]
                     v = DT64Param(v)
@@ -150,7 +155,6 @@ def bind_query(
                     k = k[:-3]
                     v = [DT64Param(x) for x in v]
             final_params[k] = v
-        matches = external_bind_re.findall(query)
         if not matches:
             query, bound_params = finalize_query(query, final_params, server_tz), {}
         else:
@@ -192,12 +196,40 @@ def bind_query(
     return query, bound_params
 
 
+# Server-side bind parameters are urlencoded into the request URL. Once the encoded length
+# passes this budget the client routes them through multipart form data instead, keeping
+# oversized payloads out of the URL where proxies (nginx, ALB, CloudFront) reject them with
+# HTTP 414. The threshold leaves ample headroom under common request line limits.
+MAX_URL_BIND_PARAM_LENGTH = 4096
+
+
+def use_form_encoding(query: str | bytes, bind_params: dict[str, str], force_form: bool = False) -> bool:
+    if force_form:
+        return True
+    # Binary binds embed bytes into the query, which the form path cannot round-trip; leave
+    # those on the default path unless form encoding is explicitly requested.
+    if isinstance(query, bytes):
+        return False
+    if not bind_params:
+        return False
+    # Raw length is a lower bound on the encoded length, so large payloads short-circuit
+    # without materializing the encoded string.
+    if sum(len(k) + len(str(v)) for k, v in bind_params.items()) > MAX_URL_BIND_PARAM_LENGTH:
+        return True
+    # Measure with quote so spaces count as %20, matching the longer of the two client encodings.
+    return len(urlencode(bind_params, quote_via=quote)) > MAX_URL_BIND_PARAM_LENGTH
+
+
 def format_str(value: str):
     return f"'{escape_str(value)}'"
 
 
 def escape_str(value: str):
     return "".join(f"{BS}{c}" if c in must_escape else c for c in value)
+
+
+def escape_bytes(value):
+    return "".join(f"{BS}x{b:02x}" for b in value)
 
 
 def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
@@ -211,6 +243,8 @@ def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
         return "NULL"
     if isinstance(value, str):
         return format_str(value)
+    if isinstance(value, (bytes, bytearray)):
+        return f"'{escape_bytes(value)}'"
     if isinstance(value, DT64Param):
         return value.format(server_tz, False)
     if isinstance(value, datetime):
@@ -258,6 +292,10 @@ def format_bind_value(value: Any, server_tz: tzinfo = timezone.utc, top_level: b
             # At the top levels, strings must not be surrounded by quotes
             return escape_str(value)
         return format_str(value)
+    if isinstance(value, (bytes, bytearray)):
+        if top_level:
+            return escape_bytes(value)
+        return f"'{escape_bytes(value)}'"
     if isinstance(value, DT64Param):
         return value.format(server_tz, top_level)
     if isinstance(value, datetime):
@@ -281,4 +319,8 @@ def format_bind_value(value: Any, server_tz: tzinfo = timezone.utc, top_level: b
         return f"{{{', '.join(pairs)}}}"
     if isinstance(value, Enum):
         return recurse(value.value)
+    if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
+        if top_level:
+            return str(value)
+        return f"'{value}'"
     return str(value)
