@@ -1,3 +1,5 @@
+import ipaddress
+import uuid
 import zoneinfo
 from datetime import date, datetime, timezone
 
@@ -46,6 +48,16 @@ def test_finalize():
         (b"\x00\xf8'", r"\x00\xf8\x27"),
         ([b"AB"], r"['\x41\x42']"),
         ((b"AB", "x"), r"('\x41\x42', 'x')"),
+        (uuid.UUID("019e1780-3b41-7673-a645-17f9b60fe8ec"), "019e1780-3b41-7673-a645-17f9b60fe8ec"),
+        (
+            [uuid.UUID("019e1780-3b41-7673-a645-17f9b60fe8ec"), uuid.UUID("019e1780-3b41-7673-a645-17f9b60fe8ed")],
+            "['019e1780-3b41-7673-a645-17f9b60fe8ec', '019e1780-3b41-7673-a645-17f9b60fe8ed']",
+        ),
+        ((uuid.UUID("019e1780-3b41-7673-a645-17f9b60fe8ec"), "user_1"), "('019e1780-3b41-7673-a645-17f9b60fe8ec', 'user_1')"),
+        (ipaddress.IPv4Address("10.13.79.1"), "10.13.79.1"),
+        ([ipaddress.IPv4Address("10.13.79.1")], "['10.13.79.1']"),
+        (ipaddress.IPv6Address("2001:db8::79"), "2001:db8::79"),
+        ([ipaddress.IPv6Address("2001:db8::79")], "['2001:db8::79']"),
     ],
 )
 def test_format_bind_value(value, expected):

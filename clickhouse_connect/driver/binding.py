@@ -316,4 +316,8 @@ def format_bind_value(value: Any, server_tz: tzinfo = timezone.utc, top_level: b
         return f"{{{', '.join(pairs)}}}"
     if isinstance(value, Enum):
         return recurse(value.value)
+    if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
+        if top_level:
+            return str(value)
+        return f"'{value}'"
     return str(value)
