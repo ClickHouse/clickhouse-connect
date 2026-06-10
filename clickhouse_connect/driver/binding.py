@@ -141,9 +141,13 @@ def bind_query(
         for key in binary_binds.keys():
             del params_copy[key]
 
+        matches = external_bind_re.findall(query)
+        placeholder_names = {name for name, _ in matches}
         final_params = {}
         for k, v in params_copy.items():
-            if k.endswith("_64"):
+            # The _64 suffix is a precision hint, not part of the name, unless the
+            # query binds the full name itself.
+            if k.endswith("_64") and k not in placeholder_names:
                 if isinstance(v, datetime):
                     k = k[:-3]
                     v = DT64Param(v)
@@ -151,7 +155,6 @@ def bind_query(
                     k = k[:-3]
                     v = [DT64Param(x) for x in v]
             final_params[k] = v
-        matches = external_bind_re.findall(query)
         if not matches:
             query, bound_params = finalize_query(query, final_params, server_tz), {}
         else:

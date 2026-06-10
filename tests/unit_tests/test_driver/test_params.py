@@ -224,3 +224,31 @@ class TestBindQueryDateTime64Precision:
         query = "SELECT {dt:DateTime64(((}"
         _, params = bind_query(query, {"dt": self.dt}, server_tz=self.utc)
         assert "param_dt" in params
+
+
+class TestBindQuerySuffixCollision:
+    """A param whose real name ends in _64 keeps its name when the query binds the full name."""
+
+    utc = timezone.utc
+    dt = datetime(2026, 1, 1, 12, 0, 0, 250306, tzinfo=timezone.utc)
+
+    def test_scalar(self):
+        query = "SELECT 1 WHERE t >= {param_64:DateTime64(6, 'UTC')}"
+        _, params = bind_query(query, {"param_64": self.dt}, server_tz=self.utc)
+        assert params == {"param_param_64": "2026-01-01 12:00:00.250306"}
+
+    def test_array(self):
+        query = "SELECT {dts_64:Array(DateTime64(6))}"
+        _, params = bind_query(query, {"dts_64": [self.dt]}, server_tz=self.utc)
+        assert params == {"param_dts_64": "['2026-01-01 12:00:00.250306']"}
+
+    def test_suffix_strips_when_stripped_name_is_bound(self):
+        query = "SELECT {dt:DateTime64(6)}"
+        _, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
+        assert params == {"param_dt": "2026-01-01 12:00:00.250306"}
+
+    def test_suffix_strips_without_placeholders(self):
+        query = "SELECT %(dt)s"
+        q, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
+        assert q == "SELECT '2026-01-01 12:00:00.250306'"
+        assert params == {}
