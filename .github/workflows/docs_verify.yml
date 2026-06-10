@@ -6,11 +6,13 @@ on:
       - main
     paths:
       - 'docs/**'
+      - '.github/workflows/docs_verify.yml'
   push:
     branches:
       - main
     paths:
       - 'docs/**'
+      - '.github/workflows/docs_verify.yml'
 
 jobs:
   verify:
