@@ -35,7 +35,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, options, tzutil
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
-from clickhouse_connect.driver.binding import bind_query, quote_identifier
+from clickhouse_connect.driver.binding import bind_query, quote_identifier, use_form_encoding
 from clickhouse_connect.driver.client import Client, _apply_arrow_tz_policy
 from clickhouse_connect.driver.common import StreamContext, coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import available_compression
@@ -587,13 +587,14 @@ class AsyncClient(Client):
             context.block_info = True
         params.update(self._validate_settings(context.settings))
         context.rename_response_column = self._rename_response_column
+        use_form = use_form_encoding(context.final_query, context.bind_params, self.form_encode_query_params)
 
         if not context.is_insert and columns_only_re.search(context.uncommented_query):
             fmt_json_query = f"{context.final_query}\n FORMAT JSON"
             fields = {"query": fmt_json_query}
             fields.update(context.bind_params)
 
-            if self.form_encode_query_params:
+            if use_form:
                 files = {}
                 if context.external_data:
                     params.update(context.external_data.query_params)
@@ -652,7 +653,7 @@ class AsyncClient(Client):
         files = None
         data = None
 
-        if self.form_encode_query_params:
+        if use_form:
             fields = {"query": final_query}
             fields.update(context.bind_params)
 
@@ -1132,10 +1133,11 @@ class AsyncClient(Client):
         files = None
         body = None
 
-        if external_data and not self.form_encode_query_params and isinstance(final_query, bytes):
+        use_form = use_form_encoding(final_query, bind_params, self.form_encode_query_params)
+        if external_data and not use_form and isinstance(final_query, bytes):
             raise ProgrammingError("Binary query cannot be placed in URL when using External Data; enable form encoding.")
 
-        if self.form_encode_query_params:
+        if use_form:
             files = {}
             files["query"] = (None, final_query if isinstance(final_query, str) else final_query.decode())
             for k, v in bind_params.items():

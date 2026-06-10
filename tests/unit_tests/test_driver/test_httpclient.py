@@ -558,6 +558,25 @@ class TestQuery:
         assert "param_id" not in params
 
     @patch.object(HttpClient, "_raw_request")
+    def test_raw_query_auto_form_encode_large_params(self, mock_raw_request):
+        """Large bind params auto-promote to form data even with form_encode_query_params=False"""
+        self.client.form_encode_query_params = False
+
+        mock_response = Mock()
+        mock_response.data = b"test_result"
+        mock_raw_request.return_value = mock_response
+
+        query = "SELECT * FROM table WHERE name = {name:String}"
+        parameters = {"name": "x" * 5000}
+
+        self.client.raw_query(query, parameters=parameters)
+
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+        assert body == b""
+        assert "param_name" in fields
+        assert "param_name" not in params
+
+    @patch.object(HttpClient, "_raw_request")
     def test_raw_query_with_external_data_only(self, mock_raw_request):
         """Test raw_query with external_data only (no form_encode)"""
         self.client.form_encode_query_params = False
@@ -787,6 +806,24 @@ class TestQuery:
         assert "query" in fields
         assert "param_id" in fields
         assert "param_id" not in params
+
+    @patch.object(HttpClient, "_raw_request")
+    def test_query_with_context_auto_form_encode_large_params(self, mock_raw_request):
+        """Large bind params auto-promote to form data even with form_encode_query_params=False"""
+        self.client.form_encode_query_params = False
+
+        mock_raw_request.return_value = self.setup_mock_raw_request()
+        self.client._transform = Mock()
+        self.client._transform.parse_response.return_value = Mock(summary=None)
+
+        context = self.create_mock_query_context(query="SELECT * FROM table WHERE name = 'x'", bind_params={"param_name": "x" * 5000})
+
+        self.client._query_with_context(context)
+
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+        assert body == b""
+        assert "param_name" in fields
+        assert "param_name" not in params
 
     @patch.object(HttpClient, "_raw_request")
     def test_query_with_context_external_data(self, mock_raw_request):
