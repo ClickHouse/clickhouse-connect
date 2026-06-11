@@ -8,12 +8,19 @@ from tests.integration_tests.conftest import TestConfig
 
 @fixture(name="dbapi_connection")
 def dbapi_connection_fixture(test_config: TestConfig, test_db: str):
+    settings = {}
+    if test_config.insert_quorum:
+        settings["insert_quorum"] = test_config.insert_quorum
+    elif test_config.cloud:
+        settings["select_sequential_consistency"] = 1
     connection = dbapi.connect(
         host=test_config.host,
         port=test_config.port,
         username=test_config.username,
         password=test_config.password,
         database=test_db,
+        compress=test_config.compress,
+        **settings,
     )
     yield connection
     connection.close()
