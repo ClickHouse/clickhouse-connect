@@ -4,7 +4,7 @@ certifi
 aiohttp>=3.9.0
 sqlalchemy>=2.0,<3.0
 alembic>=1.16
-cython==3.0.11
+cython==3.2.5
 pyarrow
 pytest
 pytest-asyncio

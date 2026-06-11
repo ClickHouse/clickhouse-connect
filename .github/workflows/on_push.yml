@@ -98,7 +98,15 @@ jobs:
           - python-version: '3.14'
             clickhouse-version: '26.4'
             use-c: '0'
+          # Free-threaded build (experimental). PYTHON_GIL=0 keeps the GIL off when
+          # dependencies that have not declared free-threading compatibility are imported.
+          - python-version: '3.14t'
+            clickhouse-version: '26.4'
+            use-c: '1'
+            python-gil: '0'
 
+    # The free-threaded job is non-blocking while support is experimental
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
@@ -130,6 +138,8 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
+          # Empty for non-free-threaded entries, CPython ignores an empty value
+          PYTHON_GIL: ${{ matrix.python-gil }}
         run: pytest -n 4 tests
       - name: Stop ClickHouse
         if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
