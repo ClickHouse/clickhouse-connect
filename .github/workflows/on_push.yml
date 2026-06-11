@@ -86,22 +86,22 @@ jobs:
           - '3.14'
         clickhouse-version:
           - '25.8' # LTS
-          - '26.2' # Stable
           - '26.3' # LTS
           - '26.4' # Stable
+          - '26.5' # Stable
         use-c:
           - '1'
         include:
           - python-version: '3.10'
-            clickhouse-version: '25.8'
+            clickhouse-version: '26.3'
             use-c: '0'
           - python-version: '3.14'
-            clickhouse-version: '26.4'
+            clickhouse-version: '26.3'
             use-c: '0'
           # Free-threaded build (experimental). PYTHON_GIL=0 keeps the GIL off when
           # dependencies that have not declared free-threading compatibility are imported.
           - python-version: '3.14t'
-            clickhouse-version: '26.4'
+            clickhouse-version: '26.3'
             use-c: '1'
             python-gil: '0'
 
