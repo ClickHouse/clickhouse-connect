@@ -867,6 +867,76 @@ class TestEmptyBatch:
         assert list(batch.to_python_rows()) == []
 
 
+class TestFromBatches:
+    _COLUMNS_A = [("id", "Int64", [13, 79]), ("name", "String", ["user_1", "user_2"])]
+    _COLUMNS_B = [("id", "Int64", [5]), ("name", "String", ["user_3"])]
+
+    def test_merge_matches_decode_native(self):
+        first = build_native_block(self._COLUMNS_A)
+        second = build_native_block(self._COLUMNS_B)
+        parts = list(_ch_core.BlockDecoder(first)) + list(_ch_core.BlockDecoder(second))
+        merged = _ch_core.ColBatch.from_batches(parts)
+        reference = _ch_core.ColBatch.decode_native(first + second)
+        assert merged.num_rows == 3
+        assert merged.num_chunks == 2
+        assert list(merged.to_python_rows()) == list(reference.to_python_rows())
+        pa = pytest.importorskip("pyarrow")
+        merged_table = pa.RecordBatchReader.from_stream(merged).read_all()
+        reference_table = pa.RecordBatchReader.from_stream(reference).read_all()
+        assert merged_table == reference_table
+
+    def test_mismatched_schema_raises(self):
+        first = _ch_core.ColBatch.decode_native(
+            build_native_block([("id", "Int64", [13])])
+        )
+        wrong_type = _ch_core.ColBatch.decode_native(
+            build_native_block([("id", "String", ["user_1"])])
+        )
+        wrong_name = _ch_core.ColBatch.decode_native(
+            build_native_block([("other", "Int64", [79])])
+        )
+        with pytest.raises(ValueError, match="Batch 1 schema differs"):
+            _ch_core.ColBatch.from_batches([first, wrong_type])
+        with pytest.raises(ValueError, match="Batch 2 schema differs"):
+            _ch_core.ColBatch.from_batches([first, first, wrong_name])
+
+    def test_empty_list_raises(self):
+        with pytest.raises(ValueError, match="at least one batch"):
+            _ch_core.ColBatch.from_batches([])
+
+    def test_zero_row_trailer_dropped(self):
+        rows = _ch_core.ColBatch.decode_native(build_native_block(self._COLUMNS_A))
+        # BlockDecoder keeps a zero-row block as a chunk, so the trailer batch
+        # carries one zero-row chunk into the merge.
+        (trailer,) = _ch_core.BlockDecoder(
+            build_native_block([("id", "Int64", []), ("name", "String", [])])
+        )
+        assert trailer.num_chunks == 1
+        merged = _ch_core.ColBatch.from_batches([rows, trailer])
+        assert merged.num_rows == 2
+        assert merged.num_chunks == 1
+        assert list(merged.to_python_rows()) == [(13, "user_1"), (79, "user_2")]
+
+    def test_all_zero_rows(self):
+        empty_block = build_native_block([("id", "Int64", []), ("name", "String", [])])
+        reference = _ch_core.ColBatch.decode_native(empty_block)
+        # Each part holds one zero-row chunk; the merge must drop them all.
+        (part,) = _ch_core.BlockDecoder(empty_block)
+        merged = _ch_core.ColBatch.from_batches([part, part])
+        assert merged.num_rows == 0
+        assert merged.num_chunks == 0
+        assert merged.num_chunks == reference.num_chunks
+        assert list(merged.to_python_rows()) == list(reference.to_python_rows()) == []
+        merged_cols = [list(c) for c in merged.to_python_columns()]
+        reference_cols = [list(c) for c in reference.to_python_columns()]
+        assert merged_cols == reference_cols == [[], []]
+        pa = pytest.importorskip("pyarrow")
+        table = pa.RecordBatchReader.from_stream(merged).read_all()
+        assert table.schema.names == ["id", "name"]
+        assert table.schema == pa.RecordBatchReader.from_stream(reference).read_all().schema
+        assert table.num_rows == 0
+
+
 class TestBlockInfo:
     def test_with_block_info(self):
         data = build_native_block(

@@ -72,6 +72,35 @@ impl ColBatch {
         Ok(Self::from_chunked(chunked))
     }
 
+    /// Merge already-decoded batches into one. The schema comes from the
+    /// first batch and every later batch must match it. Chunks are shared via
+    /// Arc clones; zero-row chunks are dropped, as in `decode_all_bytes`.
+    #[staticmethod]
+    fn from_batches(py: Python<'_>, batches: Vec<Py<ColBatch>>) -> PyResult<Self> {
+        let first = batches
+            .first()
+            .ok_or_else(|| PyValueError::new_err("from_batches requires at least one batch"))?;
+        let schema = first.borrow(py).inner.schema.clone();
+        let mut chunks = Vec::new();
+        for (i, batch) in batches.iter().enumerate() {
+            let guard = batch.borrow(py);
+            if guard.inner.schema != schema {
+                return Err(PyValueError::new_err(format!(
+                    "Batch {i} schema differs from the first batch"
+                )));
+            }
+            chunks.extend(
+                guard
+                    .inner
+                    .chunks
+                    .iter()
+                    .filter(|c| c.num_rows > 0)
+                    .cloned(),
+            );
+        }
+        Ok(Self::from_chunked(ChunkedBatch { schema, chunks }))
+    }
+
     #[getter]
     fn num_rows(&self) -> usize {
         self.inner.num_rows()
