@@ -123,7 +123,15 @@ jobs:
       - name: Install pip
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
-        run: pip install -r tests/test_requirements.txt
+        # polars ships no free-threaded wheels and its sdist needs a long Rust nightly
+        # build, so it is excluded on 3.14t and its tests skip
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.14t" ]; then
+            grep -v '^polars' tests/test_requirements.txt > /tmp/test_requirements.txt
+            pip install -r /tmp/test_requirements.txt
+          else
+            pip install -r tests/test_requirements.txt
+          fi
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
