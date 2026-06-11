@@ -224,6 +224,44 @@ def test_empty_result_set():
     assert cursor.fetchmany(5) == []
 
 
+def test_executemany_bulk_insert_with_tuple_rows():
+    """Sequence rows (PEP 249 seq_of_parameters) must use the bulk insert path
+    with column names taken from the INSERT statement.
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    client.insert.assert_called_once_with("test_table", rows, ["id", "name"])
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_tuple_rows_without_column_list():
+    """Without an explicit column list, sequence rows insert into all columns."""
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table VALUES (%s, %s)", rows)
+
+    client.insert.assert_called_once_with("test_table", rows, "*")
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_with_dict_rows():
+    """Mapping rows keep the existing bulk insert behavior."""
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%(id)s, %(name)s)", rows)
+
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"])
+    client.query.assert_not_called()
+
+
 def test_execute_unescapes_double_percents_without_parameters():
     """Test that cursor.execute unescapes %% to % when no parameters are given.
 
