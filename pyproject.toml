@@ -31,6 +31,80 @@ ignore = [
     "B905",
 ]
 
+[tool.mypy]
+files = ["clickhouse_connect"]
+python_version = "3.10"
+
+[[tool.mypy.overrides]]
+# Optional dependencies without type stubs and the compiled Cython modules.
+module = [
+    "brotli.*",
+    "lz4.*",
+    "orjson.*",
+    "pandas.*",
+    "pyarrow.*",
+    "tzlocal.*",
+    "ujson.*",
+    "clickhouse_connect.driverc.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Baseline of modules that do not yet pass type checking (issue #692).
+# Remove entries as modules are annotated and pass cleanly.
+module = [
+    "clickhouse_connect.cc_sqlalchemy.alembic.impl",
+    "clickhouse_connect.cc_sqlalchemy.alembic.utils",
+    "clickhouse_connect.cc_sqlalchemy.datatypes.base",
+    "clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes",
+    "clickhouse_connect.cc_sqlalchemy.ddl.custom",
+    "clickhouse_connect.cc_sqlalchemy.ddl.tableengine",
+    "clickhouse_connect.cc_sqlalchemy.dialect",
+    "clickhouse_connect.cc_sqlalchemy.sql",
+    "clickhouse_connect.cc_sqlalchemy.sql.preparer",
+    "clickhouse_connect.datatypes.base",
+    "clickhouse_connect.datatypes.container",
+    "clickhouse_connect.datatypes.dynamic",
+    "clickhouse_connect.datatypes.format",
+    "clickhouse_connect.datatypes.network",
+    "clickhouse_connect.datatypes.numeric",
+    "clickhouse_connect.datatypes.registry",
+    "clickhouse_connect.datatypes.special",
+    "clickhouse_connect.datatypes.string",
+    "clickhouse_connect.datatypes.temporal",
+    "clickhouse_connect.datatypes.vector",
+    "clickhouse_connect.dbapi",
+    "clickhouse_connect.dbapi.connection",
+    "clickhouse_connect.dbapi.cursor",
+    "clickhouse_connect.driver",
+    "clickhouse_connect.driver.asyncclient",
+    "clickhouse_connect.driver.asyncqueue",
+    "clickhouse_connect.driver.binding",
+    "clickhouse_connect.driver.buffer",
+    "clickhouse_connect.driver.client",
+    "clickhouse_connect.driver.common",
+    "clickhouse_connect.driver.compression",
+    "clickhouse_connect.driver.context",
+    "clickhouse_connect.driver.dataconv",
+    "clickhouse_connect.driver.ddl",
+    "clickhouse_connect.driver.exceptions",
+    "clickhouse_connect.driver.httpclient",
+    "clickhouse_connect.driver.httputil",
+    "clickhouse_connect.driver.insert",
+    "clickhouse_connect.driver.npquery",
+    "clickhouse_connect.driver.parser",
+    "clickhouse_connect.driver.query",
+    "clickhouse_connect.driver.streaming",
+    "clickhouse_connect.driver.summary",
+    "clickhouse_connect.driver.transform",
+    "clickhouse_connect.driver.types",
+    "clickhouse_connect.driver.tzutil",
+    "clickhouse_connect.json_impl",
+    "clickhouse_connect.tools.datagen",
+    "clickhouse_connect.tools.testing",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "INFO"
