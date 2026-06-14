@@ -147,7 +147,7 @@ class Cursor:
         self._ix = self._rowcount
         return ret
 
-    def fetchone(self) -> Any | None:
+    def fetchone(self) -> Any:
         self.check_valid()
         if self._ix >= self._rowcount:
             return None
