@@ -95,8 +95,11 @@ class Cursor:
             op_columns = None
         if "VALUES" not in temp.upper():
             return False
+        if not isinstance(data, Sequence) or len(data) == 0:
+            return False
         first_row = data[0]
         col_names: list[str] | str
+        data_values: Sequence[Sequence[Any]]
         if isinstance(first_row, Mapping):
             col_names = list(first_row.keys())
             if op_columns and {unescape_identifier(str(x)) for x in op_columns} != set(col_names):
@@ -111,7 +114,7 @@ class Cursor:
             return False
         insert_summary = self.client.insert(table, data_values, col_names)
         self.data = []
-        self._rowcount = 0
+        self._rowcount = insert_summary.written_rows
         self._ix = 0
         self._summary.append(insert_summary.summary)
         return True
