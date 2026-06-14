@@ -101,7 +101,7 @@ class Cursor:
         col_names: list[str] | str
         data_values: Sequence[Sequence[Any]]
         if isinstance(first_row, Mapping):
-            col_names = list(first_row.keys())
+            col_names = [str(k) for k in first_row.keys()]
             if op_columns and {unescape_identifier(str(x)) for x in op_columns} != set(col_names):
                 return False  # Data sent in doesn't match the columns in the insert statement
             data_values = [list(row.values()) for row in data]
