@@ -29,7 +29,7 @@ class Cursor:
         self.names: Sequence[str] = []
         self.types: Sequence[Any] = []
         self._rowcount: int = 0
-        self._summary: list[dict[str, str]] = []
+        self._summary: list[dict[str, Any]] = []
         self._ix: int = 0
 
     def check_valid(self) -> None:
@@ -45,7 +45,7 @@ class Cursor:
         return self._rowcount
 
     @property
-    def summary(self) -> list[dict[str, str]]:
+    def summary(self) -> list[dict[str, Any]]:
         return self._summary
 
     def close(self) -> None:
@@ -109,8 +109,11 @@ class Cursor:
             data_values = data
         else:
             return False
-        self.client.insert(table, data_values, col_names)
+        insert_summary = self.client.insert(table, data_values, col_names)
         self.data = []
+        self._rowcount = 0
+        self._ix = 0
+        self._summary.append(insert_summary.summary)
         return True
 
     def executemany(self, operation: str, parameters: Any) -> None:

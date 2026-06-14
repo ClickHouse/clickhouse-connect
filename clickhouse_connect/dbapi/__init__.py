@@ -16,7 +16,7 @@ def connect(
     database: str | None = None,
     username: str = "",
     password: str = "",
-    port: int | None = None,
+    port: int = 0,
     **kwargs: Any,
 ) -> Connection:
     secure = kwargs.pop("secure", False)
