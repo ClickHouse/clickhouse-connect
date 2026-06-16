@@ -238,7 +238,6 @@ class ResponseSource:
             done = False
             current_size = 0
             read_gen = response.stream(chunk_size, decompress is None)
-            data_received = False
             read_error = None
             while True:
                 while not done:
@@ -257,7 +256,7 @@ class ResponseSource:
                     if current_size > buffer_size:
                         break
                 if len(chunks) == 0:
-                    if read_error and not data_received:
+                    if read_error:
                         raise OperationalError("Failed to read response data from server") from read_error
                     return
                 if decompress:
@@ -267,7 +266,6 @@ class ResponseSource:
                     chunk = chunks.popleft()
                     current_size -= len(chunk)
                 if chunk:
-                    data_received = True
                     yield chunk
 
         self.gen = buffered()
