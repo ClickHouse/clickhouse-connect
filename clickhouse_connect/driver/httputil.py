@@ -245,7 +245,7 @@ class ResponseSource:
                     try:
                         chunk = next(read_gen, None)  # Always try to read at least one chunk if there are any left
                     except Exception as ex:
-                        # Store the exception for potential re-raising if no data was received
+                        # Store the exception for re-raising later
                         read_error = ex
                         logger.warning("unexpected failure to read next chunk", exc_info=True)
                     if not chunk:
