@@ -114,7 +114,7 @@ class ResponseBuffer(ByteSource):
     def read_str_col(
         self,
         num_rows: int,
-        encoding: str,
+        encoding: str | None,
         nullable: bool = False,
         null_obj: Any = None,
     ) -> Iterable[str]:

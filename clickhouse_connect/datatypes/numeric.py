@@ -3,7 +3,7 @@ import decimal
 import struct
 from collections.abc import MutableSequence, Sequence
 from math import isinf, isnan, nan
-from typing import Any
+from typing import Any, cast
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef
 from clickhouse_connect.driver import ctypes as driver_ctypes
@@ -21,7 +21,7 @@ class IntBase(ArrayType, registered=False):
             return
         np = options.np
         if np is not None and isinstance(column, np.ndarray) and column.dtype.kind in ("i", "u"):
-            data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
+            data_conv.write_native_col(cast(str, self._array_type), column, dest, ctx.column_name)
             return
         if self.nullable:
             first = next((x for x in column if x is not None), None)
@@ -35,7 +35,7 @@ class IntBase(ArrayType, registered=False):
             column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
         elif not isinstance(column[0], int):
             column = [int(x) for x in column]
-        data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
+        data_conv.write_native_col(cast(str, self._array_type), column, dest, ctx.column_name)
 
 
 class Int8(IntBase):
@@ -109,7 +109,7 @@ class BigInt(ClickHouseType, registered=False):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         signed = self._signed
         sz = self.byte_size
-        column = []
+        column: list[Any] = []
         app = column.append
         ifb = int.from_bytes
         if self.read_format(ctx) == "string":
@@ -407,7 +407,7 @@ class BigDecimal(Decimal, registered=False):
     def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext, _read_state: Any):
         dec = decimal.Decimal
         scale = self.scale
-        column = []
+        column: list[Any] = []
         app = column.append
         sz = self.byte_size
         ifb = int.from_bytes
