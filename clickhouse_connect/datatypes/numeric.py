@@ -3,7 +3,7 @@ import decimal
 import struct
 from collections.abc import MutableSequence, Sequence
 from math import isinf, isnan, nan
-from typing import Any, cast
+from typing import Any
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef
 from clickhouse_connect.driver import ctypes as driver_ctypes
@@ -16,12 +16,14 @@ from clickhouse_connect.driver.types import ByteSource
 
 
 class IntBase(ArrayType, registered=False):
+    _array_type: str
+
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
         np = options.np
         if np is not None and isinstance(column, np.ndarray) and column.dtype.kind in ("i", "u"):
-            data_conv.write_native_col(cast(str, self._array_type), column, dest, ctx.column_name)
+            data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
             return
         if self.nullable:
             first = next((x for x in column if x is not None), None)
@@ -35,7 +37,7 @@ class IntBase(ArrayType, registered=False):
             column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
         elif not isinstance(column[0], int):
             column = [int(x) for x in column]
-        data_conv.write_native_col(cast(str, self._array_type), column, dest, ctx.column_name)
+        data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
 class Int8(IntBase):

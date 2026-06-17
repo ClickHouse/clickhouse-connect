@@ -336,10 +336,12 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         if ctx.use_numpy:
             return driver_ctypes.numpy_conv.read_numpy_array(source, self.np_type, num_rows)
-        return source.read_array(cast(str, self._array_type), num_rows)
+        assert self._array_type is not None
+        return source.read_array(self._array_type, num_rows)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any) -> Sequence:
-        return data_conv.read_nullable_array(source, cast(str, self._array_type), num_rows, self._active_null(ctx))
+        assert self._array_type is not None
+        return data_conv.read_nullable_array(source, self._array_type, num_rows, self._active_null(ctx))
 
     def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         if ctx.use_numpy:
@@ -358,7 +360,8 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) and self.nullable:
             column = [0 if x is None else x for x in column]
-        write_array(cast(str, self._array_type), column, dest, ctx.column_name)
+        assert self._array_type is not None
+        write_array(self._array_type, column, dest, ctx.column_name)
 
     def _active_null(self, ctx: QueryContext):
         if ctx.as_pandas and ctx.use_extended_dtypes:
