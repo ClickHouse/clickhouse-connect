@@ -28,8 +28,8 @@ class TestResponseSourceNetworkError:
         assert "Failed to read response data from server" in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, ConnectionError)
 
-    def test_network_error_after_data_received_does_not_raise(self):
-        """Test that a network error after some data was received does not raise an exception"""
+    def test_network_error_after_data_received_does_raise(self):
+        """Test that a network error after some data was received raises an exception"""
         mock_response = Mock()
         mock_response.headers = {}
 
@@ -40,10 +40,12 @@ class TestResponseSourceNetworkError:
 
         mock_response.stream = partial_stream
         source = ResponseSource(mock_response, chunk_size=1024)
-        chunks = list(source.gen)
 
-        assert len(chunks) == 1
-        assert chunks[0] == b"first chunk of data"
+        with pytest.raises(OperationalError) as excinfo:
+            list(source.gen)
+
+        assert "Failed to read response data from server" in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, ConnectionError)
 
     def test_normal_empty_response_does_not_raise(self):
         """Test that a legitimately empty response (no error) does not raise an exception"""
