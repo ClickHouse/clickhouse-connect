@@ -3,7 +3,7 @@ import logging
 from abc import ABC
 from collections.abc import Collection, MutableSequence, Sequence
 from math import log
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
 from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options
@@ -345,7 +345,8 @@ class ArrayType(ClickHouseType, ABC, registered=False):
 
     def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         if ctx.use_numpy:
-            return options.np.fromiter((index[key] for key in keys), dtype=cast(Any, index).dtype, count=len(index))
+            # index is a numpy array when ctx.use_numpy is True
+            return options.np.fromiter((index[key] for key in keys), dtype=index.dtype, count=len(index))  # type: ignore[attr-defined]
         return super()._build_lc_column(index, keys, ctx)
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
