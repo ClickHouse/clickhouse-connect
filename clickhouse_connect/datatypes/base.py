@@ -16,8 +16,8 @@ from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
 logger = logging.getLogger(__name__)
-ch_read_formats: dict[Any, str] = {}
-ch_write_formats: dict[Any, str] = {}
+ch_read_formats: dict[type, str] = {}
+ch_write_formats: dict[type, str] = {}
 
 
 class TypeDef(NamedTuple):
