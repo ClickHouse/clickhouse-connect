@@ -57,7 +57,7 @@ def _parse_connection_params(
         username = username or _unquote(parsed.username)
         password = password or _unquote(parsed.password) or ""
         host = host or parsed.hostname
-        port = port or parsed.port
+        port = port or parsed.port or 0
         if parsed.path and (not database or database == "__default__"):
             database = unquote(parsed.path[1:].split("/")[0])
         database = database or parsed.path
@@ -81,7 +81,12 @@ def _parse_connection_params(
     return host, username, password, port, database, interface
 
 
-def _validate_access_token(access_token: str | None, token_provider: Callable[[], str] | None, username: str | None, password: str) -> None:
+def _validate_access_token(
+    access_token: str | None,
+    token_provider: Callable[[], str | Awaitable[str]] | None,
+    username: str | None,
+    password: str,
+) -> None:
     """Validate that token-based and username/password auth are not mixed."""
     if (access_token or token_provider) and (username or password):
         raise ProgrammingError("Cannot use both token authentication and username/password")
@@ -224,7 +229,7 @@ def create_client(
             interface,
             host,
             port,
-            username,
+            username or "",
             password,
             database,
             access_token,

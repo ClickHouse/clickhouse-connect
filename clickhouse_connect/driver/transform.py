@@ -106,7 +106,8 @@ class NativeTransform:
 
     @staticmethod
     def build_insert(context: InsertContext):
-        compressor = get_compressor(context.compression)
+        compression = context.compression if isinstance(context.compression, str) else None
+        compressor = get_compressor(compression)
 
         def chunk_gen():
             for block in context.next_block():
