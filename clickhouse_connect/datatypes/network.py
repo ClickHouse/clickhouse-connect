@@ -73,6 +73,8 @@ class IPv6(ClickHouseType):
         for _ in range(num_rows):
             int_value = ifb(source.read_bytes(16), "big")
             ipv6 = fast_ip_v6(IPv6Address)
+            # Bypass IPv6Address.__init__ for performance; _ip and _scope_id are
+            # the internal representation used by CPython's ipaddress module.
             ipv6._ip = int_value  # type: ignore[attr-defined]
             if with_scope_id:
                 ipv6._scope_id = None  # type: ignore[attr-defined]
