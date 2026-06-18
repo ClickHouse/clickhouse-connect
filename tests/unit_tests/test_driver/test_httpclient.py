@@ -1,4 +1,6 @@
 import logging
+import zoneinfo
+from datetime import timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1017,3 +1019,67 @@ class TestQuery:
         assert "_file1_format" in params  # External data query params
         assert "_file1" in fields  # External data form fields
         assert "query" not in params  # Query should not be in params when form encoding
+
+
+class TestResponseTimezone:
+    """set_response_tz is called only when the server reports a timezone different from server_tz."""
+
+    def setup_method(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        self.client.server_tz = timezone.utc
+        self.client._dst_safe = True
+
+    @staticmethod
+    def _make_context() -> Mock:
+        context = Mock(spec=QueryContext)
+        context.final_query = "SELECT 1"
+        context.uncommented_query = "SELECT 1"
+        context.bind_params = {}
+        context.external_data = None
+        context.is_insert = False
+        context.settings = {}
+        context.transport_settings = {}
+        context.streaming = False
+        context.block_info = False
+        return context
+
+    def _run(self, tz_header: str | None) -> Mock:
+        """Invoke _query_with_context with a mocked response and return the context Mock."""
+        mock_response = Mock()
+        mock_response.headers = {} if tz_header is None else {"X-ClickHouse-Timezone": tz_header}
+        context = self._make_context()
+
+        with (
+            patch.object(HttpClient, "_raw_request", return_value=mock_response),
+            patch("clickhouse_connect.driver.httpclient.RespBuffCls"),
+            patch("clickhouse_connect.driver.httpclient.ResponseSource"),
+            patch.object(self.client._transform, "parse_response", return_value=Mock()),
+        ):
+            self.client._query_with_context(context)
+
+        return context
+
+    def test_set_response_tz_not_called_when_header_absent(self):
+        """set_response_tz is not called when X-ClickHouse-Timezone header is missing."""
+        context = self._run(tz_header=None)
+        context.set_response_tz.assert_not_called()
+
+    def test_set_response_tz_not_called_when_timezone_matches_server(self):
+        """set_response_tz is not called when the response timezone matches server_tz."""
+        context = self._run(tz_header="UTC")
+        context.set_response_tz.assert_not_called()
+
+    def test_set_response_tz_called_with_correct_tzinfo_when_timezone_differs(self):
+        """set_response_tz is called with the resolved tzinfo when the response timezone differs."""
+        context = self._run(tz_header="America/New_York")
+        context.set_response_tz.assert_called_once()
+        called_tz = context.set_response_tz.call_args[0][0]
+        assert called_tz == zoneinfo.ZoneInfo("America/New_York")
