@@ -6,7 +6,7 @@
 - The Cython extension modules now declare free-threading compatibility, so importing clickhouse-connect on a free-threaded Python build such as 3.14t no longer silently re-enables the GIL. As part of this change, `ResponseBuffer.read_uint64` no longer uses a module level scratch buffer for its big-endian byte swap, which was the one piece of shared mutable state in the C modules. Building from source now requires Cython 3.1 or later. The CI test matrix now runs the full suite on free-threaded Python 3.14t as a non-blocking job. Free-threading support remains experimental.
 
 ### Bug Fixes
-- Fixed read errors being silently ignored after partial data was received from the server. `ResponseSource` now raises `OperationalError` once the buffered data is drained instead of ending the stream as if the response were complete. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
+- Fixed a connection failure partway through reading a query result being silently treated as a complete result. The reader detected the broken stream but discarded the error once any rows had already been read, so a truncated result was returned as if it were whole. A mid-stream read failure now raises `StreamFailureError`, carrying the server-side error message when ClickHouse reported one. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
 
 ## 1.3.0, 2026-06-11
 
