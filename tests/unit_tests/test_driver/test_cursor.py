@@ -360,3 +360,53 @@ def test_execute_empty_with_query_fetches_metadata():
         "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
         None,
     )
+
+
+def _mock_insert_client(written_rows: int, summary_extra: dict | None = None):
+    """Return a mock client whose insert() returns a QuerySummary-like object."""
+    summary_dict = {"written_rows": str(written_rows), **(summary_extra or {})}
+    insert_summary = Mock()
+    insert_summary.written_rows = written_rows
+    insert_summary.summary = summary_dict
+    client = Mock()
+    client.insert.return_value = insert_summary
+    return client, summary_dict
+
+
+def test_executemany_bulk_insert_rowcount_equals_written_rows():
+    """rowcount after a bulk executemany reflects the actual number of inserted rows."""
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    assert cursor.rowcount == 2
+
+
+def test_executemany_bulk_insert_appends_summary():
+    """summary is populated from the insert response after a bulk executemany."""
+    client, summary_dict = _mock_insert_client(written_rows=2, summary_extra={"written_bytes": "64"})
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    assert cursor.summary == [summary_dict]
+
+
+def test_executemany_generator_falls_through_to_row_by_row():
+    """A generator passed to executemany falls through to the row-by-row path without raising TypeError."""
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+
+    cursor = Cursor(client)
+
+    def row_generator():
+        yield {"id": 1, "name": "user_1"}
+        yield {"id": 2, "name": "user_2"}
+
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%(id)s, %(name)s)", row_generator())
+
+    client.insert.assert_not_called()
+    assert client.query.call_count == 2
