@@ -4,9 +4,8 @@ from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
-from sqlalchemy.sql.base import SchemaEventTarget
 from sqlalchemy.sql.elements import TextClause
-from sqlalchemy.sql.visitors import Visitable
+from sqlalchemy.sql.schema import SchemaItem
 
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
 from clickhouse_connect.driver.binding import format_str, quote_identifier
@@ -68,7 +67,7 @@ def repr_engine_value(value: Any) -> str:
     return repr(value)
 
 
-class TableEngine(SchemaEventTarget, Visitable):
+class TableEngine(SchemaItem):
     """
     SqlAlchemy Schema element to support ClickHouse table engines.  At the moment provides no real
     functionality other than the CREATE TABLE argument string
@@ -83,7 +82,7 @@ class TableEngine(SchemaEventTarget, Visitable):
         engine_map[cls.__name__] = cls
 
     def __init__(self, kwargs):
-        Visitable.__init__(self)
+        super().__init__()
         self.name = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()

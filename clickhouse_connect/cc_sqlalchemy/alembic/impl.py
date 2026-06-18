@@ -81,7 +81,7 @@ class ClickHouseImpl(DefaultImpl):
             version_table,
             MetaData(),
             Column("version_num", String(32), nullable=False),
-            MergeTree(order_by="version_num"),  # type: ignore[arg-type]
+            MergeTree(order_by="version_num"),
             schema=version_table_schema,
         )
 
