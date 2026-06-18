@@ -65,7 +65,7 @@ class ClickHouseImpl(DefaultImpl):
         if self.connection is None:
             return
         try:
-            self.connection.connection.driver_connection.client._add_integration_tag("alembic")
+            self.connection.connection.driver_connection.client._add_integration_tag("alembic")  # type: ignore[union-attr]
         except Exception:
             pass
 
@@ -81,7 +81,7 @@ class ClickHouseImpl(DefaultImpl):
             version_table,
             MetaData(),
             Column("version_num", String(32), nullable=False),
-            MergeTree(order_by="version_num"),
+            MergeTree(order_by="version_num"),  # type: ignore[arg-type]
             schema=version_table_schema,
         )
 
@@ -100,7 +100,7 @@ class ClickHouseImpl(DefaultImpl):
             construct,
             execution_options=execution_options,
             multiparams=multiparams,
-            params=params or {},
+            params=params or {},  # type: ignore[arg-type]
         )
 
     def add_column(

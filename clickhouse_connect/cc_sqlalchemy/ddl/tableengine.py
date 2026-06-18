@@ -36,7 +36,7 @@ def _render_setting_value(value: Any) -> str:
     return format_str(str(value))
 
 
-def tuple_expr(expr_name, value: EngineParam):
+def tuple_expr(expr_name: str, value: EngineParam) -> str:
     """
     Create a table parameter with a tuple or list correctly formatted
     :param expr_name: parameter
@@ -48,7 +48,7 @@ def tuple_expr(expr_name, value: EngineParam):
     v = f"{expr_name.strip()}"
     if isinstance(value, (tuple, list)):
         return f" {v} ({','.join(_render_engine_expr(item) for item in value)})"
-    return f"{v} {_render_engine_expr(value)}"
+    return f"{v} {_render_engine_expr(value)}"  # type: ignore[arg-type]
 
 
 def repr_engine_value(value: Any) -> str:
@@ -74,10 +74,10 @@ class TableEngine(SchemaEventTarget, Visitable):
     functionality other than the CREATE TABLE argument string
     """
 
-    arg_names = ()
-    quoted_args = set()
-    optional_args = set()
-    eng_params = ()
+    arg_names: Sequence[str] = ()
+    quoted_args: set[str] = set()
+    optional_args: set[str] = set()
+    eng_params: Sequence[str] = ()
 
     def __init_subclass__(cls, **kwargs):
         engine_map[cls.__name__] = cls
@@ -167,21 +167,21 @@ class Set(TableEngine):
 class Dictionary(TableEngine):
     arg_names = ["dictionary"]
 
-    def __init__(self, dictionary: str = None):
+    def __init__(self, dictionary: str | None = None):
         super().__init__(locals())
 
 
 class Merge(TableEngine):
     arg_names = ["db_name, tables_regexp"]
 
-    def __init__(self, db_name: str = None, tables_regexp: str = None):
+    def __init__(self, db_name: str | None = None, tables_regexp: str | None = None):
         super().__init__(locals())
 
 
 class File(TableEngine):
     arg_names = ["fmt"]
 
-    def __init__(self, fmt: str = None):
+    def __init__(self, fmt: str | None = None):
         super().__init__(locals())
 
 
@@ -189,7 +189,7 @@ class Distributed(TableEngine):
     arg_names = ["cluster", "database", "table", "sharding_key", "policy_name"]
     optional_args = {"sharding_key", "policy_name"}
 
-    def __init__(self, cluster: str = None, database: str = None, table=None, sharding_key: str = None, policy_name: str = None):
+    def __init__(self, cluster: str | None = None, database: str | None = None, table=None, sharding_key: str | None = None, policy_name: str | None = None):
         super().__init__(locals())
 
 
@@ -229,9 +229,9 @@ class ReplacingMergeTree(TableEngine):
 
     def __init__(
         self,
-        ver: str = None,
-        version: str = None,
-        is_deleted: str = None,
+        ver: str | None = None,
+        version: str | None = None,
+        is_deleted: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
@@ -260,7 +260,7 @@ class CollapsingMergeTree(TableEngine):
 
     def __init__(
         self,
-        sign: str = None,
+        sign: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
@@ -279,8 +279,8 @@ class VersionedCollapsingMergeTree(TableEngine):
 
     def __init__(
         self,
-        sign: str = None,
-        version: str = None,
+        sign: str | None = None,
+        version: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
@@ -300,8 +300,8 @@ class GraphiteMergeTree(TableEngine):
 
     def __init__(
         self,
-        config_section: str = None,
-        version: str = None,
+        config_section: str | None = None,
+        version: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
@@ -326,8 +326,8 @@ class ReplicatedMergeTree(TableEngine):
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        zk_path: str = None,
-        replica: str = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
         ttl: EngineExpr | None = None,
         settings: dict[str, Any] | None = None,
     ):
@@ -352,13 +352,13 @@ class ReplicatedReplacingMergeTree(TableEngine):
 
     def __init__(
         self,
-        ver: str = None,
+        ver: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        zk_path: str = None,
-        replica: str = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
         ttl: EngineExpr | None = None,
         settings: dict[str, Any] | None = None,
     ):
@@ -375,13 +375,13 @@ class ReplicatedCollapsingMergeTree(TableEngine):
 
     def __init__(
         self,
-        sign: str = None,
+        sign: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        zk_path: str = None,
-        replica: str = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
         ttl: EngineExpr | None = None,
         settings: dict[str, Any] | None = None,
     ):
@@ -398,14 +398,14 @@ class ReplicatedVersionedCollapsingMergeTree(TableEngine):
 
     def __init__(
         self,
-        sign: str = None,
-        version: str = None,
+        sign: str | None = None,
+        version: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        zk_path: str = None,
-        replica: str = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
         ttl: EngineExpr | None = None,
         settings: dict[str, Any] | None = None,
     ):
@@ -422,13 +422,13 @@ class ReplicatedGraphiteMergeTree(TableEngine):
 
     def __init__(
         self,
-        config_section: str = None,
+        config_section: str | None = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
-        zk_path: str = None,
-        replica: str = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
         ttl: EngineExpr | None = None,
         settings: dict[str, Any] | None = None,
     ):
