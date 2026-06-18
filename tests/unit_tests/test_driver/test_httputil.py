@@ -41,9 +41,12 @@ class TestResponseSourceNetworkError:
         mock_response.stream = partial_stream
         source = ResponseSource(mock_response, chunk_size=1024)
 
+        received = []
         with pytest.raises(OperationalError) as excinfo:
-            list(source.gen)
+            for chunk in source.gen:
+                received.append(chunk)
 
+        assert received == [b"first chunk of data"]
         assert "Failed to read response data from server" in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, ConnectionError)
 
