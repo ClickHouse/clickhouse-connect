@@ -52,7 +52,7 @@ class QueryContext(BaseQueryContext):
     def __init__(
         self,
         query: str | bytes = "",
-        parameters: dict[str, Any] | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
         settings: dict[str, Any] | None = None,
         query_formats: dict[str, str] | None = None,
         column_formats: dict[str, str | dict[str, str]] | None = None,
@@ -177,12 +177,12 @@ class QueryContext(BaseQueryContext):
     def is_command(self) -> bool:
         return command_re.search(self.uncommented_query) is not None or bare_row_policy_show_re.search(self.uncommented_query) is not None
 
-    def set_parameters(self, parameters: dict[str, Any]):
+    def set_parameters(self, parameters: Sequence | dict[str, Any]):
         self.parameters = parameters
         self._update_query()
 
     def set_parameter(self, key: str, value: Any):
-        if not self.parameters:
+        if not isinstance(self.parameters, dict):
             self.parameters = {}
         self.parameters[key] = value
         self._update_query()
@@ -219,7 +219,7 @@ class QueryContext(BaseQueryContext):
     def updated_copy(
         self,
         query: str | bytes | None = None,
-        parameters: dict[str, Any] | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
         settings: dict[str, Any] | None = None,
         query_formats: dict[str, str] | None = None,
         column_formats: dict[str, str | dict[str, str]] | None = None,
@@ -245,7 +245,11 @@ class QueryContext(BaseQueryContext):
         resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         return QueryContext(
             query=query or self.query,
-            parameters=dict_copy(self.parameters, parameters),
+            parameters=(
+                dict_copy(self.parameters, parameters if isinstance(parameters, dict) else None)
+                if isinstance(self.parameters, dict)
+                else (parameters if parameters is not None else self.parameters)
+            ),
             settings=dict_copy(self.settings, settings),
             query_formats=dict_copy(self.query_formats, query_formats),
             column_formats=dict_copy(self.column_formats, column_formats),
