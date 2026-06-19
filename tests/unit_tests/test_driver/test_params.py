@@ -2,6 +2,7 @@ import ipaddress
 import uuid
 import zoneinfo
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -58,6 +59,10 @@ def test_finalize():
         ([ipaddress.IPv4Address("10.13.79.1")], "['10.13.79.1']"),
         (ipaddress.IPv6Address("2001:db8::79"), "2001:db8::79"),
         ([ipaddress.IPv6Address("2001:db8::79")], "['2001:db8::79']"),
+        # Server-side bind parameters are parsed against the declared type, so a Decimal must
+        # stay unquoted (top level and nested). Quoting it makes the server bind parser reject it.
+        (Decimal("12345678901234567008.1234567890"), "12345678901234567008.1234567890"),
+        ([Decimal("1.5"), Decimal("2.5")], "[1.5, 2.5]"),
     ],
 )
 def test_format_bind_value(value, expected):
@@ -81,6 +86,36 @@ def test_format_query_value_bytes(value, expected):
 def test_finalize_bytes():
     query = finalize_query("INSERT INTO t (id) VALUES (%(id)s)", {"id": b"j!lUA\xf8\x93q;ky\x00"})
     assert query == r"INSERT INTO t (id) VALUES ('\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00')"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (Decimal("12345678901234567008.1234567890"), "'12345678901234567008.1234567890'"),
+        (Decimal("-5.5"), "'-5.5'"),
+        (Decimal("0"), "'0'"),
+        # Exponential str() forms are quoted as-is; the server coerces them to the target Decimal.
+        (Decimal("1E+5"), "'1E+5'"),
+        ([Decimal("1.5"), Decimal("2.5")], "['1.5', '2.5']"),
+        ((Decimal("1.5"), "user_1"), "('1.5', 'user_1')"),
+    ],
+)
+def test_format_query_value_decimal(value, expected):
+    assert format_query_value(value) == expected
+
+
+def test_finalize_decimal():
+    # A Decimal parameter must be inlined as a quoted string literal so the server coerces it to
+    # the column's Decimal type. An unquoted literal is parsed as Float64 and loses precision.
+    query = finalize_query("SELECT * FROM t WHERE col < %s", [Decimal("12345678901234567008.1234567890")])
+    assert query == "SELECT * FROM t WHERE col < '12345678901234567008.1234567890'"
+
+
+def test_finalize_int_float_stay_unquoted():
+    # Contrast: int and float parameters keep their bare, unquoted literal form. Only Decimal,
+    # which would otherwise round through Float64, is quoted.
+    assert finalize_query("SELECT %s", [13]) == "SELECT 13"
+    assert finalize_query("SELECT %s", [7.5]) == "SELECT 7.5"
 
 
 class TestBindQueryTimezoneHint:

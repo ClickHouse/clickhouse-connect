@@ -4,6 +4,7 @@ import uuid
 import zoneinfo
 from collections.abc import Sequence
 from datetime import date, datetime, timezone, tzinfo
+from decimal import Decimal
 from enum import Enum
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -253,6 +254,10 @@ def format_query_value(value: Any, server_tz: tzinfo = timezone.utc):
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
         return f"'{value.isoformat()}'"
+    if isinstance(value, Decimal):
+        # Inline as a quoted string literal so the server coerces it to the target Decimal
+        # type. An unquoted decimal literal is parsed as Float64, silently losing precision.
+        return format_str(str(value))
     if isinstance(value, list):
         return f"[{', '.join(str_query_value(x, server_tz) for x in value)}]"
     if isinstance(value, tuple):

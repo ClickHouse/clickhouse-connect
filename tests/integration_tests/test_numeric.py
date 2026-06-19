@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from decimal import Decimal
 
 import pytest
 
@@ -65,3 +66,25 @@ def test_interval_selects(param_client, call):
     """Test that interval type selects work correctly."""
     result = call(param_client.query, "SELECT INTERVAL 30 DAY")
     assert result.result_rows[0][0] == 30
+
+
+def test_decimal_query_parameter_precision(param_client, call, table_context: Callable):
+    """A high-precision Decimal query parameter must not lose precision through Float64.
+
+    A Decimal passed via %s substitution used to be inlined as a bare numeric literal, which
+    the server parsed as Float64. For Decimal(38, 10) values around 20 digits this silently
+    collapsed distinct values to the same float, so a strict comparison dropped matching rows.
+    """
+    stored = "12345678901234567001.1234567890"
+    threshold = Decimal("12345678901234567008.1234567890")
+    with table_context("decimal_param_precision", ["col_decimal Decimal(38, 10)"], order_by="tuple()"):
+        call(param_client.command, f"INSERT INTO decimal_param_precision VALUES (toDecimal128('{stored}', 10))")
+
+        result = call(
+            param_client.query,
+            "SELECT col_decimal FROM decimal_param_precision WHERE col_decimal < %s",
+            parameters=[threshold],
+        )
+
+        assert result.row_count == 1
+        assert result.result_rows[0][0] == Decimal(stored)
