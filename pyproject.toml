@@ -53,15 +53,6 @@ ignore_missing_imports = true
 # Baseline of modules that do not yet pass type checking (issue #692).
 # Remove entries as modules are annotated and pass cleanly.
 module = [
-    "clickhouse_connect.cc_sqlalchemy.alembic.impl",
-    "clickhouse_connect.cc_sqlalchemy.alembic.utils",
-    "clickhouse_connect.cc_sqlalchemy.datatypes.base",
-    "clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes",
-    "clickhouse_connect.cc_sqlalchemy.ddl.custom",
-    "clickhouse_connect.cc_sqlalchemy.ddl.tableengine",
-    "clickhouse_connect.cc_sqlalchemy.dialect",
-    "clickhouse_connect.cc_sqlalchemy.sql",
-    "clickhouse_connect.cc_sqlalchemy.sql.preparer",
     "clickhouse_connect.json_impl",
     "clickhouse_connect.tools.datagen",
     "clickhouse_connect.tools.testing",

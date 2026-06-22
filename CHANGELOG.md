@@ -11,6 +11,7 @@
 ### Improvements
 - The Cython extension modules now declare free-threading compatibility, so importing clickhouse-connect on a free-threaded Python build such as 3.14t no longer silently re-enables the GIL. As part of this change, `ResponseBuffer.read_uint64` no longer uses a module level scratch buffer for its big-endian byte swap, which was the one piece of shared mutable state in the C modules. Building from source now requires Cython 3.1 or later. The CI test matrix now runs the full suite on free-threaded Python 3.14t as a non-blocking job. Free-threading support remains experimental.
 - `QueryResult.query_id` now returns an empty string instead of `None` when the server reported no query id. This matches `QuerySummary` and makes the property consistently typed as `str`.
+- clickhouse-connect now ships PEP 561 type information. The `py.typed` marker is included so downstream type checkers can use the package annotations. Closes [#692](https://github.com/ClickHouse/clickhouse-connect/issues/692).
 
 ### Compatibility
 - `Client.insert`, `AsyncClient.insert`, and `raw_insert` now require `column_names` to be a `Sequence` rather than a bare `Iterable`. A one-shot iterator such as a generator already failed at runtime because the column names are measured and iterated more than once, so the type hint now matches the real requirement.
