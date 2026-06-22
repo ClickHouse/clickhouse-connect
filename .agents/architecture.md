@@ -54,6 +54,8 @@ Treat the following as public surface:
 - SQLAlchemy dialect behavior
 - result shapes and dtype choices across Python, Pandas, NumPy, Arrow, and Polars
 
+The public surface is now statically typed. The package ships `py.typed` and CI type-checks with `mypy`, so the annotations on these entry points are part of the contract. A change to a public signature must keep its annotations correct and pass `mypy`. See `Type Checking` in `AGENTS.md`.
+
 Be cautious with:
 
 - return types
