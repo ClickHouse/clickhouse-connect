@@ -188,7 +188,14 @@ class Distributed(TableEngine):
     arg_names = ["cluster", "database", "table", "sharding_key", "policy_name"]
     optional_args = {"sharding_key", "policy_name"}
 
-    def __init__(self, cluster: str | None = None, database: str | None = None, table=None, sharding_key: str | None = None, policy_name: str | None = None):
+    def __init__(
+        self,
+        cluster: str | None = None,
+        database: str | None = None,
+        table=None,
+        sharding_key: str | None = None,
+        policy_name: str | None = None,
+    ):
         super().__init__(locals())
 
 
