@@ -44,6 +44,22 @@ jobs:
       - name: Ruff lint check
         run: ruff check clickhouse_connect tests examples setup.py
 
+  typecheck:
+    runs-on: ubuntu-latest
+    name: Mypy
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/test_requirements.txt
+      - name: Mypy check
+        run: mypy
+
   bare-import-test:
     runs-on: ubuntu-latest
     needs: lint
@@ -86,19 +102,27 @@ jobs:
           - '3.14'
         clickhouse-version:
           - '25.8' # LTS
-          - '26.2' # Stable
           - '26.3' # LTS
           - '26.4' # Stable
+          - '26.5' # Stable
         use-c:
           - '1'
         include:
           - python-version: '3.10'
-            clickhouse-version: '25.8'
+            clickhouse-version: '26.3'
             use-c: '0'
           - python-version: '3.14'
-            clickhouse-version: '26.4'
+            clickhouse-version: '26.3'
             use-c: '0'
+          # Free-threaded build (experimental). PYTHON_GIL=0 keeps the GIL off when
+          # dependencies that have not declared free-threading compatibility are imported.
+          - python-version: '3.14t'
+            clickhouse-version: '26.3'
+            use-c: '1'
+            python-gil: '0'
 
+    # The free-threaded job is non-blocking while support is experimental
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
@@ -115,7 +139,15 @@ jobs:
       - name: Install pip
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
-        run: pip install -r tests/test_requirements.txt
+        # polars ships no free-threaded wheels and its sdist needs a long Rust nightly
+        # build, so it is excluded on 3.14t and its tests skip
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.14t" ]; then
+            grep -v '^polars' tests/test_requirements.txt > /tmp/test_requirements.txt
+            pip install -r /tmp/test_requirements.txt
+          else
+            pip install -r tests/test_requirements.txt
+          fi
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
@@ -130,6 +162,8 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
+          # Empty for non-free-threaded entries, CPython ignores an empty value
+          PYTHON_GIL: ${{ matrix.python-gil }}
         run: pytest -n 4 tests
       - name: Stop ClickHouse
         if: ${{ always() && hashFiles('docker-compose.yml') != '' }}

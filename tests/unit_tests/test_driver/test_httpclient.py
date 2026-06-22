@@ -1,9 +1,12 @@
 import logging
+import zoneinfo
+from datetime import timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
@@ -170,6 +173,77 @@ class TestAsyncClientHeaders:
         assert client.headers["X-Gateway"] == "cloudflare"
 
 
+class TestAsyncClientErrorHandler:
+    """Test the error handling functionality of AsyncClient"""
+
+    @staticmethod
+    def make_client():
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.url = "http://localhost:8123"
+        client.show_clickhouse_errors = True
+        return client
+
+    @staticmethod
+    def make_response(status=500, headers=None, data=b""):
+        response = Mock()
+        response.status = status
+        response.headers = headers or {}
+        response.read = AsyncMock(return_value=data)
+        response.close = Mock()
+        return response
+
+    @pytest.mark.asyncio
+    async def test_error_handler_sets_structured_code_and_name(self):
+        client = self.make_client()
+        response = self.make_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23)",
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            await client._error_handler(response)
+
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        assert "server response:" in str(excinfo.value)
+        response.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_error_handler_code_set_when_errors_disabled(self):
+        client = self.make_client()
+        client.show_clickhouse_errors = False
+        response = self.make_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE)",
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            await client._error_handler(response)
+
+        assert excinfo.value.code == 60
+        assert excinfo.value.name is None
+        assert "UNKNOWN_TABLE" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_error_handler_retried_raises_operational_error(self):
+        client = self.make_client()
+        response = self.make_response(status=503, headers={ex_header: "159"}, data=b"timeout")
+
+        with pytest.raises(OperationalError) as excinfo:
+            await client._error_handler(response, retried=True)
+
+        assert excinfo.value.code == 159
+
+
 class TestHttpClientErrorHandler:
     """Test the error handling functionality of HttpClient"""
 
@@ -207,7 +281,49 @@ class TestHttpClientErrorHandler:
         assert "Received ClickHouse exception, code: 99" in error_msg
         assert "server response: Error executing query" in error_msg
         assert self.client.url in error_msg
+        assert excinfo.value.code == 99
         response.close.assert_called_once()
+
+    def test_error_handler_sets_structured_code_and_name(self):
+        """Code and name are exposed as attributes parsed from the header and body"""
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23)",
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+
+    def test_error_handler_code_none_without_header(self):
+        """Code is None when the server sends no exception header"""
+        response = create_mock_response(status=503, data=b"Service unavailable")
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        assert excinfo.value.code is None
+        assert excinfo.value.name is None
+
+    def test_error_handler_name_parsed_before_truncation(self):
+        """name is parsed from the full body even when max_error_size truncates the message"""
+        long_body = "Code: 62. DB::Exception: " + ("x" * 400) + " (SYNTAX_ERROR) (version 26.2.4.23)"
+        response = create_mock_response(status=400, headers={ex_header: "62"}, data=long_body.encode())
+
+        original = common.get_setting("max_error_size")
+        common.set_setting("max_error_size", 100)
+        try:
+            with pytest.raises(DatabaseError) as excinfo:
+                self.client._error_handler(response)
+        finally:
+            common.set_setting("max_error_size", original)
+
+        assert excinfo.value.code == 62
+        assert excinfo.value.name == "SYNTAX_ERROR"
+        assert "SYNTAX_ERROR" not in str(excinfo.value)  # truncated out of the displayed message
 
     def test_error_handler_without_exception_code(self):
         """Test error handling when only HTTP status is available"""
@@ -261,6 +377,9 @@ class TestHttpClientErrorHandler:
         assert "The ClickHouse server returned an error (for url http://localhost:8123)" in error_msg
         assert "Invalid query" not in error_msg  # Should not include the body
         assert "99" not in error_msg  # Should not include the exception code
+        # Numeric code is still exposed structurally, but the body-derived name is suppressed
+        assert excinfo.value.code == 99
+        assert excinfo.value.name is None
         response.close.assert_called_once()
 
     def test_error_handler_with_unicode_decode_error(self):
@@ -900,3 +1019,148 @@ class TestQuery:
         assert "_file1_format" in params  # External data query params
         assert "_file1" in fields  # External data form fields
         assert "query" not in params  # Query should not be in params when form encoding
+
+
+class TestResponseTimezone:
+    """set_response_tz is called only when the server reports a timezone different from server_tz."""
+
+    def setup_method(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        self.client.server_tz = timezone.utc
+        self.client._dst_safe = True
+
+    @staticmethod
+    def _make_context() -> Mock:
+        context = Mock(spec=QueryContext)
+        context.final_query = "SELECT 1"
+        context.uncommented_query = "SELECT 1"
+        context.bind_params = {}
+        context.external_data = None
+        context.is_insert = False
+        context.settings = {}
+        context.transport_settings = {}
+        context.streaming = False
+        context.block_info = False
+        return context
+
+    def _run(self, tz_header: str | None) -> Mock:
+        """Invoke _query_with_context with a mocked response and return the context Mock."""
+        mock_response = Mock()
+        mock_response.headers = {} if tz_header is None else {"X-ClickHouse-Timezone": tz_header}
+        context = self._make_context()
+
+        with (
+            patch.object(HttpClient, "_raw_request", return_value=mock_response),
+            patch("clickhouse_connect.driver.httpclient.RespBuffCls"),
+            patch("clickhouse_connect.driver.httpclient.ResponseSource"),
+            patch.object(self.client._transform, "parse_response", return_value=Mock()),
+        ):
+            self.client._query_with_context(context)
+
+        return context
+
+    def test_set_response_tz_not_called_when_header_absent(self):
+        """set_response_tz is not called when X-ClickHouse-Timezone header is missing."""
+        context = self._run(tz_header=None)
+        context.set_response_tz.assert_not_called()
+
+    def test_set_response_tz_not_called_when_timezone_matches_server(self):
+        """set_response_tz is not called when the response timezone matches server_tz."""
+        context = self._run(tz_header="UTC")
+        context.set_response_tz.assert_not_called()
+
+    def test_set_response_tz_called_with_correct_tzinfo_when_timezone_differs(self):
+        """set_response_tz is called with the resolved tzinfo when the response timezone differs."""
+        context = self._run(tz_header="America/New_York")
+        context.set_response_tz.assert_called_once()
+        called_tz = context.set_response_tz.call_args[0][0]
+        assert called_tz == zoneinfo.ZoneInfo("America/New_York")
+
+
+class TestCommandBinaryBindGuard:
+    """command() rejects binary parameter binds that cannot share the request body."""
+
+    def setup_method(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        self.client.server_tz = timezone.utc
+
+    def test_command_binary_bind_with_data_raises(self):
+        with pytest.raises(ProgrammingError, match="Binary parameter bind"):
+            self.client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+    @pytest.mark.asyncio
+    async def test_async_command_binary_bind_with_data_raises(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        with pytest.raises(ProgrammingError, match="Binary parameter bind"):
+            await client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+
+class TestInsertArrowTransportSettings:
+    """insert_arrow forwards transport_settings rather than passing them as compression."""
+
+    def test_insert_arrow_forwards_transport_settings(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        client.write_compression = None
+        transport = {"X-Test-Header": "1"}
+        with (
+            patch("clickhouse_connect.driver.client.check_arrow"),
+            patch("clickhouse_connect.driver.client.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", return_value=Mock()) as raw_insert,
+        ):
+            client.insert_arrow("some_table", Mock(), transport_settings=transport)
+        assert raw_insert.call_args.kwargs.get("transport_settings") == transport
+        assert transport not in raw_insert.call_args.args
+
+    @pytest.mark.asyncio
+    async def test_async_insert_arrow_forwards_transport_settings(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.write_compression = None
+        transport = {"X-Test-Header": "1"}
+        with (
+            patch("clickhouse_connect.driver.asyncclient.check_arrow"),
+            patch("clickhouse_connect.driver.asyncclient.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", new=AsyncMock(return_value=Mock())) as raw_insert,
+        ):
+            await client.insert_arrow("some_table", Mock(), transport_settings=transport)
+        assert raw_insert.call_args.kwargs.get("transport_settings") == transport
+        assert transport not in raw_insert.call_args.args

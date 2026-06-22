@@ -1,3 +1,5 @@
+from typing import Any
+
 from clickhouse_connect.dbapi.connection import Connection
 
 apilevel = "2.0"  # PEP 249  DB API level
@@ -12,18 +14,18 @@ class Error(Exception):
 def connect(
     host: str | None = None,
     database: str | None = None,
-    username: str | None = "",
-    password: str | None = "",
+    username: str = "",
+    password: str = "",
     port: int | None = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Connection:
     secure = kwargs.pop("secure", False)
     return Connection(
         host=host,
         database=database,
         username=username,
         password=password,
-        port=port,
+        port=port if port is not None else 0,
         secure=secure,
         **kwargs,
     )
