@@ -74,7 +74,7 @@ def get_pool_manager_options(
     if getattr(socket, "TCP_KEEPCNT", None) is not None:
         socket_options.append((SOCKET_TCP, socket.TCP_KEEPCNT, keep_count))
     if getattr(socket, "TCP_KEEPIDLE", None) is not None:
-        socket_options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))
+        socket_options.append((SOCKET_TCP, socket.TCP_KEEPIDLE, keep_idle))  # type: ignore[attr-defined]
     if sys.platform == "darwin":
         socket_options.append((SOCKET_TCP, getattr(socket, "TCP_KEEPALIVE", 0x10), keep_interval))
     options["maxsize"] = options.get("maxsize", 8)
