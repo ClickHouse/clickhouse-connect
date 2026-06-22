@@ -73,6 +73,7 @@ module = [
     "clickhouse_connect.datatypes.string",
     "clickhouse_connect.datatypes.temporal",
     "clickhouse_connect.datatypes.vector",
+    "clickhouse_connect.driver",
     "clickhouse_connect.driver.asyncclient",
     "clickhouse_connect.driver.client",
     "clickhouse_connect.driver.httpclient",
