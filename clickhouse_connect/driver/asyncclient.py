@@ -988,6 +988,8 @@ class AsyncClient(Client):
             raise ProgrammingError("Command sent without query or recognized data") from None
 
         if payload or files:
+            if isinstance(cmd, bytes):
+                raise ProgrammingError("Binary parameter bind cannot be combined with command data or external data") from None
             params["query"] = cmd
         else:
             payload = cmd

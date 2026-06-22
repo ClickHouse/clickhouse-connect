@@ -62,7 +62,6 @@ module = [
     "clickhouse_connect.cc_sqlalchemy.dialect",
     "clickhouse_connect.cc_sqlalchemy.sql",
     "clickhouse_connect.cc_sqlalchemy.sql.preparer",
-    "clickhouse_connect.driver",
     "clickhouse_connect.json_impl",
     "clickhouse_connect.tools.datagen",
     "clickhouse_connect.tools.testing",

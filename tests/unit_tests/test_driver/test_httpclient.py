@@ -1083,3 +1083,84 @@ class TestResponseTimezone:
         context.set_response_tz.assert_called_once()
         called_tz = context.set_response_tz.call_args[0][0]
         assert called_tz == zoneinfo.ZoneInfo("America/New_York")
+
+
+class TestCommandBinaryBindGuard:
+    """command() rejects binary parameter binds that cannot share the request body."""
+
+    def setup_method(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        self.client.server_tz = timezone.utc
+
+    def test_command_binary_bind_with_data_raises(self):
+        with pytest.raises(ProgrammingError, match="Binary parameter bind"):
+            self.client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+    @pytest.mark.asyncio
+    async def test_async_command_binary_bind_with_data_raises(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        with pytest.raises(ProgrammingError, match="Binary parameter bind"):
+            await client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+
+class TestInsertArrowTransportSettings:
+    """insert_arrow forwards transport_settings rather than passing them as compression."""
+
+    def test_insert_arrow_forwards_transport_settings(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        client.write_compression = None
+        transport = {"X-Test-Header": "1"}
+        with (
+            patch("clickhouse_connect.driver.client.check_arrow"),
+            patch("clickhouse_connect.driver.client.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", return_value=Mock()) as raw_insert,
+        ):
+            client.insert_arrow("some_table", Mock(), transport_settings=transport)
+        assert raw_insert.call_args.kwargs.get("transport_settings") == transport
+        assert transport not in raw_insert.call_args.args
+
+    @pytest.mark.asyncio
+    async def test_async_insert_arrow_forwards_transport_settings(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.write_compression = None
+        transport = {"X-Test-Header": "1"}
+        with (
+            patch("clickhouse_connect.driver.asyncclient.check_arrow"),
+            patch("clickhouse_connect.driver.asyncclient.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", new=AsyncMock(return_value=Mock())) as raw_insert,
+        ):
+            await client.insert_arrow("some_table", Mock(), transport_settings=transport)
+        assert raw_insert.call_args.kwargs.get("transport_settings") == transport
+        assert transport not in raw_insert.call_args.args
