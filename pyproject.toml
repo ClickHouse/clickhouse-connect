@@ -53,10 +53,6 @@ ignore_missing_imports = true
 # Baseline of modules that do not yet pass type checking (issue #692).
 # Remove entries as modules are annotated and pass cleanly.
 module = [
-    "clickhouse_connect.driver",
-    "clickhouse_connect.driver.asyncclient",
-    "clickhouse_connect.driver.client",
-    "clickhouse_connect.driver.httpclient",
     "clickhouse_connect.json_impl",
     "clickhouse_connect.tools.datagen",
     "clickhouse_connect.tools.testing",

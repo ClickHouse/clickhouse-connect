@@ -5,10 +5,16 @@
 ### Bug Fixes
 - `Cursor.executemany` now correctly resets `rowcount` and reports the number of inserted rows after a bulk insert. Previously, `rowcount` retained the value from the previous operation. The insert summary is also appended to `cursor.summary`, consistent with the non-bulk path. In addition, passing a generator as `seq_of_parameters` no longer raises `TypeError`; the bulk-insert optimisation is now skipped for non-indexable iterables and the operation falls through to the row-by-row path as PEP 249 requires.
 - Fixed a connection failure partway through reading a query result being silently treated as a complete result. The reader detected the broken stream but discarded the error once any rows had already been read, so a truncated result was returned as if it were whole. A mid-stream read failure now raises `StreamFailureError`, carrying the server-side error message when ClickHouse reported one. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
+- `Client.insert_arrow` and `AsyncClient.insert_arrow` no longer drop the `transport_settings` argument. It was passed positionally into the `compression` parameter, so transport settings were ignored and a non-empty value corrupted the request. It is now forwarded correctly.
+- `command` now raises `ProgrammingError` when binary parameter binds are combined with command data or external data, instead of placing binary content into the URL query string. This applies to both the sync and async clients.
 
 ### Improvements
 - The Cython extension modules now declare free-threading compatibility, so importing clickhouse-connect on a free-threaded Python build such as 3.14t no longer silently re-enables the GIL. As part of this change, `ResponseBuffer.read_uint64` no longer uses a module level scratch buffer for its big-endian byte swap, which was the one piece of shared mutable state in the C modules. Building from source now requires Cython 3.1 or later. The CI test matrix now runs the full suite on free-threaded Python 3.14t as a non-blocking job. Free-threading support remains experimental.
 - `QueryResult.query_id` now returns an empty string instead of `None` when the server reported no query id. This matches `QuerySummary` and makes the property consistently typed as `str`.
+- clickhouse-connect now ships PEP 561 type information. The `py.typed` marker is included so downstream type checkers can use the package annotations. Closes [#692](https://github.com/ClickHouse/clickhouse-connect/issues/692).
+
+### Compatibility
+- `Client.insert`, `AsyncClient.insert`, and `raw_insert` now require `column_names` to be a `Sequence` rather than a bare `Iterable`. A one-shot iterator such as a generator already failed at runtime because the column names are measured and iterated more than once, so the type hint now matches the real requirement.
 
 ## 1.3.0, 2026-06-11
 
