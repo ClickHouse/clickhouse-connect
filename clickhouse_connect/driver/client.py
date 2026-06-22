@@ -371,7 +371,7 @@ class Client(ABC):
         if query and query.lower().strip().startswith("select __connect_version__"):
             return QueryResult(
                 [[f"ClickHouse Connect v.{version()}  ⓒ ClickHouse Inc."]],
-                None,  # type: ignore[arg-type]  # QueryContext.generator not yet Optional; widen after #805 merges
+                None,
                 ("connect_version",),
                 (get_from_name("String"),),
             )
@@ -672,7 +672,7 @@ class Client(ABC):
         if context:
             return context.updated_copy(
                 query=query,
-                parameters=parameters,  # type: ignore[arg-type]  # Sequence not yet accepted by QueryContext; widen after #805 merges
+                parameters=parameters,
                 settings=settings,
                 query_formats=query_formats,
                 column_formats=column_formats,
@@ -699,7 +699,7 @@ class Client(ABC):
             use_extended_dtypes = True
         return QueryContext(
             query=cast(str | bytes, query),
-            parameters=parameters,  # type: ignore[arg-type]  # Sequence not yet accepted by QueryContext; widen after #805 merges
+            parameters=parameters,
             settings=settings,
             query_formats=query_formats,
             column_formats=column_formats,
