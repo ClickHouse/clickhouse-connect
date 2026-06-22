@@ -462,7 +462,7 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        cmd, params = bind_query(cmd, parameters, self.server_tz)
+        bound_cmd, params = bind_query(cmd, parameters, self.server_tz)
         headers: dict[str, Any] = {}
         payload: str | bytes | None = None
         fields = None
@@ -477,12 +477,14 @@ class HttpClient(Client):
         elif isinstance(data, bytes):
             headers["Content-Type"] = "application/octet-stream"
             payload = data
-        if payload is None and not cmd:
+        if payload is None and not bound_cmd:
             raise ProgrammingError("Command sent without query or recognized data") from None
         if payload or fields:
-            params["query"] = cmd
+            if isinstance(bound_cmd, bytes):
+                raise ProgrammingError("Binary parameter bind cannot be combined with command data or external data") from None
+            params["query"] = bound_cmd
         else:
-            payload = cmd
+            payload = bound_cmd
         if use_database and self.database:
             params["database"] = self.database
         params.update(self._validate_settings(settings or {}))
@@ -500,7 +502,7 @@ class HttpClient(Client):
                 return result
             except UnicodeDecodeError:
                 return str(response.data)
-        if returns_empty_string_on_empty_body(cmd):
+        if returns_empty_string_on_empty_body(bound_cmd):
             return ""
         return QuerySummary(self._summary(response))
 
@@ -720,6 +722,8 @@ class HttpClient(Client):
                 form_fields.update(external_data.form_data)
         elif external_data:
             params.update(bind_params)
+            # Guaranteed str: the check above raises if external_data and not use_form and bytes
+            assert isinstance(final_query, str)
             params["query"] = final_query
             params.update(external_data.query_params)
             fields = external_data.form_data
