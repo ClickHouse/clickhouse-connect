@@ -52,6 +52,8 @@ def _parse_connection_params(
     kwargs: dict[str, Any],
 ) -> tuple[str, str | None, str, int, str | None, str]:
     """Parse and normalize connection parameters including DSN parsing."""
+    if database == "__default__":  # legacy sentinel for "not specified"
+        database = None
     if dsn:
         parsed = urlparse(dsn)
         username = username or _unquote(parsed.username)

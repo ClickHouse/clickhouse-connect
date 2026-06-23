@@ -51,3 +51,20 @@ def test_no_dsn_or_explicit_values_keeps_database_none_and_resolves_port():
 def test_dsn_without_path_keeps_database_none():
     _, _, _, _, database, _ = parse("http://host:8123")
     assert database is None
+
+
+def test_legacy_default_database_sentinel_treated_as_unspecified():
+    # "__default__" was the old default value for database and must keep meaning "not specified".
+    _, _, _, _, database, _ = parse(None, database="__default__")
+    assert database is None
+
+
+def test_legacy_default_database_sentinel_overridden_by_dsn_path():
+    _, _, _, _, database, _ = parse("http://host:8123/dsndb", database="__default__")
+    assert database == "dsndb"
+
+
+def test_legacy_zero_port_resolves_to_default():
+    # 0 was the old default value for port and must keep resolving to the interface default.
+    _, _, _, port, _, _ = parse(None, port=0)
+    assert port == 8123

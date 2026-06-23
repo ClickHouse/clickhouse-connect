@@ -78,6 +78,13 @@ def test_client_headers(client_factory, call):
     assert call(client.command, "SELECT 79") == 79
 
 
+def test_legacy_default_database_sentinel(client_factory, call):
+    # "__default__" was the old default value for database and must still mean "not specified".
+    client = client_factory(database="__default__")
+    assert client.database is None
+    assert call(client.command, "SELECT 13") == 13
+
+
 def test_none_database(param_client, call):
     old_db = param_client.database
     test_db = call(param_client.command, "select currentDatabase()")
