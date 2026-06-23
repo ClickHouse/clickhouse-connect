@@ -123,6 +123,7 @@ def create_client(
     settings: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
+    backend: str | None = None,
     **kwargs,
 ) -> Client:
     """
@@ -152,6 +153,12 @@ def create_client(
       so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally.
+    :param backend: Selects an out-of-tree execution backend registered through the
+      ``clickhouse_connect.backends`` entry point (e.g. ``"chdb"`` for the in-process embedded
+      engine). Defaults to the built-in HTTP transport. If the named backend is not installed,
+      a ``BackendNotInstalled`` error with an install hint is raised; clickhouse-connect never
+      installs a backend itself. Backend-specific options (such as chDB's ``path``) are passed
+      through as keyword arguments.
 
     :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
 
@@ -195,6 +202,14 @@ def create_client(
       when this is True. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect Client instance
     """
+    if backend is None and generic_args and "backend" in generic_args:
+        backend = generic_args.pop("backend")
+    if backend and backend != "http":
+        from clickhouse_connect.driver.registry import resolve_backend
+
+        return resolve_backend(backend).create_client(
+            database=database, settings=settings or {}, generic_args=generic_args, **kwargs
+        )
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
@@ -256,6 +271,7 @@ async def create_async_client(
     settings: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
+    backend: str | None = None,
     connector_limit: int = 100,
     connector_limit_per_host: int = 20,
     keepalive_timeout: float = 30.0,
@@ -332,6 +348,21 @@ async def create_async_client(
       when this is True. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect AsyncClient instance
     """
+    if backend is None and generic_args and "backend" in generic_args:
+        backend = generic_args.pop("backend")
+    if backend and backend != "http":
+        from clickhouse_connect.driver.registry import resolve_backend
+
+        factory = resolve_backend(backend)
+        create_async = getattr(factory, "create_async_client", None)
+        if create_async is None:
+            raise ProgrammingError(f"Backend {backend!r} does not provide an async client")
+        client = create_async(database=database, settings=settings or {}, generic_args=generic_args, **kwargs)
+        # Backends may return an already-initialized client or a coroutine to await.
+        if hasattr(client, "__await__"):
+            client = await client
+        return client
+
     try:
         from clickhouse_connect.driver.asyncclient import AsyncClient as _AsyncClient
     except ModuleNotFoundError as ex:
