@@ -1,7 +1,7 @@
 from clickhouse_connect.driver import _parse_connection_params
 
 
-def parse(dsn, *, host=None, username=None, password="", port=0, database="__default__", interface=None, secure=False):
+def parse(dsn, *, host=None, username=None, password="", port=None, database=None, interface=None, secure=False):
     return _parse_connection_params(
         host=host,
         username=username,
@@ -39,3 +39,15 @@ def test_explicit_params_override_dsn():
         "http://user%40name:pass%20word@host:8123/my%20db", username="u", password="p", database="d"
     )
     assert (username, password, database) == ("u", "p", "d")
+
+
+def test_no_dsn_or_explicit_values_keeps_database_none_and_resolves_port():
+    _, _, _, port, database, interface = parse(None)
+    assert port == 8123
+    assert database is None
+    assert interface == "http"
+
+
+def test_dsn_without_path_keeps_database_none():
+    _, _, _, _, database, _ = parse("http://host:8123")
+    assert database is None

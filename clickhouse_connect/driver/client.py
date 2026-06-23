@@ -171,7 +171,7 @@ class Client(ABC):
         """
         self.query_limit = coerce_int(query_limit)
         self.query_retries = coerce_int(query_retries)
-        if database and not database == "__default__":
+        if database:
             self.database = database
         if show_clickhouse_errors is not None:
             self.show_clickhouse_errors = coerce_bool(show_clickhouse_errors)

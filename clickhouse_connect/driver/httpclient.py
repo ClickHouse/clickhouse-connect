@@ -84,7 +84,7 @@ class HttpClient(Client):
         port: int,
         username: str,
         password: str,
-        database: str,
+        database: str | None,
         access_token: str | None = None,
         token_provider: Callable[[], str] | None = None,
         compress: bool | str = True,
