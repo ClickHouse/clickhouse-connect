@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### New Features
+- Add an in-process `chdb` backend. `clickhouse_connect.get_client(interface="chdb")` (and `get_async_client`) returns a client backed by the embedded ClickHouse engine via the `chdb` Python package, with no server required.
+
 ### Bug Fixes
 - `Cursor.executemany` now correctly resets `rowcount` and reports the number of inserted rows after a bulk insert. Previously, `rowcount` retained the value from the previous operation. The insert summary is also appended to `cursor.summary`, consistent with the non-bulk path. In addition, passing a generator as `seq_of_parameters` no longer raises `TypeError`; the bulk-insert optimisation is now skipped for non-indexable iterables and the operation falls through to the row-by-row path as PEP 249 requires.
 - Fixed a connection failure partway through reading a query result being silently treated as a complete result. The reader detected the broken stream but discarded the error once any rows had already been read, so a truncated result was returned as if it were whole. A mid-stream read failure now raises `StreamFailureError`, carrying the server-side error message when ClickHouse reported one. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
