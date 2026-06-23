@@ -44,23 +44,24 @@ def _parse_connection_params(
     host: str | None,
     username: str | None,
     password: str,
-    port: int,
-    database: str,
+    port: int | None,
+    database: str | None,
     interface: str | None,
     secure: bool | str,
     dsn: str | None,
     kwargs: dict[str, Any],
-) -> tuple[str, str | None, str, int, str, str]:
+) -> tuple[str, str | None, str, int, str | None, str]:
     """Parse and normalize connection parameters including DSN parsing."""
+    if database == "__default__":  # legacy sentinel for "not specified"
+        database = None
     if dsn:
         parsed = urlparse(dsn)
         username = username or _unquote(parsed.username)
         password = password or _unquote(parsed.password) or ""
         host = host or parsed.hostname
-        port = port or parsed.port or 0
-        if parsed.path and (not database or database == "__default__"):
-            database = unquote(parsed.path[1:].split("/")[0])
-        database = database or parsed.path
+        port = port or parsed.port
+        if not database and parsed.path:
+            database = unquote(parsed.path[1:].split("/")[0]) or None
         for k, v in parse_qs(parsed.query).items():
             kwargs[k] = v[0]
     use_tls = str(secure).lower() == "true" or interface == "https" or (not interface and str(port) in ("443", "8443"))
@@ -115,9 +116,9 @@ def create_client(
     password: str = "",
     access_token: str | None = None,
     token_provider: Callable[[], str] | None = None,
-    database: str = "__default__",
+    database: str | None = None,
     interface: str | None = None,
-    port: int = 0,
+    port: int | None = None,
     secure: bool | str = False,
     dsn: str | None = None,
     settings: dict[str, Any] | None = None,
@@ -248,9 +249,9 @@ async def create_async_client(
     password: str = "",
     access_token: str | None = None,
     token_provider: Callable[[], str | Awaitable[str]] | None = None,
-    database: str = "__default__",
+    database: str | None = None,
     interface: str | None = None,
-    port: int = 0,
+    port: int | None = None,
     secure: bool | str = False,
     dsn: str | None = None,
     settings: dict[str, Any] | None = None,

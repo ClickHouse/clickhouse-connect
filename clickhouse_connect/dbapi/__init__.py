@@ -25,7 +25,7 @@ def connect(
         database=database,
         username=username,
         password=password,
-        port=port if port is not None else 0,
+        port=port,
         secure=secure,
         **kwargs,
     )
