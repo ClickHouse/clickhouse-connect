@@ -5,3 +5,13 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        # Mirrors the CI "Mypy check" step in .github/workflows/on_push.yml exactly: no extra
+        # args, no extra strictness. Uses the project venv's mypy so installed stubs match CI.
+        entry: mypy
+        language: system
+        pass_filenames: false
+        always_run: true
