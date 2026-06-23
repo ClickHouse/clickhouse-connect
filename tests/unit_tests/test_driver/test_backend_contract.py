@@ -16,7 +16,7 @@ import pytest
 
 import clickhouse_connect
 from clickhouse_connect.driver.backend import SUPPORTS_ZERO_COPY_ARROW, Backend, client_supports
-from clickhouse_connect.driver.exceptions import BackendNotInstalled, DatabaseError
+from clickhouse_connect.driver.exceptions import BackendNotInstalledError, DatabaseError
 from clickhouse_connect.driver.registry import available_backend_names, resolve_backend
 
 
@@ -46,8 +46,20 @@ def test_http_backend_always_available():
     assert "http" in available_backend_names()
 
 
+def test_resolve_http_raises_programming_error():
+    # "http" is the built-in transport, not a registered backend; resolve_backend("http") must
+    # reject it explicitly so the inconsistency between available_backend_names() (which always
+    # includes "http") and registry resolution is loud and clear.
+    from clickhouse_connect.driver.exceptions import ProgrammingError
+
+    with pytest.raises(ProgrammingError) as exc_info:
+        resolve_backend("http")
+    msg = str(exc_info.value)
+    assert "http" in msg and "built-in" in msg
+
+
 def test_resolve_unknown_backend_raises_with_hint():
-    with pytest.raises(BackendNotInstalled) as exc_info:
+    with pytest.raises(BackendNotInstalledError) as exc_info:
         resolve_backend("definitely_not_a_real_backend")
     err = exc_info.value
     assert err.backend_name == "definitely_not_a_real_backend"
@@ -58,12 +70,12 @@ def test_resolve_chdb_hint_present_when_not_installed():
     # When chdb is not installed the error must still name the documented install command.
     try:
         resolve_backend("chdb")
-    except BackendNotInstalled as err:
+    except BackendNotInstalledError as err:
         assert err.hint == "pip install clickhouse-connect[chdb]"
 
 
 def test_get_client_unknown_backend_raises():
-    with pytest.raises(BackendNotInstalled):
+    with pytest.raises(BackendNotInstalledError):
         clickhouse_connect.get_client(backend="definitely_not_a_real_backend")
 
 
@@ -98,6 +110,8 @@ def test_error_mapper_returns_cc_exception():
 
 def test_default_backend_is_http_byte_identical(monkeypatch):
     # Passing backend="http" (or omitting it) must not divert to the registry path.
+    # We only verify the routing decision -- whether the resulting HttpClient construction
+    # then succeeds (or fails because port 1 is closed) is unrelated to the routing check.
     called = {"resolve": False}
     import clickhouse_connect.driver.registry as registry
 
@@ -106,8 +120,9 @@ def test_default_backend_is_http_byte_identical(monkeypatch):
         raise AssertionError("registry must not be consulted for the http backend")
 
     monkeypatch.setattr(registry, "resolve_backend", _fail)
-    # No host/server here, so we only assert the routing decision, not a live connection.
-    # get_client with backend="http" should attempt the normal HTTP path (not the registry).
-    with pytest.raises(Exception):  # noqa: B017  -- connection will fail; that is fine
-        clickhouse_connect.get_client(backend="http", host="127.0.0.1", port=1)
+    try:
+        client = clickhouse_connect.get_client(backend="http", host="127.0.0.1", port=1)
+        client.close()
+    except Exception:  # noqa: BLE001 -- connection failure is fine; the routing check is what matters
+        pass
     assert called["resolve"] is False

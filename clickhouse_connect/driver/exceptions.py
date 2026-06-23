@@ -112,7 +112,7 @@ class StreamFailureError(Exception):
     """Stream failed unexpectedly"""
 
 
-class BackendNotInstalled(ProgrammingError):
+class BackendNotInstalledError(ProgrammingError):
     """Raised when ``get_client(backend=...)`` names a backend that is not registered.
 
     A backend is registered out-of-tree through the ``clickhouse_connect.backends``

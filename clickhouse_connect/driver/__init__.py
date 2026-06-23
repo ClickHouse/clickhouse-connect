@@ -156,9 +156,17 @@ def create_client(
     :param backend: Selects an out-of-tree execution backend registered through the
       ``clickhouse_connect.backends`` entry point (e.g. ``"chdb"`` for the in-process embedded
       engine). Defaults to the built-in HTTP transport. If the named backend is not installed,
-      a ``BackendNotInstalled`` error with an install hint is raised; clickhouse-connect never
-      installs a backend itself. Backend-specific options (such as chDB's ``path``) are passed
-      through as keyword arguments.
+      a ``BackendNotInstalledError`` error with an install hint is raised; clickhouse-connect
+      never installs a backend itself. Backend-specific options (such as chDB's ``path``) are
+      passed through as keyword arguments.
+
+      When ``backend`` is not ``"http"`` (or unset), the HTTP-specific normalization steps are
+      skipped: the ``dsn`` argument is not parsed into ``host``/``port``/``username`` etc., the
+      ``generic_args`` mapping is forwarded verbatim instead of being folded into HTTP keyword
+      arguments and ClickHouse settings, and HTTP-only arguments (``access_token``,
+      ``token_provider``, ``compress``, ``headers``, ``secure``, ``interface``, ``port``, ...)
+      are forwarded to the backend factory, which decides what to honor or ignore. A backend
+      that wants to support DSN-style configuration should parse it itself.
 
     :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
 
@@ -207,8 +215,26 @@ def create_client(
     if backend and backend != "http":
         from clickhouse_connect.driver.registry import resolve_backend
 
+        # Forward every public argument so a backend is a genuine drop-in for HTTP; the
+        # backend factory itself decides which arguments it can honor (the chDB backend,
+        # for example, accepts ``settings`` and ``database`` and silently ignores HTTP-only
+        # arguments like host/auth/compress). A backend that wants to reject silently-
+        # ignored kwargs can do so in its own factory.
         return resolve_backend(backend).create_client(
-            database=database, settings=settings or {}, generic_args=generic_args, **kwargs
+            host=host,
+            username=username,
+            password=password,
+            access_token=access_token,
+            token_provider=token_provider,
+            database=database,
+            interface=interface,
+            port=port,
+            secure=secure,
+            dsn=dsn,
+            settings=settings or {},
+            headers=headers,
+            generic_args=generic_args,
+            **kwargs,
         )
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
@@ -306,6 +332,19 @@ async def create_async_client(
       so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
+    :param backend: Selects an out-of-tree execution backend registered through the
+      ``clickhouse_connect.backends`` entry point (e.g. ``"chdb"`` for the in-process embedded
+      engine). Defaults to the built-in async HTTP transport. If the named backend is not installed,
+      a ``BackendNotInstalledError`` error with an install hint is raised; if it does not provide an
+      async client, a ``ProgrammingError`` is raised. Backend-specific options (such as chDB's
+      ``path``) are passed through as keyword arguments.
+
+      When ``backend`` is not ``"http"`` (or unset), the HTTP-specific normalization steps are
+      skipped (as in the sync factory): ``dsn`` is not parsed into ``host``/``port``/etc.,
+      ``generic_args`` is forwarded verbatim instead of being folded into keyword arguments
+      and settings, and HTTP-only arguments (``access_token``, ``token_provider``, ``compress``,
+      ``headers``, ``secure``, ``interface``, ``port``, ``connector_limit``, ...) are forwarded
+      to the backend factory, which decides what to honor or ignore.
     :param connector_limit: Maximum number of allowable connections to the server
     :param connector_limit_per_host: Maximum number of connections per host
     :param keepalive_timeout: Time limit on idle keepalive connections
@@ -351,15 +390,37 @@ async def create_async_client(
     if backend is None and generic_args and "backend" in generic_args:
         backend = generic_args.pop("backend")
     if backend and backend != "http":
+        from collections.abc import Awaitable as _Awaitable
+
         from clickhouse_connect.driver.registry import resolve_backend
 
         factory = resolve_backend(backend)
         create_async = getattr(factory, "create_async_client", None)
         if create_async is None:
             raise ProgrammingError(f"Backend {backend!r} does not provide an async client")
-        client = create_async(database=database, settings=settings or {}, generic_args=generic_args, **kwargs)
-        # Backends may return an already-initialized client or a coroutine to await.
-        if hasattr(client, "__await__"):
+        # Forward every public argument so a backend is a genuine drop-in for HTTP; the
+        # backend factory itself decides which arguments it can honor.
+        client = create_async(
+            host=host,
+            username=username,
+            password=password,
+            access_token=access_token,
+            token_provider=token_provider,
+            database=database,
+            interface=interface,
+            port=port,
+            secure=secure,
+            dsn=dsn,
+            settings=settings or {},
+            headers=headers,
+            generic_args=generic_args,
+            connector_limit=connector_limit,
+            connector_limit_per_host=connector_limit_per_host,
+            keepalive_timeout=keepalive_timeout,
+            **kwargs,
+        )
+        # Backends may return an already-initialized client or an awaitable producing one.
+        if isinstance(client, _Awaitable):
             client = await client
         return client
 
