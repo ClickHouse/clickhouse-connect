@@ -49,8 +49,9 @@ def test_no_dsn_or_explicit_values_keeps_database_none_and_resolves_port():
 
 
 def test_dsn_without_path_keeps_database_none():
-    _, _, _, _, database, _ = parse("http://host:8123")
-    assert database is None
+    for dsn in ("http://host:8123", "http://host:8123/"):
+        _, _, _, _, database, _ = parse(dsn)
+        assert database is None
 
 
 def test_legacy_default_database_sentinel_treated_as_unspecified():

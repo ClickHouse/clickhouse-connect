@@ -61,7 +61,7 @@ def _parse_connection_params(
         host = host or parsed.hostname
         port = port or parsed.port
         if not database and parsed.path:
-            database = unquote(parsed.path[1:].split("/")[0])
+            database = unquote(parsed.path[1:].split("/")[0]) or None
         for k, v in parse_qs(parsed.query).items():
             kwargs[k] = v[0]
     use_tls = str(secure).lower() == "true" or interface == "https" or (not interface and str(port) in ("443", "8443"))
