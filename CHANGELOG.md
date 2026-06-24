@@ -3,6 +3,7 @@
 ## UNRELEASED
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - `Cursor.executemany` now correctly resets `rowcount` and reports the number of inserted rows after a bulk insert. Previously, `rowcount` retained the value from the previous operation. The insert summary is also appended to `cursor.summary`, consistent with the non-bulk path. In addition, passing a generator as `seq_of_parameters` no longer raises `TypeError`; the bulk-insert optimisation is now skipped for non-indexable iterables and the operation falls through to the row-by-row path as PEP 249 requires.
 - Fixed a connection failure partway through reading a query result being silently treated as a complete result. The reader detected the broken stream but discarded the error once any rows had already been read, so a truncated result was returned as if it were whole. A mid-stream read failure now raises `StreamFailureError`, carrying the server-side error message when ClickHouse reported one. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
 - `Client.insert_arrow` and `AsyncClient.insert_arrow` no longer drop the `transport_settings` argument. It was passed positionally into the `compression` parameter, so transport settings were ignored and a non-empty value corrupted the request. It is now forwarded correctly.
@@ -24,6 +25,7 @@
 - Server errors now expose structured fields on the raised exception. `DatabaseError` and `OperationalError` carry a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so callers can branch on `exc.code` instead of parsing the message string. `code` is set even when `show_clickhouse_errors` is disabled. `name` is only set when error detail is enabled. Both default to `None` when unavailable, such as on transport errors. Closes [#786](https://github.com/ClickHouse/clickhouse-connect/issues/786).
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - DB API `Cursor.executemany` no longer raises `AttributeError: 'tuple' object has no attribute 'keys'` when rows are passed as sequences instead of mappings. The bulk insert optimization assumed every row was a dict, but PEP 249 allows `seq_of_parameters` to contain sequences, and `cursor.execute` already accepted positional parameters. Sequence rows now use the same bulk insert path, taking column names from the INSERT statement when present. This fixes consumers like Airflow's `DbApiHook.insert_rows(executemany=True)`, which passes tuples.
 - Large query parameter payloads are now automatically sent as form data in the request body instead of the URL query string. Server-side bind parameters were urlencoded into the request URL, so a large `IN` list or a high-dimensional vector embedding could produce a URL that HTTP intermediaries such as nginx, AWS ALB, and CloudFront reject with HTTP 414. The client now routes parameters to the POST body once their encoded length passes a threshold, which keeps the URL small. Setting `form_encode_query_params=True` still forces form encoding for all queries. Queries using binary parameter binds are never promoted automatically and only use form encoding when the flag is set. This does not change the server's per-value size limit, which is governed by `http_max_field_value_size`. Applies to both sync and async clients. Closes [#740](https://github.com/ClickHouse/clickhouse-connect/issues/740).
 - `uuid.UUID`, `IPv4Address`, and `IPv6Address` values nested inside `Array`, `Tuple`, or `Map` server-side bind parameters are now quoted, matching client-side parameter formatting. Previously they rendered unquoted, so an `IN` list of UUIDs bound to `{name:Array(String)}` (as produced by SQLAlchemy `Column.in_` with `server_side_params=True`) was rejected by the server with `Code: 26 ... cannot be parsed as Array(String)`. Closes [#791](https://github.com/ClickHouse/clickhouse-connect/issues/791).
@@ -37,6 +39,7 @@
 - Added a `headers` option to `create_client`/`create_async_client` for attaching custom HTTP headers to every request, including the initialization queries sent during client creation. Useful for HTTP gateways that require auth headers such as Cloudflare Access service tokens.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - A `datetime` bound to a server-side `{name:DateTime64(...)}` placeholder now keeps its sub-second precision instead of being truncated to seconds. The declared parameter type drives this, so no `_64` name suffix or manual `DT64Param` wrapper is needed, and it applies through `Array` and `Tuple` hints. Plain `DateTime` binds are unchanged. Closes [#739](https://github.com/ClickHouse/clickhouse-connect/issues/739).
 - Strip `--` line comments that have no following space when classifying queries, so a DDL with a leading `--sql`-style comment is routed as a command instead of raising `StreamFailureError`. Closes [#499](https://github.com/ClickHouse/clickhouse-connect/issues/499).
 - SQLAlchemy: implement reflection on the dialect itself so `MetaData.reflect()` and `Inspector.get_multi_columns()` work.
@@ -48,6 +51,7 @@
 ## 1.1.1, 2026-05-27
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Async client: `ping()` now routes through the configured proxy, matching `_raw_request`. Previously the proxy was omitted, so `ping()` falsely returned `False` on networks where the server was only reachable via the proxy. Closes [#757](https://github.com/ClickHouse/clickhouse-connect/issues/757).
 - Fix `query("SHOW ROW POLICIES")`/`query("SHOW POLICIES")` by routing these non-tabular statements without appending `FORMAT Native`. Empty row-policy `SHOW` command results now return `""` instead of `QuerySummary`. Closes [#761](https://github.com/ClickHouse/clickhouse-connect/issues/761).
 - Async client: retry stale keep-alive resets surfaced by aiohttp as `ClientOSError` or `ClientConnectionResetError`, fixing large async inserts on killed pooled connections. Closes [#763](https://github.com/ClickHouse/clickhouse-connect/issues/763).
@@ -61,6 +65,7 @@
 - SQLAlchemy: the `alembic` extra now requires `alembic>=1.16` (previously `>=1.9`) so the documented `IF EXISTS` / `IF NOT EXISTS` Alembic operation kwargs are available.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - SQLAlchemy: `op.add_column(..., clickhouse_settings={...})` now works through the public Alembic operations API, and rendered `AddColumnOp` migrations preserve extra ClickHouse kwargs.
 - SQLAlchemy: Alembic migrations now handle comments with ClickHouse-compatible syntax. Column comments on `CREATE TABLE` / `ADD COLUMN` no longer emit rejected `COMMENT ON COLUMN` statements; table comments are now emitted in generated DDL, reflected for no-op autogenerate, and changed or dropped with `ALTER TABLE ... MODIFY COMMENT`.
 - Async client: `server_host_name` now also overrides the TLS SNI / certificate hostname, matching the sync client. Previously the async path only applied it to the HTTP `Host` header, so connecting to host A while presenting SNI B (the 0.x `pool_mgr=urllib3.PoolManager(server_hostname=...)` pattern, useful for ClickHouse Cloud VPC endpoints reached via external DNS) was not expressible against the new aiohttp-based client. Both `_raw_request` and `ping()` now pass `ssl=self._ssl_context, server_hostname=self.server_host_name` per request when an SSL context is in use. Closes [#752](https://github.com/ClickHouse/clickhouse-connect/issues/752).
@@ -75,11 +80,13 @@
 Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers, rebased on `1.0.0rc3` so the insert-retry fix from rc3 is also included.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
 
 ## 1.0.1, 2026-05-19
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Recognize `Fixed/UTC±HH:MM:SS` timezones emitted by ClickHouse servers without an IANA tz database (in column types, `X-ClickHouse-Timezone`, and `SELECT timezone()`). Previously raised `ProgrammingError` on any column read, parameter bind, or client init touching one. The exact `±24:00:00` boundary remains rejected because Python's `datetime.timezone` cannot represent it. Closes [#702](https://github.com/ClickHouse/clickhouse-connect/issues/702).
 - Async client: drain in-flight requests before closing the underlying aiohttp session. Sharing a single `AsyncClient` across concurrent coroutines previously raised `RuntimeError: Session is closed` (and related `Connection reset` / `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` cascades) whenever `max_connection_age` triggered a pool rotation while other tasks had requests in flight. `close_connections()` now installs the new session before retiring the old one, and waits for outstanding requests (including streaming responses) to release their lease before tearing it down. `close()` clears `self._session` so post-close calls fail with `ProgrammingError` instead of leaking aiohttp's `RuntimeError`. Closes [#744](https://github.com/ClickHouse/clickhouse-connect/issues/744)
 - Async client: `ca_cert="certifi"` shorthand now resolves to `certifi.where()`, matching the sync client. Previously the async path passed the literal string to `ssl_context.load_verify_locations`, producing `FileNotFoundError`. Closes [#742](https://github.com/ClickHouse/clickhouse-connect/issues/742)
@@ -94,6 +101,7 @@ Upgrading from a 0.15.x or earlier release? See [MIGRATION.md](MIGRATION.md) for
 ## 1.0.0rc3, 2026-05-07
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix intermittent `Code: 62. Empty query. (SYNTAX_ERROR)` on inserts when a pooled keep-alive connection is reset between attempts. The retry path now rebuilds the insert body instead of replaying an already-drained generator. Affects both sync and async clients. Closes [#731](https://github.com/ClickHouse/clickhouse-connect/issues/731)
 
 ## 1.1.0a1, 2026-05-06
@@ -111,6 +119,7 @@ This is an **alpha preview** of the upcoming 1.1.0 release, published from the a
 - **DDL compiler improvements** including better handling of nested container types and Tuple adaptation.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix Alembic autogenerated migrations rendering enum types (including nested container types) with the correct ClickHouse-compatible representation.
 
 ## 1.0.0rc2, 2026-05-05
@@ -122,6 +131,7 @@ This is an **alpha preview** of the upcoming 1.1.0 release, published from the a
 - Significantly faster `Decimal` and `BigDecimal` reads. The decode path no longer constructs intermediate strings per row, building values directly from the integer column via `Decimal.scaleb`.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
 - SQLAlchemy `Bool` type now accepts and forwards `**kwargs` to the underlying `SqlaBoolean` constructor. SQLAlchemy's `SchemaType` machinery passes internal kwargs (e.g., `_create_events`) when copying or adapting the type during ORM model use or `Table.to_metadata()`, which previously raised a `TypeError`. Fixes [#705](https://github.com/ClickHouse/clickhouse-connect/issues/705)
 - SQLAlchemy: `CreateDatabase` with `engine="Replicated"` now emits a closing `)` after the `(zoo_path, shard, replica)` arguments, fixing previously invalid DDL on this path. The same arguments and the `system.tables` lookup in `get_engine` now go through bound parameters and the existing `format_str` helper instead of raw f-string interpolation.
@@ -140,6 +150,7 @@ This is an **alpha preview** of the upcoming 1.1.0 release, published from the a
 - Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix Dynamic/JSON column reads when a path's inferred type sorts alphabetically after `"SharedVariant"`. ClickHouse's `DataTypeVariant` constructor sorts its members alphabetically by name, and discriminator bytes on the wire index into that sorted order. The client appended `SharedVariant` to the variant list without sorting, so affected paths were read as the wrong variant. Closes [#712](https://github.com/ClickHouse/clickhouse-connect/issues/712)
 - Fix async streaming race condition that caused unhandled `InvalidStateError` exceptions on early stream termination. When breaking out of an async stream early, `shutdown()` scheduled a `set_result` callback for pending futures via `call_soon_threadsafe`, but `Task.cancel()` could cancel the future before the callback ran. The done-check is now deferred into the callback itself so it sees the actual future state at execution time.
 - SQLAlchemy: Wrap raw SQL strings in `text()` in `ChClickHouseDialect.get_schema_names()` and `get_table_names()`, so `Inspector.get_schema_names()` and `get_table_names()` work on SQLAlchemy 2.x instead of raising `ObjectNotExecutableError`.
@@ -157,6 +168,7 @@ This is an **alpha preview** of the upcoming 1.1.0 release, published from the a
 ## 0.15.1, 2026-03-30
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Use timezone from parameter type hint instead of `server_tz` when formatting tz-aware datetimes in `{param:Type}` bind expressions. Previously, `bind_query` always converted datetimes to the server timezone, ignoring explicit timezone declarations in type hints like `DateTime64(6, 'UTC')`. This caused incorrect query results when `server_tz` differed from the hint timezone. Handles `LowCardinality`, `Nullable`, and container type wrappers. Fixes [#697](https://github.com/ClickHouse/clickhouse-connect/issues/697)
 
 ## 0.15.0, 2026-03-26
@@ -172,6 +184,7 @@ This is an **alpha preview** of the upcoming 1.1.0 release, published from the a
 - Remove `py.typed` marker file. The package does not have comprehensive type annotations, so the PEP 561 marker was causing false type errors for mypy/pyright users. Closes [#691](https://github.com/ClickHouse/clickhouse-connect/issues/691)
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - SQLAlchemy: Fix `.final()` and `.sample()` silently overwriting each other when chained. Both methods now store modifiers as custom attributes on the `Select` instance and render them during compilation, replacing the previous `with_hint()` approach that only allowed one hint per table. Chaining in either order (e.g. `select(t).final().sample(0.1)`) correctly produces `FROM t FINAL SAMPLE 0.1`. Also fixes rendering for aliased tables (`FROM t AS u FINAL`) and supports explicit table targeting in joins. Fixes [#658](https://github.com/ClickHouse/clickhouse-connect/issues/658)
 - SQLAlchemy: Fix `sqlalchemy.values()` to generate ClickHouse's `VALUES` table function syntax. The compiler now emits `VALUES('col1 Type1, col2 Type2', ...)` with the column structure as the first argument, instead of the standard SQL form that places column names after the alias. Generic SQLAlchemy types are mapped to ClickHouse equivalents (e.g. `Integer` to `Int32`, `String` to `String`). Also handles CTE usage by wrapping in `SELECT * FROM VALUES(...)`. Fixes [#681](https://github.com/ClickHouse/clickhouse-connect/issues/681)
 - SQLAlchemy: Fix `GraphiteMergeTree` and `ReplicatedGraphiteMergeTree` to properly single-quote the `config_section` argument as ClickHouse requires.
@@ -179,6 +192,7 @@ This is an **alpha preview** of the upcoming 1.1.0 release, published from the a
 ## 0.14.1, 2026-03-11
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix JSON and Dynamic column read paths to properly decode shared variant data instead of returning raw binary with discriminator byte prefixes. Shared data values, used when paths exceed `max_dynamic_paths` or types exceed `max_dynamic_types` are now decoded from ClickHouse's binary variant encoding. Scalar types like integers, floats, strings, booleans, and nulls as well as nested objects are now fully decoded. Compound types like Array, Tuple, Map, DateTime, Date, Decimal, and UUID are not yet decoded and will be returned as raw bytes. Fixes [#599](https://github.com/ClickHouse/clickhouse-connect/issues/599), [#615](https://github.com/ClickHouse/clickhouse-connect/issues/615), and [#674](https://github.com/ClickHouse/clickhouse-connect/issues/674)
 - SQLAlchemy: Fixed empty ORM/DBAPI SELECT results so `cursor.description` is still populated when ClickHouse Native format returns no data blocks. This restores correct handling for empty result sets, including parameterized and limited queries. Closes [#675](https://github.com/ClickHouse/clickhouse-connect/issues/675)
 - Restore the default Cython runtime path so compiled `driverc` modules are used again unless `CLICKHOUSE_CONNECT_USE_C=0` is set. Fix C/Python parity issues in streaming exception handling, `FixedString` string reads, nullable array helpers, and numpy conversion helpers, and expand CI and unit parity coverage to keep the optimized and pure-Python paths in sync. Addresses [#676](https://github.com/ClickHouse/clickhouse-connect/issues/676)
@@ -215,6 +229,7 @@ are now serialized using their native ClickHouse types client-side (e.g. inserti
 - Add type annotations to public API methods in `Client`, `AsyncClient`, `HttpClient`, and `QueryResult`. Ref [#567](https://github.com/ClickHouse/clickhouse-connect/issues/567)
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix `dict_add` parameter typed as builtin `any` instead of `typing.Any`.
 - Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
 - SQLAlchemy: `GROUP BY` now renders label aliases instead of full expressions which avoids circular reference errors when an alias shadows a source column name in ClickHouse.
@@ -231,6 +246,7 @@ A `DeprecationWarning` will now be displayed when initializing the client on Pyt
 Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix issue where settings matching server defaults were not stored on client during initialization. Explicitly setting a default value is now respected (e.g., to prevent ClickHouse from auto-enabling optimizations). Closes [#638](https://github.com/ClickHouse/clickhouse-connect/issues/638)
 - Raise OperationalError when ResponseSource hits network failure before any data is received. Previously, empty result would be returned. Closes [#620](https://github.com/ClickHouse/clickhouse-connect/issues/620)
 - Fix issue with DROP table in client temp table test.
@@ -251,6 +267,7 @@ Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 ## 0.10.0, 2025-11-14
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fixed DST fallback bug in DateTime and DateTime64 types caused by passing potentially ambiguous times to pd.DateTimeIndex constructor. Closes [#585](https://github.com/ClickHouse/clickhouse-connect/issues/585)
 - Fixed issue with JSON key dot escaping. Closes [#571](https://github.com/ClickHouse/clickhouse-connect/issues/571)
 
@@ -305,6 +322,7 @@ Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 - Replace the use of deprecated `datetime.utcfromtimestamp`
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fixed an AttributeError on `http.client` when importing `clickhouse_connect` under certain circumstances
 - Fixes problem with df inserts of Time and Time64 types. Closes [#524](https://github.com/ClickHouse/clickhouse-connect/issues/524)
 
@@ -314,6 +332,7 @@ Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 - Added a standalone test file (`tests/unit_tests/test_driver/test_cursor.py`) for testing cursor behavior
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix SQLAlchemy execution error by using text() function by @lakako in https://github.com/ClickHouse/clickhouse-connect/pull/491
 - Test fixes for main by @genzgd in https://github.com/ClickHouse/clickhouse-connect/pull/497
 - Ensure types are returned even if there are no rows by @orian in https://github.com/ClickHouse/clickhouse-connect/pull/500
@@ -341,6 +360,7 @@ behind a proxy that used path based routing (such as `https://big_proxy:8080/cli
 
 ## 0.8.16, 2025-03-28
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Don't send a setting value if the setting is already correct according to the `system.settings` table. 
 Closes https://github.com/ClickHouse/clickhouse-connect/issues/469
 - Ensure that the http `user_agent` header is in ascii.  Note this could lead to an incorrectly encoded `os_user` if the
@@ -393,6 +413,7 @@ Fixes https://github.com/ClickHouse/clickhouse-connect/issues/441 and likely som
 
 ## 0.8.10, 2024-12-14
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - The experimental JSON type would break in some circumstances with ClickHouse server version 24.10 and later.  This has
 been fixed.  The fix is incompatible with ClickHouse version 24.8 and 24.9 however, so see the above WARNING about
 mixing JSON types
@@ -423,6 +444,7 @@ https://github.com/ClickHouse/clickhouse-connect/issues/426
 
 ## 0.8.6, 2024-11-01
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Correctly stream unchunked HTTP responses.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/417.
 - Don't use `wait_end_of_query` for any streaming requests.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/416
 
@@ -487,6 +509,7 @@ datatypes are complex and still experimental in ClickHouse server.  Current test
 quite limited.  Please don't hesitate to report issues with the new types.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - When operating ClickHouse Server in `strict` TLS mode, HTTPS connections [require](https://github.com/ClickHouse/poco/blob/master/NetSSL_OpenSSL/include/Poco/Net/Context.h#L84-L89) a client certificate even if that
 certificate is not used for authentication.  A new client parameter `tls_mode='strict'` can be used in this situation where
 username/password authentication is being used with client certificates.  Other valid values for the new `tls_mode` setting
@@ -564,6 +587,7 @@ correctly in this situation by settings the `verify` parameter to `proxy`.  This
 
 ## 0.7.13, 2024-06-24
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Set required minimum version for optional tzlocal dependency.  Thanks to [drew-talon](https://github.com/drew-talon) for
 reporting the issue and submitting the fix.  Closes #360.
 - Extended the effect of the `show_clickhouse_errors` client setting to exclude showing hostname and port for errors
@@ -629,6 +653,7 @@ the PR that highlighted the somewhat messy public API.
 
 ## 0.7.5, 2024-03-28
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fixed client side binding for Python format strings using `%d` (int) and `%f` (float) format patterns.  Closes
 https://github.com/ClickHouse/clickhouse-connect/issues/327
 - Allows empty `data` argument in the initializer of `ExternalFile` / `ExternalData` objects. Thanks to
@@ -646,6 +671,7 @@ https://github.com/ClickHouse/clickhouse-connect/issues/327
 
 ## 0.7.2, 2024-03-07
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Inserts into columns with multibyte UTF-8 names were broken.  This has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/312
 - If the result of applying the precedence of timezones to a column results in an explicit UTC timezone, the datetime object returned
 should now be timezone naive.  This should make the behavior consistent with the [documentation](https://clickhouse.com/docs/en/integrations/python#time-zones).
@@ -661,6 +687,7 @@ address https://github.com/ClickHouse/clickhouse-connect/issues/307.
 
 ## 0.7.1, 2024-02-28
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Changed type hint of the `query` parameter in Client `query*` methods to `Optional[str]` to work correctly with type analyzers.
 This also highlights that using a query_context instead of a query in these methods is supported (and preferred for repeated queries).
 Thanks to [Avery Fischer](https://github.com/biggerfisch) for the PR!
@@ -720,6 +747,7 @@ timezones differed between the client and ClickHouse server.  Closes https://git
 
 ## 0.6.19, 2023-11-07
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - In some circumstances it was possible to insert a `None` value into a non-Nullable String column.  As this could mask
 invalid input data, any attempt to insert None into a non-Nullable String or LowCardinality(String) will now throw
 a DataError
@@ -730,6 +758,7 @@ fragile in several respects, so the best approach remains to use simple column n
 
 ## 0.6.18, 2023-10-25
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Reduce the estimated insert block size from 16-32MB to 1-2MB for large inserts.  The large data transfers could cause
 "write timeout" errors in the Python code or "empty query" responses from ClickHouse over HTTPS connections.
 Should fix https://github.com/ClickHouse/clickhouse-connect/issues/258
@@ -754,6 +783,7 @@ https://github.com/ClickHouse/clickhouse-connect/issues/249
 
 ## 0.6.14, 2023-09-22
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fixed insert error when inserting a zero length string into a FixedString column.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/244
 - Removed unnecessary validate_entrypoints import from top level package __init__ that was breaking Python 3.7.  Note that Python 3.7 is EOL
 and will no longer be supported as of January 1, 2024.
@@ -806,6 +836,7 @@ recognized.
 
 ## 0.6.7, 2023-07-18
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fixed an issue for older versions of ClickHouse where the server would send an initial block of 0 rows for larger queries.
 This would break some queries with LowCardinality columns.  Closes https://github.com/ClickHouse/clickhouse-connect/issues/221 
 - Fixed the`compression` alias for the `compress` client setting in SQLAlchemy/Superset DSN urls.
@@ -821,6 +852,7 @@ https://github.com/ClickHouse/clickhouse-connect/issues/219
 
 ## 0.6.5, 2023-07-06
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - The Client min_version method now ignores unrecognized "text" elements.  This could cause issues for unofficial
 ClickHouse releases. Thanks to [Diego Nieto](https://github.com/lesandie) for the fix!
 - In most cases insert query is now sent as part of the POST body instead of as a query parameter.  This fixes
@@ -847,6 +879,7 @@ avoids some indirect dependency problems.  Thanks to [cwegener](https://github.c
 
 ## 0.6.4, 2023-06-22
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Quote database name when retrieving tables via SQLAlchemy.  Fixes the Superset issue https://github.com/apache/superset/issues/24372
 for recent versions of Superset using clickhouse-connect
 - Don't rely on the ClickHouse currentDatabase() function to set an explicit database parameter.  This should not change functionality
@@ -874,6 +907,7 @@ Minor documentation clean up regarding Superset compatibility
 
 ## 0.6.0, 2023-06-05
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Use uuid4 instead of uuid1 for generating client level session_ids, as well as use a new urllib3 PoolManager
 when multiprocessing mode is detected.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/194.
 Thanks to [Guillaume Matheron](https://github.com/guillaumematheron) for filing the issue and digging into details.
@@ -899,12 +933,14 @@ because of this behavior in CHProxy.  Fixes https://github.com/ClickHouse/clickh
 
 ## 0.5.24, 2023-05-11
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - The client `command` method now accepts ClickHouse "external data."  Closes https://github.com/ClickHouse/clickhouse-connect/issues/186
 - Arrays of Python date and datetime objects are now correctly formatted when use as server side parameters.  Fixes https://github.com/ClickHouse/clickhouse-connect/issues/188
 - Fixed inserts of SimpleAggregateFunction columns with a LowCardinality type parameter.  https://github.com/ClickHouse/clickhouse-connect/issues/187
 
 ## 0.5.23, 2023-05-03
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - SQLAlchemy table reflection threw an exception for `SimpleAggregateFunction` columns.  This has been fixed.
 https://github.com/ClickHouse/clickhouse-connect/issues/180
 - The client no longer logs an invalid warning for query types that did not return a timezone header.
@@ -934,6 +970,7 @@ for most "nullable types")  This should allow creating "basic" dataframes for gr
 
 ## 0.5.20, 2023-04-06
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix Pandas dataframe inserts where the Dataframe index does not match the data values (after, for example, creating a new DataFrame from
 a subset of the original.)   https://github.com/ClickHouse/clickhouse-connect/issues/167  Thanks to [Georgi Peev](https://github.com/georgipeev) for
 the report and suggested fix, and his continued stress testing of Pandas functionality.
@@ -943,6 +980,7 @@ Many thanks to [Alexander Khmelevskiy](https://github.com/khmelevskiy) for the e
 
 ## 0.5.19, 2023-04-05
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Fix quoting and escaping of array literals in server parameters.  See [#159](https://github.com/ClickHouse/clickhouse-connect/issues/159).  Big thanks to
 [Joachim Jablon](https://github.com/ewjoachim) for the report and the fix.
 - Pandas and numpy Date values were incorrect for values after 2050.  This has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/164
@@ -1025,6 +1063,7 @@ extended Pandas dtype.  Closes https://github.com/ClickHouse/clickhouse-connect/
 - There are new low level optimizations for reading some Nullable columns, and writing Pandas dataframes
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Timezone information from ClickHouse DateTime columns with a timezone was lost.  There was a workaround implemented
 for this issue in v0.5.8 that allowed assigned timezones to the query or columns on the client side.  ClickHouse now
 support sending this timezone data with the column, but only in server versions 23.2 and later.  If such a version is
@@ -1076,6 +1115,7 @@ LowCardinality(Nullable(String)) columns.)
 - Extraction of ClickHouse error messages included in the HTTP Response has been improved
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - When reading native Python integer columns, the `use_none=False` query parameter would not be respected,
 and ClickHouse NULLS would be returned as None instead of 0.  `use_none=False` should now work correctly for
 Nullable(*Int*) columns
@@ -1085,6 +1125,7 @@ Nullable(*Int*) columns
 ## 0.5.9, 2023-02-11
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - Large query results using `zstd` compression incorrectly buffered all incoming data at the start of the query,
 consuming an excessive amount of memory. This has been fixed. https://github.com/ClickHouse/clickhouse-connect/issues/122
 Big thanks to [Denny Crane](https://github.com/den-crane) for his detailed investigation of the problem.  Note that
@@ -1161,6 +1202,7 @@ for small datasets to 5x or more for very large Pandas DataFrames (even without 
 Pandas Timestamp objects have particularly benefited from the new implementation.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * The default `maxsize` for concurrent HTTP connections to a single host was accidentally dropped in the 0.5.x release.  It
 has been restored to 8 for better performance when using multiple client objects.
 * A single low level retry has been restored for HTTP connections on ConnectionReset or RemoteDisconnected exceptions.  This
@@ -1244,6 +1286,7 @@ allocate significantly less memory and do much less internal data copying otherw
 of a million rows or more, streaming can improve query performance 2x or more.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * As mentioned, ClickHouse `gzip` performance is poor compared to `lz4` and `zstd`.  Using those compression methods by default
 avoids the major performance degradation seen in https://github.com/ClickHouse/clickhouse-connect/issues/89.
 * Passing SqlAlchemy query parameters to the driver.Client constructor was broken by changes in release 0.4.8.
@@ -1266,6 +1309,7 @@ precedence over values extracted from the dsn.
 ## 0.4.7, 2022-12-05
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * JSON inserts with the ujson failed, this has been fixed.  https://github.com/ClickHouse/clickhouse-connect/issues/84
 
 ### New Features
@@ -1274,18 +1318,21 @@ precedence over values extracted from the dsn.
 ## 0.4.6, 2022-11-29
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fixed a major settings issue with connecting to a readonly database (introduced in v0.4.4)
 * Fix for broken database setup dialog with recent Superset versions using SQLAlchemy 1.4
 
 ## 0.4.5, 2022-11-24
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Common settings were stored in an immutable named tuple and could not be changed.  This is fixed.
 * Fixed issue where the query_arrow method would not use the client database
 
 ## 0.4.4, 2022-11-22
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Ignore all "transport settings" when validating settings.  This should fix https://github.com/ClickHouse/clickhouse-connect/issues/80 
 for older ClickHouse versions
 
@@ -1308,6 +1355,7 @@ Changing this setting to 'send' will include such settings with the request anyw
 * The `clickhouse_connect.get_client` method now accepts a `settings` dictionary argument for consistency with other client methods.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fixed insert of Pandas Dataframes for Timestamp columns with timezones  https://github.com/ClickHouse/clickhouse-connect/issues/77
 * Fixed exception when inserting a Pandas Dataframes with NaType values into ClickHouse Float column (see known issue)
 
@@ -1318,6 +1366,7 @@ This is a side effect of a Pandas issue where `df.replace` cannot distinguish be
 ## 0.4.1, 2022-11-14
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Numpy array read and write compatibility has been refined and performance has been improved.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/69
 * Pandas Timestamp objects are now correctly handled for all supported ClickHouse Date* types.  This fixes https://github.com/ClickHouse/clickhouse-connect/issues/68
 * SQLAlchemy datatypes are now correctly mapped to the underlying ClickHouse type regardless of case.  This fixes an issue with migrating Superset datasets and queries from
@@ -1332,6 +1381,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 * The transformation of Pandas data to Python types now bypasses Numpy.  As a result compatibility for ClickHouse date, integer, and NULL types has been significantly improved
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * An insert using chunked transfer encode could fail in progress during serialization to ClickHouse native format.  This would "hang" the request after throwing the exception, leading to ClickHouse reporting
 "concurrent session" errors.  This has been fixed.
 * Pandas DataFrame inserts into tables with a "large" integer column would throw an exception.  This has been fixed.
@@ -1345,6 +1395,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.3.8, 2022-11-03
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fix read compression typo
 
 
@@ -1357,6 +1408,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 * Pandas DataFrame inserts have been optimized by keep the data in columnar format during the entire insert process
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fix inserts for date and datetime columns from Pandas dataframes.
 * Fix serialization issues for Decimal128 and Decimal256 types
 
@@ -1365,6 +1417,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.3.6, 2022-11-02
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Update QueryContext.updated_copy method to preserve settings, parameters, etc.  https://github.com/ClickHouse/clickhouse-connect/issues/65
 
 
@@ -1399,6 +1452,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.3.1, 2022-10-19
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * UInt64 types were incorrectly returned as signed Python ints even outside of Superset.  This has been fixed
 * Superset Engine Spec will now format (U)Int256 and (U)Int128 types as strings to avoid throwing a conversion exception
 
@@ -1408,17 +1462,20 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 * The row_binary option for ClickHouse serialization has been removed.  The performance is significantly lower than Native format and maintaining the option added complexity with no corresponding benefit
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * The Database Connection dialog was broken in the latest Superset development builds.  This has been fixed
 * IPv6 Addresses fixed for default Superset configuration
 
 ## 0.2.10, 2022-09-28
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Add single retry for HTTP RemoteDisconnected errors from the ClickHouse Server.  This prevents exception spam when requests (in particular inserts) are sent at approximately the same time as the ClickHouse server closes a keep alive connection.
 
 ## 0.2.9, 2022-09-24
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fix incorrect validation errors in the Superset connection dialog
 
 
@@ -1440,11 +1497,13 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.2.6, 2022-09-08
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fixed an SQLAlchemy dialect issue with SQLAlchemy 1.4 that would cause problems in the most recent Superset version
 
 ## 0.2.5, 2022-08-30
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fixed an issue where DBAPI cursors returned an invalid description object for columns.  This would cause `'property' object has no attribute 'startswith'` errors for some SqlAlchemy and SuperSet queries.  
 * Fixed an issue where datetime parameters would not be correctly rendered as ClickHouse compatible strings
 
@@ -1454,11 +1513,13 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.2.4, 2022-08-19
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * The wait_end_of_query parameter/setting was incorrectly being stripped.  This is fixed
 
 ## 0.2.3, 2022-08-14
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fix encoding insert of multibyte characters
 
 ### New Features
@@ -1469,12 +1530,14 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 ## 0.2.2, 2022-08-06
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fix issue when query_limit set to 0
 
 
 ## 0.2.1, 2022-08-04
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fix SQL comment problems in DBAPI cursor
 
 ## 0.2.0, 2022-08-04
@@ -1487,6 +1550,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 * Increase default HTTP timeout to 300 seconds to match ClickHouse server default
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 * Fixed multiple issues with SQL comments that would cause some queries to fail
 * Fixed problem with SQLAlchemy literal binds that would cause an error in Superset filters
 * Fixed issue with parameterized queries
@@ -1501,6 +1565,7 @@ clickhouse-sqlalchemy to clickhouse-connect.  Thanks to [Eugene Torap](https://g
 * Support Nested data types.
 
 ### Bug Fixes
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 
 * Fix issue with native reads of Nullable(LowCardinality) numeric and date types.
 * Empty inserts will now just log a debug message instead of throwing an IndexError.

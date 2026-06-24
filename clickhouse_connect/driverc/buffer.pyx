@@ -24,7 +24,7 @@ cdef char * utf8 = 'utf8'
 cdef dict array_templates = {}
 cdef bint must_swap = sys.byteorder == 'big'
 
-for c in 'bBuhHiIlLqQfd':
+for c in 'bBhHiIlLqQfd':
     array_templates[c] = array.array(c, [])
 
 
