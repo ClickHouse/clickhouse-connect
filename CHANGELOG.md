@@ -3,6 +3,8 @@
 ## UNRELEASED
 
 ### Bug Fixes
+
+- Removed deprecated 'u' (wchar_t) array type code from buffer.pyx to fix DeprecationWarning on Python 3.13+
 - `Cursor.executemany` now correctly resets `rowcount` and reports the number of inserted rows after a bulk insert. Previously, `rowcount` retained the value from the previous operation. The insert summary is also appended to `cursor.summary`, consistent with the non-bulk path. In addition, passing a generator as `seq_of_parameters` no longer raises `TypeError`; the bulk-insert optimisation is now skipped for non-indexable iterables and the operation falls through to the row-by-row path as PEP 249 requires.
 - Fixed a connection failure partway through reading a query result being silently treated as a complete result. The reader detected the broken stream but discarded the error once any rows had already been read, so a truncated result was returned as if it were whole. A mid-stream read failure now raises `StreamFailureError`, carrying the server-side error message when ClickHouse reported one. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
 - `Client.insert_arrow` and `AsyncClient.insert_arrow` no longer drop the `transport_settings` argument. It was passed positionally into the `compression` parameter, so transport settings were ignored and a non-empty value corrupted the request. It is now forwarded correctly.
