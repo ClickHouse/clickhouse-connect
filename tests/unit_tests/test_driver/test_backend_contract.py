@@ -74,9 +74,9 @@ def test_resolve_chdb_hint_present_when_not_installed():
         assert err.hint == "pip install clickhouse-connect[chdb]"
 
 
-def test_get_client_unknown_backend_raises():
+def test_get_client_unknown_backend_dsn_raises():
     with pytest.raises(BackendNotInstalledError):
-        clickhouse_connect.get_client(backend="definitely_not_a_real_backend")
+        clickhouse_connect.get_client("notarealbackend://memory")
 
 
 def test_capability_flag_defaults_false():
@@ -108,21 +108,37 @@ def test_error_mapper_returns_cc_exception():
     assert isinstance(mapped, ClickHouseError)
 
 
-def test_default_backend_is_http_byte_identical(monkeypatch):
-    # Passing backend="http" (or omitting it) must not divert to the registry path.
-    # We only verify the routing decision -- whether the resulting HttpClient construction
-    # then succeeds (or fails because port 1 is closed) is unrelated to the routing check.
+def test_http_dsn_does_not_consult_registry(monkeypatch):
+    # An http(s) scheme (or no scheme) goes through the in-tree HttpClient path; the registry
+    # must never be consulted for HTTP DSNs.
     called = {"resolve": False}
     import clickhouse_connect.driver.registry as registry
 
     def _fail(_name):
         called["resolve"] = True
-        raise AssertionError("registry must not be consulted for the http backend")
+        raise AssertionError("registry must not be consulted for HTTP DSNs")
 
     monkeypatch.setattr(registry, "resolve_backend", _fail)
     try:
-        client = clickhouse_connect.get_client(backend="http", host="127.0.0.1", port=1)
+        client = clickhouse_connect.get_client("http://127.0.0.1:1")
         client.close()
     except Exception:  # noqa: BLE001 -- connection failure is fine; the routing check is what matters
         pass
     assert called["resolve"] is False
+
+
+def test_route_backend_dsn_parsing():
+    from clickhouse_connect.driver import _route_backend_dsn
+
+    # HTTP / HTTPS / SQLAlchemy-style aliases / empty scheme -> handled by the HTTP DSN parser.
+    assert _route_backend_dsn("http://localhost:8123") is None
+    assert _route_backend_dsn("https://x.cloud:8443") is None
+    assert _route_backend_dsn("clickhouse://u:p@h:8123/db") is None
+    assert _route_backend_dsn("clickhousedb://u:p@h:8123/db?session_id=x") is None
+
+    # Backend schemes route to the registry.
+    assert _route_backend_dsn("chdb://memory") == ("chdb", {"path": ":memory:"})
+    assert _route_backend_dsn("chdb:///tmp/foo.db") == ("chdb", {"path": "/tmp/foo.db"})
+    scheme, kw = _route_backend_dsn("chdb:///tmp/foo.db?udf_path=/x&verbose=")
+    assert scheme == "chdb"
+    assert kw == {"path": "/tmp/foo.db", "udf_path": "/x", "verbose": ""}

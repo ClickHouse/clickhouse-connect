@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from inspect import signature
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, parse_qsl, unquote, urlparse
 
 import clickhouse_connect.driver.ctypes  # noqa: F401 -- side-effect import
 from clickhouse_connect.driver.client import Client
@@ -38,6 +38,35 @@ def default_port(interface: str, secure: bool) -> int:
 def _unquote(value: str | None) -> str | None:
     """Percent-decode a DSN component, passing through None/empty."""
     return unquote(value) if value else value
+
+
+# Schemes that the existing HTTP DSN parser handles natively. ``clickhouse`` and
+# ``clickhousedb`` are SQLAlchemy-style aliases historically used by the dbapi / dialect
+# layer to encode HTTP connection parameters; treating them as HTTP preserves backward
+# compatibility for callers (and for the upstream test_dsn_config test).
+_HTTP_SCHEMES = frozenset({"", "http", "https", "clickhouse", "clickhousedb"})
+
+
+def _route_backend_dsn(dsn: str) -> tuple[str, dict[str, Any]] | None:
+    """If ``dsn``'s scheme names a non-HTTP backend, return ``(scheme, kwargs)``; else None.
+
+    ``chdb://memory``        -> ``("chdb", {"path": ":memory:"})``
+    ``chdb:///tmp/foo.db``   -> ``("chdb", {"path": "/tmp/foo.db"})``
+    ``chdb:///tmp/foo?k=v``  -> ``("chdb", {"path": "/tmp/foo", "k": "v"})``
+    ``http://...`` / ``clickhousedb://...`` / no scheme -> ``None`` (HTTP path)
+    """
+    parsed = urlparse(dsn)
+    scheme = parsed.scheme.lower()
+    if scheme in _HTTP_SCHEMES:
+        return None
+    if parsed.netloc == "memory" and not parsed.path:
+        path = ":memory:"
+    else:
+        path = parsed.path or ":memory:"
+    parsed_kwargs: dict[str, Any] = {"path": path}
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        parsed_kwargs[key] = value
+    return scheme, parsed_kwargs
 
 
 def _parse_connection_params(
@@ -109,6 +138,7 @@ def _validate_headers(headers: Any | None) -> None:
 
 
 def create_client(
+    dsn: str | None = None,
     *,
     host: str | None = None,
     username: str | None = None,
@@ -119,11 +149,9 @@ def create_client(
     interface: str | None = None,
     port: int = 0,
     secure: bool | str = False,
-    dsn: str | None = None,
     settings: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
-    backend: str | None = None,
     **kwargs,
 ) -> Client:
     """
@@ -145,28 +173,19 @@ def create_client(
     :param port: The ClickHouse HTTP or HTTPS port. If not set will default to 8123, or to 8443 if secure=True
       or interface=https.
     :param secure: Use https/TLS. This overrides inferred values from the interface or port arguments.
-    :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
-      will be extracted from this string if not set otherwise.
+    :param dsn: A string in standard DSN (Data Source Name) format, accepted positionally or
+      as a keyword. For HTTP / HTTPS schemes (or no scheme) it is parsed into host/user/port
+      etc. as before. A non-HTTP scheme selects an out-of-tree backend registered through the
+      ``clickhouse_connect.backends`` entry point: ``"chdb://memory"`` and ``"chdb:///path/to/db"``
+      route to the chDB backend, with the path translated to its ``path`` argument and any
+      ``?key=value`` query parameters forwarded as backend kwargs. If the named backend is not
+      installed, ``BackendNotInstalledError`` is raised with an install hint.
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
       so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally.
-    :param backend: Selects an out-of-tree execution backend registered through the
-      ``clickhouse_connect.backends`` entry point (e.g. ``"chdb"`` for the in-process embedded
-      engine). Defaults to the built-in HTTP transport. If the named backend is not installed,
-      a ``BackendNotInstalledError`` error with an install hint is raised; clickhouse-connect
-      never installs a backend itself. Backend-specific options (such as chDB's ``path``) are
-      passed through as keyword arguments.
-
-      When ``backend`` is not ``"http"`` (or unset), the HTTP-specific normalization steps are
-      skipped: the ``dsn`` argument is not parsed into ``host``/``port``/``username`` etc., the
-      ``generic_args`` mapping is forwarded verbatim instead of being folded into HTTP keyword
-      arguments and ClickHouse settings, and HTTP-only arguments (``access_token``,
-      ``token_provider``, ``compress``, ``headers``, ``secure``, ``interface``, ``port``, ...)
-      are forwarded to the backend factory, which decides what to honor or ignore. A backend
-      that wants to support DSN-style configuration should parse it itself.
 
     :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
 
@@ -210,30 +229,16 @@ def create_client(
       when this is True. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect Client instance
     """
-    if backend is None and generic_args and "backend" in generic_args:
-        backend = generic_args.pop("backend")
-    if backend and backend != "http":
+    backend_route = _route_backend_dsn(dsn) if dsn else None
+    if backend_route is not None:
         from clickhouse_connect.driver.registry import resolve_backend
 
-        # Forward every public argument so a backend is a genuine drop-in for HTTP; the
-        # backend factory itself decides which arguments it can honor (the chDB backend,
-        # for example, accepts ``settings`` and ``database`` and silently ignores HTTP-only
-        # arguments like host/auth/compress). A backend that wants to reject silently-
-        # ignored kwargs can do so in its own factory.
-        return resolve_backend(backend).create_client(
-            host=host,
-            username=username,
-            password=password,
-            access_token=access_token,
-            token_provider=token_provider,
+        scheme, parsed_kwargs = backend_route
+        return resolve_backend(scheme).create_client(
             database=database,
-            interface=interface,
-            port=port,
-            secure=secure,
-            dsn=dsn,
             settings=settings or {},
-            headers=headers,
             generic_args=generic_args,
+            **parsed_kwargs,
             **kwargs,
         )
     host, username, password, port, database, interface = _parse_connection_params(
@@ -283,6 +288,7 @@ def create_client(
 
 
 async def create_async_client(
+    dsn: str | None = None,
     *,
     host: str | None = None,
     username: str | None = None,
@@ -293,11 +299,9 @@ async def create_async_client(
     interface: str | None = None,
     port: int = 0,
     secure: bool | str = False,
-    dsn: str | None = None,
     settings: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
-    backend: str | None = None,
     connector_limit: int = 100,
     connector_limit_per_host: int = 20,
     keepalive_timeout: float = 30.0,
@@ -324,27 +328,19 @@ async def create_async_client(
     :param port: The ClickHouse HTTP or HTTPS port. If not set will default to 8123, or to 8443 if secure=True
       or interface=https.
     :param secure: Use https/TLS. This overrides inferred values from the interface or port arguments.
-    :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
-      will be extracted from this string if not set otherwise.
+    :param dsn: A string in standard DSN (Data Source Name) format, accepted positionally or
+      as a keyword. For HTTP / HTTPS schemes (or no scheme) it is parsed into host/user/port etc.
+      as before. A non-HTTP scheme selects an out-of-tree backend registered through the
+      ``clickhouse_connect.backends`` entry point: ``"chdb://memory"`` and ``"chdb:///path/to/db"``
+      route to the chDB backend. If the named backend is not installed,
+      ``BackendNotInstalledError`` is raised; if it does not provide an async client,
+      ``ProgrammingError`` is raised.
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
       so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
-    :param backend: Selects an out-of-tree execution backend registered through the
-      ``clickhouse_connect.backends`` entry point (e.g. ``"chdb"`` for the in-process embedded
-      engine). Defaults to the built-in async HTTP transport. If the named backend is not installed,
-      a ``BackendNotInstalledError`` error with an install hint is raised; if it does not provide an
-      async client, a ``ProgrammingError`` is raised. Backend-specific options (such as chDB's
-      ``path``) are passed through as keyword arguments.
-
-      When ``backend`` is not ``"http"`` (or unset), the HTTP-specific normalization steps are
-      skipped (as in the sync factory): ``dsn`` is not parsed into ``host``/``port``/etc.,
-      ``generic_args`` is forwarded verbatim instead of being folded into keyword arguments
-      and settings, and HTTP-only arguments (``access_token``, ``token_provider``, ``compress``,
-      ``headers``, ``secure``, ``interface``, ``port``, ``connector_limit``, ...) are forwarded
-      to the backend factory, which decides what to honor or ignore.
     :param connector_limit: Maximum number of allowable connections to the server
     :param connector_limit_per_host: Maximum number of connections per host
     :param keepalive_timeout: Time limit on idle keepalive connections
@@ -387,39 +383,24 @@ async def create_async_client(
       when this is True. Only available for query operations (not inserts). Default: False
     :return: ClickHouse Connect AsyncClient instance
     """
-    if backend is None and generic_args and "backend" in generic_args:
-        backend = generic_args.pop("backend")
-    if backend and backend != "http":
+    backend_route = _route_backend_dsn(dsn) if dsn else None
+    if backend_route is not None:
         from collections.abc import Awaitable as _Awaitable
 
         from clickhouse_connect.driver.registry import resolve_backend
 
-        factory = resolve_backend(backend)
+        scheme, parsed_kwargs = backend_route
+        factory = resolve_backend(scheme)
         create_async = getattr(factory, "create_async_client", None)
         if create_async is None:
-            raise ProgrammingError(f"Backend {backend!r} does not provide an async client")
-        # Forward every public argument so a backend is a genuine drop-in for HTTP; the
-        # backend factory itself decides which arguments it can honor.
+            raise ProgrammingError(f"Backend {scheme!r} does not provide an async client")
         client = create_async(
-            host=host,
-            username=username,
-            password=password,
-            access_token=access_token,
-            token_provider=token_provider,
             database=database,
-            interface=interface,
-            port=port,
-            secure=secure,
-            dsn=dsn,
             settings=settings or {},
-            headers=headers,
             generic_args=generic_args,
-            connector_limit=connector_limit,
-            connector_limit_per_host=connector_limit_per_host,
-            keepalive_timeout=keepalive_timeout,
+            **parsed_kwargs,
             **kwargs,
         )
-        # Backends may return an already-initialized client or an awaitable producing one.
         if isinstance(client, _Awaitable):
             client = await client
         return client
