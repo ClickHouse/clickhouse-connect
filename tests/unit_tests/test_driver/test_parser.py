@@ -1,4 +1,5 @@
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.parser import parse_callable, parse_enum
 from clickhouse_connect.driver.query import remove_sql_comments
 
@@ -18,6 +19,27 @@ def test_parse_callable():
 def test_parse_enum():
     assert parse_enum("Enum8('one' = 1)") == (("one",), (1,))
     assert parse_enum("Enum16('**\\'5' = 5, '578' = 7)") == (("**'5", "578"), (5, 7))
+
+
+def test_unescape_identifier():
+    # Plain and single backtick-quoted identifiers are unchanged.
+    assert unescape_identifier("directory") == "directory"
+    assert unescape_identifier("`directory`") == "directory"
+    # An unquoted dotted path is preserved as-is.
+    assert unescape_identifier("a.b.c") == "a.b.c"
+    # A single identifier that literally contains a dot keeps the dot.
+    assert unescape_identifier("`weird.name`") == "weird.name"
+    # Compound backtick-quoted identifiers (the wire form of a Nested sub-column)
+    # must lose every backtick, not just the outermost pair.
+    assert unescape_identifier("`directory`.`id`") == "directory.id"
+
+
+def test_unescape_dotted_backtick_identifier():
+    # Reproduction from clickhouse-go#1587 (Python sibling): the column list of a
+    # Nested INSERT round-trips through parse_callable + unescape_identifier.
+    column_list = "(`directory`.`id`,`directory`.`type`,`directory`.`path`)"
+    _, cols, _ = parse_callable(column_list)
+    assert [unescape_identifier(c) for c in cols] == ["directory.id", "directory.type", "directory.path"]
 
 
 def test_map_type():

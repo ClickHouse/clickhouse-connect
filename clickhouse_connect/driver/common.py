@@ -103,9 +103,29 @@ def decimal_size(prec: int):
 
 
 def unescape_identifier(x: str) -> str:
-    if x.startswith("`") and x.endswith("`"):
-        return x[1:-1]
-    return x
+    """
+    Remove backtick quoting from a ClickHouse identifier, including compound
+    identifiers such as `directory`.`id` (the wire form of a Nested sub-column),
+    which normalizes to directory.id.  Dots outside of backticks are treated as
+    separators between identifier parts, while dots inside backticks are kept.
+
+    Backslash- or doubled-backtick escaping of a literal backtick inside an
+    identifier is not interpreted, matching the previous behavior.
+    """
+    parts = []
+    buf = ""
+    in_quote = False
+    for ch in x:
+        if ch == "`":
+            in_quote = not in_quote
+            continue
+        if ch == "." and not in_quote:
+            parts.append(buf)
+            buf = ""
+            continue
+        buf += ch
+    parts.append(buf)
+    return ".".join(parts)
 
 
 def dict_copy(source: dict | None = None, update: dict | None = None) -> dict:
