@@ -379,44 +379,22 @@ class Time64(ChSqlaType, Interval):  # type: ignore[misc]
         return None
 
 
-class Nullable:
-    """
-    Class "wrapper" to use in DDL construction.  It is never actually initialized but instead creates the "wrapped"
-    type with a Nullable wrapper
-    """
-
-    def __new__(cls, element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # type: ignore[misc]
-        """
-        Actually returns an instance of the enclosed type with a Nullable wrapper.  If element is an instance,
-        constructs a new instance with a copied TypeDef plus the Nullable wrapper.  If element is just a type,
-        constructs a new element of that type with only the Nullable wrapper.
-        :param element: ChSqlaType instance or class to wrap
-        """
-        if callable(element):
-            return element(type_def=NULLABLE_TYPE_DEF)
-        orig = element.type_def
-        wrappers = orig if "Nullable" in orig.wrappers else orig.wrappers + ("Nullable",)
-        return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
+def Nullable(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N802
+    """Wrap a ChSqlaType instance or class with a Nullable modifier for DDL construction."""
+    if callable(element):
+        return element(type_def=NULLABLE_TYPE_DEF)
+    orig = element.type_def
+    wrappers = orig if "Nullable" in orig.wrappers else orig.wrappers + ("Nullable",)
+    return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
-class LowCardinality:
-    """
-    Class "wrapper" to use in DDL construction.  It is never actually instantiated but instead creates the "wrapped"
-    type with a LowCardinality wrapper
-    """
-
-    def __new__(cls, element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # type: ignore[misc]
-        """
-        Actually returns an instance of the enclosed type with a LowCardinality wrapper.  If element is an instance,
-        constructs a new instance with a copied TypeDef plus the LowCardinality wrapper.  If element is just a type,
-        constructs a new element of that type with only the LowCardinality wrapper.
-        :param element: ChSqlaType instance or class to wrap
-        """
-        if callable(element):
-            return element(type_def=LC_TYPE_DEF)
-        orig = element.type_def
-        wrappers = orig if "LowCardinality" in orig.wrappers else ("LowCardinality",) + orig.wrappers
-        return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
+def LowCardinality(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N802
+    """Wrap a ChSqlaType instance or class with a LowCardinality modifier for DDL construction."""
+    if callable(element):
+        return element(type_def=LC_TYPE_DEF)
+    orig = element.type_def
+    wrappers = orig if "LowCardinality" in orig.wrappers else ("LowCardinality",) + orig.wrappers
+    return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
 class Array(ChSqlaType, ARRAY):  # type: ignore[misc]
