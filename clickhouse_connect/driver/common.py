@@ -106,24 +106,44 @@ def unescape_identifier(x: str) -> str:
     """
     Remove backtick quoting from a ClickHouse identifier, including compound
     identifiers such as `directory`.`id` (the wire form of a Nested sub-column),
-    which normalizes to directory.id.  Dots outside of backticks are treated as
+    which normalizes to directory.id. Dots outside of backticks are treated as
     separators between identifier parts, while dots inside backticks are kept.
 
-    Backslash- or doubled-backtick escaping of a literal backtick inside an
-    identifier is not interpreted, matching the previous behavior.
+    Inside a quoted part the escapes produced by quote_identifier are reversed:
+    a doubled backtick and a backslash-escaped character each yield the single
+    literal character they encode, so both `a``b` and `a\\`b` normalize to a`b.
     """
     parts = []
     buf = ""
     in_quote = False
-    for ch in x:
-        if ch == "`":
-            in_quote = not in_quote
-            continue
-        if ch == "." and not in_quote:
+    i = 0
+    length = len(x)
+    while i < length:
+        ch = x[i]
+        if in_quote:
+            if ch == "`":
+                # A doubled backtick is an escaped literal backtick; a lone
+                # backtick closes the quoted part.
+                if i + 1 < length and x[i + 1] == "`":
+                    buf += "`"
+                    i += 2
+                    continue
+                in_quote = False
+            elif ch == "\\" and i + 1 < length:
+                # A backslash escapes the next character (for example \` or \\).
+                buf += x[i + 1]
+                i += 2
+                continue
+            else:
+                buf += ch
+        elif ch == "`":
+            in_quote = True
+        elif ch == ".":
             parts.append(buf)
             buf = ""
-            continue
-        buf += ch
+        else:
+            buf += ch
+        i += 1
     parts.append(buf)
     return ".".join(parts)
 

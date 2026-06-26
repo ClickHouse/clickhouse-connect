@@ -1,4 +1,5 @@
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.parser import parse_callable, parse_enum
 from clickhouse_connect.driver.query import remove_sql_comments
@@ -32,6 +33,16 @@ def test_unescape_identifier():
     # Compound backtick-quoted identifiers (the wire form of a Nested sub-column)
     # must lose every backtick, not just the outermost pair.
     assert unescape_identifier("`directory`.`id`") == "directory.id"
+    # A literal backtick inside a quoted part is escaped either by doubling it
+    # or with a backslash. The server accepts both forms and quote_identifier
+    # emits the backslash form, so both must reverse to the single backtick the
+    # column name actually contains (verified against the server: `a``b` and
+    # `a\`b` both name the column a`b).
+    assert unescape_identifier("`a``b`") == "a`b"
+    assert unescape_identifier("`a\\`b`") == "a`b"
+    # A backslash escapes the following character, so a doubled backslash is one
+    # literal backslash.
+    assert unescape_identifier("`a\\\\b`") == "a\\b"
 
 
 def test_unescape_dotted_backtick_identifier():
@@ -40,6 +51,14 @@ def test_unescape_dotted_backtick_identifier():
     column_list = "(`directory`.`id`,`directory`.`type`,`directory`.`path`)"
     _, cols, _ = parse_callable(column_list)
     assert [unescape_identifier(c) for c in cols] == ["directory.id", "directory.type", "directory.path"]
+
+
+def test_unescape_identifier_inverts_quote_identifier():
+    # unescape_identifier reverses the quoting that quote_identifier applies, so
+    # quote_identifier -> unescape_identifier is the identity even for names that
+    # contain the characters quote_identifier escapes (backticks and backslashes).
+    for name in ["simple", "directory.id", "weird.name", "a`b", "a`", "`a", "a\\b", "a\\", "a``b"]:
+        assert unescape_identifier(quote_identifier(name)) == name
 
 
 def test_map_type():
