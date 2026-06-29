@@ -387,13 +387,17 @@ class QueryResult(Closable):
         return len(self.result_set)
 
     @property
-    def first_item(self) -> dict[str, Any]:
+    def first_item(self) -> dict[str, Any] | None:
+        if self.row_count == 0:
+            return None
         if self.column_oriented:
             return {name: col[0] for name, col in zip(self.column_names, self.result_set)}
         return dict(zip(self.column_names, self.result_set[0]))
 
     @property
-    def first_row(self) -> Sequence[Any]:
+    def first_row(self) -> Sequence[Any] | None:
+        if self.row_count == 0:
+            return None
         if self.column_oriented:
             return [col[0] for col in self.result_set]
         return self.result_set[0]
