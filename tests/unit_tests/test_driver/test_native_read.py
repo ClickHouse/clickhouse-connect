@@ -3,7 +3,7 @@ from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
@@ -109,3 +109,22 @@ def test_point():
 def test_nested():
     result = parse_response(bytes_source(NESTED_BINARY))
     check_result(result, [{"str1": "one", "int32": 5}, {"str1": "two", "int32": 55}], 2, 0)
+
+
+def test_first_item_first_row_empty_result():
+    # An empty result set should return None rather than raising IndexError (#824).
+    columns = ("id", "name")
+    row_oriented = QueryResult([], column_names=columns, column_oriented=False)
+    assert row_oriented.first_item is None
+    assert row_oriented.first_row is None
+
+    col_oriented = QueryResult([[], []], column_names=columns, column_oriented=True)
+    assert col_oriented.first_item is None
+    assert col_oriented.first_row is None
+
+
+def test_first_item_first_row_non_empty_result():
+    columns = ("id", "name")
+    row_oriented = QueryResult([[1, "a"], [2, "b"]], column_names=columns, column_oriented=False)
+    assert row_oriented.first_item == {"id": 1, "name": "a"}
+    assert row_oriented.first_row == [1, "a"]
