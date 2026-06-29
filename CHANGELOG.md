@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.4.0, 2026-06-29
+
 ### Bug Fixes
 - `QueryResult.first_item` and `QueryResult.first_row` now return `None` for an empty result set instead of raising `IndexError`. Both properties indexed element `[0]` without checking the row count, so they crashed when a query returned no rows. They now short-circuit on an empty result in both row-oriented and column-oriented mode. Closes [#824](https://github.com/ClickHouse/clickhouse-connect/issues/824).
 - `Cursor.executemany` now correctly resets `rowcount` and reports the number of inserted rows after a bulk insert. Previously, `rowcount` retained the value from the previous operation. The insert summary is also appended to `cursor.summary`, consistent with the non-bulk path. In addition, passing a generator as `seq_of_parameters` no longer raises `TypeError`; the bulk-insert optimisation is now skipped for non-indexable iterables and the operation falls through to the row-by-row path as PEP 249 requires.
