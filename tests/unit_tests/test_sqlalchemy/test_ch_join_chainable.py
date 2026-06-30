@@ -181,7 +181,7 @@ def test_ch_join_invalid_strictness_raises():
 
 def test_ch_join_mixed_with_native_join_raises():
     stmt = select(books.c.id).select_from(books).join(authors, authors.c.id == books.c.author_id)
-    with pytest.raises(ValueError, match="native .join.. on the same statement"):
+    with pytest.raises(ValueError, match=r"native \.join\(\) on the same statement"):
         stmt.ch_join(publishers, publishers.c.id == books.c.publisher_id)
 
 

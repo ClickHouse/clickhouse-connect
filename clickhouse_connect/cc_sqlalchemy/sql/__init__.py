@@ -160,7 +160,7 @@ def limit_by(select_stmt: Select, by_clauses: Any, limit: int, offset: int | Non
 
 def _select_ch_join(
     self: Select,
-    right: FromClause,
+    right: Any,
     onclause: Any = None,
     *,
     isouter: bool = False,
