@@ -4,6 +4,7 @@
 
 ### Bug Fixes
 - SQLAlchemy: importing the ClickHouse Alembic integration no longer changes Alembic autogenerate output for other database dialects. The ClickHouse renderers for `CreateTableOp`, `AddColumnOp`, and `DropTableOp` were registered as process-wide replacements with no dialect guard, because Alembic renderers have no per-dialect dispatch. Any non-ClickHouse autogenerate run in the same process then used the ClickHouse renderers, which dropped the `nullable` argument from columns whose nullability was not set explicitly and injected `cc_sqlalchemy` imports. The renderers now fall back to Alembic's built-in rendering for non-ClickHouse dialects. Closes [#832](https://github.com/ClickHouse/clickhouse-connect/issues/832).
+- Several public `AsyncClient` methods now carry the return-type annotations their sync `Client` counterparts already had. `close`, `close_connections`, `query_np`, `query_df`, `query_arrow`, `set_client_setting`, and `set_access_token` were missing them, so downstream projects running mypy with `--disallow-untyped-calls` got `no-untyped-call` errors on calls like `await client.close()` once the package began shipping `py.typed` in 1.4.0. The async client surface is now fully annotated. This is a type-only change with no runtime effect. Closes [#831](https://github.com/ClickHouse/clickhouse-connect/issues/831).
 
 ## 1.4.0, 2026-06-29
 
