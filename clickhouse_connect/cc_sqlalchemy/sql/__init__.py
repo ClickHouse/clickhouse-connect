@@ -5,6 +5,7 @@ from sqlalchemy.sql.selectable import FromClause, Select
 
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin, LimitByClause, PreWhereClause
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import array_join as _array_join_fromclause
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import ch_join as _ch_join_fromclause
 from clickhouse_connect.driver.binding import quote_identifier
 
 # Non-rendering statement-hint dialect tag. Used only to force distinct
@@ -157,6 +158,64 @@ def limit_by(select_stmt: Select, by_clauses: Any, limit: int, offset: int | Non
     return new_stmt
 
 
+def _select_ch_join(
+    self: Select,
+    right: FromClause,
+    onclause: Any = None,
+    *,
+    isouter: bool = False,
+    full: bool = False,
+    cross: bool = False,
+    using: Any = None,
+    strictness: str | None = None,
+    distribution: str | None = None,
+) -> Select:
+    """Chainable ClickHouse JOIN. Resolves the left side from the prior join or the single FROM/select_from target."""
+    if not isinstance(self, Select):
+        raise TypeError("ch_join() expects a SQLAlchemy Select instance")
+
+    if getattr(self, "_setup_joins", ()):
+        raise ValueError(
+            "ch_join() cannot be combined with SQLAlchemy's native .join() on the same statement. "
+            "Use .ch_join() for all joins in the chain."
+        )
+
+    left = getattr(self, "_ch_join_root", None)
+    if left is None:
+        from_obj: tuple[FromClause, ...] = getattr(self, "_from_obj", ())
+        if len(from_obj) == 1:
+            left = from_obj[0]
+        elif not from_obj:
+            froms = self.get_final_froms()
+            if len(froms) == 1:
+                left = froms[0]
+        if left is None:
+            raise ValueError(
+                "ch_join() cannot determine the left side of the join. "
+                "Use the module-level ch_join(left, right, ...) with select_from() instead."
+            )
+
+    join = _ch_join_fromclause(
+        left,
+        right,
+        onclause,
+        isouter=isouter,
+        full=full,
+        cross=cross,
+        using=using,
+        strictness=strictness,
+        distribution=distribution,
+    )
+    new = self.select_from(join)
+    # The join subsumes the prior froms (left's tables are hidden), so collapse
+    # _from_obj to exactly (join,). Keeps the cache key equal to the
+    # select_from(ch_join(...)) factory form and stops deep chains from
+    # accumulating froms.
+    new._from_obj = (join,)  # type: ignore[attr-defined]
+    new._ch_join_root = join  # type: ignore[attr-defined]
+    return new
+
+
 def _select_prewhere(self: Select, whereclause: Any) -> Select:
     return prewhere(self, whereclause)
 
@@ -171,3 +230,4 @@ Select.array_join = _select_array_join  # type: ignore[attr-defined]
 Select.left_array_join = _select_left_array_join  # type: ignore[attr-defined]
 Select.prewhere = _select_prewhere  # type: ignore[attr-defined]
 Select.limit_by = _select_limit_by  # type: ignore[attr-defined]
+Select.ch_join = _select_ch_join  # type: ignore[attr-defined]
