@@ -68,11 +68,72 @@ def _temporal_struct_fmt(inner_type: str):
     return None
 
 
+def _encode_lc_dict_values(dict_values, value_type):
+    """Serialize a LowCardinality block dictionary (the inner type's bulk form)."""
+    buf = bytearray()
+    if value_type == "String":
+        for v in dict_values:
+            encoded = v if isinstance(v, bytes) else v.encode("utf-8")
+            buf.extend(_encode_varint(len(encoded)))
+            buf.extend(encoded)
+    elif value_type in _FIXED_TYPES:
+        fmt, _ = _FIXED_TYPES[value_type]
+        for v in dict_values:
+            buf.extend(struct.pack(fmt, v))
+    elif (temporal_fmt := _temporal_struct_fmt(value_type)) is not None:
+        for v in dict_values:
+            buf.extend(struct.pack(temporal_fmt, v))
+    else:
+        raise ValueError(f"_encode_lc_dict_values: unsupported inner type {value_type}")
+    return buf
+
+
+def _build_low_cardinality_body(type_name, values):
+    """Encode a LowCardinality(T) column body (SharedDictionariesWithAdditionalKeys).
+
+    Wire layout, matching server SerializationLowCardinality: a u64 key version
+    prefix, then per block a u64 index-type word (HasAdditionalKeysBit set, UInt8
+    index width here), a u64 dictionary size, the dictionary values, a u64 row
+    count, and the UInt8 index per row. For a Nullable inner type, dictionary
+    slot 0 is the NULL sentinel (default inner value) and null rows index it.
+    """
+    inner = type_name[len("LowCardinality("):-1]
+    nullable = inner.startswith("Nullable(")
+    value_type = inner[len("Nullable("):-1] if nullable else inner
+
+    dict_values = []
+    slot_of = {}
+    if nullable:
+        dict_values.append(b"" if value_type == "String" else 0)  # slot 0 sentinel
+    indices = []
+    for v in values:
+        if nullable and v is None:
+            indices.append(0)
+            continue
+        if v not in slot_of:
+            slot_of[v] = len(dict_values)
+            dict_values.append(v)
+        indices.append(slot_of[v])
+    if len(dict_values) > 256 or any(i > 255 for i in indices):
+        raise ValueError("_build_low_cardinality_body: test helper only emits UInt8 indices")
+
+    buf = bytearray()
+    buf.extend(struct.pack("<Q", 1))  # key version (per-column state prefix)
+    buf.extend(struct.pack("<Q", 0x200))  # HasAdditionalKeysBit | UInt8 index width (tag 0)
+    buf.extend(struct.pack("<Q", len(dict_values)))
+    buf.extend(_encode_lc_dict_values(dict_values, value_type))
+    buf.extend(struct.pack("<Q", len(values)))
+    for i in indices:
+        buf.append(i)
+    return buf
+
+
 def build_native_block(columns, *, block_info=False):
     """Build a ClickHouse Native format block from column specs.
 
     Each column is (name, type_name, values).
-    Supports: Bool, Int8-64, UInt8-64, Float32, Float64, String, FixedString(N), Nullable(*).
+    Supports: Bool, Int8-64, UInt8-64, Float32, Float64, String, FixedString(N),
+    Nullable(*), and LowCardinality(*) over those inner types.
     """
     buf = bytearray()
     if block_info:
@@ -86,6 +147,10 @@ def build_native_block(columns, *, block_info=False):
     for name, type_name, values in columns:
         buf.extend(_encode_varint_string(name))
         buf.extend(_encode_varint_string(type_name))
+
+        if type_name.startswith("LowCardinality("):
+            buf.extend(_build_low_cardinality_body(type_name, values))
+            continue
 
         is_nullable = type_name.startswith("Nullable(")
         inner_type = type_name
@@ -487,6 +552,106 @@ class TestArrowTemporal:
 
 
 # ---------------------------------------------------------------------------
+# LowCardinality
+# ---------------------------------------------------------------------------
+
+class TestDecodeLowCardinality:
+    def test_string_basic(self):
+        vals = ["red", "green", "red", "blue", "green", "red"]
+        data = build_native_block([("c", "LowCardinality(String)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == ["LowCardinality(String)"]
+        assert list(batch.column_data(0)) == vals
+
+    def test_nullable_string(self):
+        vals = ["x", None, "y", "x", None, "y"]
+        data = build_native_block([("c", "LowCardinality(Nullable(String))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == ["LowCardinality(Nullable(String))"]
+        assert list(batch.column_data(0)) == vals
+
+    def test_empty_string_distinct_from_null(self):
+        # A real empty string is its own dictionary entry, not the null sentinel.
+        vals = ["", None, "", "a"]
+        data = build_native_block([("c", "LowCardinality(Nullable(String))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+
+    def test_uint32_inner(self):
+        # A non-String inner type exercises the dictionary -> primitive recursion.
+        vals = [100, 200, 100, 4_000_000_000, 200]
+        data = build_native_block([("c", "LowCardinality(UInt32)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+
+    def test_datetime_named_zone(self):
+        # LowCardinality(DateTime(tz)) must still apply the timezone policy, which
+        # means prepare_temporal has to see through the LowCardinality wrapper.
+        secs = 1705322096  # 2024-01-15 12:34:56 UTC
+        data = build_native_block(
+            [("c", "LowCardinality(DateTime('America/New_York'))", [secs, secs])]
+        )
+        batch = _ch_core.ColBatch.decode_native(data)
+        v = list(batch.column_data(0))[0]
+        assert v.tzinfo == ZoneInfo("America/New_York")
+        assert v == dt.datetime(2024, 1, 15, 12, 34, 56, tzinfo=dt.timezone.utc)
+
+    def test_invalid_utf8_hex_fallback(self):
+        vals = ["ok", b"\xff\xfe", "ok"]
+        data = build_native_block([("c", "LowCardinality(String)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == ["ok", "fffe", "ok"]
+
+    def test_paths_agree(self):
+        vals = ["a", "a", "b", "c", "b", "a", None]
+        data = build_native_block([("c", "LowCardinality(Nullable(String))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [row[0] for row in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == vals
+
+    def test_arrow_dictionary(self):
+        pa = pytest.importorskip("pyarrow")
+        vals = ["red", "green", "red", "blue"]
+        data = build_native_block([("c", "LowCardinality(String)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        result = pa.RecordBatchReader.from_stream(batch).read_all()
+        assert pa.types.is_dictionary(result.schema.field("c").type)
+        assert result.column("c").to_pylist() == vals
+
+    def test_arrow_nullable_dictionary(self):
+        pa = pytest.importorskip("pyarrow")
+        vals = ["x", None, "y", "x", None]
+        data = build_native_block([("c", "LowCardinality(Nullable(String))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        col = pa.RecordBatchReader.from_stream(batch).read_all().column("c")
+        assert pa.types.is_dictionary(col.type)
+        assert col.to_pylist() == vals
+        assert col.null_count == 2
+
+    def test_across_chunks(self):
+        # Each Native block carries its own dictionary; the two chunks must
+        # concatenate correctly even with different per-block dictionaries.
+        first = build_native_block([("c", "LowCardinality(String)", ["a", "b", "a"])])
+        second = build_native_block([("c", "LowCardinality(String)", ["c", "c", "d"])])
+        batch = _ch_core.ColBatch.decode_native(first + second)
+        assert batch.num_chunks == 2
+        assert list(batch.column_data(0)) == ["a", "b", "a", "c", "c", "d"]
+
+    def test_with_block_info(self):
+        # The shape clickhouse-connect actually receives: client_protocol_version
+        # 54405 emits a BlockInfo preamble and, being below 54454, no per-column
+        # custom-serialization marker. The LowCardinality state prefix follows.
+        vals = ["red", "green", "red", None, "green"]
+        data = build_native_block(
+            [("c", "LowCardinality(Nullable(String))", vals)], block_info=True
+        )
+        batch = _ch_core.ColBatch.decode_native(data, has_block_info=True)
+        assert list(batch.column_data(0)) == vals
+
+
+# ---------------------------------------------------------------------------
 # Multi-column
 # ---------------------------------------------------------------------------
 
@@ -770,12 +935,15 @@ class TestArrowCapsuleLifecycle:
 
 class TestUnsupportedType:
     def test_raises_value_error(self):
+        # Array is not a supported column type, so it surfaces as a clean
+        # UnsupportedType -> ValueError. (UUID, IPv4/IPv6, and Enum are decoded
+        # by the core now, so they no longer exercise this path.)
         buf = bytearray()
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint_string("id"))
-        buf.extend(_encode_varint_string("UUID"))
-        with pytest.raises(ValueError, match="Unsupported ClickHouse type 'UUID'"):
+        buf.extend(_encode_varint_string("Array(UInt8)"))
+        with pytest.raises(ValueError, match="Unsupported ClickHouse type 'Array\\(UInt8\\)'"):
             _ch_core.ColBatch.decode_native(bytes(buf))
 
 

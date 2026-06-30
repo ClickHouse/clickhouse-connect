@@ -1,7 +1,7 @@
 use std::ffi::{c_char, CString};
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
+use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDict, PyList};
@@ -324,7 +324,13 @@ struct TemporalCtx<'py> {
 /// (no Python calls); imports zoneinfo only for a named non-UTC zone. Safe to
 /// call for any column type; non-temporal types yield the naive default.
 fn prepare_temporal<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<TemporalCtx<'py>> {
-    let (timezone, precision) = match ch_type.inner() {
+    // Unwrap LowCardinality to reach the value type before inner() strips any
+    // Nullable, so LowCardinality(DateTime(tz)) still applies timezone policy.
+    let resolved = match ch_type {
+        ChType::LowCardinality(inner) => inner.inner(),
+        other => other.inner(),
+    };
+    let (timezone, precision) = match resolved {
         ChType::DateTime { timezone } => (timezone.as_deref(), 0u8),
         ChType::DateTime64 {
             precision,
@@ -600,6 +606,14 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::DateTime64(c) => c.validity.as_ref(),
         Column::Utf8(c) => c.validity.as_ref(),
         Column::FixedBinary(c) => c.validity.as_ref(),
+        Column::Ipv4(c) => c.validity.as_ref(),
+        Column::Ipv6(c) => c.validity.as_ref(),
+        Column::Uuid(c) => c.validity.as_ref(),
+        Column::Enum8(c) => c.validity.as_ref(),
+        Column::Enum16(c) => c.validity.as_ref(),
+        // A LowCardinality column's nulls live in the index validity, the Arrow
+        // dictionary convention, not as a dictionary entry.
+        Column::Dictionary(c) => c.validity.as_ref(),
     }
 }
 
@@ -651,6 +665,25 @@ unsafe fn column_value_nonnull_ptr(
                 ),
             )
         }
+        // LowCardinality(T): resolve the row's dictionary index, then build the
+        // inner value through this same constructor. The cell is known non-null
+        // here (callers check the index validity first), so the resolved slot is
+        // a real dictionary entry. The ctx already reflects the inner type, so a
+        // LowCardinality temporal column gets the right timezone and precision.
+        Column::Dictionary(c) => {
+            let slot = c.indices[index] as usize;
+            column_value_nonnull_ptr(py, &c.values, ctx, slot)
+        }
+        // Decoded by the core and exportable through the Arrow exit, but the
+        // Python object value policy for these is not implemented yet. Scoped
+        // separately from LowCardinality.
+        Column::Ipv4(_)
+        | Column::Ipv6(_)
+        | Column::Uuid(_)
+        | Column::Enum8(_)
+        | Column::Enum16(_) => Err(PyNotImplementedError::new_err(
+            "this column type is not yet supported on the Python object exit; use the Arrow exit",
+        )),
     }
 }
 
