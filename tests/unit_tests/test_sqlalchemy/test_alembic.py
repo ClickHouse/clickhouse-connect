@@ -699,3 +699,16 @@ def test_non_clickhouse_drop_table_render_is_unmodified():
     table = Table("widgets", MetaData(), Column("id", Integer, primary_key=True))
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table).reverse())
     assert rendered == "op.drop_table('widgets')"
+
+
+def test_captured_default_renderers_are_alembic_builtins():
+    from clickhouse_connect.cc_sqlalchemy.alembic import adapter
+
+    for op_type, ours in (
+        (ops.CreateTableOp, adapter.render_create_table),
+        (ops.AddColumnOp, adapter.render_add_column),
+        (ops.DropTableOp, adapter.render_drop_table),
+    ):
+        default = adapter._DEFAULT_RENDERERS[op_type]
+        assert default is not ours
+        assert default.__module__.startswith("alembic.")
