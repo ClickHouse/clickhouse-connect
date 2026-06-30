@@ -666,3 +666,49 @@ def test_clickhouse_settings_string_value_quoted():
     rendered = ClickHouseDDLHelper.render_settings({"mutations_sync": "2", "alter_sync": 2})
     assert "mutations_sync = '2'" in rendered
     assert "alter_sync = 2" in rendered
+
+
+def _non_clickhouse_autogen_context():
+    """AutogenContext for a non-ClickHouse dialect, with the cc_sqlalchemy.alembic import side-effect active."""
+    context = MigrationContext.configure(dialect_name="sqlite", opts={"target_metadata": MetaData()})
+    return AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+
+
+def test_non_clickhouse_add_column_render_keeps_nullable():
+    """Importing the ClickHouse Alembic adapter must not corrupt autogenerate for other dialects (#832)."""
+    autogen_context = _non_clickhouse_autogen_context()
+    rendered = render.render_op_text(autogen_context, ops.AddColumnOp("widgets", Column("name", String(32))))
+    assert rendered == "op.add_column('widgets', sa.Column('name', sa.String(length=32), nullable=True))"
+    assert "cc_sqlalchemy" not in rendered
+
+
+def test_non_clickhouse_create_table_render_keeps_nullable():
+    autogen_context = _non_clickhouse_autogen_context()
+    table = Table("widgets", MetaData(), Column("id", Integer, primary_key=True), Column("name", String(32)))
+    rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
+    assert "sa.Column('id', sa.Integer(), nullable=False)" in rendered
+    assert "sa.Column('name', sa.String(length=32), nullable=True)" in rendered
+    assert "clickhouse_engine" not in rendered
+
+
+def test_non_clickhouse_drop_table_render_is_unmodified():
+    autogen_context = _non_clickhouse_autogen_context()
+    table = Table("widgets", MetaData(), Column("id", Integer, primary_key=True))
+    rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table).reverse())
+    assert rendered == "op.drop_table('widgets')"
+
+
+def test_captured_default_renderers_are_alembic_builtins():
+    from clickhouse_connect.cc_sqlalchemy.alembic import adapter
+
+    for op_type, ours in (
+        (ops.CreateTableOp, adapter.render_create_table),
+        (ops.AddColumnOp, adapter.render_add_column),
+        (ops.DropTableOp, adapter.render_drop_table),
+    ):
+        default = adapter._DEFAULT_RENDERERS[op_type]
+        assert default is not ours
+        assert default.__module__.startswith("alembic.")
