@@ -25,6 +25,7 @@ import lz4.frame
 import zstandard
 
 if TYPE_CHECKING:
+    import numpy
     import pandas
     import polars
     import pyarrow
@@ -320,7 +321,7 @@ class AsyncClient(Client):
 
         self._ssl_context = ssl_context
         self._proxy_url = proxy_url
-        self._connector_kwargs = {
+        self._connector_kwargs: dict[str, Any] = {
             "limit": connector_limit,
             "limit_per_host": connector_limit_per_host,
             "keepalive_timeout": keepalive_timeout,
@@ -506,18 +507,18 @@ class AsyncClient(Client):
                 self._session = None
             raise
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> AsyncClient:
         """Async context manager entry."""
         if not self._initialized:
             await self._initialize()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         """Async context manager exit."""
         await self.close()
         return False
 
-    async def close(self):  # type: ignore[override]
+    async def close(self) -> None:  # type: ignore[override]
         async with self._session_lock:
             old_lease = self._session_lease
             self._session_lease = None
@@ -525,7 +526,7 @@ class AsyncClient(Client):
             await old_lease.wait_drained()
             await old_lease.session.close()
 
-    async def close_connections(self):  # type: ignore[override]
+    async def close_connections(self) -> None:  # type: ignore[override]
         """Rotate the connection pool: new requests use a fresh session; in-flight
         requests keep using the old session until they complete, then it's closed."""
         async with self._session_lock:
@@ -544,7 +545,7 @@ class AsyncClient(Client):
             await old_lease.wait_drained()
             await old_lease.session.close()
 
-    def set_client_setting(self, key, value):
+    def set_client_setting(self, key: str, value: Any) -> None:
         str_value = self._validate_setting(key, value, common.get_setting("invalid_setting_action"))
         if str_value is not None:
             self._client_settings[key] = str_value
@@ -561,7 +562,7 @@ class AsyncClient(Client):
             result = await result
         return result
 
-    def set_access_token(self, access_token: str):
+    def set_access_token(self, access_token: str) -> None:
         auth_header = self.headers.get("Authorization")
         if auth_header and not auth_header.startswith("Bearer"):
             raise ProgrammingError("Cannot set access token when a different auth type is used")
@@ -874,7 +875,7 @@ class AsyncClient(Client):
         context: QueryContext | None = None,
         external_data: ExternalData | None = None,
         transport_settings: dict[str, str] | None = None,
-    ):
+    ) -> numpy.ndarray:
         check_numpy()
         self._add_integration_tag("numpy")
         return (await self._context_query(locals(), use_numpy=True)).np_result
@@ -915,7 +916,7 @@ class AsyncClient(Client):
         use_extended_dtypes: bool | None = None,
         transport_settings: dict[str, str] | None = None,
         tz_mode: TzMode | None = None,
-    ):
+    ) -> pandas.DataFrame:
         check_pandas()
         self._add_integration_tag("pandas")
         return (await self._context_query(locals(), use_numpy=True, as_pandas=True)).df_result
@@ -943,7 +944,7 @@ class AsyncClient(Client):
         self._add_integration_tag("pandas")
         return (await self._context_query(locals(), use_numpy=True, as_pandas=True, streaming=True)).df_stream
 
-    async def _context_query(self, lcls: dict, **overrides):  # type: ignore[override]
+    async def _context_query(self, lcls: dict, **overrides):
         """
         Helper method to create query context and execute query.
         Matches sync client pattern for consistency.
@@ -1228,7 +1229,7 @@ class AsyncClient(Client):
         use_strings: bool | None = None,
         external_data: ExternalData | None = None,
         transport_settings: dict[str, str] | None = None,
-    ):
+    ) -> pyarrow.Table:
         """
         Query method using the ClickHouse Arrow format to return a PyArrow table
         :param query: Query statement/format string
