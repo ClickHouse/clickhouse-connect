@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Several public `AsyncClient` methods now carry the return-type annotations their sync `Client` counterparts already had. `close`, `close_connections`, `query_np`, `query_df`, `query_arrow`, `set_client_setting`, and `set_access_token` were missing them, so downstream projects running mypy with `--disallow-untyped-calls` got `no-untyped-call` errors on calls like `await client.close()` once the package began shipping `py.typed` in 1.4.0. The async client surface is now fully annotated. This is a type-only change with no runtime effect. Closes [#831](https://github.com/ClickHouse/clickhouse-connect/issues/831).
+
 ## 1.4.0, 2026-06-29
 
 ### Bug Fixes
