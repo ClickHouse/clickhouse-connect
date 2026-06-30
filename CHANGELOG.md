@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Improvements
+- SQLAlchemy: added a chainable `Select.ch_join()` so ClickHouse JOIN modifiers can be written in normal SQLAlchemy chaining style instead of nesting the `ch_join()` helper inside `select_from()`. It takes the strictness modifiers ALL, ANY, ASOF, SEMI, and ANTI, the GLOBAL distribution modifier, plus USING and CROSS, all as keyword arguments, and chains so multi-join queries stay readable. The existing `ch_join()` factory is unchanged. Closes [#827](https://github.com/ClickHouse/clickhouse-connect/issues/827).
+
 ## 1.4.1, 2026-06-30
 
 ### Bug Fixes
