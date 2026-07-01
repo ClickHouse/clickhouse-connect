@@ -262,6 +262,42 @@ def test_executemany_bulk_insert_with_dict_rows():
     client.query.assert_not_called()
 
 
+def test_executemany_bulk_insert_with_simple_backtick_columns():
+    """Backtick-quoted simple column names still match the row dict keys, so the
+    bulk insert fast path is kept (contrast case: behavior unchanged by the fix).
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
+    cursor.executemany("INSERT INTO test_table (`id`, `name`) VALUES (%(id)s, %(name)s)", rows)
+
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"])
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_with_dotted_backtick_columns():
+    """Backtick-quoted dotted column names (the wire form of Nested sub-columns)
+    must unescape to directory.id so they match the row dict keys and keep the
+    bulk insert fast path instead of silently degrading to per-row execution.
+    See https://github.com/ClickHouse/clickhouse-go/issues/1587 (Python sibling).
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [
+        {"directory.id": 13, "directory.type": "user_1"},
+        {"directory.id": 79, "directory.type": "user_2"},
+    ]
+    cursor.executemany(
+        "INSERT INTO test_table (`directory`.`id`, `directory`.`type`) VALUES (%(directory.id)s, %(directory.type)s)",
+        rows,
+    )
+
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["directory.id", "directory.type"])
+    client.query.assert_not_called()
+
+
 def test_execute_unescapes_double_percents_without_parameters():
     """Test that cursor.execute unescapes %% to % when no parameters are given.
 
