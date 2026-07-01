@@ -286,5 +286,6 @@ class ClickHouseSelect(Select[Any]):
 
 
 def select(*entities: Any) -> ClickHouseSelect:
-    """Typed drop-in for sqlalchemy.select with ClickHouse chainables."""
+    """Runtime drop-in for sqlalchemy.select that adds the ClickHouse chainables as typed methods.
+    Result rows type as Any until the generic follow-up lands."""
     return ClickHouseSelect(*entities)
