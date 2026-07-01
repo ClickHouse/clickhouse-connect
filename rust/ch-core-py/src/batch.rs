@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::sync::Arc;
 
 use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDict, PyList};
+use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDict, PyList, PyString};
 
 /// Wrapper to make ArrowArrayStream Send-safe for PyCapsule.
 #[repr(transparent)]
@@ -191,7 +192,7 @@ impl ColBatch {
             )));
         }
 
-        let ctx = prepare_temporal(py, &self.inner.schema.fields[index].ch_type)?;
+        let ctx = prepare_column_ctx(py, &self.inner.schema.fields[index].ch_type)?;
         column_to_pylist(py, &self.inner.chunks, index, &ctx)
     }
 
@@ -201,12 +202,12 @@ impl ColBatch {
         let num_cols = self.inner.num_columns();
         // Resolve each column's temporal context once, not per cell, so a
         // tz-aware column imports its zoneinfo a single time for the whole table.
-        let ctxs: Vec<TemporalCtx> = self
+        let ctxs: Vec<ColumnCtx> = self
             .inner
             .schema
             .fields
             .iter()
-            .map(|f| prepare_temporal(py, &f.ch_type))
+            .map(|f| prepare_column_ctx(py, &f.ch_type))
             .collect::<PyResult<_>>()?;
         for chunk in &self.inner.chunks {
             check_chunk_width(chunk, num_cols)?;
@@ -258,7 +259,7 @@ impl ColBatch {
     fn to_python_columns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let cols: Vec<Bound<'py, PyList>> = (0..self.inner.num_columns())
             .map(|ci| {
-                let ctx = prepare_temporal(py, &self.inner.schema.fields[ci].ch_type)?;
+                let ctx = prepare_column_ctx(py, &self.inner.schema.fields[ci].ch_type)?;
                 column_to_pylist(py, &self.inner.chunks, ci, &ctx)
             })
             .collect::<PyResult<_>>()?;
@@ -308,28 +309,54 @@ const UTC_EQUIVALENTS: &[&str] = &[
     "Etc/Greenwich",
 ];
 
-/// Per-column context for materializing a temporal column. For a naive column
-/// (Date/Date32, or a DateTime/DateTime64 with no timezone or a UTC-equivalent
-/// one) `tz` is `None` and values are built by epoch arithmetic. For a column
-/// with a named non-UTC timezone, `tz` holds its `zoneinfo.ZoneInfo` and
-/// `fromtimestamp` the bound `datetime.datetime.fromtimestamp`, applied per row.
-struct TemporalCtx<'py> {
+/// Per-column context for materializing a column's host values, resolved once
+/// per column rather than per cell. For a temporal column it carries the
+/// timezone policy: a naive column (Date/Date32, or a DateTime/DateTime64 with
+/// no timezone or a UTC-equivalent one) has `tz` `None` and is built by epoch
+/// arithmetic, while a named non-UTC timezone holds its `zoneinfo.ZoneInfo` in
+/// `tz` and the bound `datetime.datetime.fromtimestamp` in `fromtimestamp`. For
+/// an Enum8/Enum16 column it carries `enum_names`, the value -> label-string map.
+struct ColumnCtx<'py> {
     tz: Option<Bound<'py, PyAny>>,
     fromtimestamp: Option<Bound<'py, PyAny>>,
     /// DateTime64 fractional precision (decimal digits). 0 for Date/DateTime.
     precision: u8,
+    /// Enum value -> pre-built label string, for an Enum8/Enum16 column; `None`
+    /// for any other type. A value missing from the map materializes as None,
+    /// matching clickhouse-connect's `int_map.get(value, None)`.
+    enum_names: Option<HashMap<i64, Bound<'py, PyString>>>,
 }
 
-/// Resolve a column's ChType into a TemporalCtx. Cheap for the common naive case
-/// (no Python calls); imports zoneinfo only for a named non-UTC zone. Safe to
-/// call for any column type; non-temporal types yield the naive default.
-fn prepare_temporal<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<TemporalCtx<'py>> {
+/// Build an enum's value -> label-string map, one Python str per variant created
+/// once for the whole column.
+fn enum_name_map<'py, V: Copy + Into<i64>>(
+    py: Python<'py>,
+    variants: &[(String, V)],
+) -> HashMap<i64, Bound<'py, PyString>> {
+    variants
+        .iter()
+        .map(|(name, value)| ((*value).into(), PyString::new(py, name)))
+        .collect()
+}
+
+/// Resolve a column's ChType into a ColumnCtx. Cheap for the common naive case
+/// (no Python calls); imports zoneinfo only for a named non-UTC zone and builds
+/// the enum map only for an enum. Safe to call for any column type; types that
+/// need neither yield the naive, non-enum default.
+fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<ColumnCtx<'py>> {
     // Unwrap LowCardinality to reach the value type before inner() strips any
     // Nullable, so LowCardinality(DateTime(tz)) still applies timezone policy.
     let resolved = match ch_type {
         ChType::LowCardinality(inner) => inner.inner(),
         other => other.inner(),
     };
+
+    let enum_names = match resolved {
+        ChType::Enum8 { variants } => Some(enum_name_map(py, variants)),
+        ChType::Enum16 { variants } => Some(enum_name_map(py, variants)),
+        _ => None,
+    };
+
     let (timezone, precision) = match resolved {
         ChType::DateTime { timezone } => (timezone.as_deref(), 0u8),
         ChType::DateTime64 {
@@ -339,25 +366,24 @@ fn prepare_temporal<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Temporal
         _ => (None, 0u8),
     };
 
-    match timezone {
+    let (tz, fromtimestamp) = match timezone {
         Some(tz) if !UTC_EQUIVALENTS.contains(&tz) => {
             let zone = py.import("zoneinfo")?.getattr("ZoneInfo")?.call1((tz,))?;
             let fromtimestamp = py
                 .import("datetime")?
                 .getattr("datetime")?
                 .getattr("fromtimestamp")?;
-            Ok(TemporalCtx {
-                tz: Some(zone),
-                fromtimestamp: Some(fromtimestamp),
-                precision,
-            })
+            (Some(zone), Some(fromtimestamp))
         }
-        _ => Ok(TemporalCtx {
-            tz: None,
-            fromtimestamp: None,
-            precision,
-        }),
-    }
+        _ => (None, None),
+    };
+
+    Ok(ColumnCtx {
+        tz,
+        fromtimestamp,
+        precision,
+        enum_names,
+    })
 }
 
 /// Split DateTime64 ticks at `precision` into whole seconds and microseconds.
@@ -414,12 +440,12 @@ fn make_date(py: Python<'_>, days: i64) -> PyResult<Bound<'_, PyAny>> {
 }
 
 /// Build a `datetime.datetime` from epoch seconds plus microseconds, honoring
-/// the column's TemporalCtx (naive UTC arithmetic, or tz-aware fromtimestamp).
+/// the column's ColumnCtx (naive UTC arithmetic, or tz-aware fromtimestamp).
 fn make_datetime<'py>(
     py: Python<'py>,
     secs: i64,
     micros: u32,
-    ctx: &TemporalCtx<'py>,
+    ctx: &ColumnCtx<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     match (&ctx.tz, &ctx.fromtimestamp) {
         (Some(tz), Some(fromtimestamp)) => {
@@ -469,7 +495,7 @@ fn column_to_pylist<'py>(
     py: Python<'py>,
     chunks: &[Arc<RustColBatch>],
     col_idx: usize,
-    ctx: &TemporalCtx<'_>,
+    ctx: &ColumnCtx<'_>,
 ) -> PyResult<Bound<'py, PyList>> {
     for chunk in chunks {
         if col_idx >= chunk.columns.len() {
@@ -614,6 +640,7 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         // A LowCardinality column's nulls live in the index validity, the Arrow
         // dictionary convention, not as a dictionary entry.
         Column::Dictionary(c) => c.validity.as_ref(),
+        Column::Decimal(c) => c.validity.as_ref(),
     }
 }
 
@@ -626,7 +653,7 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
 unsafe fn column_value_nonnull_ptr(
     py: Python<'_>,
     col: &Column,
-    ctx: &TemporalCtx<'_>,
+    ctx: &ColumnCtx<'_>,
     index: usize,
 ) -> PyResult<*mut ffi::PyObject> {
     match col {
@@ -674,16 +701,32 @@ unsafe fn column_value_nonnull_ptr(
             let slot = c.indices[index] as usize;
             column_value_nonnull_ptr(py, &c.values, ctx, slot)
         }
+        // Enum8/Enum16 carry only the physical signed int; map it to its label
+        // string through the per-column value->name map. A value with no defined
+        // label becomes None, matching clickhouse-connect's int_map.get default.
+        Column::Enum8(c) => enum_value_ptr(ctx, c.values[index] as i64),
+        Column::Enum16(c) => enum_value_ptr(ctx, c.values[index] as i64),
         // Decoded by the core and exportable through the Arrow exit, but the
-        // Python object value policy for these is not implemented yet. Scoped
-        // separately from LowCardinality.
+        // Python object value policy for these is not implemented yet.
         Column::Ipv4(_)
         | Column::Ipv6(_)
         | Column::Uuid(_)
-        | Column::Enum8(_)
-        | Column::Enum16(_) => Err(PyNotImplementedError::new_err(
+        | Column::Decimal(_) => Err(PyNotImplementedError::new_err(
             "this column type is not yet supported on the Python object exit; use the Arrow exit",
         )),
+    }
+}
+
+/// Map an enum's physical integer to its label string, or None for a value with
+/// no defined label (matching clickhouse-connect's `int_map.get(value, None)`).
+///
+/// # Safety
+///
+/// Returns an owned reference; the caller must take over the reference count.
+unsafe fn enum_value_ptr(ctx: &ColumnCtx<'_>, value: i64) -> PyResult<*mut ffi::PyObject> {
+    match ctx.enum_names.as_ref().and_then(|m| m.get(&value)) {
+        Some(name) => Ok(name.clone().into_ptr()),
+        None => Ok(none_owned_ptr()),
     }
 }
 
@@ -697,7 +740,7 @@ unsafe fn column_value_nonnull_ptr(
 unsafe fn column_value_to_owned_ptr(
     py: Python<'_>,
     col: &Column,
-    ctx: &TemporalCtx<'_>,
+    ctx: &ColumnCtx<'_>,
     index: usize,
 ) -> PyResult<*mut ffi::PyObject> {
     if column_validity(col).is_some_and(|v| !v.is_valid(index)) {

@@ -181,7 +181,12 @@ def build_native_block(columns, *, block_info=False):
                 b = v if v is not None else b"\x00" * width
                 if isinstance(b, str):
                     b = b.encode("utf-8")
-                buf.extend(b[:width].ljust(width, b"\x00"))
+                buf.extend(bytes(b[:width]).ljust(width, b"\x00"))
+        elif inner_type.startswith("Enum8(") or inner_type.startswith("Enum16("):
+            # Enum is a plain signed-int buffer on the wire; values are the codes.
+            fmt = "b" if inner_type.startswith("Enum8(") else "<h"
+            for v in values:
+                buf.extend(struct.pack(fmt, v if v is not None else 0))
         else:
             raise ValueError(f"build_native_block: unsupported type {inner_type}")
     return bytes(buf)
@@ -649,6 +654,62 @@ class TestDecodeLowCardinality:
         )
         batch = _ch_core.ColBatch.decode_native(data, has_block_info=True)
         assert list(batch.column_data(0)) == vals
+
+
+# ---------------------------------------------------------------------------
+# Enum
+# ---------------------------------------------------------------------------
+
+class TestDecodeEnum:
+    _E8 = "Enum8('red' = 1, 'green' = 2, 'blue' = 3)"
+    _E16 = "Enum16('alpha' = -5, 'beta' = 0, 'gamma' = 1000)"
+
+    def test_enum8_basic(self):
+        # Wire carries the integer codes; the Python exit yields the labels.
+        data = build_native_block([("c", self._E8, [1, 2, 3, 1, 2])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == [self._E8]
+        assert list(batch.column_data(0)) == ["red", "green", "blue", "red", "green"]
+
+    def test_enum16_negative_and_large(self):
+        data = build_native_block([("c", self._E16, [-5, 0, 1000, 0, -5])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == [self._E16]
+        assert list(batch.column_data(0)) == ["alpha", "beta", "gamma", "beta", "alpha"]
+
+    def test_nullable_enum8(self):
+        data = build_native_block([("c", f"Nullable({self._E8})", [1, None, 3, None])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == [f"Nullable({self._E8})"]
+        assert list(batch.column_data(0)) == ["red", None, "blue", None]
+
+    def test_unknown_code_is_none(self):
+        # A code with no defined label materializes as None, matching
+        # clickhouse-connect's int_map.get(code, None).
+        data = build_native_block([("c", self._E8, [1, 99, 2])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == ["red", None, "green"]
+
+    def test_paths_agree(self):
+        data = build_native_block([("c", self._E16, [1000, -5, 0, 1000, -5])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [row[0] for row in batch.to_python_rows()]
+        expected = ["gamma", "alpha", "beta", "gamma", "alpha"]
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_arrow_exports_int_codes(self):
+        # The core exports Enum as the raw signed-int codes (no per-cell label
+        # remapping); the label policy lives only on the Python object exit.
+        pa = pytest.importorskip("pyarrow")
+        data = build_native_block([("c", self._E8, [1, 2, 3]), ("d", self._E16, [-5, 0, 1000])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        result = pa.RecordBatchReader.from_stream(batch).read_all()
+        assert result.schema.field("c").type == pa.int8()
+        assert result.schema.field("d").type == pa.int16()
+        assert result.column("c").to_pylist() == [1, 2, 3]
+        assert result.column("d").to_pylist() == [-5, 0, 1000]
 
 
 # ---------------------------------------------------------------------------
