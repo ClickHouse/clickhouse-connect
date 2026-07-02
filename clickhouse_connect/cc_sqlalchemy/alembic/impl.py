@@ -152,8 +152,8 @@ class ClickHouseImpl(DefaultImpl):
         super().create_table(table, **kw)
 
     def prep_table_for_batch(self, batch_impl, table: Table) -> None:
-        batch_indexes = getattr(batch_impl, "new_indexes", {})
-        existing_indexes = getattr(batch_impl, "indexes", {})
+        batch_indexes = batch_impl.new_indexes
+        existing_indexes = batch_impl.indexes
         if batch_indexes or existing_indexes or _has_standard_index(table):
             _reject_standard_index()
         super().prep_table_for_batch(batch_impl, table)

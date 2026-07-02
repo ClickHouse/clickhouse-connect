@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from alembic.autogenerate import render
 from alembic.autogenerate.api import AutogenContext
 from alembic.autogenerate.compare import comparators
@@ -213,8 +215,14 @@ def render_drop_table(autogen_context: AutogenContext, op: ops.DropTableOp) -> s
     return rendered
 
 
+def _render_literal(value: object) -> str:
+    if isinstance(value, Mapping):
+        value = dict(value)
+    return repr(value)
+
+
 def _render_kwargs(kwargs: list[tuple[str, object]]) -> list[str]:
-    return [f"{name}={value!r}" for name, value in kwargs]
+    return [f"{name}={_render_literal(value)}" for name, value in kwargs]
 
 
 def _render_op_call(autogen_context: AutogenContext, name: str, args: list[str], kwargs: list[tuple[str, object]]) -> str:
@@ -388,7 +396,7 @@ def render_modify_clickhouse_table_settings(autogen_context: AutogenContext, op:
     return _render_op_call(
         autogen_context,
         "modify_clickhouse_table_settings",
-        [repr(op.table_name), repr(op.settings)],
+        [repr(op.table_name), _render_literal(op.settings)],
         _optional_kwargs(("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)),
     )
 

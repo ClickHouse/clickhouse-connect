@@ -1,5 +1,5 @@
 from io import StringIO
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from alembic.autogenerate import render
@@ -1305,6 +1305,29 @@ def test_clickhouse_custom_op_renderers_add_value_object_imports():
 
     assert "from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseIndex" in autogen_context.imports
     assert "from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseProjection" in autogen_context.imports
+
+
+def test_clickhouse_custom_op_renderers_normalize_mapping_subclasses():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    generated = render_python_code(
+        ops.UpgradeOps(
+            ops=[
+                AddClickHouseIndexOp(
+                    "events",
+                    "idx_1",
+                    "user_id",
+                    "minmax",
+                    clickhouse_settings=MappingProxyType({"alter_sync": 2}),
+                ),
+                ModifyClickHouseTableSettingsOp("events", MappingProxyType({"merge_with_ttl_timeout": 79})),
+            ]
+        ),
+        migration_context=context,
+    )
+
+    assert "mappingproxy" not in generated
+    assert "clickhouse_settings={'alter_sync': 2}" in generated
+    assert "op.modify_clickhouse_table_settings('events', {'merge_with_ttl_timeout': 79})" in generated
 
 
 def test_render_settings_module_level_matches_helper():
