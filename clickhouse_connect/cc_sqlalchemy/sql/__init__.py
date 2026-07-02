@@ -239,6 +239,30 @@ class ClickHouseSelect(Select[Any]):
 
     inherit_cache = True
 
+    def add_columns(self, *entities: object) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().add_columns(*cast("tuple[Any, ...]", entities)))
+
+    def with_only_columns(
+        self,
+        *entities: object,
+        maintain_column_froms: bool = False,
+        **kwargs: object,
+    ) -> "ClickHouseSelect":
+        return cast(
+            "ClickHouseSelect",
+            super().with_only_columns(
+                *cast("tuple[Any, ...]", entities),
+                maintain_column_froms=maintain_column_froms,
+                **cast("dict[str, Any]", kwargs),
+            ),
+        )
+
+    def column(self, column: object) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().column(cast(Any, column)))
+
+    def reduce_columns(self, only_synonyms: bool = True) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().reduce_columns(only_synonyms=only_synonyms))
+
     def final(self, table: FromClause | None = None) -> "ClickHouseSelect":
         return cast("ClickHouseSelect", final(self, table=table))
 
@@ -288,4 +312,8 @@ class ClickHouseSelect(Select[Any]):
 def select(*entities: Any) -> ClickHouseSelect:
     """Runtime drop-in for sqlalchemy.select that adds the ClickHouse chainables as typed methods.
     Result rows type as Any until the generic follow-up lands."""
+    # SQLAlchemy 1.4 disables Select.__init__; use its future-style class factory when present.
+    create_future_select = getattr(ClickHouseSelect, "_create_future_select", None)
+    if create_future_select is not None:
+        return cast("ClickHouseSelect", create_future_select(*entities))
     return ClickHouseSelect(*entities)
