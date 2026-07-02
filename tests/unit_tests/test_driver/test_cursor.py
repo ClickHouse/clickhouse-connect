@@ -1,11 +1,12 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
+
 import pytest
 
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
-# pylint: disable=protected-access
 def create_mock_client(result_data):
     """Helper to create a mock client with query result"""
     client = Mock()
@@ -16,6 +17,16 @@ def create_mock_client(result_data):
     query_result.summary = {"rows": len(result_data)}
     client.query.return_value = query_result
     return client
+
+
+def create_mock_query_result(result_data, column_names=None, column_types=None):
+    """Create a mock query result with optional metadata."""
+    query_result = Mock()
+    query_result.result_set = result_data
+    query_result.column_names = column_names or []
+    query_result.column_types = column_types or []
+    query_result.summary = {"rows": len(result_data)}
+    return query_result
 
 
 def test_fetchall_respects_cursor_position():
@@ -213,6 +224,44 @@ def test_empty_result_set():
     assert cursor.fetchmany(5) == []
 
 
+def test_executemany_bulk_insert_with_tuple_rows():
+    """Sequence rows (PEP 249 seq_of_parameters) must use the bulk insert path
+    with column names taken from the INSERT statement.
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    client.insert.assert_called_once_with("test_table", rows, ["id", "name"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_tuple_rows_without_column_list():
+    """Without an explicit column list, sequence rows insert into all columns."""
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table VALUES (%s, %s)", rows)
+
+    client.insert.assert_called_once_with("test_table", rows, "*", settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_with_dict_rows():
+    """Mapping rows keep the existing bulk insert behavior."""
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%(id)s, %(name)s)", rows)
+
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
+    client.query.assert_not_called()
+
+
 def test_execute_unescapes_double_percents_without_parameters():
     """Test that cursor.execute unescapes %% to % when no parameters are given.
 
@@ -232,7 +281,7 @@ def test_execute_unescapes_double_percents_without_parameters():
     # The query passed to client.query should have %% unescaped to %
     actual_query = client.query.call_args[0][0]
     assert actual_query == "SELECT formatDateTime(toDate('2010-01-04'), '%g')"
-    assert '%%' not in actual_query
+    assert "%%" not in actual_query
 
 
 def test_execute_preserves_percent_with_parameters():
@@ -245,17 +294,14 @@ def test_execute_preserves_percent_with_parameters():
     # Simulate what SQLAlchemy sends for:
     #   text("SELECT formatDateTime(toDate(:d), '%g')")
     # with _double_percents=True and bound parameter d
-    cursor.execute(
-        "SELECT formatDateTime(toDate(%(d)s), '%%g')",
-        {'d': '2010-01-04'}
-    )
+    cursor.execute("SELECT formatDateTime(toDate(%(d)s), '%%g')", {"d": "2010-01-04"})
 
     # Parameters are passed through to client.query; finalize_query handles
     # the %% -> % unescaping via the % operator during parameter substitution.
     actual_query = client.query.call_args[0][0]
     actual_params = client.query.call_args[0][1]
     assert actual_query == "SELECT formatDateTime(toDate(%(d)s), '%%g')"
-    assert actual_params == {'d': '2010-01-04'}
+    assert actual_params == {"d": "2010-01-04"}
 
 
 def test_execute_unescapes_multiple_percents():
@@ -267,3 +313,100 @@ def test_execute_unescapes_multiple_percents():
 
     actual_query = client.query.call_args[0][0]
     assert actual_query == "SELECT formatDateTime(now(), '%Y-%m-%d %H:%M:%S')"
+
+
+def test_execute_empty_result_fetches_metadata_with_parameters():
+    """Empty SELECT results should still populate description metadata."""
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute(
+        "SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s",
+        {"value_1": 13, "param_1": 1},
+    )
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s) LIMIT 0",
+        {"value_1": 13, "param_1": 1},
+    )
+
+
+def test_execute_empty_with_query_fetches_metadata():
+    """CTE queries should use the same metadata fallback."""
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute("WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79")
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
+        None,
+    )
+
+
+def _mock_insert_client(written_rows: int, summary_extra: dict | None = None):
+    """Return a mock client whose insert() returns a QuerySummary-like object."""
+    summary_dict = {"written_rows": str(written_rows), **(summary_extra or {})}
+    insert_summary = Mock()
+    insert_summary.written_rows = written_rows
+    insert_summary.summary = summary_dict
+    client = Mock()
+    client.insert.return_value = insert_summary
+    return client, summary_dict
+
+
+def test_executemany_bulk_insert_rowcount_equals_written_rows():
+    """rowcount after a bulk executemany reflects the actual number of inserted rows."""
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    assert cursor.rowcount == 2
+
+
+def test_executemany_bulk_insert_appends_summary():
+    """summary is populated from the insert response after a bulk executemany."""
+    client, summary_dict = _mock_insert_client(written_rows=2, summary_extra={"written_bytes": "64"})
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    assert cursor.summary == [summary_dict]
+
+
+def test_executemany_generator_falls_through_to_row_by_row():
+    """A generator passed to executemany falls through to the row-by-row path without raising TypeError."""
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+
+    cursor = Cursor(client)
+
+    def row_generator():
+        yield {"id": 1, "name": "user_1"}
+        yield {"id": 2, "name": "user_2"}
+
+    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%(id)s, %(name)s)", row_generator())
+
+    client.insert.assert_not_called()
+    assert client.query.call_count == 2

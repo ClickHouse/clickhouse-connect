@@ -1,16 +1,15 @@
 import array
 import unittest
-from datetime import timedelta, time
+from datetime import time, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.datatypes.temporal import Time, Time64
 from clickhouse_connect.driver.exceptions import ProgrammingError
-
-# pylint: disable=too-many-public-methods
 
 
 # Helper function used only in these tests
@@ -21,7 +20,6 @@ def _dummy_write_array(array_type, ticks, dest, _col_name):
     dest.extend(array.array(array_type, ticks).tobytes())
 
 
-# pylint: disable=protected-access
 class TestTimeDataType(unittest.TestCase):
     """Tests for the second-precision Time ClickHouse type, including edge cases."""
 
@@ -60,12 +58,8 @@ class TestTimeDataType(unittest.TestCase):
                 self.assertEqual(self.time_type._string_to_ticks(literal), expected)
 
     def test_bounds_max_min(self):
-        self.assertEqual(
-            self.time_type._string_to_ticks("999:59:59"), self.time_type.max_ticks
-        )
-        self.assertEqual(
-            self.time_type._string_to_ticks("-999:59:59"), self.time_type.min_ticks
-        )
+        self.assertEqual(self.time_type._string_to_ticks("999:59:59"), self.time_type.max_ticks)
+        self.assertEqual(self.time_type._string_to_ticks("-999:59:59"), self.time_type.min_ticks)
 
     # ------------------------------------------------------------------
     # Tick<->timedelta round-trips
@@ -86,8 +80,9 @@ class TestTimeDataType(unittest.TestCase):
         column = [timedelta(hours=1, minutes=2, seconds=3)]
         expected_ticks = [3723]
         dest = bytearray()
-        with patch(f"{Time.__module__}.write_array", _dummy_write_array), patch.object(
-            self.time_type, "write_format", return_value="native"
+        with (
+            patch(f"{Time.__module__}.write_array", _dummy_write_array),
+            patch.object(self.time_type, "write_format", return_value="native"),
         ):
             self.time_type._write_column_binary(column, dest, self.insert_ctx)
         self.assertEqual(dest, array.array("i", expected_ticks).tobytes())
@@ -95,18 +90,14 @@ class TestTimeDataType(unittest.TestCase):
         mock_source = MagicMock()
         mock_source.read_array.return_value = expected_ticks
         with patch.object(self.time_type, "read_format", return_value="native"):
-            result = self.time_type._read_column_binary(
-                mock_source, 1, self.base_read_ctx, None
-            )
+            result = self.time_type._read_column_binary(mock_source, 1, self.base_read_ctx, None)
         self.assertEqual(result, column)
 
     def test_write_int_format(self):
         column = [5]
         expected = [5]
         dest = bytearray()
-        with patch(f"{Time.__module__}.write_array", _dummy_write_array), patch.object(
-            self.time_type, "write_format", return_value="int"
-        ):
+        with patch(f"{Time.__module__}.write_array", _dummy_write_array), patch.object(self.time_type, "write_format", return_value="int"):
             self.time_type._write_column_binary(column, dest, self.insert_ctx)
         self.assertEqual(dest, array.array("i", expected).tobytes())
 
@@ -115,23 +106,17 @@ class TestTimeDataType(unittest.TestCase):
         mock_source = MagicMock()
         mock_source.read_array.return_value = ticks
         with patch.object(self.time_type, "read_format", return_value="string"):
-            res = self.time_type._read_column_binary(
-                mock_source, 1, self.base_read_ctx, None
-            )
+            res = self.time_type._read_column_binary(mock_source, 1, self.base_read_ctx, None)
             self.assertEqual(res, ["000:00:59"])
         with patch.object(self.time_type, "read_format", return_value="int"):
-            res = self.time_type._read_column_binary(
-                mock_source, 1, self.base_read_ctx, None
-            )
+            res = self.time_type._read_column_binary(mock_source, 1, self.base_read_ctx, None)
             self.assertEqual(res, ticks)
 
     def test_read_numpy_format(self):
         ticks = [1, 2, 3]
         mock_source = MagicMock()
         mock_source.read_array.return_value = ticks
-        np_ctx = SimpleNamespace(
-            use_numpy=True, use_extended_dtypes=False, use_none=False
-        )
+        np_ctx = SimpleNamespace(use_numpy=True, use_extended_dtypes=False, use_none=False)
         with patch.object(self.time_type, "read_format", return_value="native"):
             res = self.time_type._read_column_binary(mock_source, 3, np_ctx, None)
         self.assertIsInstance(res, np.ndarray)
@@ -153,7 +138,6 @@ class TestTimeDataType(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.time_type._to_ticks_array([1, "000:00:01"])
 
-    # pylint: disable=c-extension-no-member
     def test_active_null_with_extended_dtypes(self):
         self.time_type.nullable = True
         ctx = SimpleNamespace(use_extended_dtypes=True, use_none=False)
@@ -174,9 +158,7 @@ class TestTimeDataType(unittest.TestCase):
         arr = self.time_type._build_lc_column(index, keys, ctx)
         self.assertIsInstance(arr, np.ndarray)
         self.assertEqual(arr.dtype, np.dtype("timedelta64[s]"))
-        np.testing.assert_array_equal(
-            arr, np.array([index[i] for i in keys], dtype="timedelta64[s]")
-        )
+        np.testing.assert_array_equal(arr, np.array([index[i] for i in keys], dtype="timedelta64[s]"))
 
     # ------------------------------------------------------------------
     # datetime.time conversions
@@ -209,9 +191,7 @@ class TestTimeDataType(unittest.TestCase):
         mock_source.read_array.return_value = ticks
 
         with patch.object(self.time_type, "read_format", return_value="time"):
-            result = self.time_type._read_column_binary(
-                mock_source, len(ticks), self.base_read_ctx, None
-            )
+            result = self.time_type._read_column_binary(mock_source, len(ticks), self.base_read_ctx, None)
         self.assertEqual(result, expected)
 
     def test_write_time_format(self):
@@ -229,9 +209,7 @@ class TestTime64DataType(unittest.TestCase):
     """Tests for the Time64 type."""
 
     def setUp(self):
-        self.base_read_ctx = SimpleNamespace(
-            use_numpy=False, use_extended_dtypes=False, use_none=False
-        )
+        self.base_read_ctx = SimpleNamespace(use_numpy=False, use_extended_dtypes=False, use_none=False)
 
     @staticmethod
     def make(scale, nullable=False):
@@ -304,9 +282,7 @@ class TestTime64DataType(unittest.TestCase):
         column = [timedelta(seconds=1, microseconds=1), None]
         expected_ticks = [1_000_001, 0]
         dest = bytearray()
-        with patch(
-            f"{Time64.__module__}.write_array", _dummy_write_array
-        ), patch.object(t6, "write_format", return_value="native"):
+        with patch(f"{Time64.__module__}.write_array", _dummy_write_array), patch.object(t6, "write_format", return_value="native"):
             t6._write_column_binary(column, dest, SimpleNamespace(column_name="c"))
         self.assertEqual(dest, array.array("q", expected_ticks).tobytes())
 
@@ -321,9 +297,7 @@ class TestTime64DataType(unittest.TestCase):
         ticks = [0, 10**6]
         mock_source = MagicMock()
         mock_source.read_array.return_value = ticks
-        np_ctx = SimpleNamespace(
-            use_numpy=True, use_extended_dtypes=False, use_none=False
-        )
+        np_ctx = SimpleNamespace(use_numpy=True, use_extended_dtypes=False, use_none=False)
         with patch.object(t6, "read_format", return_value="native"):
             res = t6._read_column_binary(mock_source, 2, np_ctx, None)
         self.assertIsInstance(res, np.ndarray)
@@ -335,16 +309,14 @@ class TestTime64DataType(unittest.TestCase):
         column = [2_000_000]
         expected = [2_000_000]
         dest = bytearray()
-        with patch(
-            f"{Time64.__module__}.write_array", _dummy_write_array
-        ), patch.object(t6, "write_format", return_value="int"):
+        with patch(f"{Time64.__module__}.write_array", _dummy_write_array), patch.object(t6, "write_format", return_value="int"):
             t6._write_column_binary(column, dest, SimpleNamespace(column_name="c"))
         self.assertEqual(dest, array.array("q", expected).tobytes())
 
     # ------------------------------------------------------------------
     # Nullable behavior
     # ------------------------------------------------------------------
-    # pylint: disable=c-extension-no-member
+
     def test_active_null_with_extended_dtypes(self):
         t6 = self.make(6, nullable=True)
         ctx = SimpleNamespace(use_extended_dtypes=True, use_none=False)

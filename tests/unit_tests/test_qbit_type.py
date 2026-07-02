@@ -2,12 +2,10 @@ import math
 
 import pytest
 
-import clickhouse_connect.datatypes.vector as vector_module
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.vector import QBit
+from clickhouse_connect.driver import options
 from clickhouse_connect.driver.options import np
-
-# pylint: disable=protected-access
 
 
 def test_qbit_type_registration():
@@ -600,13 +598,13 @@ def test_transpose_numpy_vs_pure_python_equivalence():
         qbit = get_from_name(f"QBit({elem_type}, {dimension})")
 
         # Get pure Python result by temporarily disabling numpy
-        original_np = vector_module.np
+        original_np = options.np
         try:
             # Disable numpy to force pure Python path
-            vector_module.np = None
+            options.np = None
             result_python = qbit._transpose_row(test_vector)
         finally:
-            vector_module.np = original_np
+            options.np = original_np
 
         dtype = np.float64 if elem_type == "Float64" else np.float32
         np_vector = np.array(test_vector, dtype=dtype)
@@ -638,13 +636,13 @@ def test_untranspose_numpy_vs_pure_python_equivalence():
         bit_planes = qbit._transpose_row_numpy(np_vector)
 
         # Get pure Python result by temporarily disabling numpy
-        original_np = vector_module.np
+        original_np = options.np
         try:
             # Disable numpy to force pure Python path
-            vector_module.np = None
+            options.np = None
             result_python = qbit._untranspose_row(bit_planes)
         finally:
-            vector_module.np = original_np
+            options.np = original_np
 
         result_numpy = qbit._untranspose_row_numpy(bit_planes)
         assert len(result_python) == len(result_numpy)

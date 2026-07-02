@@ -1,11 +1,14 @@
 from datetime import date
-from clickhouse_connect.driver.dataconv import epoch_days_to_date as py_date, pivot as py_pivot
-# pylint: disable=no-name-in-module
-from clickhouse_connect.driverc.dataconv import epoch_days_to_date as c_date, pivot as c_pivot
+
+from clickhouse_connect.driverc.dataconv import epoch_days_to_date as c_date
+from clickhouse_connect.driverc.dataconv import pivot as c_pivot
+
+from clickhouse_connect.driver.dataconv import epoch_days_to_date as py_date
+from clickhouse_connect.driver.dataconv import pivot as py_pivot
 
 
 def test_date_conv():
-    for date_func in (c_date, py_date,):
+    for date_func in (c_date, py_date):
         assert date_func(11322) == date(2000, 12, 31)
         assert date_func(47579) == date(2100, 4, 8)
         assert date_func(0) == date(1970, 1, 1)

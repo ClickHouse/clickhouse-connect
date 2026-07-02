@@ -3,7 +3,7 @@ from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
@@ -73,7 +73,7 @@ def test_uint16_nulls():
 
 def test_low_cardinality():
     result = parse_response(bytes_source(LOW_CARDINALITY))
-    assert result.result_set == [('CDMA',), ('GSM',), ('UMTS',)]
+    assert result.result_set == [("CDMA",), ("GSM",), ("UMTS",)]
 
 
 def test_low_card_array():
@@ -83,29 +83,48 @@ def test_low_card_array():
 
 def test_map():
     result = parse_response(bytes_source(SIMPLE_MAP))
-    check_result(result, {'key1': 'value1', 'key2': 'value2'})
+    check_result(result, {"key1": "value1", "key2": "value2"})
     result = parse_response(bytes_source(LOW_CARD_MAP))
-    check_result(result, {'george': UUID('1d439f79-c57d-5f23-52c6-ffccca93e1a9'), 'igor': None})
+    check_result(result, {"george": UUID("1d439f79-c57d-5f23-52c6-ffccca93e1a9"), "igor": None})
 
 
 def test_ip():
-    ips = ['192.168.5.3', '202.44.8.25', '0.0.2.2']
-    ipv4_type = registry.get_from_name('IPv4')
+    ips = ["192.168.5.3", "202.44.8.25", "0.0.2.2"]
+    ipv4_type = registry.get_from_name("IPv4")
     dest = bytearray()
-    ipv4_type.write_column(ips, dest, InsertContext('', [], []))
+    ipv4_type.write_column(ips, dest, InsertContext("", [], []))
     python = ipv4_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), None)
     assert tuple(python) == tuple(IPv4Address(ip) for ip in ips)
 
 
 def test_point():
-    points = ((3.22, 3.22),(5.22, 5.22),(4.22, 4.22))
-    point_type = registry.get_from_name('Point')
+    points = ((3.22, 3.22), (5.22, 5.22), (4.22, 4.22))
+    point_type = registry.get_from_name("Point")
     dest = bytearray()
-    point_type.write_column(points, dest, InsertContext('', [], []))
+    point_type.write_column(points, dest, InsertContext("", [], []))
     python = point_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), [None, None])
     assert tuple(python) == tuple(point for point in points)
 
 
 def test_nested():
-    result = parse_response (bytes_source(NESTED_BINARY))
-    check_result(result, [{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}], 2, 0)
+    result = parse_response(bytes_source(NESTED_BINARY))
+    check_result(result, [{"str1": "one", "int32": 5}, {"str1": "two", "int32": 55}], 2, 0)
+
+
+def test_first_item_first_row_empty_result():
+    # An empty result set should return None rather than raising IndexError (#824).
+    columns = ("id", "name")
+    row_oriented = QueryResult([], column_names=columns, column_oriented=False)
+    assert row_oriented.first_item is None
+    assert row_oriented.first_row is None
+
+    col_oriented = QueryResult([[], []], column_names=columns, column_oriented=True)
+    assert col_oriented.first_item is None
+    assert col_oriented.first_row is None
+
+
+def test_first_item_first_row_non_empty_result():
+    columns = ("id", "name")
+    row_oriented = QueryResult([[1, "a"], [2, "b"]], column_names=columns, column_oriented=False)
+    assert row_oriented.first_item == {"id": 1, "name": "a"}
+    assert row_oriented.first_row == [1, "a"]

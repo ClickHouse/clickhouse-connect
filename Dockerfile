@@ -2,7 +2,7 @@ FROM python:3.10
 
 ADD . /
 
-RUN pip install requests pytz
+RUN pip install requests
 RUN pip install --upgrade pip; \
     pip install cython; \
     pip install -v .

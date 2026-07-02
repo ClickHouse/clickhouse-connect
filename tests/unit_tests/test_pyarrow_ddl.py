@@ -1,7 +1,5 @@
-# pylint: disable=duplicate-code
-
-import pytest
 import pyarrow as pa
+import pytest
 
 from clickhouse_connect.driver.ddl import (
     arrow_schema_to_column_defs,
@@ -131,12 +129,7 @@ def test_create_table_from_arrow_schema_builds_expected_ddl():
         engine_params={"ORDER BY": "id"},
     )
 
-    assert (
-        ddl
-        == "CREATE TABLE arrow_basic_test "
-           "(id Int64, name String, score Float32, flag Bool) "
-           "ENGINE MergeTree  ORDER BY id"
-    )
+    assert ddl == "CREATE TABLE arrow_basic_test (id Int64, name String, score Float32, flag Bool) ENGINE MergeTree  ORDER BY id"
 
 
 def test_create_table_from_arrow_schema_matches_manual_create_table():

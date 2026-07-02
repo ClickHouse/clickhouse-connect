@@ -1,7 +1,7 @@
 import sqlalchemy as db
 from sqlalchemy import func
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt32, DateTime
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime, String, UInt32
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
 dialect = ClickHouseDialect()
@@ -33,20 +33,14 @@ def test_group_by_multiple_labels():
     """Multiple labeled expressions in GROUP BY should all render as aliases."""
     time_label = func.toStartOfDay(func.toDateTime(commits.c.time)).label("day")
     author_label = func.lower(commits.c.author).label("author_lc")
-    stmt = (
-        db.select(time_label, author_label, func.sum(commits.c.lines_added))
-        .group_by(time_label, author_label)
-    )
+    stmt = db.select(time_label, author_label, func.sum(commits.c.lines_added)).group_by(time_label, author_label)
     sql = compile_query(stmt)
     assert "GROUP BY `day`, `author_lc`" in sql
 
 
 def test_group_by_unlabeled_column():
     """Unlabeled columns in GROUP BY should render normally (table-qualified)."""
-    stmt = (
-        db.select(commits.c.author, func.sum(commits.c.lines_added))
-        .group_by(commits.c.author)
-    )
+    stmt = db.select(commits.c.author, func.sum(commits.c.lines_added)).group_by(commits.c.author)
     sql = compile_query(stmt)
     assert "GROUP BY `commits`.`author`" in sql
 
@@ -62,10 +56,6 @@ def test_select_still_renders_full_expression():
 def test_order_by_still_renders_alias():
     """ORDER BY should still render the alias (no regression)."""
     time_label = func.toStartOfDay(func.toDateTime(commits.c.time)).label("time")
-    stmt = (
-        db.select(time_label, func.sum(commits.c.lines_added))
-        .group_by(time_label)
-        .order_by(time_label)
-    )
+    stmt = db.select(time_label, func.sum(commits.c.lines_added)).group_by(time_label).order_by(time_label)
     sql = compile_query(stmt)
     assert "ORDER BY `time`" in sql

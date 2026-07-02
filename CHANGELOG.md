@@ -1,30 +1,218 @@
 # ClickHouse Connect ChangeLog
 
-### WARNING -- Breaking change for AsyncClient close()
-The AsyncClient close() method is now async and should be called as an async function.
-
-### WARNING -- Python 3.8 EOL
-Python 3.8 was EOL on 2024-10-07.  It is no longer tested, and versions after 2025-04-07 will not include Python
-3.8 wheel distributions.  As of version 0.8.15, wheels are not built for Python 3.8 AARCH64 versions due to
-missing dependencies in the build chain.
-
-### WARNING -- JSON Incompatibility between versions 22.8 and 22.10
-The internal serialization format for experimental JSON was updated in ClickHouse version 24.10.  `clickhouse-connect`
-will set the compatibility level on a global basis based on the last client created, so multiple clients using the
-library with mixed versions 22.8/22.9 and 22.10 and later versions will break.  If you need JSON support for mixed
-versions you must use different Python interpreters for each version.
-
-### WARNING -- Impending Breaking Change - Server Settings in DSN
-When creating a DBAPI Connection method using the Connection constructor or a SQLAlchemy DSN, the library currently
-converts any unrecognized keyword argument/query parameter to a ClickHouse server setting. Starting in the next minor
-release (0.9.0), unrecognized arguments/keywords for these methods of creating a DBAPI connection will raise an exception
-instead of being passed as ClickHouse server settings. This is in conjunction with some refactoring in Client construction.
-The supported method of passing ClickHouse server settings is to prefix such arguments/query parameters with`ch_`.
-
 ## UNRELEASED
 
 ### Improvements
+- SQLAlchemy: added a chainable `Select.ch_join()` so ClickHouse JOIN modifiers can be written in normal SQLAlchemy chaining style instead of nesting the `ch_join()` helper inside `select_from()`. It takes the strictness modifiers ALL, ANY, ASOF, SEMI, and ANTI, the GLOBAL distribution modifier, plus USING and CROSS, all as keyword arguments, and chains so multi-join queries stay readable. The existing `ch_join()` factory is unchanged. Closes [#827](https://github.com/ClickHouse/clickhouse-connect/issues/827).
+- SQLAlchemy: added `cc_sqlalchemy.select()` which returns a `ClickHouseSelect`. It exposes the ClickHouse chainable modifiers such as `ch_join`, `final`, `sample`, `array_join`, `prewhere`, and `limit_by` as typed methods so static type checkers accept them without suppressions. The existing `sqlalchemy.select()` path keeps working unchanged. Closes [#837](https://github.com/ClickHouse/clickhouse-connect/issues/837).
+- SQLAlchemy: `execution_options(settings={...})` now forwards per-query ClickHouse settings through the dialect and DB-API cursor instead of silently ignoring them. This works for Core and `text()` statements, connection-level execution options, `execute`, `executemany`, and the bulk-insert path, while continuing to use the existing client settings validation. Closes [#838](https://github.com/ClickHouse/clickhouse-connect/issues/838).
+
+## 1.4.1, 2026-06-30
+
+### Bug Fixes
+- SQLAlchemy: importing the ClickHouse Alembic integration no longer changes Alembic autogenerate output for other database dialects. The ClickHouse renderers for `CreateTableOp`, `AddColumnOp`, and `DropTableOp` were registered as process-wide replacements with no dialect guard, because Alembic renderers have no per-dialect dispatch. Any non-ClickHouse autogenerate run in the same process then used the ClickHouse renderers, which dropped the `nullable` argument from columns whose nullability was not set explicitly and injected `cc_sqlalchemy` imports. The renderers now fall back to Alembic's built-in rendering for non-ClickHouse dialects. Closes [#832](https://github.com/ClickHouse/clickhouse-connect/issues/832).
+- Several public `AsyncClient` methods now carry the return-type annotations their sync `Client` counterparts already had. `close`, `close_connections`, `query_np`, `query_df`, `query_arrow`, `set_client_setting`, and `set_access_token` were missing them, so downstream projects running mypy with `--disallow-untyped-calls` got `no-untyped-call` errors on calls like `await client.close()` once the package began shipping `py.typed` in 1.4.0. The async client surface is now fully annotated. This is a type-only change with no runtime effect. Closes [#831](https://github.com/ClickHouse/clickhouse-connect/issues/831).
+
+## 1.4.0, 2026-06-29
+
+### Bug Fixes
+- `QueryResult.first_item` and `QueryResult.first_row` now return `None` for an empty result set instead of raising `IndexError`. Both properties indexed element `[0]` without checking the row count, so they crashed when a query returned no rows. They now short-circuit on an empty result in both row-oriented and column-oriented mode. Closes [#824](https://github.com/ClickHouse/clickhouse-connect/issues/824).
+- `Cursor.executemany` now correctly resets `rowcount` and reports the number of inserted rows after a bulk insert. Previously, `rowcount` retained the value from the previous operation. The insert summary is also appended to `cursor.summary`, consistent with the non-bulk path. In addition, passing a generator as `seq_of_parameters` no longer raises `TypeError`; the bulk-insert optimisation is now skipped for non-indexable iterables and the operation falls through to the row-by-row path as PEP 249 requires.
+- Fixed a connection failure partway through reading a query result being silently treated as a complete result. The reader detected the broken stream but discarded the error once any rows had already been read, so a truncated result was returned as if it were whole. A mid-stream read failure now raises `StreamFailureError`, carrying the server-side error message when ClickHouse reported one. Closes [#802](https://github.com/ClickHouse/clickhouse-connect/issues/802).
+- `Client.insert_arrow` and `AsyncClient.insert_arrow` no longer drop the `transport_settings` argument. It was passed positionally into the `compression` parameter, so transport settings were ignored and a non-empty value corrupted the request. It is now forwarded correctly.
+- `command` now raises `ProgrammingError` when binary parameter binds are combined with command data or external data, instead of placing binary content into the URL query string. This applies to both the sync and async clients.
+- Importing clickhouse-connect no longer emits a `DeprecationWarning` for the `array` `'u'` type code. The compiled buffer module built an unused `array.array('u', [])` template at import time. The `'u'` (wchar_t) code was deprecated and is scheduled for removal in 3.16, where this would have become an `ImportError`. The template is removed, which also lets projects that run with `-W error` import the package. Closes [#815](https://github.com/ClickHouse/clickhouse-connect/issues/815).
+- The SQLAlchemy `Nullable` and `LowCardinality` DDL helpers are now functions that return a concrete `ChSqlaType`. They were classes whose `__new__` returned a different type, which type checkers cannot model, so `Array(LowCardinality(String))` raised a spurious mypy error despite working at runtime. Runtime behavior is unchanged. Closes [#819](https://github.com/ClickHouse/clickhouse-connect/issues/819).
+
+### Improvements
+- The Cython extension modules now declare free-threading compatibility, so importing clickhouse-connect on a free-threaded Python build such as 3.14t no longer silently re-enables the GIL. As part of this change, `ResponseBuffer.read_uint64` no longer uses a module level scratch buffer for its big-endian byte swap, which was the one piece of shared mutable state in the C modules. Building from source now requires Cython 3.1 or later. The CI test matrix now runs the full suite on free-threaded Python 3.14t as a non-blocking job. Free-threading support remains experimental.
+- `QueryResult.query_id` now returns an empty string instead of `None` when the server reported no query id. This matches `QuerySummary` and makes the property consistently typed as `str`.
+- clickhouse-connect now ships PEP 561 type information. The `py.typed` marker is included so downstream type checkers can use the package annotations. Closes [#692](https://github.com/ClickHouse/clickhouse-connect/issues/692).
+- `create_client`, `create_async_client`, `connect()`, and the DB-API `Connection` constructor now accept `None` for `port` and `database` to request the driver's defaults, in addition to omitting them. Previously the public type hints exposed the internal sentinel values `0` for port and `"__default__"` for database, so callers had no clean way to say "not specified". `None` is now the documented, typed way to do that at every level. The old sentinel values are still accepted, so the change is backward compatible. Closes [#801](https://github.com/ClickHouse/clickhouse-connect/issues/801).
+
+### Compatibility
+- `Client.insert`, `AsyncClient.insert`, and `raw_insert` now require `column_names` to be a `Sequence` rather than a bare `Iterable`. A one-shot iterator such as a generator already failed at runtime because the column names are measured and iterated more than once, so the type hint now matches the real requirement.
+
+## 1.3.0, 2026-06-11
+
+### Improvements
+- Build and publish Windows ARM64 `win_arm64` wheels for CPython 3.10 through 3.14, including the free-threaded 3.14 build. Closes [#785](https://github.com/ClickHouse/clickhouse-connect/issues/785).
+- Server errors now expose structured fields on the raised exception. `DatabaseError` and `OperationalError` carry a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so callers can branch on `exc.code` instead of parsing the message string. `code` is set even when `show_clickhouse_errors` is disabled. `name` is only set when error detail is enabled. Both default to `None` when unavailable, such as on transport errors. Closes [#786](https://github.com/ClickHouse/clickhouse-connect/issues/786).
+
+### Bug Fixes
+- DB API `Cursor.executemany` no longer raises `AttributeError: 'tuple' object has no attribute 'keys'` when rows are passed as sequences instead of mappings. The bulk insert optimization assumed every row was a dict, but PEP 249 allows `seq_of_parameters` to contain sequences, and `cursor.execute` already accepted positional parameters. Sequence rows now use the same bulk insert path, taking column names from the INSERT statement when present. This fixes consumers like Airflow's `DbApiHook.insert_rows(executemany=True)`, which passes tuples.
+- Large query parameter payloads are now automatically sent as form data in the request body instead of the URL query string. Server-side bind parameters were urlencoded into the request URL, so a large `IN` list or a high-dimensional vector embedding could produce a URL that HTTP intermediaries such as nginx, AWS ALB, and CloudFront reject with HTTP 414. The client now routes parameters to the POST body once their encoded length passes a threshold, which keeps the URL small. Setting `form_encode_query_params=True` still forces form encoding for all queries. Queries using binary parameter binds are never promoted automatically and only use form encoding when the flag is set. This does not change the server's per-value size limit, which is governed by `http_max_field_value_size`. Applies to both sync and async clients. Closes [#740](https://github.com/ClickHouse/clickhouse-connect/issues/740).
+- `uuid.UUID`, `IPv4Address`, and `IPv6Address` values nested inside `Array`, `Tuple`, or `Map` server-side bind parameters are now quoted, matching client-side parameter formatting. Previously they rendered unquoted, so an `IN` list of UUIDs bound to `{name:Array(String)}` (as produced by SQLAlchemy `Column.in_` with `server_side_params=True`) was rejected by the server with `Code: 26 ... cannot be parsed as Array(String)`. Closes [#791](https://github.com/ClickHouse/clickhouse-connect/issues/791).
+- A datetime parameter whose name genuinely ends in `_64` is no longer renamed when the query binds that exact name. `bind_query` treated any trailing `_64` as a DateTime64 precision hint and stripped it before looking at the query, so a placeholder like `{param_64:DateTime64(6)}` was left unbound and the server rejected the query. SQLAlchemy hits this with `server_side_params=True` once a statement reaches 64 anonymous parameters. The suffix is now only treated as a hint when the full name does not appear as a placeholder in the query, which leaves the documented `_64` convention working as before. Closes [#790](https://github.com/ClickHouse/clickhouse-connect/issues/790).
+
+## 1.2.0, 2026-06-08
+
+### Improvements
+- SQLAlchemy: opt-in server-side bind parameters via `create_engine(url, server_side_params=True)`. The dialect then emits ClickHouse native `{name:Type}` / `{name:Array(Type)}` placeholders instead of client-side string interpolation. Off by default. Closes [#735](https://github.com/ClickHouse/clickhouse-connect/issues/735).
+- Added a `token_provider` client option (sync and async). It accepts a callable returning an access token string; the callable is invoked once for the initial token and again to fetch a fresh token whenever the server rejects the current one (authentication failure), retrying the request once. Mutually exclusive with `access_token` and `username`/`password`.
+- Added a `headers` option to `create_client`/`create_async_client` for attaching custom HTTP headers to every request, including the initialization queries sent during client creation. Useful for HTTP gateways that require auth headers such as Cloudflare Access service tokens.
+
+### Bug Fixes
+- A `datetime` bound to a server-side `{name:DateTime64(...)}` placeholder now keeps its sub-second precision instead of being truncated to seconds. The declared parameter type drives this, so no `_64` name suffix or manual `DT64Param` wrapper is needed, and it applies through `Array` and `Tuple` hints. Plain `DateTime` binds are unchanged. Closes [#739](https://github.com/ClickHouse/clickhouse-connect/issues/739).
+- Strip `--` line comments that have no following space when classifying queries, so a DDL with a leading `--sql`-style comment is routed as a command instead of raising `StreamFailureError`. Closes [#499](https://github.com/ClickHouse/clickhouse-connect/issues/499).
+- SQLAlchemy: implement reflection on the dialect itself so `MetaData.reflect()` and `Inspector.get_multi_columns()` work.
+- SQLAlchemy: UDT-based types (`UUID`, `IPv4`/`IPv6`, `JSON`, `Nested`, geometry types, `AggregateFunction`, etc.) now return concrete `python_type` classes instead of `None`, matching SQLAlchemy's `TypeEngine.python_type` contract.
+- SQLAlchemy: `Array` now subclasses `sqlalchemy.types.ARRAY` and exposes `item_type`.
+- `bytes`/`bytearray` query parameters now render as ClickHouse string literals (each byte as `\xHH`) instead of the Python repr, fixing inserts into `FixedString`/`String` columns through the SQLAlchemy dialect. Closes [#777](https://github.com/ClickHouse/clickhouse-connect/issues/777).
+- The `dsn` passed to `create_client`/`create_async_client` now percent-decodes the username, password, and database, so credentials containing reserved characters can be supplied URL-encoded (`pass%20word` becomes `pass word`). A literal `%` in a DSN must now be written as `%25`. A DSN with a username and no password now sends an empty password rather than the literal string `None`. Closes [#713](https://github.com/ClickHouse/clickhouse-connect/issues/713).
+
+## 1.1.1, 2026-05-27
+
+### Bug Fixes
+- Async client: `ping()` now routes through the configured proxy, matching `_raw_request`. Previously the proxy was omitted, so `ping()` falsely returned `False` on networks where the server was only reachable via the proxy. Closes [#757](https://github.com/ClickHouse/clickhouse-connect/issues/757).
+- Fix `query("SHOW ROW POLICIES")`/`query("SHOW POLICIES")` by routing these non-tabular statements without appending `FORMAT Native`. Empty row-policy `SHOW` command results now return `""` instead of `QuerySummary`. Closes [#761](https://github.com/ClickHouse/clickhouse-connect/issues/761).
+- Async client: retry stale keep-alive resets surfaced by aiohttp as `ClientOSError` or `ClientConnectionResetError`, fixing large async inserts on killed pooled connections. Closes [#763](https://github.com/ClickHouse/clickhouse-connect/issues/763).
+- Async client: do not retry aiohttp timeout, connector, or fingerprint errors as these can indicate the request was already delivered or a config issue, not a stale connection.
+- Sync client: also retry stale keep-alive `BrokenPipeError` (in addition to `ConnectionResetError`), matching the async behavior.
+
+## 1.1.0, 2026-05-26
+
+### Compatibility
+- Async client now requires `aiohttp>=3.9.0`. This is required to support TLS SNI override via `server_host_name`, because aiohttp added the per-request `server_hostname` option in 3.9.
+- SQLAlchemy: the `alembic` extra now requires `alembic>=1.16` (previously `>=1.9`) so the documented `IF EXISTS` / `IF NOT EXISTS` Alembic operation kwargs are available.
+
+### Bug Fixes
+- SQLAlchemy: `op.add_column(..., clickhouse_settings={...})` now works through the public Alembic operations API, and rendered `AddColumnOp` migrations preserve extra ClickHouse kwargs.
+- SQLAlchemy: Alembic migrations now handle comments with ClickHouse-compatible syntax. Column comments on `CREATE TABLE` / `ADD COLUMN` no longer emit rejected `COMMENT ON COLUMN` statements; table comments are now emitted in generated DDL, reflected for no-op autogenerate, and changed or dropped with `ALTER TABLE ... MODIFY COMMENT`.
+- Async client: `server_host_name` now also overrides the TLS SNI / certificate hostname, matching the sync client. Previously the async path only applied it to the HTTP `Host` header, so connecting to host A while presenting SNI B (the 0.x `pool_mgr=urllib3.PoolManager(server_hostname=...)` pattern, useful for ClickHouse Cloud VPC endpoints reached via external DNS) was not expressible against the new aiohttp-based client. Both `_raw_request` and `ping()` now pass `ssl=self._ssl_context, server_hostname=self.server_host_name` per request when an SSL context is in use. Closes [#752](https://github.com/ClickHouse/clickhouse-connect/issues/752).
+- Drain the full `retries` budget on connection-error retries in `_raw_request` instead of only retrying once. Previously both the sync and async clients gated network-error retries on `attempts == 1`, so two consecutive `aiohttp.ServerDisconnectedError`s (or `ConnectionResetError`s on the sync path) surfaced as `OperationalError` even when `query_retries` would have allowed another attempt. Read paths now drain `query_retries`; insert/command paths still get one retry (`retries=0` callers). Sync `raw_query` and `raw_stream` (the foundation for `query_arrow` / `query_arrow_stream`) now also pass `query_retries` so they match their async counterparts. Adds a `0.1 * attempts` backoff between connection-error retries to match the 429/503/504 branch. Closes [#754](https://github.com/ClickHouse/clickhouse-connect/issues/754).
+- `quote_identifier` now re-escapes inputs that start and end with `` ` `` or `"` but contain unescaped inner occurrences of the same quote character, instead of passing them through unchanged. Validly pre-quoted identifiers like backslash or doubled-quote escaping still pass through untouched. Closes [#737](https://github.com/ClickHouse/clickhouse-connect/issues/737).
+- SQLAlchemy: quote string-valued engine and operation settings as ClickHouse string literals when rendering `SETTINGS` clauses. Previously settings like `MergeTree(settings={"storage_policy": "hot_cold"})` or `op.add_column(..., clickhouse_settings={"mutations_sync": "2"})` emitted unquoted SQL (`storage_policy = hot_cold`), which ClickHouse rejected. Numeric and boolean settings are unchanged.
+- SQLAlchemy: preserve engine `settings` on reflection. `build_engine()` previously hardcoded `engine.settings = {}` even when the reflected DDL contained a `SETTINGS` clause, so callers reading `engine.settings` after reflection saw an empty dict. `settings` is now populated from the parsed engine kwargs, decoding ClickHouse string-literal escapes (`\\`, `\'`, `\n`, etc.) and preserving float-valued settings as floats — round-trip parity with the construction path.
+- SQLAlchemy: `Inspector` error messages from `get_table_metadata()` now report the resolved database name i.e. from `currentDatabase()` when `schema` was not provided instead of literal `None`.
+
+## 1.1.0a2, 2026-05-07
+
+Follow-up alpha to 1.1.0a1 with a fix for an ORM compile-path regression in the new ClickHouse Select modifiers, rebased on `1.0.0rc3` so the insert-retry fix from rc3 is also included.
+
+### Bug Fixes
+- SQLAlchemy: `FINAL`, `SAMPLE`, `PREWHERE`, and `LIMIT BY` modifiers are now preserved when a `select()` is built from ORM-mapped attributes (e.g. `select(Event.id)`) rather than Core columns. Previously the ORM compile path rebuilt the inner Select via `Select._create_raw_select`, which dropped the modifier instance attributes, so the compiled SQL silently emitted no modifier. The compiler now falls back to `compile_state.select_statement` (the original user-built Select) to recover the modifiers. Closes [#730](https://github.com/ClickHouse/clickhouse-connect/issues/730).
+
+## 1.0.1, 2026-05-19
+
+### Bug Fixes
+- Recognize `Fixed/UTC±HH:MM:SS` timezones emitted by ClickHouse servers without an IANA tz database (in column types, `X-ClickHouse-Timezone`, and `SELECT timezone()`). Previously raised `ProgrammingError` on any column read, parameter bind, or client init touching one. The exact `±24:00:00` boundary remains rejected because Python's `datetime.timezone` cannot represent it. Closes [#702](https://github.com/ClickHouse/clickhouse-connect/issues/702).
+- Async client: drain in-flight requests before closing the underlying aiohttp session. Sharing a single `AsyncClient` across concurrent coroutines previously raised `RuntimeError: Session is closed` (and related `Connection reset` / `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` cascades) whenever `max_connection_age` triggered a pool rotation while other tasks had requests in flight. `close_connections()` now installs the new session before retiring the old one, and waits for outstanding requests (including streaming responses) to release their lease before tearing it down. `close()` clears `self._session` so post-close calls fail with `ProgrammingError` instead of leaking aiohttp's `RuntimeError`. Closes [#744](https://github.com/ClickHouse/clickhouse-connect/issues/744)
+- Async client: `ca_cert="certifi"` shorthand now resolves to `certifi.where()`, matching the sync client. Previously the async path passed the literal string to `ssl_context.load_verify_locations`, producing `FileNotFoundError`. Closes [#742](https://github.com/ClickHouse/clickhouse-connect/issues/742)
+- Fix SQLAlchemy dialect rendering for `ILIKE` and `NOT ILIKE` expressions to use native ClickHouse syntax instead of the generic SQLAlchemy `lower(...) LIKE lower(...)` fallback.
+
+## 1.0.0, 2026-05-13
+
+No code changes since `1.0.0rc3`. See the `1.0.0rc1`, `1.0.0rc2`, and `1.0.0rc3` entries below for the full set of changes included in the 1.0.0 release.
+
+Upgrading from a 0.15.x or earlier release? See [MIGRATION.md](MIGRATION.md) for a guide to the breaking changes and their replacements.
+
+## 1.0.0rc3, 2026-05-07
+
+### Bug Fixes
+- Fix intermittent `Code: 62. Empty query. (SYNTAX_ERROR)` on inserts when a pooled keep-alive connection is reset between attempts. The retry path now rebuilds the insert body instead of replaying an already-drained generator. Affects both sync and async clients. Closes [#731](https://github.com/ClickHouse/clickhouse-connect/issues/731)
+
+## 1.1.0a1, 2026-05-06
+
+This is an **alpha preview** of the upcoming 1.1.0 release, published from the alembic integration branch for early testing. It includes everything in 1.0.0rc2 plus the items below. The new SQLAlchemy and Alembic APIs introduced here may change before 1.1.0 final.
+
+### Improvements
+- **SQLAlchemy: Alembic migration support.** Full Alembic integration for ClickHouse schema migrations: autogeneration of migration scripts from SQLAlchemy metadata, upgrade/downgrade lifecycle, and round-tripping of ClickHouse-specific DDL. Supported operations include create/drop table, add/alter/drop/rename column, type and nullability changes, defaults, comments, `IF EXISTS` guards, column placement with `AFTER`, and operation-level `clickhouse_settings`. ClickHouse table engines (`MergeTree`, `ReplacingMergeTree`, etc.) and dictionaries are preserved through the migration lifecycle. Install via `pip install clickhouse-connect[alembic]`. See `clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md` for an end-to-end walkthrough.
+- **SQLAlchemy: ClickHouse `Dictionary` type support.** Reflect, create, and drop ClickHouse dictionaries through SQLAlchemy and Alembic.
+- **SQLAlchemy: `PREWHERE`, `LIMIT BY`, and lambda expressions** are now available as chainable Select constructs for ClickHouse-specific query shapes.
+- **SQLAlchemy: Multi-column `ARRAY JOIN` label preservation.** `ARRAY JOIN` aliases now survive through compilation, fixing label-loss issues with parallel array expansion.
+- **SQLAlchemy: Migration shim for `clickhouse-sqlalchemy` users.** New `cc_sqlalchemy.types` and `cc_sqlalchemy.engines` import-compatible modules ease migration from `clickhouse-sqlalchemy`. See `clickhouse_connect/cc_sqlalchemy/MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md`.
+- **SQLAlchemy 1.4 and 2.x compatibility improvements** across the dialect and DDL compiler paths.
+- **Inspector: cloud quirk reflection fixes** for ClickHouse Cloud-specific schema reflection edge cases.
+- **DDL compiler improvements** including better handling of nested container types and Tuple adaptation.
+
+### Bug Fixes
+- Fix Alembic autogenerated migrations rendering enum types (including nested container types) with the correct ClickHouse-compatible representation.
+
+## 1.0.0rc2, 2026-05-05
+
+### Improvements
+- Order-of-magnitude faster `DateTime` and `DateTime64` reads for naive UTC and UTC-equivalent timezones. The Cython read paths now decode via epoch arithmetic and construct `datetime` objects directly via the CPython datetime C API, bypassing `datetime.fromtimestamp` and the Python-level `datetime(...)` constructor. Also fixes Cython `DateTime` conversion bugs and expands epoch-arithmetic test coverage.
+- Significantly faster `Map` reads and writes. The read path avoids materializing an intermediate pair tuple, with the win scaling with entries per row. The write path moves into a new Cython `build_map_columns` helper.
+- Order-of-magnitude faster fixed-width numeric inserts from numpy arrays, with significantly lower peak memory. A new Cython `write_native_col` helper writes 1-D C-contiguous numpy arrays of matching dtype directly into the output buffer via `memcpy`, avoiding the per-element conversion the previous path required.
+- Significantly faster `Decimal` and `BigDecimal` reads. The decode path no longer constructs intermediate strings per row, building values directly from the integer column via `Decimal.scaleb`.
+
+### Bug Fixes
+- Async client: retry once when a pooled keep-alive connection is closed by the server and aiohttp raises `ServerDisconnectedError` with the default `"Server disconnected"` message. The existing retry path covered `"Connection reset"` and `"Remote end closed"`, but not the bare `ServerDisconnectedError()` produced by recent aiohttp versions, which surfaced as an `OperationalError("Network Error: Server disconnected")` on the first request after an idle period.
+- SQLAlchemy `Bool` type now accepts and forwards `**kwargs` to the underlying `SqlaBoolean` constructor. SQLAlchemy's `SchemaType` machinery passes internal kwargs (e.g., `_create_events`) when copying or adapting the type during ORM model use or `Table.to_metadata()`, which previously raised a `TypeError`. Fixes [#705](https://github.com/ClickHouse/clickhouse-connect/issues/705)
+- SQLAlchemy: `CreateDatabase` with `engine="Replicated"` now emits a closing `)` after the `(zoo_path, shard, replica)` arguments, fixing previously invalid DDL on this path. The same arguments and the `system.tables` lookup in `get_engine` now go through bound parameters and the existing `format_str` helper instead of raw f-string interpolation.
+
+## 1.0.0rc1, 2026-04-22
+
+### Breaking Changes
+- Dropped the `pytz` dependency in favor of the standard library `zoneinfo`. On Windows, `tzdata` is pulled in automatically. On slim Linux containers without a system tzdb, install `pip install clickhouse-connect[tzdata]`.
+- Unknown timezone strings from `query_tz`, `column_tzs`, or the server now surface `zoneinfo.ZoneInfoNotFoundError` internally (previously `pytz.exceptions.UnknownTimeZoneError`). User-visible `ProgrammingError`/log messages suggest the `tzdata` extra. Closes [#714](https://github.com/ClickHouse/clickhouse-connect/issues/714).
+- Remove the legacy executor-based async client. The `AsyncClient(client=...)` constructor pattern, `executor_threads`, and `executor` parameters are no longer supported. Use `clickhouse_connect.get_async_client()` (or `create_async_client()`) which creates a native aiohttp-based async client directly. The `pool_mgr` parameter is also rejected on the async path. `aiohttp` remains an optional dependency, installed via `pip install clickhouse-connect[async]`.
+- The internal `AiohttpAsyncClient` class has been renamed to `AsyncClient` and the module `clickhouse_connect.driver.aiohttp_client` has been removed. Import `AsyncClient` from `clickhouse_connect.driver` as before.
+- Removed the deprecated `utc_tz_aware` parameter entirely. Use `tz_mode` instead: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), or `"schema"` (unchanged). Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654), [#665](https://github.com/ClickHouse/clickhouse-connect/issues/665)
+- Removed the deprecated `apply_server_timezone` parameter entirely. Use `tz_source` instead: `"auto"` (default), `"server"` (was `True`), or `"local"` (was `False`).
+- Dropped pandas 1.x support. Minimum pandas version is now 2.0. Users with pandas < 2.0 will get a `NotSupportedError` at import time. Non-pandas usage is unaffected. Closes [#661](https://github.com/ClickHouse/clickhouse-connect/issues/661)
+- Removed the `preserve_pandas_datetime_resolution` common setting. Datetime columns now always return their natural resolution, e.g. `datetime64[s]` for `DateTime`, `datetime64[ms]` for `DateTime64(3)`, instead of coercing everything to `datetime64[ns]`. Closes [#662](https://github.com/ClickHouse/clickhouse-connect/issues/662)
+- Dropped Python 3.9 support. The minimum supported Python version is now 3.10. 0.15.x is the last series supporting Python 3.9.
+
+### Bug Fixes
+- Fix Dynamic/JSON column reads when a path's inferred type sorts alphabetically after `"SharedVariant"`. ClickHouse's `DataTypeVariant` constructor sorts its members alphabetically by name, and discriminator bytes on the wire index into that sorted order. The client appended `SharedVariant` to the variant list without sorting, so affected paths were read as the wrong variant. Closes [#712](https://github.com/ClickHouse/clickhouse-connect/issues/712)
+- Fix async streaming race condition that caused unhandled `InvalidStateError` exceptions on early stream termination. When breaking out of an async stream early, `shutdown()` scheduled a `set_result` callback for pending futures via `call_soon_threadsafe`, but `Task.cancel()` could cancel the future before the callback ran. The done-check is now deferred into the callback itself so it sees the actual future state at execution time.
+- SQLAlchemy: Wrap raw SQL strings in `text()` in `ChClickHouseDialect.get_schema_names()` and `get_table_names()`, so `Inspector.get_schema_names()` and `get_table_names()` work on SQLAlchemy 2.x instead of raising `ObjectNotExecutableError`.
+
+### Development
+- Replaced pylint with [Ruff](https://docs.astral.sh/ruff/) for linting and formatting. Double quotes are now the standard quote style. Bulk formatting commits are listed in `.git-blame-ignore-revs`. CI lint job no longer requires building C extensions or installing project dependencies, significantly reducing lint check time.
+
+### Improvements
+- Package version is now exposed as `clickhouse_connect.__version__` (a string), following Python packaging conventions. The version remains single-sourced from `clickhouse_connect/_version.py`. Users can access version information via `clickhouse_connect.__version__`, `importlib.metadata.version("clickhouse-connect")`, or the `clickhouse_connect.common.version()` helper.
+- Lazy loading of optional dependencies (numpy, pandas, pyarrow, polars) now applies to the async client as well, matching the pattern established in 0.15.0 for the sync client.
+- Clearer error message when attempting to use the async client without aiohttp installed.
+- The `generic_args` parameter is now properly parsed on the async client creation path, matching the sync client behavior.
+- Pandas 3.x compatibility. Removed deprecated `copy=False` parameter from `Series()`, `concat()`, and `astype()` calls. Updated datetime insert path to use vectorized numpy conversion instead of element-by-element nanosecond arithmetic.
+
+## 0.15.1, 2026-03-30
+
+### Bug Fixes
+- Use timezone from parameter type hint instead of `server_tz` when formatting tz-aware datetimes in `{param:Type}` bind expressions. Previously, `bind_query` always converted datetimes to the server timezone, ignoring explicit timezone declarations in type hints like `DateTime64(6, 'UTC')`. This caused incorrect query results when `server_tz` differed from the hint timezone. Handles `LowCardinality`, `Nullable`, and container type wrappers. Fixes [#697](https://github.com/ClickHouse/clickhouse-connect/issues/697)
+
+## 0.15.0, 2026-03-26
+
+### Improvements
+- SQLAlchemy: Comprehensive ClickHouse JOIN support via the new `ch_join()` helper. All strictness modifiers (`ALL`, `ANY`, `SEMI`, `ANTI`, `ASOF`), the `GLOBAL` distribution modifier, and explicit `CROSS JOIN` are now available. Use with `select_from()` to generate ClickHouse-specific join syntax like `GLOBAL ALL LEFT OUTER JOIN`. Closes [#635](https://github.com/ClickHouse/clickhouse-connect/issues/635)
+- SQLAlchemy: `array_join()` now supports multiple columns for parallel array expansion. Pass a list of columns and a matching list of aliases to generate `ARRAY JOIN col1 AS a, col2 AS b, col3 AS c`. Single-column usage is unchanged. Closes [#633](https://github.com/ClickHouse/clickhouse-connect/issues/633)
+- SQLAlchemy: `ch_join()` now supports `USING` syntax via the new `using` parameter. Pass a list of column name strings to generate `USING (col1, col2)` instead of `ON`. This is important for `FULL OUTER JOIN` where `USING` merges the join column correctly while `ON` produces default values (0, '') for unmatched sides. Closes [#636](https://github.com/ClickHouse/clickhouse-connect/issues/636)
+- SQLAlchemy: Add missing Replicated table engine variants: `ReplicatedReplacingMergeTree`, `ReplicatedCollapsingMergeTree`, `ReplicatedVersionedCollapsingMergeTree`, and `ReplicatedGraphiteMergeTree`. Closes [#687](https://github.com/ClickHouse/clickhouse-connect/issues/687)
+- Lazy imports for optional dependencies (numpy, pandas, pyarrow, polars). If installed, these heavy libraries are no longer imported at `import clickhouse_connect` time. They are only imported when features that need them are actually used. The C/Numpy optimization bridge is also deferred. This speeds up bare import time of `clickhouse-connect` about 4X in environments where all four are installed. Closes [#589](https://github.com/ClickHouse/clickhouse-connect/issues/589)
+
+### Other
+- Remove `py.typed` marker file. The package does not have comprehensive type annotations, so the PEP 561 marker was causing false type errors for mypy/pyright users. Closes [#691](https://github.com/ClickHouse/clickhouse-connect/issues/691)
+
+### Bug Fixes
+- SQLAlchemy: Fix `.final()` and `.sample()` silently overwriting each other when chained. Both methods now store modifiers as custom attributes on the `Select` instance and render them during compilation, replacing the previous `with_hint()` approach that only allowed one hint per table. Chaining in either order (e.g. `select(t).final().sample(0.1)`) correctly produces `FROM t FINAL SAMPLE 0.1`. Also fixes rendering for aliased tables (`FROM t AS u FINAL`) and supports explicit table targeting in joins. Fixes [#658](https://github.com/ClickHouse/clickhouse-connect/issues/658)
+- SQLAlchemy: Fix `sqlalchemy.values()` to generate ClickHouse's `VALUES` table function syntax. The compiler now emits `VALUES('col1 Type1, col2 Type2', ...)` with the column structure as the first argument, instead of the standard SQL form that places column names after the alias. Generic SQLAlchemy types are mapped to ClickHouse equivalents (e.g. `Integer` to `Int32`, `String` to `String`). Also handles CTE usage by wrapping in `SELECT * FROM VALUES(...)`. Fixes [#681](https://github.com/ClickHouse/clickhouse-connect/issues/681)
+- SQLAlchemy: Fix `GraphiteMergeTree` and `ReplicatedGraphiteMergeTree` to properly single-quote the `config_section` argument as ClickHouse requires.
+
+## 0.14.1, 2026-03-11
+
+### Bug Fixes
+- Fix JSON and Dynamic column read paths to properly decode shared variant data instead of returning raw binary with discriminator byte prefixes. Shared data values, used when paths exceed `max_dynamic_paths` or types exceed `max_dynamic_types` are now decoded from ClickHouse's binary variant encoding. Scalar types like integers, floats, strings, booleans, and nulls as well as nested objects are now fully decoded. Compound types like Array, Tuple, Map, DateTime, Date, Decimal, and UUID are not yet decoded and will be returned as raw bytes. Fixes [#599](https://github.com/ClickHouse/clickhouse-connect/issues/599), [#615](https://github.com/ClickHouse/clickhouse-connect/issues/615), and [#674](https://github.com/ClickHouse/clickhouse-connect/issues/674)
+- SQLAlchemy: Fixed empty ORM/DBAPI SELECT results so `cursor.description` is still populated when ClickHouse Native format returns no data blocks. This restores correct handling for empty result sets, including parameterized and limited queries. Closes [#675](https://github.com/ClickHouse/clickhouse-connect/issues/675)
+- Restore the default Cython runtime path so compiled `driverc` modules are used again unless `CLICKHOUSE_CONNECT_USE_C=0` is set. Fix C/Python parity issues in streaming exception handling, `FixedString` string reads, nullable array helpers, and numpy conversion helpers, and expand CI and unit parity coverage to keep the optimized and pure-Python paths in sync. Addresses [#676](https://github.com/ClickHouse/clickhouse-connect/issues/676)
+- Simplify `pivot` in the Cython data conversion module to use `tuple(zip(*...))` instead of a manual tuple-building loop which matches the pure-Python implementation and provides significant insert speedup.
+
+## 0.14.0, 2026-03-09
+
+### Breaking Changes
+- Renamed `apply_server_timezone` parameter to `tz_source` across Client and HttpClient. The new `tz_source` parameter accepts string values: `"auto"` (default, was `None`), `"server"` (was `True` or `"always"`), and `"local"` (was `False`). The old `apply_server_timezone` parameter is still accepted but emits a `DeprecationWarning` and will be removed in 1.0. Passing both `tz_source` and `apply_server_timezone` raises `ProgrammingError`. The `"always"` value (which had no distinct runtime behavior from `True`) maps to `"server"`.
+- Renamed `utc_tz_aware` parameter to `tz_mode` across Client, QueryContext, and all query methods. The new `tz_mode` parameter accepts string values: `"naive_utc"` (default, was `False`), `"aware"` (was `True`), and `"schema"` (unchanged). The old `utc_tz_aware` parameter is still accepted but emits a `DeprecationWarning` and will be removed in 1.0. Passing both `tz_mode` and `utc_tz_aware` raises `ProgrammingError`. Closes [#654](https://github.com/ClickHouse/clickhouse-connect/issues/654)
+- Removed the deprecated `Object('json')` type. This was the legacy experimental JSON type that has been superseded by the new `JSON` type in ClickHouse. Closes [#556](https://github.com/ClickHouse/clickhouse-connect/issues/556)
+
+### Deprecations
+- Pandas 1.x support is now deprecated and will be removed in v1.0.0. A `DeprecationWarning` is emitted at import time for pandas 1.x users.
+
+### Improvements
 - Added support for the `SAMPLE` clause in SQLAlchemy statements. Note: Due to a SQLAlchemy limitation, only one hint (SAMPLE or FINAL) can be applied per table; chaining both will silently ignore one. For now, this change enables use of sample(), but chaining with final() is not yet supported.  Closes [#634](https://github.com/ClickHouse/clickhouse-connect/issues/634)
+- **Experimental:** Added Python 3.14 free-threading (cp314t) wheel builds for all platforms. The full test suite currently (as of 2 MAR, 2026) passes under free-threaded Python, but is not added to the CI test matrix at this time nor has it been otherwise tested to any degree. Free-threading support should be considered experimental with no guarantees of correctness at this time. Closes [#573](https://github.com/ClickHouse/clickhouse-connect/issues/573)
 
 ## 0.13.0, 2026-02-26
 
@@ -47,6 +235,9 @@ are now serialized using their native ClickHouse types client-side (e.g. inserti
 - Recognize `UPDATE` as a command so lightweight updates work correctly via `client.query()` and SQLAlchemy.
 - SQLAlchemy: `GROUP BY` now renders label aliases instead of full expressions which avoids circular reference errors when an alias shadows a source column name in ClickHouse.
 
+## 0.12.0rc1, 2026-02-11
+- Implement a native async client. Closes [#141](https://github.com/ClickHouse/clickhouse-connect/issues/141)
+
 ## 0.11.0, 2026-02-10
 
 ### Python 3.9 Deprecation
@@ -56,6 +247,7 @@ A `DeprecationWarning` will now be displayed when initializing the client on Pyt
 Python 3.10+ as 3.9 compatibility may break unexpectedly in future updates.
 
 ### Bug Fixes
+- Fix issue where settings matching server defaults were not stored on client during initialization. Explicitly setting a default value is now respected (e.g., to prevent ClickHouse from auto-enabling optimizations). Closes [#638](https://github.com/ClickHouse/clickhouse-connect/issues/638)
 - Raise OperationalError when ResponseSource hits network failure before any data is received. Previously, empty result would be returned. Closes [#620](https://github.com/ClickHouse/clickhouse-connect/issues/620)
 - Fix issue with DROP table in client temp table test.
 - Fixed a bug where InsertContext state was not reset on insert failure, leading to reuse errors when data was passed separately.

@@ -1,7 +1,6 @@
-from clickhouse_connect.driver.exceptions import ProgrammingError
-
 from clickhouse_connect.datatypes.registry import get_from_name
-from tests.helpers import to_bytes, native_insert_block
+from clickhouse_connect.driver.exceptions import ProgrammingError
+from tests.helpers import native_insert_block, to_bytes
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 LOW_CARD_OUTPUT = """
@@ -59,94 +58,98 @@ LOW_CARDINALITY_NULLABLE_OUTPUT = """
 
 
 def test_low_card_null():
-    data = [['three']]
-    names = ['value']
-    types = [get_from_name('LowCardinality(Nullable(String))')]
+    data = [["three"]]
+    names = ["value"]
+    types = [get_from_name("LowCardinality(Nullable(String))")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == to_bytes(LOW_CARD_OUTPUT)
 
 
 def test_tuple_one():
-    data = [[('string1', 3.22, None)]]
-    names = ['value']
-    types = [get_from_name('Tuple(String, Float32, LowCardinality(Nullable(String)))')]
+    data = [[("string1", 3.22, None)]]
+    names = ["value"]
+    types = [get_from_name("Tuple(String, Float32, LowCardinality(Nullable(String)))")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(TUPLE_ONE_OUTPUT)
 
 
 def test_tuple_three():
-    data = [[('string1',)], [('string2',)], [('string3',)]]
-    names = ['value']
-    types = [get_from_name('Tuple(String)')]
+    data = [[("string1",)], [("string2",)], [("string3",)]]
+    names = ["value"]
+    types = [get_from_name("Tuple(String)")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(TUPLE_THREE_OUTPUT)
 
 
 def test_point():
     data = [[(3.22, 3.22)]]
-    names = ['value']
-    types = [get_from_name('Point')]
+    names = ["value"]
+    types = [get_from_name("Point")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(POINT_OUTPUT)
 
 
 def test_nested():
-    data = [([],),
-            ([{'str1': 'three', 'int32': 5}, {'str1': 'five', 'int32': 77}],),
-            ([{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}],),
-            ([{'str1': 'one', 'int32': 5}, {'str1': 'two', 'int32': 55}],)]
-    types = [get_from_name('Nested(str1 String, int32 UInt32)')]
-    output = native_insert_block(data, ['nested'], types)
+    data = [
+        ([],),
+        ([{"str1": "three", "int32": 5}, {"str1": "five", "int32": 77}],),
+        ([{"str1": "one", "int32": 5}, {"str1": "two", "int32": 55}],),
+        ([{"str1": "one", "int32": 5}, {"str1": "two", "int32": 55}],),
+    ]
+    types = [get_from_name("Nested(str1 String, int32 UInt32)")]
+    output = native_insert_block(data, ["nested"], types)
     assert bytes(output) == bytes.fromhex(NESTED_BINARY)
 
 
 def test_string_accepts_bytes():
-    data = [[bytes.fromhex('ff')]]
-    names = ['value']
-    types = [get_from_name('String')]
+    data = [[bytes.fromhex("ff")]]
+    names = ["value"]
+    types = [get_from_name("String")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(STRING_ACCEPTS_BYTES_OUTPUT)
 
 
 def test_long_str():
-    x = ('蹝ㅝǅ잍鞏≈ﬞ㉢嫩杻⤧㛕錍к❭䦳텶샖爤㍅䱃䰅ἐ䤖엋㰾멛蹒뀃쩷섡፳聣᮵峧쒝咋觀હ鷁䯕͢퐠㏈猡칆빃밥뜼৫葘鹯勲掾ᬗ罧炼䏦險ヤⴕ懺릨봟죩ᬨ칰ԁ凢' +
-         '䰚娞祃獿휢듕鞜甲뉛⠆ᗫ䐼詠圂ᱞ出裒ਗ਼ᩜ㉤扷ꑐ晏镄焬㞧ノⷶ枆侪㇉摨⒞펦埏穊僛䦃吹ꗣ麥䔲鸈麡┨࣓ꢫႮﬆᝢ妢曢ꗠᆪ擽烣졀씥⣏便꽉슕盈㪃拪풻ᯖ럐峨' +
-         '箻躰䆲⏂錬횬渪㜟첯鋘ꊩ㾝톶╁茒牾붮뚂О灪噚놾蠂쌇龥䁼')
+    x = (
+        "蹝ㅝǅ잍鞏≈ﬞ㉢嫩杻⤧㛕錍к❭䦳텶샖爤㍅䱃䰅ἐ䤖엋㰾멛蹒뀃쩷섡፳聣᮵峧쒝咋觀હ鷁䯕͢퐠㏈猡칆빃밥뜼৫葘鹯勲掾ᬗ罧炼䏦險ヤⴕ懺릨봟죩ᬨ칰ԁ凢"
+        + "䰚娞祃獿휢듕鞜甲뉛⠆ᗫ䐼詠圂ᱞ出裒ਗ਼ᩜ㉤扷ꑐ晏镄焬㞧ノⷶ枆侪㇉摨⒞펦埏穊僛䦃吹ꗣ麥䔲鸈麡┨࣓ꢫႮﬆᝢ妢曢ꗠᆪ擽烣졀씥⣏便꽉슕盈㪃拪풻ᯖ럐峨"
+        + "箻躰䆲⏂錬횬渪㜟첯鋘ꊩ㾝톶╁茒牾붮뚂О灪噚놾蠂쌇龥䁼"
+    )
     data = [[x]]
-    names = ['value']
-    types = [get_from_name('String')]
+    names = ["value"]
+    types = [get_from_name("String")]
     output = native_insert_block(data, names, types)
-    assert bytes(output) == b'\x01\x01\x05value\x06String\xe7\x03' + x.encode()
+    assert bytes(output) == b"\x01\x01\x05value\x06String\xe7\x03" + x.encode()
 
 
 def test_low_card_map():
-    data = [[{'key1': '1', 'key2': 'two'}], [{}]]
-    names = ['MAP']
-    types = [get_from_name('Map(LowCardinality(String), String)')]
+    data = [[{"key1": "1", "key2": "two"}], [{}]]
+    names = ["MAP"]
+    types = [get_from_name("Map(LowCardinality(String), String)")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(MAP_LOW_CARDINALITY_OUTPUT)
 
 
 def test_low_card_nullable():
-    data = [['first'], [None]]
-    names = ['str']
-    types = [get_from_name('LowCardinality(Nullable(String))')]
+    data = [["first"], [None]]
+    names = ["str"]
+    types = [get_from_name("LowCardinality(Nullable(String))")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(LOW_CARDINALITY_NULLABLE_OUTPUT)
 
 
 def test_bad_columns():
-    data = [['str'], [3.5]]
-    names = ['value']
-    types = [get_from_name('String')]
+    data = [["str"], [3.5]]
+    names = ["value"]
+    types = [get_from_name("String")]
     try:
         native_insert_block(data, names, types)
     except TypeError:
         pass
 
     data = [[3.5], [str]]
-    names = ['value']
-    types = [get_from_name('Float64')]
+    names = ["value"]
+    types = [get_from_name("Float64")]
 
     try:
         native_insert_block(data, names, types)

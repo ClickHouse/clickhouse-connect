@@ -47,9 +47,7 @@ class _InsertCtx(Mock):
         self.column_name = "bf16_col"
 
 
-# pylint: disable=protected-access
 class TestBFloat16(unittest.TestCase):
-
     def setUp(self):
         self.bf16 = BFloat16(TypeDef())
         self.null_bf16 = BFloat16(TypeDef(wrappers=("Nullable",)))
@@ -75,9 +73,7 @@ class TestBFloat16(unittest.TestCase):
         dest.extend([1 if v is None else 0 for v in data_in])
         self.null_bf16._write_column_binary(data_in, dest, self.ins_ctx)
         source = create_test_source(bytes(dest))
-        out = self.null_bf16._read_nullable_column(
-            source, len(data_in), self.qry_ctx, None
-        )
+        out = self.null_bf16._read_nullable_column(source, len(data_in), self.qry_ctx, None)
         self.assertEqual(out, expected)
 
     def test_numpy_fastpath(self):

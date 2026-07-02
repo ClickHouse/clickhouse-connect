@@ -1,15 +1,12 @@
-from ipaddress import IPv4Address, IPv6Address
-from unittest.mock import Mock, MagicMock, patch
 import unittest
+from ipaddress import IPv4Address, IPv6Address
+from unittest.mock import MagicMock, Mock, patch
+
 from clickhouse_connect.datatypes.base import TypeDef
+from clickhouse_connect.datatypes.network import IPV4_V6_MASK, V6_NULL, IPv6
 
 
-from clickhouse_connect.datatypes.network import IPv6, IPV4_V6_MASK, V6_NULL
-
-
-# pylint: disable=protected-access
 class TestIPv6DataType(unittest.TestCase):
-
     def setUp(self):
         """Set up a reusable IPv6 type instance and a mock insert context."""
         self.ipv6_type = IPv6(TypeDef())
@@ -69,9 +66,7 @@ class TestIPv6DataType(unittest.TestCase):
         column_to_write = [ip_string]
         dest_buffer = bytearray()
 
-        self.ipv6_type._write_column_binary(
-            column_to_write, dest_buffer, self.mock_context
-        )
+        self.ipv6_type._write_column_binary(column_to_write, dest_buffer, self.mock_context)
 
         mock_source = MagicMock()
         mock_source.read_bytes.return_value = dest_buffer
@@ -102,9 +97,7 @@ class TestIPv6DataType(unittest.TestCase):
         self.mock_context.read_format.return_value = "native"
         mock_source = MagicMock()
         mock_source.read_bytes.return_value = dest_buffer
-        read_result = self.ipv6_type._read_column_binary(
-            mock_source, 1, self.mock_context, None
-        )
+        read_result = self.ipv6_type._read_column_binary(mock_source, 1, self.mock_context, None)
 
         self.assertEqual(read_result[0], ip_v6)
 
@@ -117,9 +110,7 @@ class TestIPv6DataType(unittest.TestCase):
         mock_source.read_bytes.return_value = source_ip.packed
 
         with patch.object(self.ipv6_type, "read_format", return_value="string"):
-            result = self.ipv6_type._read_column_binary(
-                mock_source, 1, self.mock_context, None
-            )
+            result = self.ipv6_type._read_column_binary(mock_source, 1, self.mock_context, None)
 
         self.assertEqual(len(result), 1)
         self.assertIsInstance(result[0], str)

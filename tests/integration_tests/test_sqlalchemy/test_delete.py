@@ -6,6 +6,7 @@ from sqlalchemy.exc import CompileError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt64
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
+from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
 
 
 def test_delete_with_table_object(test_engine: Engine, test_db: str, test_table_engine: str):
@@ -179,6 +180,8 @@ def test_explicit_delete(test_engine: Engine, test_table_engine: str):
         conn.execute(db.insert(test_table).values({"id": 1, "name": "hello world"}))
         conn.execute(db.insert(test_table).values({"id": 2, "name": "test data"}))
         conn.execute(db.insert(test_table).values({"id": 3, "name": "hello test"}))
+        # Wait for inserts to complete in cloud environments
+        verify_tables_ready(conn, {"delete_explicit_test": 3})
         starting = conn.execute(db.select(test_table).order_by(test_table.c.id)).fetchall()
         assert len(starting) == 3
         assert [row.id for row in starting] == [1, 2, 3]

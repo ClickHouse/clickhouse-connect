@@ -1,91 +1,164 @@
-import pytz
-import pytest
+import zoneinfo
+from datetime import timedelta, timezone
 
 import pyarrow as pa
+import pytest
 
-from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.query import QueryContext
-from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver import tzutil
+from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
+from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.query import QueryContext, returns_empty_string_on_empty_body
 
 
 def test_copy_context():
-    settings = {'max_bytes_for_external_group_by': 1024 * 1024 * 100,
-                'read_overflow_mode': 'throw'}
-    parameters = {'user_id': 'user_1'}
-    query_formats = {'IPv*': 'string'}
-    context = QueryContext('SELECT source_ip FROM table WHERE user_id = %(user_id)s',
-                           settings=settings,
-                           parameters=parameters,
-                           query_formats=query_formats,
-                           use_none=True)
+    settings = {"max_bytes_for_external_group_by": 1024 * 1024 * 100, "read_overflow_mode": "throw"}
+    parameters = {"user_id": "user_1"}
+    query_formats = {"IPv*": "string"}
+    context = QueryContext(
+        "SELECT source_ip FROM table WHERE user_id = %(user_id)s",
+        settings=settings,
+        parameters=parameters,
+        query_formats=query_formats,
+        use_none=True,
+    )
     assert context.use_none is True
     assert context.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_1'"
-    assert context.query_formats['IPv*'] == 'string'
-    assert context.settings['max_bytes_for_external_group_by'] == 104857600
+    assert context.query_formats["IPv*"] == "string"
+    assert context.settings["max_bytes_for_external_group_by"] == 104857600
 
     context_copy = context.updated_copy(
-        settings={'max_bytes_for_external_group_by': 1024 * 1024 * 24, 'max_execution_time': 120},
-        parameters={'user_id': 'user_2'}
+        settings={"max_bytes_for_external_group_by": 1024 * 1024 * 24, "max_execution_time": 120}, parameters={"user_id": "user_2"}
     )
-    assert context_copy.settings['read_overflow_mode'] == 'throw'
-    assert context_copy.settings['max_execution_time'] == 120
-    assert context_copy.settings['max_bytes_for_external_group_by'] == 25165824
+    assert context_copy.settings["read_overflow_mode"] == "throw"
+    assert context_copy.settings["max_execution_time"] == 120
+    assert context_copy.settings["max_bytes_for_external_group_by"] == 25165824
     assert context_copy.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_2'"
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES",
+        "SHOW POLICIES",
+        "show row policies",
+        "  SHOW   ROW   POLICIES  ",
+        "-- comment\nSHOW ROW POLICIES",
+    ],
+)
+def test_bare_row_policy_show_is_command(query):
+    assert QueryContext(query).is_command is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES ON db.table",
+        "SHOW ROW POLICIES policy_1",
+        "SHOW DATABASES",
+        "SHOW TABLES",
+        "SHOW USERS",
+        "SELECT 1",
+        "SHOW",
+    ],
+)
+def test_other_show_queries_are_not_commands(query):
+    assert QueryContext(query).is_command is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES",
+        "SHOW POLICIES",
+        "  SHOW ROW POLICIES ON db.table",
+        "-- comment\nSHOW POLICIES ON db.table",
+        "SHOW ROW POLICIES policy_1",
+    ],
+)
+def test_row_policy_show_empty_body_returns_empty_string(query):
+    assert returns_empty_string_on_empty_body(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        b"SHOW ROW POLICIES",
+        "INSERT INTO t FORMAT TSV",
+        "CREATE TABLE x (id UInt32) ENGINE Memory",
+        "ALTER TABLE x ADD COLUMN y UInt32",
+        "SELECT 1",
+        "SHOW DATABASES",
+    ],
+)
+def test_non_row_policy_show_empty_body_uses_query_summary(query):
+    assert returns_empty_string_on_empty_body(query) is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "--sql\nCREATE OR REPLACE TABLE x (a String) ENGINE=MergeTree ORDER BY tuple()",
+        "--anything\nDROP TABLE x",
+        "--sql\n  ALTER TABLE x ADD COLUMN y UInt32",
+        "/*sql*/CREATE TABLE x (a String) ENGINE=Memory",
+    ],
+)
+def test_leading_no_space_comment_is_command(query):
+    assert QueryContext(query).is_command is True
+
+
 def test_active_tz_utc_defaults_to_naive():
-    ctx = QueryContext(query_tz=pytz.UTC)
-    assert ctx.utc_tz_aware is False
+    ctx = QueryContext(query_tz=zoneinfo.ZoneInfo("UTC"))
+    assert ctx.tz_mode == "naive_utc"
     assert ctx.active_tz(None) is None
 
 
 def test_active_tz_utc_opt_in_timezone():
-    ctx = QueryContext(query_tz=pytz.UTC, utc_tz_aware=True)
-    assert ctx.utc_tz_aware is True
-    assert ctx.active_tz(None) == pytz.UTC
+    ctx = QueryContext(query_tz=zoneinfo.ZoneInfo("UTC"), tz_mode="aware")
+    assert ctx.tz_mode == "aware"
+    assert ctx.active_tz(None) == zoneinfo.ZoneInfo("UTC")
 
 
 def test_active_tz_etc_utc_defaults_to_naive():
     """Test that Etc/UTC is treated as UTC for naive datetime conversion.
 
-    This test reproduces the bug where pytz.timezone('Etc/UTC') != pytz.UTC,
+    This test reproduces the bug where zoneinfo.ZoneInfo('Etc/UTC') != zoneinfo.ZoneInfo("UTC"),
     causing timezone-aware datetimes to be returned when they should be naive.
     """
-    etc_utc = pytz.timezone('Etc/UTC')
+    etc_utc = zoneinfo.ZoneInfo("Etc/UTC")
     ctx = QueryContext(query_tz=etc_utc)
-    assert ctx.utc_tz_aware is False
+    assert ctx.tz_mode == "naive_utc"
     # BUG: Previously returned etc_utc instead of None
     assert ctx.active_tz(None) is None  # Should return None for naive datetime
 
 
 def test_active_tz_etc_utc_opt_in_timezone():
-    """Test that Etc/UTC with utc_tz_aware=True returns timezone."""
-    etc_utc = pytz.timezone('Etc/UTC')
-    ctx = QueryContext(query_tz=etc_utc, utc_tz_aware=True)
-    assert ctx.utc_tz_aware is True
+    """Test that Etc/UTC with tz_mode='aware' returns timezone."""
+    etc_utc = zoneinfo.ZoneInfo("Etc/UTC")
+    ctx = QueryContext(query_tz=etc_utc, tz_mode="aware")
+    assert ctx.tz_mode == "aware"
     assert ctx.active_tz(None) is not None  # Should return the timezone
 
 
-def test_is_utc_timezone_pytz_utc():
-    assert tzutil.is_utc_timezone(pytz.UTC) is True
+def test_is_utc_timezone_zoneinfo_utc():
+    assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("UTC")) is True
 
 
 def test_is_utc_timezone_etc_utc():
-    assert tzutil.is_utc_timezone(pytz.timezone('Etc/UTC')) is True
+    assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("Etc/UTC")) is True
 
 
 def test_is_utc_timezone_utc_string():
-    assert tzutil.is_utc_timezone(pytz.timezone('UTC')) is True
+    assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("UTC")) is True
 
 
 def test_is_utc_timezone_gmt():
-    assert tzutil.is_utc_timezone(pytz.timezone('GMT')) is True
+    assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("GMT")) is True
 
 
 def test_is_utc_timezone_non_utc():
-    assert tzutil.is_utc_timezone(pytz.timezone('America/Denver')) is False
-    assert tzutil.is_utc_timezone(pytz.timezone('Europe/London')) is False
+    assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("America/Denver")) is False
+    assert tzutil.is_utc_timezone(zoneinfo.ZoneInfo("Europe/London")) is False
 
 
 def test_is_utc_timezone_none():
@@ -94,59 +167,59 @@ def test_is_utc_timezone_none():
 
 def test_is_utc_timezone_string():
     """Test is_utc_timezone with string timezone names (used by Arrow field.type.tz)."""
-    assert tzutil.is_utc_timezone('UTC') is True
-    assert tzutil.is_utc_timezone('Etc/UTC') is True
-    assert tzutil.is_utc_timezone('GMT') is True
-    assert tzutil.is_utc_timezone('America/Denver') is False
-    assert tzutil.is_utc_timezone('Europe/London') is False
+    assert tzutil.is_utc_timezone("UTC") is True
+    assert tzutil.is_utc_timezone("Etc/UTC") is True
+    assert tzutil.is_utc_timezone("GMT") is True
+    assert tzutil.is_utc_timezone("America/Denver") is False
+    assert tzutil.is_utc_timezone("Europe/London") is False
 
 
 def test_strip_utc_timezone_from_arrow_strips_utc():
-    ts = pa.array([1705312200000000], type=pa.timestamp('us', 'UTC'))
-    table = pa.Table.from_arrays([ts], names=['ts'])
+    ts = pa.array([1705312200000000], type=pa.timestamp("us", "UTC"))
+    table = pa.Table.from_arrays([ts], names=["ts"])
     result = _strip_utc_timezone_from_arrow(table)
-    assert result.schema[0].type == pa.timestamp('us')
+    assert result.schema[0].type == pa.timestamp("us")
 
 
 def test_strip_utc_timezone_from_arrow_strips_etc_utc():
-    ts = pa.array([1705312200000000], type=pa.timestamp('us', 'Etc/UTC'))
-    table = pa.Table.from_arrays([ts], names=['ts'])
+    ts = pa.array([1705312200000000], type=pa.timestamp("us", "Etc/UTC"))
+    table = pa.Table.from_arrays([ts], names=["ts"])
     result = _strip_utc_timezone_from_arrow(table)
-    assert result.schema[0].type == pa.timestamp('us')
+    assert result.schema[0].type == pa.timestamp("us")
 
 
 def test_strip_utc_timezone_from_arrow_preserves_non_utc():
-    ts = pa.array([1705312200000000], type=pa.timestamp('us', 'America/Denver'))
-    table = pa.Table.from_arrays([ts], names=['ts'])
+    ts = pa.array([1705312200000000], type=pa.timestamp("us", "America/Denver"))
+    table = pa.Table.from_arrays([ts], names=["ts"])
     result = _strip_utc_timezone_from_arrow(table)
-    assert result.schema[0].type == pa.timestamp('us', 'America/Denver')
+    assert result.schema[0].type == pa.timestamp("us", "America/Denver")
 
 
 def test_strip_utc_timezone_from_arrow_preserves_naive():
-    ts = pa.array([1705312200000000], type=pa.timestamp('us'))
-    table = pa.Table.from_arrays([ts], names=['ts'])
+    ts = pa.array([1705312200000000], type=pa.timestamp("us"))
+    table = pa.Table.from_arrays([ts], names=["ts"])
     result = _strip_utc_timezone_from_arrow(table)
-    assert result.schema[0].type == pa.timestamp('us')
+    assert result.schema[0].type == pa.timestamp("us")
 
 
 def test_utc_equivalent_timezones_normalize_to_naive():
     """Test that UTC-equivalent timezones (Etc/UCT, GMT, etc.) return naive datetimes by default"""
-    utc_equivalents = ['Etc/UCT', 'GMT', 'Etc/GMT', 'Etc/Universal', 'Etc/Zulu', 'UCT', 'Universal']
+    utc_equivalents = ["Etc/UCT", "GMT", "Etc/GMT", "Etc/Universal", "Etc/Zulu", "UCT", "Universal"]
 
     for tz_name in utc_equivalents:
-        tz = pytz.timezone(tz_name)
-        ctx = QueryContext(utc_tz_aware=False)
+        tz = zoneinfo.ZoneInfo(tz_name)
+        ctx = QueryContext(tz_mode="naive_utc")
         result = ctx.active_tz(datatype_tz=tz)
         assert result is None
 
 
-def test_utc_equivalent_timezones_with_utc_tz_aware():
-    """Test that UTC-equivalent timezones return timezone-aware when utc_tz_aware=True"""
-    utc_equivalents = ['Etc/UCT', 'GMT', 'Etc/GMT']
+def test_utc_equivalent_timezones_with_tz_mode_aware():
+    """Test that UTC-equivalent timezones return timezone-aware when tz_mode='aware'"""
+    utc_equivalents = ["Etc/UCT", "GMT", "Etc/GMT"]
 
     for tz_name in utc_equivalents:
-        tz = pytz.timezone(tz_name)
-        ctx = QueryContext(utc_tz_aware=True)
+        tz = zoneinfo.ZoneInfo(tz_name)
+        ctx = QueryContext(tz_mode="aware")
         result = ctx.active_tz(datatype_tz=tz)
         assert result == tz
 
@@ -154,27 +227,119 @@ def test_utc_equivalent_timezones_with_utc_tz_aware():
 def test_tzutil_normalize_utc_equivalents():
     """Test that tzutil.normalize_timezone properly normalizes UTC-equivalent timezones"""
     utc_equivalents = [
-        'UTC', 'Etc/UTC', 'Etc/UCT', 'Etc/Universal',
-        'GMT', 'Etc/GMT', 'Etc/GMT+0', 'Etc/GMT-0', 'Etc/GMT0',
-        'GMT+0', 'GMT-0', 'GMT0',
-        'Greenwich', 'UCT', 'Universal', 'Zulu'
+        "UTC",
+        "Etc/UTC",
+        "Etc/UCT",
+        "Etc/Universal",
+        "GMT",
+        "Etc/GMT",
+        "Etc/GMT+0",
+        "Etc/GMT-0",
+        "Etc/GMT0",
+        "GMT+0",
+        "GMT-0",
+        "GMT0",
+        "Greenwich",
+        "UCT",
+        "Universal",
+        "Zulu",
     ]
 
     for tz_name in utc_equivalents:
-        tz = pytz.timezone(tz_name)
+        tz = zoneinfo.ZoneInfo(tz_name)
         normalized, is_valid = tzutil.normalize_timezone(tz)
-        assert normalized == pytz.UTC
+        assert tzutil.is_utc_timezone(normalized)
         assert is_valid is True
 
 
-def test_etc_uct_returns_naive_when_utc_tz_aware_false():
+def test_resolve_zone_fixed_offset_positive():
+    """ClickHouse Fixed/UTC+HH:MM:SS strings resolve to a stdlib fixed-offset timezone."""
+    tz = tzutil.resolve_zone("Fixed/UTC+05:30:00")
+    assert tz == timezone(timedelta(hours=5, minutes=30))
+
+
+def test_resolve_zone_fixed_offset_negative():
+    tz = tzutil.resolve_zone("Fixed/UTC-03:00:00")
+    assert tz == timezone(timedelta(hours=-3))
+
+
+def test_resolve_zone_fixed_offset_with_seconds():
+    tz = tzutil.resolve_zone("Fixed/UTC+05:30:30")
+    assert tz == timezone(timedelta(hours=5, minutes=30, seconds=30))
+
+
+def test_resolve_zone_fixed_offset_zero_collapses_to_utc():
+    """A Fixed offset of zero is semantically UTC and should normalize to timezone.utc."""
+    tz = tzutil.resolve_zone("Fixed/UTC+00:00:00")
+    assert tz is timezone.utc
+
+
+def test_resolve_zone_fixed_offset_invalid_falls_through():
+    """Malformed or unrepresentable Fixed strings raise ZoneInfoNotFoundError."""
+    invalid = [
+        "Fixed/UTC+25:00:00",  # hour > 24
+        "Fixed/UTC+24:00:00",  # server accepts, but Python tzinfo cannot represent +/-24h
+        "Fixed/UTC-24:00:00",
+        "Fixed/UTC+24:00:01",  # boundary + nonzero
+        "Fixed/UTC+24:01:00",
+        "Fixed/UTC+05:60:00",  # minute > 59
+        "Fixed/UTC+05:00:60",  # second > 59
+        "Fixed/UTC+05:30",  # missing seconds component
+        "Fixed/UTC+5:30:00",  # single-digit hour, server rejects
+    ]
+    for s in invalid:
+        with pytest.raises(zoneinfo.ZoneInfoNotFoundError):
+            tzutil.resolve_zone(s)
+
+
+def test_tzutil_normalize_fixed_offset_trusted_for_server():
+    """Server-init paths pass trust_fixed_offset=True; the offset is taken at face value."""
+    tz = timezone(timedelta(hours=5, minutes=30))
+    normalized, is_valid = tzutil.normalize_timezone(tz, trust_fixed_offset=True)
+    assert normalized is tz
+    assert is_valid is True
+
+
+def test_tzutil_normalize_fixed_offset_default_falls_through():
+    """Without trust_fixed_offset, a stdlib fixed offset is not auto-trusted."""
+    tz = timezone(timedelta(hours=-7))  # PDT-shaped fixed offset
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    # Either tzlocal upgraded it to an IANA zone (then is_valid=True and normalized is
+    # a ZoneInfo, not the original fixed offset) or it fell through to (tz, False).
+    if is_valid:
+        assert not isinstance(normalized, timezone) or normalized is timezone.utc
+    else:
+        assert normalized is tz
+
+
+def test_extract_tz_from_type_fixed_offset():
+    """_extract_tz_from_type must resolve Fixed/UTC strings used in parameter binding hints."""
+    from clickhouse_connect.driver.binding import _extract_tz_from_type
+
+    tz = _extract_tz_from_type("DateTime('Fixed/UTC+05:30:00')")
+    assert tz == timezone(timedelta(hours=5, minutes=30))
+
+    tz = _extract_tz_from_type("DateTime64(6, 'Fixed/UTC-03:00:00')")
+    assert tz == timezone(timedelta(hours=-3))
+
+
+def test_tzutil_normalize_named_iana_zones_are_dst_safe():
+    """Named IANA zones pass through normalize_timezone unchanged and are marked dst_safe."""
+    for tz_name in ("America/Denver", "Europe/Berlin", "Asia/Tokyo", "Australia/Sydney"):
+        tz = zoneinfo.ZoneInfo(tz_name)
+        normalized, is_valid = tzutil.normalize_timezone(tz)
+        assert normalized == tz
+        assert is_valid is True
+
+
+def test_etc_uct_returns_naive_when_tz_mode_naive_utc():
     """
     Regression test for the issue where DateTime('UTC') columns with Etc/UCT
     returned timezone-aware while DateTime columns returned naive
     """
-    column_with_explicit_utc = pytz.timezone('Etc/UCT')
-    server_tz = pytz.timezone('Etc/UCT')
-    ctx = QueryContext(utc_tz_aware=False, server_tz=server_tz, apply_server_tz=True)
+    column_with_explicit_utc = zoneinfo.ZoneInfo("Etc/UCT")
+    server_tz = zoneinfo.ZoneInfo("Etc/UCT")
+    ctx = QueryContext(tz_mode="naive_utc", server_tz=server_tz, apply_server_tz=True)
     result1 = ctx.active_tz(datatype_tz=column_with_explicit_utc)
 
     assert result1 is None
@@ -185,30 +350,30 @@ def test_etc_uct_returns_naive_when_utc_tz_aware_false():
 
 def test_schema_mode_with_schema_tz():
     """DateTime('UTC') should return tz-aware in schema mode."""
-    ctx = QueryContext(utc_tz_aware="schema")
-    result = ctx.active_tz(datatype_tz=pytz.UTC)
-    assert result == pytz.UTC
+    ctx = QueryContext(tz_mode="schema")
+    result = ctx.active_tz(datatype_tz=zoneinfo.ZoneInfo("UTC"))
+    assert result == zoneinfo.ZoneInfo("UTC")
 
 
 def test_schema_mode_bare_datetime():
     """Bare DateTime (no schema tz) should return naive in schema mode."""
-    ctx = QueryContext(utc_tz_aware="schema", server_tz=pytz.UTC, apply_server_tz=True)
+    ctx = QueryContext(tz_mode="schema", server_tz=zoneinfo.ZoneInfo("UTC"), apply_server_tz=True)
     result = ctx.active_tz(datatype_tz=None)
     assert result is None
 
 
 def test_schema_mode_non_utc_tz():
     """DateTime('America/Denver') should return tz-aware in schema mode."""
-    denver = pytz.timezone("America/Denver")
-    ctx = QueryContext(utc_tz_aware="schema")
+    denver = zoneinfo.ZoneInfo("America/Denver")
+    ctx = QueryContext(tz_mode="schema")
     result = ctx.active_tz(datatype_tz=denver)
     assert result == denver
 
 
 def test_schema_mode_with_column_tz_override():
     """Per-column tz override should still work in schema mode."""
-    denver = pytz.timezone("America/Denver")
-    ctx = QueryContext(utc_tz_aware="schema", column_tzs={"ts": denver})
+    denver = zoneinfo.ZoneInfo("America/Denver")
+    ctx = QueryContext(tz_mode="schema", column_tzs={"ts": denver})
     ctx.start_column("ts")
     result = ctx.active_tz(datatype_tz=None)
     assert result == denver
@@ -216,28 +381,89 @@ def test_schema_mode_with_column_tz_override():
 
 def test_schema_mode_ignores_query_tz():
     """query_tz should not apply to bare DateTime in schema mode."""
-    ctx = QueryContext(utc_tz_aware="schema", query_tz=pytz.UTC)
+    ctx = QueryContext(tz_mode="schema", query_tz=zoneinfo.ZoneInfo("UTC"))
     result = ctx.active_tz(datatype_tz=None)
     assert result is None
 
 
 def test_schema_mode_ignores_server_tz():
     """Server tz should not apply to bare DateTime in schema mode."""
-    denver = pytz.timezone("America/Denver")
-    ctx = QueryContext(utc_tz_aware="schema", server_tz=denver, apply_server_tz=True)
+    denver = zoneinfo.ZoneInfo("America/Denver")
+    ctx = QueryContext(tz_mode="schema", server_tz=denver, apply_server_tz=True)
     result = ctx.active_tz(datatype_tz=None)
     assert result is None
 
 
 def test_schema_mode_etc_utc_schema():
     """DateTime('Etc/UTC') should return tz-aware in schema mode."""
-    etc_utc = pytz.timezone("Etc/UTC")
-    ctx = QueryContext(utc_tz_aware="schema")
+    etc_utc = zoneinfo.ZoneInfo("Etc/UTC")
+    ctx = QueryContext(tz_mode="schema")
     result = ctx.active_tz(datatype_tz=etc_utc)
     assert result == etc_utc
 
 
-def test_schema_mode_invalid_string_raises():
-    """Invalid string value for utc_tz_aware should raise ProgrammingError."""
-    with pytest.raises(ProgrammingError, match="utc_tz_aware must be"):
-        QueryContext(utc_tz_aware="invalid")
+def test_tz_mode_invalid_string_raises():
+    """Invalid string value for tz_mode should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="tz_mode must be"):
+        QueryContext(tz_mode="invalid")
+
+
+def test_invalid_query_tz_string_raises_programming_error():
+    """Unknown query_tz string should raise ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="query_tz"):
+        QueryContext(query_tz="Not/A/Real/Zone")
+
+
+def test_invalid_column_tz_string_raises_programming_error():
+    """Unknown column_tz string must raise ProgrammingError, not NameError."""
+    with pytest.raises(ProgrammingError, match="column_tz"):
+        QueryContext(column_tzs={"ts": "Not/A/Real/Zone"})
+
+
+@pytest.mark.parametrize("bad_tz", ["", "/absolute/path", "../foo"])
+def test_malformed_query_tz_raises_programming_error(bad_tz):
+    """ZoneInfo raises ValueError (not ZoneInfoNotFoundError) for empty/absolute/unnormalized
+    keys; the driver must still surface ProgrammingError."""
+    with pytest.raises(ProgrammingError, match="query_tz"):
+        QueryContext(query_tz=bad_tz)
+    with pytest.raises(ProgrammingError, match="column_tz"):
+        QueryContext(column_tzs={"ts": bad_tz})
+
+
+def test_resolve_zone_utc_equivalents_without_tzdata(monkeypatch):
+    """UTC-equivalent names must resolve without touching zoneinfo, so hosts without a
+    system tzdb (and no `tzdata` extra) can still use the library for UTC."""
+    import zoneinfo as zi
+
+    from clickhouse_connect.driver import tzutil as tzutil_mod
+
+    def no_tzdata(*args, **kwargs):
+        raise zi.ZoneInfoNotFoundError("tzdata unavailable")
+
+    monkeypatch.setattr(tzutil_mod.zoneinfo, "ZoneInfo", no_tzdata)
+
+    for name in tzutil_mod.UTC_EQUIVALENTS:
+        assert tzutil_mod.resolve_zone(name).utcoffset(None).total_seconds() == 0
+
+    # Non-UTC names still require tzdata and surface the underlying error.
+    with pytest.raises(zi.ZoneInfoNotFoundError):
+        tzutil_mod.resolve_zone("America/Denver")
+
+
+def test_query_context_utc_query_tz_without_tzdata(monkeypatch):
+    """query_tz='UTC' and column_tzs={c: 'UTC'} must succeed without tzdata."""
+    import zoneinfo as zi
+
+    from clickhouse_connect.driver import tzutil as tzutil_mod
+
+    monkeypatch.setattr(
+        tzutil_mod.zoneinfo,
+        "ZoneInfo",
+        lambda *a, **kw: (_ for _ in ()).throw(zi.ZoneInfoNotFoundError("tzdata unavailable")),
+    )
+
+    ctx = QueryContext(query_tz="UTC")
+    assert tzutil_mod.is_utc_timezone(ctx.query_tz)
+
+    ctx = QueryContext(column_tzs={"ts": "Etc/UTC"})
+    assert tzutil_mod.is_utc_timezone(ctx.column_tzs["ts"])
