@@ -76,15 +76,15 @@ jobs:
           CLICKHOUSE_CONNECT_SKIP_CYTHON=1 python -m build --sdist --outdir "$RUNNER_TEMP/dist"
           CLICKHOUSE_CONNECT_SKIP_CYTHON=1 "$RUNNER_TEMP/consumer/bin/pip" install "$RUNNER_TEMP"/dist/*.tar.gz
           # Stub packages are intentionally unpinned. If the ratchet count shifts without a repo change, pin them here.
-          "$RUNNER_TEMP/consumer/bin/pip" install numpy pandas pandas-stubs pyarrow polars
+          "$RUNNER_TEMP/consumer/bin/pip" install numpy pandas pandas-stubs pyarrow polars "sqlalchemy>=2.0,<3.0"
           "$RUNNER_TEMP/consumer/bin/pip" install "mypy==2.1.0" "pyright==1.1.408"
       - name: Confirm py.typed shipped with the install
         run: test -f "$RUNNER_TEMP"/consumer/lib/python*/site-packages/clickhouse_connect/py.typed
-      - name: Consumer smoke test (mypy --strict against installed wheel)
+      - name: Consumer smoke tests (mypy --strict against installed wheel)
         run: |
-          cp tests/type_check/consumer_smoke.py "$RUNNER_TEMP/consumer_smoke.py"
+          cp tests/type_check/consumer_smoke.py tests/type_check/sqlalchemy_smoke.py "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent consumer_smoke.py
+          "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent consumer_smoke.py sqlalchemy_smoke.py
       - name: Public type completeness ratchet
         run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1129 --python "$RUNNER_TEMP/consumer/bin/python"
 
@@ -274,7 +274,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest -n 4 tests/integration_tests/test_sqlalchemy
+        run: pytest -n 4 tests/integration_tests/test_sqlalchemy tests/unit_tests/test_sqlalchemy/test_ch_select.py
       - name: Stop ClickHouse
         if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
         env:
