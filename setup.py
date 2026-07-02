@@ -76,6 +76,9 @@ def run_setup(try_c: bool = True):
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.9.0"],
+            # The chdb backend lives in the chdb package and self-registers through the
+            # clickhouse_connect.backends entry point; this extra just pulls chdb in.
+            "chdb": ["chdb>=3.7"],
         },
         tests_require=["pytest"],
         entry_points={

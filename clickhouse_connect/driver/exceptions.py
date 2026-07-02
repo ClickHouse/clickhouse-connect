@@ -110,3 +110,24 @@ class StreamCompleteException(Exception):  # noqa: N818
 
 class StreamFailureError(Exception):
     """Stream failed unexpectedly"""
+
+
+class BackendNotInstalledError(ProgrammingError):
+    """Raised when ``get_client(backend=...)`` names a backend that is not registered.
+
+    A backend is registered out-of-tree through the ``clickhouse_connect.backends``
+    entry-point group (see ``clickhouse_connect.driver.registry``). This error means the
+    package that provides the backend is not installed; ``hint`` carries the suggested
+    install command when one is known. clickhouse-connect never installs a backend itself.
+    """
+
+    def __init__(self, name: str, available: list[str] | None = None, hint: str | None = None):
+        self.backend_name = name
+        self.available = available or []
+        self.hint = hint
+        msg = f"No clickhouse-connect backend named {name!r} is registered."
+        if hint:
+            msg += f" Install it with: {hint}"
+        if self.available:
+            msg += f" Registered backends: {', '.join(sorted(self.available))}."
+        super().__init__(msg)
