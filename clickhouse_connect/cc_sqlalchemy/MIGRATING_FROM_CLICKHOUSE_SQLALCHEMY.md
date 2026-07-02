@@ -99,6 +99,20 @@ select(tbl).final().prewhere(tbl.c.active == 1).left_array_join(tbl.c.tags).limi
 
 `final()`, `sample()`, and `limit_by()` use the same calling convention as `clickhouse-sqlalchemy`. `prewhere()` and explicit `Lambda(...)` are available on `sqlalchemy.select` in `clickhouse-connect`.
 
+### Typed entry point for the chainables
+
+`sqlalchemy.select(...)` gets the chainables by monkey-patch, so they work at runtime but static type checkers do not see them and flag calls like `.ch_join(...)`. Use `clickhouse_connect.cc_sqlalchemy.select` instead. It returns a `ClickHouseSelect` that declares `.ch_join()`, `.final()`, `.sample()`, `.array_join()`, `.left_array_join()`, `.prewhere()`, and `.limit_by()` as typed methods, so they type-check without suppressions. The subclass stays itself through SQLAlchemy generative methods like `.where()` and `.select_from()`, so a mixed chain keeps the typed methods.
+
+```python
+from clickhouse_connect.cc_sqlalchemy import select
+
+select(authors.c.name).select_from(books).ch_join(
+    authors, authors.c.id == books.c.author_id, isouter=True, strictness="ANY"
+).final(books)
+```
+
+The native `.join(..., strictness=...)` spelling that carries ClickHouse JOIN modifiers on SQLAlchemy's own `.join()` is future work.
+
 The dialect compiles these modifiers on SQLAlchemy Select statements, but the ClickHouse server still enforces its own rules. For example, the server rejects `FINAL` on a plain `MergeTree` and `PREWHERE` against `FROM (SELECT ...)`.
 
 ## Engine expressions accept `Column` objects

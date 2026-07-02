@@ -4,6 +4,8 @@
 
 ### Improvements
 - SQLAlchemy: added a chainable `Select.ch_join()` so ClickHouse JOIN modifiers can be written in normal SQLAlchemy chaining style instead of nesting the `ch_join()` helper inside `select_from()`. It takes the strictness modifiers ALL, ANY, ASOF, SEMI, and ANTI, the GLOBAL distribution modifier, plus USING and CROSS, all as keyword arguments, and chains so multi-join queries stay readable. The existing `ch_join()` factory is unchanged. Closes [#827](https://github.com/ClickHouse/clickhouse-connect/issues/827).
+- SQLAlchemy: added `cc_sqlalchemy.select()` which returns a `ClickHouseSelect`. It exposes the ClickHouse chainable modifiers such as `ch_join`, `final`, `sample`, `array_join`, `prewhere`, and `limit_by` as typed methods so static type checkers accept them without suppressions. The existing `sqlalchemy.select()` path keeps working unchanged. Closes [#837](https://github.com/ClickHouse/clickhouse-connect/issues/837).
+- SQLAlchemy: `execution_options(settings={...})` now forwards per-query ClickHouse settings through the dialect and DB-API cursor instead of silently ignoring them. This works for Core and `text()` statements, connection-level execution options, `execute`, `executemany`, and the bulk-insert path, while continuing to use the existing client settings validation. Closes [#838](https://github.com/ClickHouse/clickhouse-connect/issues/838).
 
 ## 1.4.1, 2026-06-30
 

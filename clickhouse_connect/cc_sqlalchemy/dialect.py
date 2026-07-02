@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
@@ -10,6 +12,7 @@ from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
+from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 
@@ -65,6 +68,22 @@ class ClickHouseDialect(DefaultDialect):
         # Set before super().__init__() so ChIdentifierPreparer can read it when built.
         self.server_side_params = server_side_params
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _ch_query_settings(context: Any) -> dict[str, Any] | None:
+        # Pull per-statement ClickHouse settings from execution_options["settings"].
+        if context is None:
+            return None
+        return context.execution_options.get("settings")
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+        cast(Cursor, cursor).execute(statement, parameters, settings=self._ch_query_settings(context))
+
+    def do_executemany(self, cursor, statement, parameters, context=None):
+        cast(Cursor, cursor).executemany(statement, parameters, settings=self._ch_query_settings(context))
+
+    def do_execute_no_params(self, cursor, statement, context=None):
+        cast(Cursor, cursor).execute(statement, settings=self._ch_query_settings(context))
 
     # SQA 1 compatibility
 
