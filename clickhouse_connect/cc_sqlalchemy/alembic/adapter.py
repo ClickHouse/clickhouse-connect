@@ -3,9 +3,30 @@ from alembic.autogenerate.api import AutogenContext
 from alembic.autogenerate.compare import comparators
 from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
-from alembic.util import DispatchPriority, PriorityDispatchResult
+from alembic.util import CommandError, DispatchPriority, PriorityDispatchResult
 
 from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
+from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
+    AddClickHouseIndexesOp,
+    AddClickHouseIndexOp,
+    AddClickHouseProjectionOp,
+    AddClickHouseProjectionsOp,
+    ClickHouseIndex,
+    ClickHouseProjection,
+    CreateClickHouseDictionaryOp,
+    CreateClickHouseMaterializedViewOp,
+    DropClickHouseDictionaryOp,
+    DropClickHouseIndexesOp,
+    DropClickHouseIndexOp,
+    DropClickHouseMaterializedViewOp,
+    DropClickHouseProjectionOp,
+    DropClickHouseProjectionsOp,
+    MaterializeClickHouseIndexOp,
+    MaterializeClickHouseProjectionOp,
+    ModifyClickHouseTableSettingsOp,
+    ReloadClickHouseDictionaryOp,
+    ResetClickHouseTableSettingsOp,
+)
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 
@@ -192,10 +213,274 @@ def render_drop_table(autogen_context: AutogenContext, op: ops.DropTableOp) -> s
     return rendered
 
 
+def _render_kwargs(kwargs: list[tuple[str, object]]) -> list[str]:
+    return [f"{name}={value!r}" for name, value in kwargs]
+
+
+def _render_op_call(autogen_context: AutogenContext, name: str, args: list[str], kwargs: list[tuple[str, object]]) -> str:
+    prefix = render._alembic_autogenerate_prefix(autogen_context)
+    params = args + _render_kwargs(kwargs)
+    return f"{prefix}{name}({', '.join(params)})"
+
+
+def _optional_kwargs(*items: tuple[str, object, object]) -> list[tuple[str, object]]:
+    return [(name, value) for name, value, default in items if value != default]
+
+
+def _render_clickhouse_index(autogen_context: AutogenContext, index: ClickHouseIndex) -> str:
+    autogen_context.imports.add("from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseIndex")
+    kwargs = _optional_kwargs(
+        ("granularity", index.granularity, None),
+        ("if_not_exists", index.if_not_exists, False),
+        ("first", index.first, False),
+        ("after_index", index.after_index, None),
+    )
+    params = [repr(index.name), repr(index.expression), repr(index.type_)] + _render_kwargs(kwargs)
+    return f"ClickHouseIndex({', '.join(params)})"
+
+
+def _render_clickhouse_projection(autogen_context: AutogenContext, projection: ClickHouseProjection) -> str:
+    autogen_context.imports.add("from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseProjection")
+    kwargs = _optional_kwargs(
+        ("if_not_exists", projection.if_not_exists, False),
+        ("first", projection.first, False),
+        ("after_projection", projection.after_projection, None),
+    )
+    params = [repr(projection.name), repr(projection.select)] + _render_kwargs(kwargs)
+    return f"ClickHouseProjection({', '.join(params)})"
+
+
+@render.renderers.dispatch_for(AddClickHouseIndexOp)
+def render_add_clickhouse_index(autogen_context: AutogenContext, op: AddClickHouseIndexOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "add_clickhouse_index",
+        [repr(op.table_name), repr(op.name), repr(op.expression), repr(op.type_)],
+        _optional_kwargs(
+            ("granularity", op.granularity, None),
+            ("if_not_exists", op.if_not_exists, False),
+            ("first", op.first, False),
+            ("after_index", op.after_index, None),
+            ("schema", op.schema, None),
+            ("clickhouse_settings", op.clickhouse_settings, None),
+        ),
+    )
+
+
+@render.renderers.dispatch_for(AddClickHouseIndexesOp)
+def render_add_clickhouse_indexes(autogen_context: AutogenContext, op: AddClickHouseIndexesOp) -> str:
+    indexes = "[" + ", ".join(_render_clickhouse_index(autogen_context, index) for index in op.indexes) + "]"
+    return _render_op_call(
+        autogen_context,
+        "add_clickhouse_indexes",
+        [repr(op.table_name), indexes],
+        _optional_kwargs(("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)),
+    )
+
+
+@render.renderers.dispatch_for(DropClickHouseIndexOp)
+def render_drop_clickhouse_index(autogen_context: AutogenContext, op: DropClickHouseIndexOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_index",
+        [repr(op.table_name), repr(op.name)],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False), ("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)
+        ),
+    )
+
+
+@render.renderers.dispatch_for(DropClickHouseIndexesOp)
+def render_drop_clickhouse_indexes(autogen_context: AutogenContext, op: DropClickHouseIndexesOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_indexes",
+        [repr(op.table_name), repr(list(op.names))],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False), ("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)
+        ),
+    )
+
+
+@render.renderers.dispatch_for(MaterializeClickHouseIndexOp)
+def render_materialize_clickhouse_index(autogen_context: AutogenContext, op: MaterializeClickHouseIndexOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "materialize_clickhouse_index",
+        [repr(op.table_name), repr(op.name)],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False),
+            ("partition", op.partition, None),
+            ("schema", op.schema, None),
+            ("clickhouse_settings", op.clickhouse_settings, None),
+        ),
+    )
+
+
+@render.renderers.dispatch_for(AddClickHouseProjectionOp)
+def render_add_clickhouse_projection(autogen_context: AutogenContext, op: AddClickHouseProjectionOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "add_clickhouse_projection",
+        [repr(op.table_name), repr(op.name), repr(op.select)],
+        _optional_kwargs(
+            ("if_not_exists", op.if_not_exists, False),
+            ("first", op.first, False),
+            ("after_projection", op.after_projection, None),
+            ("schema", op.schema, None),
+            ("clickhouse_settings", op.clickhouse_settings, None),
+        ),
+    )
+
+
+@render.renderers.dispatch_for(AddClickHouseProjectionsOp)
+def render_add_clickhouse_projections(autogen_context: AutogenContext, op: AddClickHouseProjectionsOp) -> str:
+    projections = "[" + ", ".join(_render_clickhouse_projection(autogen_context, projection) for projection in op.projections) + "]"
+    return _render_op_call(
+        autogen_context,
+        "add_clickhouse_projections",
+        [repr(op.table_name), projections],
+        _optional_kwargs(("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)),
+    )
+
+
+@render.renderers.dispatch_for(DropClickHouseProjectionOp)
+def render_drop_clickhouse_projection(autogen_context: AutogenContext, op: DropClickHouseProjectionOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_projection",
+        [repr(op.table_name), repr(op.name)],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False), ("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)
+        ),
+    )
+
+
+@render.renderers.dispatch_for(DropClickHouseProjectionsOp)
+def render_drop_clickhouse_projections(autogen_context: AutogenContext, op: DropClickHouseProjectionsOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_projections",
+        [repr(op.table_name), repr(list(op.names))],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False), ("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)
+        ),
+    )
+
+
+@render.renderers.dispatch_for(MaterializeClickHouseProjectionOp)
+def render_materialize_clickhouse_projection(autogen_context: AutogenContext, op: MaterializeClickHouseProjectionOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "materialize_clickhouse_projection",
+        [repr(op.table_name), repr(op.name)],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False),
+            ("partition", op.partition, None),
+            ("schema", op.schema, None),
+            ("clickhouse_settings", op.clickhouse_settings, None),
+        ),
+    )
+
+
+@render.renderers.dispatch_for(ModifyClickHouseTableSettingsOp)
+def render_modify_clickhouse_table_settings(autogen_context: AutogenContext, op: ModifyClickHouseTableSettingsOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "modify_clickhouse_table_settings",
+        [repr(op.table_name), repr(op.settings)],
+        _optional_kwargs(("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)),
+    )
+
+
+@render.renderers.dispatch_for(ResetClickHouseTableSettingsOp)
+def render_reset_clickhouse_table_settings(autogen_context: AutogenContext, op: ResetClickHouseTableSettingsOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "reset_clickhouse_table_settings",
+        [repr(op.table_name), repr(list(op.names))],
+        _optional_kwargs(("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)),
+    )
+
+
+@render.renderers.dispatch_for(CreateClickHouseMaterializedViewOp)
+def render_create_clickhouse_materialized_view(autogen_context: AutogenContext, op: CreateClickHouseMaterializedViewOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "create_clickhouse_materialized_view",
+        [repr(op.name), repr(op.to_table), repr(op.select)],
+        _optional_kwargs(("if_not_exists", op.if_not_exists, False), ("schema", op.schema, None), ("to_schema", op.to_schema, None)),
+    )
+
+
+@render.renderers.dispatch_for(DropClickHouseMaterializedViewOp)
+def render_drop_clickhouse_materialized_view(autogen_context: AutogenContext, op: DropClickHouseMaterializedViewOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_materialized_view",
+        [repr(op.name)],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False), ("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)
+        ),
+    )
+
+
+@render.renderers.dispatch_for(CreateClickHouseDictionaryOp)
+def render_create_clickhouse_dictionary(autogen_context: AutogenContext, op: CreateClickHouseDictionaryOp) -> str:
+    columns = "[" + ", ".join(render_clickhouse_column(column, autogen_context) for column in op.columns) + "]"
+    return _render_op_call(
+        autogen_context,
+        "create_clickhouse_dictionary",
+        [repr(op.name), columns],
+        _optional_kwargs(
+            ("primary_key", op.primary_key, None),
+            ("source", op.source, None),
+            ("layout", op.layout, None),
+            ("lifetime", op.lifetime, None),
+            ("if_not_exists", op.if_not_exists, False),
+            ("schema", op.schema, None),
+            ("comment", op.comment, None),
+            ("clickhouse_settings", op.clickhouse_settings, None),
+        ),
+    )
+
+
+@render.renderers.dispatch_for(DropClickHouseDictionaryOp)
+def render_drop_clickhouse_dictionary(autogen_context: AutogenContext, op: DropClickHouseDictionaryOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_dictionary",
+        [repr(op.name)],
+        _optional_kwargs(
+            ("if_exists", op.if_exists, False), ("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)
+        ),
+    )
+
+
+@render.renderers.dispatch_for(ReloadClickHouseDictionaryOp)
+def render_reload_clickhouse_dictionary(autogen_context: AutogenContext, op: ReloadClickHouseDictionaryOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "reload_clickhouse_dictionary",
+        [repr(op.name)],
+        _optional_kwargs(("schema", op.schema, None)),
+    )
+
+
 def include_object(object_, name, type_, reflected, compare_to):
     """
     Standard filter for ClickHouse system tables and internal objects.
     """
+    if type_ == "index":
+        if reflected:
+            return False
+        raise CommandError(
+            "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
+            "Column(index=True), or autogenerate. Use op.add_clickhouse_index "
+            "and op.drop_clickhouse_index for ClickHouse data skipping indexes, "
+            "or op.execute for custom DDL."
+        )
+
     # Guard against None name which can happen in some Alembic versions/contexts
     if not name:
         return True

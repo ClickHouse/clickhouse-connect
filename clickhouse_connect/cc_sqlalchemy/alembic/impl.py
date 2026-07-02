@@ -5,8 +5,9 @@ from typing import Any
 
 from alembic.ddl.impl import DefaultImpl
 from alembic.util import CommandError
-from sqlalchemy import Column, MetaData, String, Table, text
+from sqlalchemy import Column, Index, MetaData, String, Table, text
 from sqlalchemy.sql.dml import Delete, Update
+from sqlalchemy.sql.elements import quoted_name
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array as ChSqlaArray
@@ -21,6 +22,21 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     column_specification,
 )
 from clickhouse_connect.driver.binding import quote_identifier
+
+_STANDARD_INDEX_MESSAGE = (
+    "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
+    "Column(index=True), op.create_index, or op.drop_index. Use op.add_clickhouse_index "
+    "and op.drop_clickhouse_index for ClickHouse data skipping indexes, or op.execute "
+    "for custom DDL."
+)
+
+
+def _has_standard_index(table: Table) -> bool:
+    return bool(table.indexes) or any(bool(getattr(column, "index", False)) for column in table.columns)
+
+
+def _reject_standard_index() -> None:
+    raise CommandError(_STANDARD_INDEX_MESSAGE)
 
 
 def _render_ch_type(type_obj):
@@ -112,6 +128,8 @@ class ClickHouseImpl(DefaultImpl):
         if_not_exists: bool | None = None,
         **kw: Any,
     ) -> None:
+        if getattr(column, "index", False):
+            _reject_standard_index()
         sql = [
             "ALTER TABLE",
             full_table(table_name, schema),
@@ -127,6 +145,18 @@ class ClickHouseImpl(DefaultImpl):
         if settings:
             sql.extend(["SETTINGS", settings])
         self._exec(text(" ".join(sql)))
+
+    def create_table(self, table: Table, **kw: Any) -> None:
+        if _has_standard_index(table):
+            _reject_standard_index()
+        super().create_table(table, **kw)
+
+    def prep_table_for_batch(self, batch_impl, table: Table) -> None:
+        batch_indexes = getattr(batch_impl, "new_indexes", {})
+        existing_indexes = getattr(batch_impl, "indexes", {})
+        if batch_indexes or existing_indexes or _has_standard_index(table):
+            _reject_standard_index()
+        super().prep_table_for_batch(batch_impl, table)
 
     def drop_column(
         self,
@@ -145,6 +175,21 @@ class ClickHouseImpl(DefaultImpl):
         if settings:
             sql.extend(["SETTINGS", settings])
         self._exec(text(" ".join(sql)))
+
+    def rename_table(
+        self,
+        old_table_name: str,
+        new_table_name: str | quoted_name,
+        schema: str | quoted_name | None = None,
+    ) -> None:
+        sql = f"RENAME TABLE {full_table(old_table_name, schema)} TO {full_table(new_table_name, schema)}"
+        self._exec(text(sql))
+
+    def create_index(self, index: Index, **kw: Any) -> None:
+        _reject_standard_index()
+
+    def drop_index(self, index: Index, **kw: Any) -> None:
+        _reject_standard_index()
 
     def create_table_comment(self, table: Table) -> None:
         self._exec(text(self._comment_table_sql(table, table.comment)))

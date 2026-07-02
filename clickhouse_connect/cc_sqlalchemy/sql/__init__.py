@@ -14,7 +14,7 @@ _CH_MODIFIER_DIALECT = "_ch_modifier"
 
 
 def full_table(table_name: str, schema: str | None = None) -> str:
-    if table_name.startswith("(") or "." in table_name or not schema:
+    if table_name.startswith("(") or not schema:
         return quote_identifier(table_name)
     return f"{quote_identifier(schema)}.{quote_identifier(table_name)}"
 
