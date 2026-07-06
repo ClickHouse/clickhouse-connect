@@ -7,6 +7,11 @@
 - SQLAlchemy: added `cc_sqlalchemy.select()` which returns a `ClickHouseSelect`. It exposes the ClickHouse chainable modifiers such as `ch_join`, `final`, `sample`, `array_join`, `prewhere`, and `limit_by` as typed methods so static type checkers accept them without suppressions. The existing `sqlalchemy.select()` path keeps working unchanged. Closes [#837](https://github.com/ClickHouse/clickhouse-connect/issues/837).
 - SQLAlchemy: `execution_options(settings={...})` now forwards per-query ClickHouse settings through the dialect and DB-API cursor instead of silently ignoring them. This works for Core and `text()` statements, connection-level execution options, `execute`, `executemany`, and the bulk-insert path, while continuing to use the existing client settings validation. Closes [#838](https://github.com/ClickHouse/clickhouse-connect/issues/838).
 
+## 1.4.2, 2026-07-06
+
+### Bug Fixes
+- Async inserts and queries with an in-memory body larger than 1 MiB no longer emit an aiohttp `ResourceWarning` about sending a large body directly with raw bytes. Closes [#850](https://github.com/ClickHouse/clickhouse-connect/issues/850).
+
 ## 1.4.1, 2026-06-30
 
 ### Bug Fixes
