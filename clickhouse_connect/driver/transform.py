@@ -1,9 +1,10 @@
 import logging
+from collections.abc import Generator
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
 from clickhouse_connect.driver.compression import get_compressor
-from clickhouse_connect.driver.exceptions import StreamCompleteException, StreamFailureError
+from clickhouse_connect.driver.exceptions import DataError, StreamCompleteException, StreamFailureError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
@@ -12,6 +13,42 @@ from clickhouse_connect.driver.types import ByteSource
 _EMPTY_CTX = QueryContext()
 
 logger = logging.getLogger(__name__)
+
+RUST_INSERT_SETTING = "rust_insert"
+RUST_INSERT_STRICT_VALUES = {"force", "only", "strict"}
+RUST_INSERT_TRUE_VALUES = {"1", "true", "yes", "on"} | RUST_INSERT_STRICT_VALUES
+_INSERT_INTERNAL_TRANSPORT_SETTINGS = frozenset({RUST_INSERT_SETTING})
+
+
+def _rust_insert_value(context: InsertContext) -> str:
+    transport_settings = context.transport_settings or {}
+    value: object = ""
+    for key, setting_value in transport_settings.items():
+        if key.lower() == RUST_INSERT_SETTING:
+            value = setting_value
+            break
+    if value is True:
+        return "true"
+    if value == 1:
+        return "1"
+    if isinstance(value, str):
+        return value.strip().lower()
+    return ""
+
+
+def rust_insert_requested(context: InsertContext) -> bool:
+    return _rust_insert_value(context) in RUST_INSERT_TRUE_VALUES
+
+
+def rust_insert_strict(context: InsertContext) -> bool:
+    return _rust_insert_value(context) in RUST_INSERT_STRICT_VALUES
+
+
+def insert_transport_settings(context: InsertContext) -> dict[str, str] | None:
+    transport_settings = context.transport_settings
+    if not transport_settings:
+        return None
+    return {k: v for k, v in transport_settings.items() if k.lower() not in _INSERT_INTERNAL_TRANSPORT_SETTINGS}
 
 
 class NativeTransform:
@@ -139,6 +176,84 @@ class NativeTransform:
                 yield footer
 
         return chunk_gen()
+
+    @staticmethod
+    def build_insert_rust(context: InsertContext):
+        return NativeTransform._build_insert_rust(context, catch_errors=True)
+
+    @staticmethod
+    def build_insert_rust_or_python(context: InsertContext):
+        if rust_insert_strict(context):
+            return NativeTransform.build_insert_rust(context)
+
+        def chunk_gen():
+            single_block = context.row_count <= context.block_row_count
+            try:
+                rust_gen = NativeTransform._build_insert_rust(context, catch_errors=not single_block, wrap_errors=not single_block)
+            except ImportError as ex:
+                logger.debug("Falling back to Python Native insert serializer: %s", ex)
+                context.current_row = 0
+                context.current_block = 0
+                context.insert_exception = None
+                yield from NativeTransform.build_insert(context)
+                return
+
+            if not single_block:
+                yield from rust_gen
+                return
+
+            try:
+                chunks = list(rust_gen)
+            except (NotImplementedError, TypeError, ValueError) as ex:
+                logger.debug("Falling back to Python Native insert serializer: %s", ex)
+                context.current_row = 0
+                context.current_block = 0
+                context.insert_exception = None
+                yield from NativeTransform.build_insert(context)
+                return
+
+            yield from chunks
+
+        return chunk_gen()
+
+    @staticmethod
+    def _build_insert_rust(context: InsertContext, catch_errors: bool, wrap_errors: bool = False) -> Generator[bytes, None, None]:
+        import _ch_core
+
+        compressor = get_compressor(context.compression)
+
+        def chunk_gen():
+            for block in context.next_block():
+                try:
+                    output = _ch_core.encode_native_block(
+                        list(block.column_names),
+                        [col_type.insert_name for col_type in block.column_types],
+                        list(block.column_data),
+                        block.row_count,
+                        block.prefix,
+                    )
+                except Exception as ex:
+                    if not catch_errors:
+                        raise
+                    logger.error("Error serializing insert with Rust Native encoder", exc_info=True)
+                    context.insert_exception = NativeTransform._rust_insert_exception(ex) if wrap_errors else ex
+                    yield b"INTERNAL EXCEPTION WHILE SERIALIZING"
+                    return
+                yield compressor.compress_block(output)
+            footer = compressor.flush()
+            if footer:
+                yield footer
+
+        return chunk_gen()
+
+    @staticmethod
+    def _rust_insert_exception(ex: Exception) -> DataError:
+        err = DataError(
+            "Rust Native insert failed; non-strict Python fallback is only attempted for single-block inserts "
+            f"before bytes are yielded. Original error: {type(ex).__name__}: {ex}"
+        )
+        err.__cause__ = ex
+        return err
 
 
 def extract_exception_with_tag(message: bytes, exception_tag: str) -> str | None:

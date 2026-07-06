@@ -44,8 +44,9 @@ from clickhouse_connect.driver.httputil import (
 )
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult, TzSource, returns_empty_string_on_empty_body
+from clickhouse_connect.driver.streaming import SyncStreamingInsertSource
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.transform import NativeTransform
+from clickhouse_connect.driver.transform import NativeTransform, insert_transport_settings, rust_insert_requested
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
@@ -373,18 +374,32 @@ class HttpClient(Client):
             context.compression = self.write_compression
         if context.compression:
             headers["Content-Encoding"] = context.compression
-        block_gen = self._transform.build_insert(context)
+        use_rust = rust_insert_requested(context)
+        active_source = None
+        if use_rust:
+            active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10, use_rust=True)
+            active_source.start_producer()
+            block_gen = active_source.gen
+        else:
+            block_gen = self._transform.build_insert(context)
 
         def rebuild_block_gen():
+            nonlocal active_source
+            if active_source is not None:
+                active_source.close(timeout=None)
             context.current_row = 0
             context.current_block = 0
+            if use_rust:
+                active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10, use_rust=True)
+                active_source.start_producer()
+                return active_source.gen
             return self._transform.build_insert(context)
 
         params = {}
         if self.database:
             params["database"] = self.database
         params.update(self._validate_settings(context.settings))
-        headers = dict_copy(headers, context.transport_settings)
+        headers = dict_copy(headers, insert_transport_settings(context))
         try:
             response = self._raw_request(
                 block_gen,
@@ -397,6 +412,8 @@ class HttpClient(Client):
             logger.debug("Context insert response code: %d, content: %s", response.status, response.data)
             return QuerySummary(self._summary(response))
         finally:
+            if active_source is not None:
+                active_source.close()
             context.data = None
 
     def raw_insert(

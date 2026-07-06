@@ -6,6 +6,7 @@ import zoneinfo
 from abc import abstractmethod
 from collections.abc import MutableSequence, Sequence
 from datetime import date, datetime, time, timedelta, tzinfo
+from math import floor
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
@@ -257,6 +258,10 @@ class DateTime64(DateTimeBase):
     def _read_binary_naive(self, column: Sequence):
         return data_conv.read_datetime64_naive_col(column, self.prec)
 
+    def _datetime64_ticks(self, value: datetime) -> int:
+        seconds = floor(value.timestamp())
+        return ((seconds * 1000000 + value.microsecond) * self.prec) // 1000000
+
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
         if isinstance(first, int) or self.write_format(ctx) == "int":
@@ -271,15 +276,14 @@ class DateTime64(DateTimeBase):
                     v = 0
                 else:
                     dt = datetime.fromisoformat(x)
-                    v = ((int(dt.timestamp()) * 1000000 + dt.microsecond) * self.prec) // 1000000
+                    v = self._datetime64_ticks(dt)
 
                 column.append(v)
         else:
-            prec = self.prec
             if self.nullable:
-                column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 if x else 0 for x in column]
+                column = [self._datetime64_ticks(x) if x else 0 for x in column]
             else:
-                column = [((int(x.timestamp()) * 1000000 + x.microsecond) * prec) // 1000000 for x in column]
+                column = [self._datetime64_ticks(x) for x in column]
         write_array("q", column, dest, ctx.column_name)
 
 

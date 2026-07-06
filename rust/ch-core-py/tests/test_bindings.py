@@ -1,11 +1,14 @@
 """Tests for _ch_core Python bindings - Phase 1 types."""
 
 import datetime as dt
+import decimal
+import ipaddress
 import os
 import struct
 import subprocess
 import sys
 import textwrap
+import uuid
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,6 +17,29 @@ _ch_core = pytest.importorskip("_ch_core")
 
 _EPOCH_DATE = dt.date(1970, 1, 1)
 _EPOCH_NAIVE = dt.datetime(1970, 1, 1)
+
+
+class _NdarrayLikeColumn:
+    def __init__(self, values):
+        self._values = values
+
+    def __len__(self):
+        return len(self._values)
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+
+class _SeriesLikeColumn:
+    def __init__(self, values):
+        self._values = values
+        self.iloc = _NdarrayLikeColumn(values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def __getitem__(self, index):
+        raise KeyError(index)
 
 
 def _encode_varint(value: int) -> bytes:
@@ -190,6 +216,198 @@ def build_native_block(columns, *, block_info=False):
         else:
             raise ValueError(f"build_native_block: unsupported type {inner_type}")
     return bytes(buf)
+
+
+def build_native_block_from_bodies(columns, row_count):
+    """Build a Native block from already-encoded column bodies."""
+    buf = bytearray()
+    buf.extend(_encode_varint(len(columns)))
+    buf.extend(_encode_varint(row_count))
+    for name, type_name, body in columns:
+        buf.extend(_encode_varint_string(name))
+        buf.extend(_encode_varint_string(type_name))
+        buf.extend(body)
+    return bytes(buf)
+
+
+# ---------------------------------------------------------------------------
+# Native insert encoding
+# ---------------------------------------------------------------------------
+
+
+class TestEncodeNativeBlock:
+    def test_indexable_non_sequence_columns_match_native_helper(self):
+        names = ["i", "s"]
+        type_names = ["Int32", "String"]
+        columns = [
+            _NdarrayLikeColumn([13, 79]),
+            _SeriesLikeColumn(["user_1", "user_2"]),
+        ]
+
+        encoded = _ch_core.encode_native_block(names, type_names, columns, 2)
+        expected = build_native_block(
+            [
+                ("i", "Int32", [13, 79]),
+                ("s", "String", ["user_1", "user_2"]),
+            ]
+        )
+        assert encoded == expected
+
+    @pytest.mark.parametrize("bad_values", ["xy", b"xy", bytearray(b"xy")])
+    def test_bare_string_or_bytes_column_rejected(self, bad_values):
+        with pytest.raises(ValueError, match="bare str or bytes"):
+            _ch_core.encode_native_block(["s"], ["String"], [bad_values], len(bad_values))
+
+    def test_common_types_match_native_helper(self):
+        enum_type = "Enum8('red' = 1, 'green' = 2)"
+        names = ["i", "s", "n", "fs", "d", "ts", "e"]
+        type_names = [
+            "Int32",
+            "String",
+            "Nullable(UInt16)",
+            "FixedString(4)",
+            "Date",
+            "DateTime64(3)",
+            enum_type,
+        ]
+        aware_ts = dt.datetime(2024, 1, 15, 12, 34, 56, 789000, tzinfo=dt.timezone.utc)
+        columns = [
+            [13, 79],
+            ["user_1", b"\xff"],
+            [13, None],
+            ["ab", b"xy\x00\x00"],
+            [dt.date(1970, 1, 2), 19737],
+            [aware_ts, 0],
+            ["red", 2],
+        ]
+        encoded = _ch_core.encode_native_block(names, type_names, columns, 2)
+        expected = build_native_block(
+            [
+                ("i", "Int32", [13, 79]),
+                ("s", "String", ["user_1", b"\xff"]),
+                ("n", "Nullable(UInt16)", [13, None]),
+                ("fs", "FixedString(4)", [b"ab", b"xy"]),
+                ("d", "Date", [1, 19737]),
+                ("ts", "DateTime64(3)", [1705322096789, 0]),
+                ("e", enum_type, [1, 2]),
+            ]
+        )
+        assert encoded == expected
+
+    def test_datetime64_pre_epoch_fractional_encode(self):
+        values = [
+            dt.datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=dt.timezone.utc),
+            dt.datetime(1969, 12, 31, 23, 59, 59, 999999, tzinfo=dt.timezone.utc),
+            dt.datetime(1970, 1, 1, 0, 0, 0, 999000, tzinfo=dt.timezone.utc),
+        ]
+        encoded = _ch_core.encode_native_block(["ts"], ["DateTime64(3)"], [values], len(values))
+        expected = build_native_block([("ts", "DateTime64(3)", [-500, -1, 999])])
+        assert encoded == expected
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == [
+            dt.datetime(1969, 12, 31, 23, 59, 59, 500000),
+            dt.datetime(1969, 12, 31, 23, 59, 59, 999000),
+            dt.datetime(1970, 1, 1, 0, 0, 0, 999000),
+        ]
+
+    def test_prefix_is_prepended(self):
+        payload = _ch_core.encode_native_block(["v"], ["Int8"], [[13]], 1)
+        prefix = b"INSERT INTO t FORMAT Native\n"
+        encoded = _ch_core.encode_native_block(["v"], ["Int8"], [[13]], 1, prefix=prefix)
+        assert encoded == prefix + payload
+
+    def test_low_cardinality_round_trip(self):
+        vals = ["x", None, "y", "x", None, ""]
+        encoded = _ch_core.encode_native_block(["c"], ["LowCardinality(Nullable(String))"], [vals], len(vals))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == ["LowCardinality(Nullable(String))"]
+        assert list(batch.column_data(0)) == vals
+
+    def test_uuid_bytes_match_python_serializer_order(self):
+        value_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+        encoded = _ch_core.encode_native_block(["u"], ["UUID"], [[value_uuid.bytes]], 1)
+        expected_body = bytearray()
+        expected_body.extend(bytes(reversed(value_uuid.bytes[:8])))
+        expected_body.extend(bytes(reversed(value_uuid.bytes[8:])))
+        expected = build_native_block_from_bodies([("u", "UUID", expected_body)], 1)
+        assert encoded == expected
+
+    def test_special_binary_types_exact_bytes(self):
+        value_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+        ipv4_values = ["192.0.2.1", ipaddress.IPv4Address("198.51.100.7")]
+        ipv6_values = [ipaddress.IPv6Address("2001:db8::1"), "192.0.2.9"]
+        decimals = [decimal.Decimal("123.4567"), "-1.5"]
+
+        encoded = _ch_core.encode_native_block(
+            ["u", "v4", "v6", "dec"],
+            ["UUID", "IPv4", "IPv6", "Decimal(20, 4)"],
+            [[value_uuid, 0], ipv4_values, ipv6_values, decimals],
+            2,
+        )
+
+        uuid_body = bytearray()
+        uuid_int = value_uuid.int
+        uuid_body.extend((uuid_int >> 64).to_bytes(8, "little"))
+        uuid_body.extend((uuid_int & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little"))
+        uuid_body.extend(bytes(16))
+
+        ipv4_body = bytearray()
+        for value in ipv4_values:
+            ipv4_body.extend(int(ipaddress.IPv4Address(value)).to_bytes(4, "little"))
+
+        ipv6_body = bytearray()
+        ipv6_body.extend(ipv6_values[0].packed)
+        ipv6_body.extend(b"\x00" * 10 + b"\xff\xff" + ipaddress.IPv4Address(ipv6_values[1]).packed)
+
+        decimal_body = bytearray()
+        decimal_body.extend((1234567).to_bytes(16, "little", signed=True))
+        decimal_body.extend((-15000).to_bytes(16, "little", signed=True))
+
+        expected = build_native_block_from_bodies(
+            [
+                ("u", "UUID", uuid_body),
+                ("v4", "IPv4", ipv4_body),
+                ("v6", "IPv6", ipv6_body),
+                ("dec", "Decimal(20, 4)", decimal_body),
+            ],
+            2,
+        )
+        assert encoded == expected
+
+    def test_decimal_precision_boundary_and_overflow(self):
+        encoded = _ch_core.encode_native_block(
+            ["d"],
+            ["Decimal(3, 1)"],
+            [[decimal.Decimal("99.9"), decimal.Decimal("-99.9")]],
+            2,
+        )
+        body = bytearray()
+        body.extend((999).to_bytes(4, "little", signed=True))
+        body.extend((-999).to_bytes(4, "little", signed=True))
+        assert encoded == build_native_block_from_bodies([("d", "Decimal(3, 1)", body)], 2)
+
+        for value in (decimal.Decimal("100.0"), decimal.Decimal("-100.0"), "999"):
+            with pytest.raises(ValueError, match="exceeds precision 3"):
+                _ch_core.encode_native_block(["d"], ["Decimal(3, 1)"], [[value]], 1)
+
+    def test_decimal_str_failure_is_value_error_with_context(self):
+        class BadDecimalStr:
+            def __str__(self):
+                raise RuntimeError("cannot render")
+
+        with pytest.raises(ValueError, match='column "d" row 0 Decimal value cannot be stringified'):
+            _ch_core.encode_native_block(["d"], ["Decimal(9, 2)"], [[BadDecimalStr()]], 1)
+
+    def test_encode_errors_are_specific(self):
+        with pytest.raises(ValueError, match="row_count"):
+            _ch_core.encode_native_block(["v"], ["Int8"], [[13, 79]], 1)
+        with pytest.raises(ValueError, match="not Nullable"):
+            _ch_core.encode_native_block(["v"], ["Int8"], [[None]], 1)
+        with pytest.raises(ValueError, match="FixedString binary value"):
+            _ch_core.encode_native_block(["fs"], ["FixedString(4)"], [[b"xy"]], 1)
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["v"], ["Array(Int8)"], [[[13]]], 1)
+        with pytest.raises(ValueError, match="label"):
+            _ch_core.encode_native_block(["e"], ["Enum8('ok' = 1)"], [["missing"]], 1)
 
 
 # ---------------------------------------------------------------------------

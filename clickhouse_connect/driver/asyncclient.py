@@ -63,7 +63,7 @@ from clickhouse_connect.driver.query import (
 )
 from clickhouse_connect.driver.streaming import StreamingFileAdapter, StreamingInsertSource, StreamingResponseSource
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.transform import NativeTransform
+from clickhouse_connect.driver.transform import NativeTransform, insert_transport_settings, rust_insert_requested
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
@@ -1707,7 +1707,8 @@ class AsyncClient(Client):
 
         loop = asyncio.get_running_loop()
 
-        active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
+        use_rust = rust_insert_requested(context)
+        active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10, use_rust=use_rust)
         active_source.start_producer()
 
         async def rebuild_body():
@@ -1715,7 +1716,7 @@ class AsyncClient(Client):
             await active_source.close(timeout=None)
             context.current_row = 0
             context.current_block = 0
-            active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
+            active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10, use_rust=use_rust)
             active_source.start_producer()
             return active_source.async_generator()
 
@@ -1727,7 +1728,7 @@ class AsyncClient(Client):
         if self.database:
             params["database"] = self.database
         params.update(self._validate_settings(context.settings))
-        headers = dict_copy(headers, context.transport_settings)
+        headers = dict_copy(headers, insert_transport_settings(context))
 
         response = None
         try:

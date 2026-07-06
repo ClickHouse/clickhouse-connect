@@ -1,5 +1,8 @@
 from collections.abc import Callable
+from datetime import date
 from decimal import Decimal
+from ipaddress import IPv4Address, IPv6Address
+from uuid import UUID
 
 import pytest
 
@@ -34,6 +37,170 @@ def test_float_decimal_conv(param_client: Client, call, table_context: Callable)
         call(param_client.insert, "test_float_to_dec_conv", data)
         result = call(param_client.query, "SELECT * FROM test_float_to_dec_conv").result_set
         assert result == [(Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"))]
+
+
+def test_rust_native_insert_opt_in(param_client: Client, call, table_context: Callable):
+    pytest.importorskip("_ch_core")
+
+    columns = [
+        "id UInt32",
+        "b Bool",
+        "i Int32",
+        "u UInt64",
+        "f Float64",
+        "s String",
+        "fs FixedString(4)",
+        "n Nullable(Int32)",
+        "d Date",
+        "dt DateTime",
+        "ts DateTime64(3)",
+        "e Enum8('red' = 1, 'green' = 2)",
+        "dec Decimal(18, 4)",
+        "uuid_col UUID",
+        "ip4 IPv4",
+        "ip6 IPv6",
+        "lc LowCardinality(String)",
+        "lcn LowCardinality(Nullable(String))",
+    ]
+    data = [
+        [
+            1,
+            True,
+            -13,
+            79,
+            1.25,
+            "user_1",
+            "abcd",
+            13,
+            date(2024, 1, 15),
+            1705322096,
+            1705322096789,
+            "red",
+            Decimal("123.4567"),
+            UUID("00112233-4455-6677-8899-aabbccddeeff"),
+            "192.0.2.1",
+            IPv6Address("2001:db8::1"),
+            "x",
+            "nx",
+        ],
+        [
+            2,
+            False,
+            -79,
+            500,
+            -2.5,
+            "user_2",
+            "xy",
+            None,
+            19738,
+            1705322097,
+            1705322097790,
+            2,
+            "-1.5",
+            "11111111-2222-3333-4444-555555555555",
+            IPv4Address("198.51.100.7"),
+            "2001:db8::2",
+            "x",
+            None,
+        ],
+    ]
+    expected = [
+        (
+            1,
+            True,
+            -13,
+            79,
+            1.25,
+            "user_1",
+            b"abcd",
+            13,
+            19737,
+            1705322096,
+            1705322096789,
+            "red",
+            Decimal("123.4567"),
+            UUID("00112233-4455-6677-8899-aabbccddeeff"),
+            IPv4Address("192.0.2.1"),
+            IPv6Address("2001:db8::1"),
+            "x",
+            "nx",
+        ),
+        (
+            2,
+            False,
+            -79,
+            500,
+            -2.5,
+            "user_2",
+            b"xy\x00\x00",
+            None,
+            19738,
+            1705322097,
+            1705322097790,
+            "green",
+            Decimal("-1.5000"),
+            UUID("11111111-2222-3333-4444-555555555555"),
+            IPv4Address("198.51.100.7"),
+            IPv6Address("2001:db8::2"),
+            "x",
+            None,
+        ),
+    ]
+
+    with table_context("test_rust_native_insert", columns):
+        call(
+            param_client.insert,
+            "test_rust_native_insert",
+            data,
+            transport_settings={"rust_insert": "strict"},
+        )
+        result = call(
+            param_client.query,
+            "SELECT * FROM test_rust_native_insert ORDER BY id",
+            query_formats={"Date": "int", "DateTime": "int", "DateTime64": "int"},
+        ).result_rows
+        assert result == expected
+
+
+def test_rust_native_insert_dataframe_opt_in(param_client: Client, call, table_context: Callable):
+    pytest.importorskip("_ch_core")
+    pd = pytest.importorskip("pandas")
+
+    data = pd.DataFrame(
+        {
+            "id": [13, 79],
+            "name": ["user_1", "user_2"],
+            "score": [Decimal("12.30"), Decimal("45.60")],
+        }
+    )
+
+    with table_context("test_rust_native_insert_df", ["id Int32", "name String", "score Decimal(9, 2)"]):
+        call(
+            param_client.insert_df,
+            "test_rust_native_insert_df",
+            data,
+            transport_settings={"rust_insert": "strict"},
+        )
+        result = call(param_client.query, "SELECT * FROM test_rust_native_insert_df ORDER BY id").result_rows
+        assert result == [(13, "user_1", Decimal("12.30")), (79, "user_2", Decimal("45.60"))]
+
+
+def test_rust_native_insert_numpy_opt_in(param_client: Client, call, table_context: Callable):
+    pytest.importorskip("_ch_core")
+    np = pytest.importorskip("numpy")
+
+    data = np.array([(13, 1.25), (79, 2.5)], dtype=[("id", "<i4"), ("value", "<f8")])
+
+    with table_context("test_rust_native_insert_numpy", ["id Int32", "value Float64"]):
+        call(
+            param_client.insert,
+            "test_rust_native_insert_numpy",
+            data,
+            column_names=["id", "value"],
+            transport_settings={"rust_insert": "strict"},
+        )
+        result = call(param_client.query, "SELECT * FROM test_rust_native_insert_numpy ORDER BY id").result_rows
+        assert result == [(13, 1.25), (79, 2.5)]
 
 
 def test_bad_data_insert(param_client: Client, call, table_context: Callable):

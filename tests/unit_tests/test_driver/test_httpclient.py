@@ -171,6 +171,123 @@ class TestAsyncClientHeaders:
         assert client.headers["X-Gateway"] == "cloudflare"
 
 
+class _MockInsertContext:
+    def __init__(self, transport_settings):
+        self.empty = False
+        self.compression = False
+        self.settings = {}
+        self.transport_settings = transport_settings
+        self.insert_exception = None
+        self.data = [(13,)]
+        self.current_row = 0
+        self.current_block = 0
+
+
+class _RustAwareInsertTransform:
+    def __init__(self):
+        self.used_path = None
+
+    def build_insert(self, context):
+        self.used_path = "python"
+        yield b"python"
+
+    def build_insert_rust_or_python(self, context):
+        self.used_path = "rust"
+        yield b"rust"
+
+
+class TestHttpClientInsert:
+    def test_rust_retry_closes_active_source_before_rewind(self):
+        context = _MockInsertContext({"rust_insert": "on"})
+        close_events = []
+        init_events = []
+
+        class TrackingSource:
+            instances = 0
+
+            def __init__(self, transform, context, maxsize=10, use_rust=False):
+                TrackingSource.instances += 1
+                self.index = TrackingSource.instances
+                self.context = context
+                self.gen = iter([b"rust"])
+                init_events.append((self.index, context.current_row, context.current_block))
+
+            def start_producer(self):
+                self.context.current_row = 13
+                self.context.current_block = 1
+
+            def close(self, timeout=1.0):
+                close_events.append((self.index, timeout, self.context.current_row, self.context.current_block))
+
+        client = object.__new__(HttpClient)
+        client.database = None
+        client.write_compression = None
+        client._transform = _RustAwareInsertTransform()
+        client._validate_settings = Mock(return_value={})
+        client._summary = Mock(return_value={})
+
+        def raw_request(data, params, headers, **kwargs):
+            rebuilt = kwargs["retry_body"]()
+            assert list(rebuilt) == [b"rust"]
+            return create_mock_response(status=200)
+
+        client._raw_request = raw_request
+
+        with patch("clickhouse_connect.driver.httpclient.SyncStreamingInsertSource", TrackingSource):
+            client.data_insert(context)
+
+        assert init_events == [(1, 0, 0), (2, 0, 0)]
+        assert close_events[0] == (1, None, 13, 1)
+        assert close_events[-1] == (2, 1.0, 13, 1)
+        assert context.data is None
+
+
+class TestAsyncClientInsert:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("transport_settings", "expected_body", "expected_path"),
+        [
+            ({"X-Trace": "user_1"}, b"python", "python"),
+            ({"rust_insert": "on", "X-Trace": "user_1"}, b"rust", "rust"),
+        ],
+    )
+    async def test_data_insert_rust_selector_and_headers(self, transport_settings, expected_body, expected_path):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        transform = _RustAwareInsertTransform()
+        client._transform = transform
+        context = _MockInsertContext(transport_settings)
+        captured = {}
+
+        async def raw_request(data, params, headers=None, **kwargs):
+            body = bytearray()
+            async for chunk in data:
+                body += chunk
+            captured["body"] = bytes(body)
+            captured["headers"] = headers
+            response = Mock()
+            response.status = 200
+            response.headers = {}
+            response.close = Mock()
+            return response
+
+        client._raw_request = raw_request
+
+        await client.data_insert(context)
+
+        assert captured["body"] == expected_body
+        assert captured["headers"]["X-Trace"] == "user_1"
+        assert "rust_insert" not in captured["headers"]
+        assert transform.used_path == expected_path
+        assert context.data is None
+
+
 class TestAsyncClientErrorHandler:
     """Test the error handling functionality of AsyncClient"""
 

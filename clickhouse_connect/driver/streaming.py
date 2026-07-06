@@ -1,20 +1,23 @@
 import asyncio
 import logging
+import queue
 import threading
 import zlib
 from collections.abc import Iterator
+from typing import cast
 
 import lz4.frame
 import zstandard
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
+from clickhouse_connect.driver.asyncqueue import Full as AsyncQueueFull
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["StreamingResponseSource", "StreamingFileAdapter", "StreamingInsertSource"]
+__all__ = ["StreamingResponseSource", "StreamingFileAdapter", "StreamingInsertSource", "SyncStreamingInsertSource"]
 
 if "br" in available_compression:
     import brotli
@@ -253,11 +256,13 @@ class StreamingFileAdapter:
 class StreamingInsertSource:
     """Streaming source for async inserts (reverse bridge)"""
 
-    def __init__(self, transform, context, loop: asyncio.AbstractEventLoop, maxsize: int = 10):
+    def __init__(self, transform, context, loop: asyncio.AbstractEventLoop, maxsize: int = 10, use_rust: bool = False):
         self.transform = transform
         self.context = context
         self.loop = loop
         self.queue = AsyncSyncQueue(maxsize=maxsize)
+        self.use_rust = use_rust
+        self._stop_event = threading.Event()
         self._producer_future = None
         self._started = False
 
@@ -268,17 +273,22 @@ class StreamingInsertSource:
 
         def producer():
             try:
-                for block in self.transform.build_insert(self.context):
-                    self.queue.sync_q.put(block)
+                build_insert = self.transform.build_insert_rust_or_python if self.use_rust else self.transform.build_insert
+                block_gen = build_insert(self.context)
+                while not self._stop_event.is_set():
+                    try:
+                        block = next(block_gen)
+                    except StopIteration:
+                        self._put(EOF_SENTINEL)
+                        return
 
-                self.queue.sync_q.put(EOF_SENTINEL)
+                    if not self._put(block):
+                        return
 
             except Exception as e:
                 logger.error("Insert producer error: %s", e, exc_info=True)
-                try:
-                    self.queue.sync_q.put(e)
-                except Exception:
-                    pass
+                if not self._stop_event.is_set():
+                    self._put(e)
             finally:
                 self.queue.shutdown()
 
@@ -305,6 +315,8 @@ class StreamingInsertSource:
             logger.error("Insert consumer error: %s", e, exc_info=True)
             raise
         finally:
+            self._stop_event.set()
+            self.queue.shutdown()
             if self._producer_future and not self._producer_future.done():
                 try:
                     await self._producer_future
@@ -313,6 +325,7 @@ class StreamingInsertSource:
 
     async def close(self, timeout: float | None = 1.0):
         """Shut down the queue and wait for the producer thread to terminate. Pass ``timeout=None`` to wait without a deadline."""
+        self._stop_event.set()
         self.queue.shutdown()
         if self._producer_future and not self._producer_future.done():
             try:
@@ -324,3 +337,80 @@ class StreamingInsertSource:
                 logger.warning("Insert producer did not finish within timeout")
             except Exception:
                 pass
+
+    def _put(self, item: bytes | Exception | object) -> bool:
+        while not self._stop_event.is_set():
+            try:
+                self.queue.sync_q.put(item, timeout=0.1)
+                return True
+            except AsyncQueueFull:
+                continue
+            except RuntimeError:
+                return False
+        return False
+
+
+class SyncStreamingInsertSource:
+    """Bounded producer/consumer source for sync inserts."""
+
+    def __init__(self, transform, context, maxsize: int = 10, use_rust: bool = False):
+        self.transform = transform
+        self.context = context
+        self.queue: queue.Queue[bytes | Exception | object] = queue.Queue(maxsize=maxsize)
+        self.use_rust = use_rust
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._started = False
+
+    def start_producer(self):
+        if self._started:
+            raise RuntimeError("Producer already started")
+        self._started = True
+        self._thread = threading.Thread(target=self._producer, name="clickhouse-insert-producer", daemon=True)
+        self._thread.start()
+
+    @property
+    def gen(self) -> Iterator[bytes]:
+        if not self._started:
+            raise RuntimeError("Producer not started, call start_producer() first")
+        try:
+            while True:
+                chunk = self.queue.get()
+                if chunk is EOF_SENTINEL:
+                    break
+                if isinstance(chunk, Exception):
+                    raise chunk
+                yield cast(bytes, chunk)
+        finally:
+            self.close()
+
+    def close(self, timeout: float | None = 1.0):
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+
+    def _producer(self):
+        try:
+            build_insert = self.transform.build_insert_rust_or_python if self.use_rust else self.transform.build_insert
+            block_gen = build_insert(self.context)
+            while not self._stop_event.is_set():
+                try:
+                    block = next(block_gen)
+                except StopIteration:
+                    self._put(EOF_SENTINEL)
+                    return
+                if not self._put(block):
+                    return
+        except Exception as ex:
+            logger.error("Insert producer error: %s", ex, exc_info=True)
+            if not self._stop_event.is_set():
+                self._put(ex)
+
+    def _put(self, item: bytes | Exception | object) -> bool:
+        while not self._stop_event.is_set():
+            try:
+                self.queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False

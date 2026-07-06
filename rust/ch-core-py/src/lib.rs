@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 mod batch;
 mod decoder;
+mod insert;
 
 #[pymodule]
 fn _ch_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -11,5 +12,6 @@ fn _ch_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<decoder::StreamDecoder>()?;
     #[cfg(unix)]
     m.add_class::<decoder::PipeDecoder>()?;
+    m.add_function(wrap_pyfunction!(insert::encode_native_block, m)?)?;
     Ok(())
 }
