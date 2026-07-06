@@ -117,6 +117,27 @@ def test_subclass_class_preserved_through_mixed_chain():
     assert "FINAL" in sql
 
 
+def test_subclass_class_preserved_through_column_shape_methods():
+    base = ch_select(books.c.id).select_from(books)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        column_stmt = base.column(books.c.active)
+
+    statements = [
+        base.add_columns(books.c.active),
+        base.with_only_columns(books.c.author_id),
+        base.reduce_columns(),
+        column_stmt,
+    ]
+
+    for stmt in statements:
+        assert isinstance(stmt, ClickHouseSelect)
+
+    joined = statements[0].ch_join(authors, authors.c.id == books.c.author_id, strictness="ALL")
+    assert "ALL INNER JOIN" in compile_sql(joined)
+
+
 def test_subclass_compiles_without_warning():
     stmt = ch_select(books.c.id).select_from(books).final().prewhere(books.c.active == 1).limit_by([books.c.author_id], 3)
     with warnings.catch_warnings():
