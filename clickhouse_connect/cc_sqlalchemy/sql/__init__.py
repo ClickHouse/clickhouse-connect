@@ -239,26 +239,26 @@ class ClickHouseSelect(Select[Any]):
 
     inherit_cache = True
 
-    def add_columns(self, *entities: object) -> "ClickHouseSelect":
-        return cast("ClickHouseSelect", super().add_columns(*cast("tuple[Any, ...]", entities)))
+    def add_columns(self, *entities: Any) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().add_columns(*entities))
 
     def with_only_columns(
         self,
-        *entities: object,
+        *entities: Any,
         maintain_column_froms: bool = False,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> "ClickHouseSelect":
         return cast(
             "ClickHouseSelect",
             super().with_only_columns(
-                *cast("tuple[Any, ...]", entities),
+                *entities,
                 maintain_column_froms=maintain_column_froms,
-                **cast("dict[str, Any]", kwargs),
+                **kwargs,
             ),
         )
 
-    def column(self, column: object) -> "ClickHouseSelect":
-        return cast("ClickHouseSelect", super().column(cast(Any, column)))
+    def column(self, column: Any) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().column(column))
 
     def reduce_columns(self, only_synonyms: bool = True) -> "ClickHouseSelect":
         return cast("ClickHouseSelect", super().reduce_columns(only_synonyms=only_synonyms))
