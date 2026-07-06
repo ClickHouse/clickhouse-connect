@@ -1,1 +1,2 @@
 global-include *.pxd *.pyx
+include clickhouse_connect/py.typed

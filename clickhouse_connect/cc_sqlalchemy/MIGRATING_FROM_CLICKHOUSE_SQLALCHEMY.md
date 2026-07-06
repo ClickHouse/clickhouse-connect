@@ -29,7 +29,7 @@ create_engine("clickhousedb://user:pass@host:8123/db")  # short form alias
 | `clickhouse-sqlalchemy` import                                          | Action  | Replacement                                                                                                                                                                                                                                                                                                                                                                                                         |
 |-------------------------------------------------------------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `from clickhouse_sqlalchemy import Table`                               | Alias   | `from clickhouse_connect.cc_sqlalchemy import Table`. Pure alias for `sqlalchemy.Table`. The dialect picks up the engine via `construct_arguments`.                                                                                                                                                                                                                                                                 |
-| `from clickhouse_sqlalchemy import select as ch_select`                 | Rewrite | `from sqlalchemy import select`. Once `clickhouse_connect.cc_sqlalchemy` has been imported anywhere in the process, plain `select` has our chainables (`.final()`, `.sample()`, `.array_join()`, `.left_array_join()`, `.prewhere()`, `.limit_by()`) attached.                                                                                                                                                      |
+| `from clickhouse_sqlalchemy import select as ch_select`                 | Rewrite | `from sqlalchemy import select`. Once `clickhouse_connect.cc_sqlalchemy` has been imported anywhere in the process, plain `select` has our chainables (`.final()`, `.sample()`, `.array_join()`, `.left_array_join()`, `.prewhere()`, `.limit_by()`, `.ch_join()`) attached.                                                                                                                                                      |
 | `from clickhouse_sqlalchemy import get_declarative_base`                | Rewrite | Use standard SQLAlchemy declarative setup. For a version-generic form across SQLAlchemy 1.4 and 2.x: `from sqlalchemy.orm import declarative_base; Base = declarative_base()`.                                                                                                                                                                                                                                      |
 | `from clickhouse_sqlalchemy.orm.query import Query` (`ClickHouseQuery`) | Drop    | Remove `query_cls=ClickHouseQuery` from your `sessionmaker(...)` call. `clickhouse-sqlalchemy`'s Query subclass adds ClickHouse-specific behavior to `session.query(...)`. In `clickhouse-connect`, the ClickHouse select helpers are attached to `sqlalchemy.select` instead. Your own `query_cls=YourQuery` still works for legacy `session.query(...)` usage, but it is separate from the `select(...)` helpers. |
 | `from clickhouse_sqlalchemy import types`                               | Alias   | `from clickhouse_connect.cc_sqlalchemy import types`. Provides `types.DateTime`, `types.UInt32`, `types.LowCardinality`, etc.                                                                                                                                                                                                                                                                                       |
@@ -81,12 +81,37 @@ select(tbl).sample(0.1)
 select(tbl).prewhere(tbl.c.active == 1)
 select(tbl).limit_by([tbl.c.user_id], 5)
 
+# Chained ClickHouse joins. The left side is the prior join or the single FROM/select_from target.
+(
+    select(authors.c.name, publishers.c.name)
+    .select_from(books)
+    .ch_join(authors, authors.c.id == books.c.author_id, isouter=True, strictness="ANY")
+    .ch_join(publishers, publishers.c.id == books.c.publisher_id, isouter=True, strictness="ANY")
+)
+# Do not mix .ch_join() with SQLAlchemy's native .join() on the same statement. Use .ch_join() throughout.
+# When chaining, the tracked join root is the left side, so a select_from() placed after a .ch_join()
+# does not become the left of the next .ch_join().
+
 func.arrayMap(Lambda("x", column("x") * 2), tbl.c.nums)
 
 select(tbl).final().prewhere(tbl.c.active == 1).left_array_join(tbl.c.tags).limit_by([tbl.c.user_id], 3)
 ```
 
 `final()`, `sample()`, and `limit_by()` use the same calling convention as `clickhouse-sqlalchemy`. `prewhere()` and explicit `Lambda(...)` are available on `sqlalchemy.select` in `clickhouse-connect`.
+
+### Typed entry point for the chainables
+
+`sqlalchemy.select(...)` gets the chainables by monkey-patch, so they work at runtime but static type checkers do not see them and flag calls like `.ch_join(...)`. Use `clickhouse_connect.cc_sqlalchemy.select` instead. It returns a `ClickHouseSelect` that declares `.ch_join()`, `.final()`, `.sample()`, `.array_join()`, `.left_array_join()`, `.prewhere()`, and `.limit_by()` as typed methods, so they type-check without suppressions. The subclass stays itself through SQLAlchemy generative methods like `.where()` and `.select_from()`, so a mixed chain keeps the typed methods.
+
+```python
+from clickhouse_connect.cc_sqlalchemy import select
+
+select(authors.c.name).select_from(books).ch_join(
+    authors, authors.c.id == books.c.author_id, isouter=True, strictness="ANY"
+).final(books)
+```
+
+The native `.join(..., strictness=...)` spelling that carries ClickHouse JOIN modifiers on SQLAlchemy's own `.join()` is future work.
 
 The dialect compiles these modifiers on SQLAlchemy Select statements, but the ClickHouse server still enforces its own rules. For example, the server rejects `FINAL` on a plain `MergeTree` and `PREWHERE` against `FROM (SELECT ...)`.
 

@@ -18,7 +18,7 @@ class Connection:
         host: str | None = None,
         database: str | None = None,
         interface: str | None = None,
-        port: int = 0,
+        port: int | None = None,
         secure: bool | str = False,
         **kwargs: Any,
     ):
@@ -26,7 +26,7 @@ class Connection:
             host=host,
             username=username,
             password=password,
-            database=database if database is not None else "__default__",
+            database=database,
             interface=interface,
             port=port,
             secure=secure,

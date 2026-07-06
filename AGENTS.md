@@ -36,10 +36,20 @@ Act like an experienced maintainer of a public Python database driver.
 
 - Use `uv` for pip-style package management, for example `uv pip install pandas`.
 - Run formatting and linting with `ruff`.
-- Run Pylance on every Python file you edit and address real issues it finds.
-- Ignore Pyright. Do not distort code just to satisfy static analysis when runtime behavior is already correct.
+- Type-check with `mypy`. It is the authoritative static type checker for this repo and runs in CI. See `Type Checking` below.
 - Prefer `rg` over slower text search tools when inspecting the repo.
 - `gh` is available for GitHub inspection when needed.
+
+## Type Checking
+
+This is a typed library. It ships PEP 561 type information: `clickhouse_connect/py.typed` is published so downstream type checkers consume our annotations, and CI type-checks the package with `mypy`. The annotations are part of the public contract, so a wrong or missing annotation on the public surface is a bug.
+
+- `mypy` is the authority. Run it from the repo root with no arguments (`mypy`). Configuration lives in `[tool.mypy]` in `pyproject.toml` and targets the `clickhouse_connect` package on Python 3.10.
+- New and changed code must pass `mypy` cleanly. Do not introduce type errors.
+- Public-facing API must carry correct, complete type annotations. That includes the top-level entry points (`get_client`, `get_async_client`, `create_client`), public `clickhouse_connect.driver.*` names, `Client` and `AsyncClient` method signatures, the DB-API layer, and the SQLAlchemy dialect. Downstream users type-check against these, so treat their signatures with the same care as their runtime behavior.
+- A per-module baseline in `pyproject.toml` (`ignore_errors = true`, issue #692) still exempts a shrinking set of modules that predate the typing work. This list only shrinks. Do not add modules to it. When you clean up a baselined module so it passes, remove its entry in the same change.
+- The `ignore_missing_imports` overrides for some optional dependencies and the compiled Cython modules are expected. Do not "fix" them by adding stubs unless that is the actual task.
+- Stay practical. Prefer accurate annotations over contortions. If runtime-correct code cannot satisfy the checker without distortion, use a narrow, commented `# type: ignore[code]` and flag it, rather than reshaping the code. The default expectation is that `mypy` passes.
 
 ## Repo Workflow
 
