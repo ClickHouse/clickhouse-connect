@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Async inserts and queries with an in-memory body larger than 1 MiB no longer emit an aiohttp `ResourceWarning` about sending a large body directly with raw bytes. Closes [#850](https://github.com/ClickHouse/clickhouse-connect/issues/850).
+
 ## 1.4.1, 2026-06-30
 
 ### Bug Fixes
