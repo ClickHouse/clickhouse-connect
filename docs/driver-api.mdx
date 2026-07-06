@@ -72,7 +72,7 @@ Finally, the `settings` argument to `get_client` is used to pass additional Clic
 | wait_end_of_query | Buffers the entire response on the ClickHouse server. This setting is required to return summary information, and is set automatically on non-streaming queries. |
 | role              | ClickHouse role to be used for the session. Valid transport setting that can be included in query context.                                                       |
 
-For other ClickHouse settings that can be sent with each query, see [the ClickHouse documentation](/core/reference/settings/session-settings).
+For other ClickHouse settings that can be sent with each query, see [the ClickHouse documentation](/reference/settings/session-settings).
 
 ### Client creation examples {#client-creation-examples}
 
@@ -249,7 +249,7 @@ ClickHouse Connect Client `query*` and `command` methods accept an optional `par
 
 #### Server-side binding {#server-side-binding}
 
-ClickHouse supports [server side binding](/core/concepts/features/interfaces/client#cli-queries-with-parameters) for most query values, where the bound value is sent separate from the query as an HTTP query parameter. ClickHouse Connect will add the appropriate query parameters if it detects a binding expression of the form `{<name>:<datatype>}`. For server side binding, the `parameters` argument should be a Python dictionary.
+ClickHouse supports [server side binding](/concepts/features/interfaces/client#cli-queries-with-parameters) for most query values, where the bound value is sent separate from the query as an HTTP query parameter. ClickHouse Connect will add the appropriate query parameters if it detects a binding expression of the form `{<name>:<datatype>}`. For server side binding, the `parameters` argument should be a Python dictionary.
 
 - Server-side binding with Python dictionary, DateTime value, and string value
 
@@ -339,7 +339,7 @@ To bind DateTime64 arguments (ClickHouse types with sub-second precision) requir
 
 ### Settings argument {#settings-argument-1}
 
-All the key ClickHouse Connect Client "insert" and "select" methods accept an optional `settings` keyword argument to pass ClickHouse server [user settings](/core/reference/settings/session-settings) for the included SQL statement. The `settings` argument should be a dictionary. Each item should be a ClickHouse setting name and its associated value. Note that values will be converted to strings when sent to the server as query parameters.
+All the key ClickHouse Connect Client "insert" and "select" methods accept an optional `settings` keyword argument to pass ClickHouse server [user settings](/reference/settings/session-settings) for the included SQL statement. The `settings` argument should be a dictionary. Each item should be a ClickHouse setting name and its associated value. Note that values will be converted to strings when sent to the server as query parameters.
 
 As with client level settings, ClickHouse Connect will drop any settings that the server marks as *readonly*=*1*, with an associated log message. Settings that apply only to queries via the ClickHouse HTTP interface are always valid. Those settings are described under the `get_client` [API](#settings-argument).
 
