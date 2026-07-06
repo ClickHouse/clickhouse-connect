@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Sequence
-from typing import Any, assert_type
+from typing import Any
 
 import numpy
 import pandas
+from typing_extensions import assert_type
 
 import clickhouse_connect
 from clickhouse_connect.driver import AsyncClient, Client, create_async_client, create_client
