@@ -14,29 +14,31 @@ from sqlalchemy.schema import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
 from clickhouse_connect.cc_sqlalchemy.alembic import (
-    AddClickHouseIndexesOp,
-    AddClickHouseIndexOp,
-    AddClickHouseProjectionOp,
-    AddClickHouseProjectionsOp,
     ClickHouseImpl,
     ClickHouseIndex,
     ClickHouseProjection,
-    CreateClickHouseDictionaryOp,
-    CreateClickHouseMaterializedViewOp,
-    DropClickHouseDictionaryOp,
-    DropClickHouseIndexesOp,
-    DropClickHouseIndexOp,
-    DropClickHouseMaterializedViewOp,
-    DropClickHouseProjectionOp,
-    DropClickHouseProjectionsOp,
-    MaterializeClickHouseIndexOp,
-    MaterializeClickHouseProjectionOp,
-    ModifyClickHouseTableSettingsOp,
-    ReloadClickHouseDictionaryOp,
-    ResetClickHouseTableSettingsOp,
     clickhouse_writer,
     include_object,
     patch_alembic_version,
+)
+from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
+    _AddClickHouseIndexesOp,
+    _AddClickHouseIndexOp,
+    _AddClickHouseProjectionOp,
+    _AddClickHouseProjectionsOp,
+    _CreateClickHouseDictionaryOp,
+    _CreateClickHouseMaterializedViewOp,
+    _DropClickHouseDictionaryOp,
+    _DropClickHouseIndexesOp,
+    _DropClickHouseIndexOp,
+    _DropClickHouseMaterializedViewOp,
+    _DropClickHouseProjectionOp,
+    _DropClickHouseProjectionsOp,
+    _MaterializeClickHouseIndexOp,
+    _MaterializeClickHouseProjectionOp,
+    _ModifyClickHouseTableSettingsOp,
+    _ReloadClickHouseDictionaryOp,
+    _ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.alembic.utils import make_include_object
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
@@ -555,6 +557,23 @@ def test_public_compat_exports():
     assert hasattr(types, "String")
 
 
+def test_alembic_public_exports():
+    from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
+
+    assert set(ch_alembic.__all__) == {
+        "patch_alembic_version",
+        "clickhouse_writer",
+        "include_object",
+        "ClickHouseImpl",
+        "make_include_name",
+        "make_include_object",
+        "prevent_empty_migrations",
+        "ClickHouseIndex",
+        "ClickHouseProjection",
+    }
+    assert not any(name.endswith("Op") for name in ch_alembic.__all__)
+
+
 def test_positional_engine_autogenerate_render():
     metadata = MetaData()
     table = Table("events", metadata, Column("id", Integer), MergeTree(order_by="id"))
@@ -742,9 +761,9 @@ def test_captured_default_renderers_are_alembic_builtins():
     from clickhouse_connect.cc_sqlalchemy.alembic import adapter
 
     for op_type, ours in (
-        (ops.CreateTableOp, adapter.render_create_table),
-        (ops.AddColumnOp, adapter.render_add_column),
-        (ops.DropTableOp, adapter.render_drop_table),
+        (ops.CreateTableOp, adapter._render_create_table),
+        (ops.AddColumnOp, adapter._render_add_column),
+        (ops.DropTableOp, adapter._render_drop_table),
     ):
         default = adapter._DEFAULT_RENDERERS[op_type]
         assert default is not ours
@@ -1105,9 +1124,9 @@ def test_list_ops_require_non_empty(call):
 
 def test_add_index_reverse_round_trips():
     settings = {"alter_sync": 2}
-    add_op = AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", schema="olap", clickhouse_settings=settings)
+    add_op = _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", schema="olap", clickhouse_settings=settings)
     reversed_op = add_op.reverse()
-    assert isinstance(reversed_op, DropClickHouseIndexOp)
+    assert isinstance(reversed_op, _DropClickHouseIndexOp)
     assert reversed_op.table_name == "events"
     assert reversed_op.name == "idx_1"
     assert reversed_op.if_exists is True
@@ -1117,14 +1136,14 @@ def test_add_index_reverse_round_trips():
 
 def test_add_indexes_reverse_round_trips():
     settings = {"alter_sync": 2}
-    add_op = AddClickHouseIndexesOp(
+    add_op = _AddClickHouseIndexesOp(
         "events",
         [ClickHouseIndex("idx_1", "user_id", "minmax"), ClickHouseIndex("idx_2", "event_name", "set(100)")],
         schema="olap",
         clickhouse_settings=settings,
     )
     reversed_op = add_op.reverse()
-    assert isinstance(reversed_op, DropClickHouseIndexesOp)
+    assert isinstance(reversed_op, _DropClickHouseIndexesOp)
     assert reversed_op.table_name == "events"
     assert reversed_op.names == ("idx_1", "idx_2")
     assert reversed_op.if_exists is True
@@ -1134,9 +1153,9 @@ def test_add_indexes_reverse_round_trips():
 
 def test_add_projection_reverse_round_trips():
     settings = {"alter_sync": 2}
-    add_op = AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1", schema="olap", clickhouse_settings=settings)
+    add_op = _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1", schema="olap", clickhouse_settings=settings)
     reversed_op = add_op.reverse()
-    assert isinstance(reversed_op, DropClickHouseProjectionOp)
+    assert isinstance(reversed_op, _DropClickHouseProjectionOp)
     assert reversed_op.table_name == "events"
     assert reversed_op.name == "proj_1"
     assert reversed_op.if_exists is True
@@ -1146,14 +1165,14 @@ def test_add_projection_reverse_round_trips():
 
 def test_add_projections_reverse_round_trips():
     settings = {"alter_sync": 2}
-    add_op = AddClickHouseProjectionsOp(
+    add_op = _AddClickHouseProjectionsOp(
         "events",
         [ClickHouseProjection("proj_1", "SELECT user_1"), ClickHouseProjection("proj_2", "SELECT user_2")],
         schema="olap",
         clickhouse_settings=settings,
     )
     reversed_op = add_op.reverse()
-    assert isinstance(reversed_op, DropClickHouseProjectionsOp)
+    assert isinstance(reversed_op, _DropClickHouseProjectionsOp)
     assert reversed_op.table_name == "events"
     assert reversed_op.names == ("proj_1", "proj_2")
     assert reversed_op.if_exists is True
@@ -1162,14 +1181,14 @@ def test_add_projections_reverse_round_trips():
 
 
 def test_create_materialized_view_reverse_round_trips():
-    create_op = CreateClickHouseMaterializedViewOp(
+    create_op = _CreateClickHouseMaterializedViewOp(
         "events_mv",
         "events_sink",
         "SELECT id FROM events",
         schema="olap",
     )
     reversed_op = create_op.reverse()
-    assert isinstance(reversed_op, DropClickHouseMaterializedViewOp)
+    assert isinstance(reversed_op, _DropClickHouseMaterializedViewOp)
     assert reversed_op.name == "events_mv"
     assert reversed_op.if_exists is True
     assert reversed_op.schema == "olap"
@@ -1178,7 +1197,7 @@ def test_create_materialized_view_reverse_round_trips():
 
 def test_create_dictionary_reverse_round_trips():
     settings = {"distributed_ddl_task_timeout": 120}
-    create_op = CreateClickHouseDictionaryOp(
+    create_op = _CreateClickHouseDictionaryOp(
         "dim_lookup",
         [Column("id", types.UInt32())],
         primary_key="id",
@@ -1189,7 +1208,7 @@ def test_create_dictionary_reverse_round_trips():
         clickhouse_settings=settings,
     )
     reversed_op = create_op.reverse()
-    assert isinstance(reversed_op, DropClickHouseDictionaryOp)
+    assert isinstance(reversed_op, _DropClickHouseDictionaryOp)
     assert reversed_op.name == "dim_lookup"
     assert reversed_op.if_exists is True
     assert reversed_op.schema == "olap"
@@ -1201,8 +1220,8 @@ def test_create_dictionary_reverse_round_trips():
     [
         lambda: ClickHouseIndex("idx_1", "user_id", "minmax", first=True, after_index="idx_0"),
         lambda: ClickHouseProjection("proj_1", "SELECT user_1", first=True, after_projection="proj_0"),
-        lambda: AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", first=True, after_index="idx_0"),
-        lambda: AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1", first=True, after_projection="proj_0"),
+        lambda: _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", first=True, after_index="idx_0"),
+        lambda: _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1", first=True, after_projection="proj_0"),
     ],
 )
 def test_first_and_after_are_mutually_exclusive(factory):
@@ -1239,21 +1258,21 @@ def test_clickhouse_custom_ops_autogenerate_render():
     generated = render_python_code(
         ops.UpgradeOps(
             ops=[
-                AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", schema="olap"),
-                AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]),
-                DropClickHouseIndexOp("events", "idx_1", if_exists=True),
-                DropClickHouseIndexesOp("events", ["idx_1", "idx_2"]),
-                MaterializeClickHouseIndexOp("events", "idx_1", partition="202401"),
-                AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1"),
-                AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_1")]),
-                DropClickHouseProjectionOp("events", "proj_1"),
-                DropClickHouseProjectionsOp("events", ["proj_1", "proj_2"]),
-                MaterializeClickHouseProjectionOp("events", "proj_1"),
-                ModifyClickHouseTableSettingsOp("events", {"merge_with_ttl_timeout": 79}),
-                ResetClickHouseTableSettingsOp("events", ["merge_with_ttl_timeout"]),
-                CreateClickHouseMaterializedViewOp("events_mv", "events_sink", "SELECT id FROM events"),
-                DropClickHouseMaterializedViewOp("events_mv"),
-                CreateClickHouseDictionaryOp(
+                _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", schema="olap"),
+                _AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]),
+                _DropClickHouseIndexOp("events", "idx_1", if_exists=True),
+                _DropClickHouseIndexesOp("events", ["idx_1", "idx_2"]),
+                _MaterializeClickHouseIndexOp("events", "idx_1", partition="202401"),
+                _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1"),
+                _AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_1")]),
+                _DropClickHouseProjectionOp("events", "proj_1"),
+                _DropClickHouseProjectionsOp("events", ["proj_1", "proj_2"]),
+                _MaterializeClickHouseProjectionOp("events", "proj_1"),
+                _ModifyClickHouseTableSettingsOp("events", {"merge_with_ttl_timeout": 79}),
+                _ResetClickHouseTableSettingsOp("events", ["merge_with_ttl_timeout"]),
+                _CreateClickHouseMaterializedViewOp("events_mv", "events_sink", "SELECT id FROM events"),
+                _DropClickHouseMaterializedViewOp("events_mv"),
+                _CreateClickHouseDictionaryOp(
                     "dim_lookup",
                     [Column("id", types.UInt32())],
                     primary_key="id",
@@ -1261,8 +1280,8 @@ def test_clickhouse_custom_ops_autogenerate_render():
                     layout="FLAT",
                     lifetime="MIN 0 MAX 10",
                 ),
-                DropClickHouseDictionaryOp("dim_lookup"),
-                ReloadClickHouseDictionaryOp("dim_lookup"),
+                _DropClickHouseDictionaryOp("dim_lookup"),
+                _ReloadClickHouseDictionaryOp("dim_lookup"),
             ]
         ),
         migration_context=context,
@@ -1297,10 +1316,10 @@ def test_clickhouse_custom_op_renderers_add_value_object_imports():
         opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
     )
 
-    render.render_op_text(autogen_context, AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]))
+    render.render_op_text(autogen_context, _AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]))
     render.render_op_text(
         autogen_context,
-        AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_1")]),
+        _AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_1")]),
     )
 
     assert "from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseIndex" in autogen_context.imports
@@ -1312,14 +1331,14 @@ def test_clickhouse_custom_op_renderers_normalize_mapping_subclasses():
     generated = render_python_code(
         ops.UpgradeOps(
             ops=[
-                AddClickHouseIndexOp(
+                _AddClickHouseIndexOp(
                     "events",
                     "idx_1",
                     "user_id",
                     "minmax",
                     clickhouse_settings=MappingProxyType({"alter_sync": 2}),
                 ),
-                ModifyClickHouseTableSettingsOp("events", MappingProxyType({"merge_with_ttl_timeout": 79})),
+                _ModifyClickHouseTableSettingsOp("events", MappingProxyType({"merge_with_ttl_timeout": 79})),
             ]
         ),
         migration_context=context,

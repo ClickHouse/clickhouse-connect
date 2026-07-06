@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 from alembic.ddl.impl import DefaultImpl
 from alembic.util import CommandError
@@ -22,6 +22,8 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     column_specification,
 )
 from clickhouse_connect.driver.binding import quote_identifier
+
+__all__ = ["ClickHouseImpl"]
 
 _STANDARD_INDEX_MESSAGE = (
     "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
@@ -66,10 +68,12 @@ def _render_inner(name):
 
 
 class ClickHouseImpl(DefaultImpl):
+    """Alembic DDL implementation for the ClickHouse SQLAlchemy dialect."""
+
     __dialect__ = "clickhousedb"
     transactional_ddl = False
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._add_integration_tag()
         if self.context_opts.get("include_schemas") and not self.context_opts.get("version_table_schema") and self.connection is not None:
@@ -151,7 +155,8 @@ class ClickHouseImpl(DefaultImpl):
             _reject_standard_index()
         super().create_table(table, **kw)
 
-    def prep_table_for_batch(self, batch_impl, table: Table) -> None:
+    def prep_table_for_batch(self, batch_impl: Any, table: Table) -> None:
+        """Reject unsupported SQLAlchemy indexes before batch DDL starts."""
         batch_indexes = batch_impl.new_indexes
         existing_indexes = batch_impl.indexes
         if batch_indexes or existing_indexes or _has_standard_index(table):
@@ -203,20 +208,21 @@ class ClickHouseImpl(DefaultImpl):
         column_name: str,
         *,
         nullable: bool | None = None,
-        server_default=False,
+        server_default: Any = False,
         name: str | None = None,
-        type_=None,
+        type_: Any = None,
         schema: str | None = None,
         autoincrement: bool | None = None,
-        comment=False,
+        comment: Any = False,
         existing_comment: str | None = None,
-        existing_type=None,
-        existing_server_default=None,
+        existing_type: Any = None,
+        existing_server_default: Any = None,
         existing_nullable: bool | None = None,
         existing_autoincrement: bool | None = None,
         if_exists: bool | None = None,
         **kw: Any,
     ) -> None:
+        """Render ClickHouse column rename, comment, type, default, and nullable alters."""
         if autoincrement is not None or existing_autoincrement is not None:
             return
         if name is not None:
@@ -267,7 +273,8 @@ class ClickHouseImpl(DefaultImpl):
             sql.extend(["SETTINGS", settings])
         self._exec(text(" ".join(sql)))
 
-    def compare_type(self, inspector_column, metadata_column) -> bool:
+    def compare_type(self, inspector_column: Any, metadata_column: Any) -> bool:
+        """Compare reflected and metadata ClickHouse column types for autogenerate."""
         inspector_type = inspector_column.type
         metadata_type = metadata_column.type
         explicit_nullable = ClickHouseDDLHelper.explicit_column_nullable(metadata_column)
@@ -282,14 +289,16 @@ class ClickHouseImpl(DefaultImpl):
 
     def compare_server_default(
         self,
-        inspector_column,
-        metadata_column,
-        rendered_metadata_default,
-        rendered_inspector_default,
-    ):
+        inspector_column: Any,
+        metadata_column: Any,
+        rendered_metadata_default: Any,
+        rendered_inspector_default: Any,
+    ) -> bool:
+        """Compare normalized ClickHouse server defaults for autogenerate."""
         return self._normalize_default(rendered_inspector_default) != self._normalize_default(rendered_metadata_default)
 
-    def render_type(self, type_obj, autogen_context):
+    def render_type(self, type_obj: Any, autogen_context: Any) -> str | Literal[False]:
+        """Render ClickHouse SQLAlchemy types as migration Python source."""
         if not isinstance(type_obj, ChSqlaType):
             return False
         return _render_ch_type(type_obj)
