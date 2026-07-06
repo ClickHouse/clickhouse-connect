@@ -183,29 +183,23 @@ class _MockInsertContext:
         self.current_block = 0
 
 
-class _RustAwareInsertTransform:
-    def __init__(self):
-        self.used_path = None
+class _FakeInsertTransform:
+    threaded_insert = True
 
     def build_insert(self, context):
-        self.used_path = "python"
-        yield b"python"
-
-    def build_insert_rust_or_python(self, context):
-        self.used_path = "rust"
-        yield b"rust"
+        yield b"body"
 
 
 class TestHttpClientInsert:
     def test_rust_retry_closes_active_source_before_rewind(self):
-        context = _MockInsertContext({"rust_insert": "on"})
+        context = _MockInsertContext({})
         close_events = []
         init_events = []
 
         class TrackingSource:
             instances = 0
 
-            def __init__(self, transform, context, maxsize=10, use_rust=False):
+            def __init__(self, transform, context, maxsize=10):
                 TrackingSource.instances += 1
                 self.index = TrackingSource.instances
                 self.context = context
@@ -222,7 +216,7 @@ class TestHttpClientInsert:
         client = object.__new__(HttpClient)
         client.database = None
         client.write_compression = None
-        client._transform = _RustAwareInsertTransform()
+        client._transform = _FakeInsertTransform()
         client._validate_settings = Mock(return_value={})
         client._summary = Mock(return_value={})
 
@@ -244,14 +238,7 @@ class TestHttpClientInsert:
 
 class TestAsyncClientInsert:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("transport_settings", "expected_body", "expected_path"),
-        [
-            ({"X-Trace": "user_1"}, b"python", "python"),
-            ({"rust_insert": "on", "X-Trace": "user_1"}, b"rust", "rust"),
-        ],
-    )
-    async def test_data_insert_rust_selector_and_headers(self, transport_settings, expected_body, expected_path):
+    async def test_data_insert_passes_transport_settings_as_headers(self):
         client = AsyncClient(
             interface="http",
             host="localhost",
@@ -260,9 +247,8 @@ class TestAsyncClientInsert:
             password="",
             database="default",
         )
-        transform = _RustAwareInsertTransform()
-        client._transform = transform
-        context = _MockInsertContext(transport_settings)
+        client._transform = _FakeInsertTransform()
+        context = _MockInsertContext({"X-Trace": "user_1"})
         captured = {}
 
         async def raw_request(data, params, headers=None, **kwargs):
@@ -281,10 +267,8 @@ class TestAsyncClientInsert:
 
         await client.data_insert(context)
 
-        assert captured["body"] == expected_body
+        assert captured["body"] == b"body"
         assert captured["headers"]["X-Trace"] == "user_1"
-        assert "rust_insert" not in captured["headers"]
-        assert transform.used_path == expected_path
         assert context.data is None
 
 

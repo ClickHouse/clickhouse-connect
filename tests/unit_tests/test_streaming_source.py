@@ -373,21 +373,6 @@ class FailingTransform:
         raise ValueError("Serialization error")
 
 
-class RustAwareTransform:
-    """Mock NativeTransform with distinct Python and Rust insert paths."""
-
-    def __init__(self):
-        self.used_path = None
-
-    def build_insert(self, context):
-        self.used_path = "python"
-        yield b"python"
-
-    def build_insert_rust_or_python(self, context):
-        self.used_path = "rust"
-        yield b"rust"
-
-
 class MockContext:
     """Mock InsertContext."""
 
@@ -470,38 +455,6 @@ async def test_streaming_insert_backpressure():
 
     assert len(received) == 100
     assert received == chunks
-
-
-@pytest.mark.asyncio
-async def test_streaming_insert_uses_rust_path_when_enabled():
-    """Test that async insert bridge uses the Rust opt-in serializer."""
-    transform = RustAwareTransform()
-    context = MockContext()
-    loop = asyncio.get_running_loop()
-
-    source = StreamingInsertSource(transform, context, loop, use_rust=True)
-    source.start_producer()
-
-    chunks = []
-    async for chunk in source.async_generator():
-        chunks.append(chunk)
-
-    await source.close()
-
-    assert chunks == [b"rust"]
-    assert transform.used_path == "rust"
-
-
-def test_sync_streaming_insert_uses_rust_path_when_enabled():
-    """Test that sync insert bridge uses the Rust opt-in serializer."""
-    transform = RustAwareTransform()
-    context = MockContext()
-
-    source = SyncStreamingInsertSource(transform, context, use_rust=True)
-    source.start_producer()
-
-    assert list(source.gen) == [b"rust"]
-    assert transform.used_path == "rust"
 
 
 if __name__ == "__main__":

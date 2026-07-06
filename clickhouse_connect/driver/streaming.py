@@ -13,6 +13,7 @@ from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
 from clickhouse_connect.driver.asyncqueue import Full as AsyncQueueFull
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.transform import Transform
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
@@ -256,12 +257,11 @@ class StreamingFileAdapter:
 class StreamingInsertSource:
     """Streaming source for async inserts (reverse bridge)"""
 
-    def __init__(self, transform, context, loop: asyncio.AbstractEventLoop, maxsize: int = 10, use_rust: bool = False):
+    def __init__(self, transform: Transform, context, loop: asyncio.AbstractEventLoop, maxsize: int = 10):
         self.transform = transform
         self.context = context
         self.loop = loop
         self.queue = AsyncSyncQueue(maxsize=maxsize)
-        self.use_rust = use_rust
         self._stop_event = threading.Event()
         self._producer_future = None
         self._started = False
@@ -273,8 +273,7 @@ class StreamingInsertSource:
 
         def producer():
             try:
-                build_insert = self.transform.build_insert_rust_or_python if self.use_rust else self.transform.build_insert
-                block_gen = build_insert(self.context)
+                block_gen = self.transform.build_insert(self.context)
                 while not self._stop_event.is_set():
                     try:
                         block = next(block_gen)
@@ -353,11 +352,10 @@ class StreamingInsertSource:
 class SyncStreamingInsertSource:
     """Bounded producer/consumer source for sync inserts."""
 
-    def __init__(self, transform, context, maxsize: int = 10, use_rust: bool = False):
+    def __init__(self, transform: Transform, context, maxsize: int = 10):
         self.transform = transform
         self.context = context
         self.queue: queue.Queue[bytes | Exception | object] = queue.Queue(maxsize=maxsize)
-        self.use_rust = use_rust
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
@@ -391,8 +389,7 @@ class SyncStreamingInsertSource:
 
     def _producer(self):
         try:
-            build_insert = self.transform.build_insert_rust_or_python if self.use_rust else self.transform.build_insert
-            block_gen = build_insert(self.context)
+            block_gen = self.transform.build_insert(self.context)
             while not self._stop_event.is_set():
                 try:
                     block = next(block_gen)

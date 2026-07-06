@@ -39,8 +39,10 @@ def test_float_decimal_conv(param_client: Client, call, table_context: Callable)
         assert result == [(Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"))]
 
 
-def test_rust_native_insert_opt_in(param_client: Client, call, table_context: Callable):
+def test_rust_codec_insert(client_factory, call, table_context: Callable):
     pytest.importorskip("_ch_core")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
 
     columns = [
         "id UInt32",
@@ -149,22 +151,23 @@ def test_rust_native_insert_opt_in(param_client: Client, call, table_context: Ca
 
     with table_context("test_rust_native_insert", columns):
         call(
-            param_client.insert,
+            rust_client.insert,
             "test_rust_native_insert",
             data,
-            transport_settings={"rust_insert": "strict"},
         )
         result = call(
-            param_client.query,
+            python_client.query,
             "SELECT * FROM test_rust_native_insert ORDER BY id",
             query_formats={"Date": "int", "DateTime": "int", "DateTime64": "int"},
         ).result_rows
         assert result == expected
 
 
-def test_rust_native_insert_dataframe_opt_in(param_client: Client, call, table_context: Callable):
+def test_rust_codec_insert_dataframe(client_factory, call, table_context: Callable):
     pytest.importorskip("_ch_core")
     pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
 
     data = pd.DataFrame(
         {
@@ -176,30 +179,30 @@ def test_rust_native_insert_dataframe_opt_in(param_client: Client, call, table_c
 
     with table_context("test_rust_native_insert_df", ["id Int32", "name String", "score Decimal(9, 2)"]):
         call(
-            param_client.insert_df,
+            rust_client.insert_df,
             "test_rust_native_insert_df",
             data,
-            transport_settings={"rust_insert": "strict"},
         )
-        result = call(param_client.query, "SELECT * FROM test_rust_native_insert_df ORDER BY id").result_rows
+        result = call(python_client.query, "SELECT * FROM test_rust_native_insert_df ORDER BY id").result_rows
         assert result == [(13, "user_1", Decimal("12.30")), (79, "user_2", Decimal("45.60"))]
 
 
-def test_rust_native_insert_numpy_opt_in(param_client: Client, call, table_context: Callable):
+def test_rust_codec_insert_numpy(client_factory, call, table_context: Callable):
     pytest.importorskip("_ch_core")
     np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
 
     data = np.array([(13, 1.25), (79, 2.5)], dtype=[("id", "<i4"), ("value", "<f8")])
 
     with table_context("test_rust_native_insert_numpy", ["id Int32", "value Float64"]):
         call(
-            param_client.insert,
+            rust_client.insert,
             "test_rust_native_insert_numpy",
             data,
             column_names=["id", "value"],
-            transport_settings={"rust_insert": "strict"},
         )
-        result = call(param_client.query, "SELECT * FROM test_rust_native_insert_numpy ORDER BY id").result_rows
+        result = call(python_client.query, "SELECT * FROM test_rust_native_insert_numpy ORDER BY id").result_rows
         assert result == [(13, 1.25), (79, 2.5)]
 
 

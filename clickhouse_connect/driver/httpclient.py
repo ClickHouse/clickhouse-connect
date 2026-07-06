@@ -44,9 +44,10 @@ from clickhouse_connect.driver.httputil import (
 )
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult, TzSource, returns_empty_string_on_empty_body
+from clickhouse_connect.driver.rustcodec import NativeCodec, make_native_transform
 from clickhouse_connect.driver.streaming import SyncStreamingInsertSource
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.transform import NativeTransform, insert_transport_settings, rust_insert_requested
+from clickhouse_connect.driver.transform import Transform
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
@@ -114,6 +115,7 @@ class HttpClient(Client):
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
+        native_codec: NativeCodec | None = None,
     ):
         """
         Create an HTTP ClickHouse Connect client
@@ -173,7 +175,7 @@ class HttpClient(Client):
         if headers:
             self.headers.update(headers)
         self._read_format = self._write_format = "Native"
-        self._transform = NativeTransform()
+        self._transform: Transform = make_native_transform(native_codec)
 
         # There are use cases when the client needs to disable timeouts.
         if connect_timeout is not None:
@@ -374,10 +376,10 @@ class HttpClient(Client):
             context.compression = self.write_compression
         if context.compression:
             headers["Content-Encoding"] = context.compression
-        use_rust = rust_insert_requested(context)
+        threaded = self._transform.threaded_insert
         active_source = None
-        if use_rust:
-            active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10, use_rust=True)
+        if threaded:
+            active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10)
             active_source.start_producer()
             block_gen = active_source.gen
         else:
@@ -389,8 +391,8 @@ class HttpClient(Client):
                 active_source.close(timeout=None)
             context.current_row = 0
             context.current_block = 0
-            if use_rust:
-                active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10, use_rust=True)
+            if threaded:
+                active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10)
                 active_source.start_producer()
                 return active_source.gen
             return self._transform.build_insert(context)
@@ -399,7 +401,7 @@ class HttpClient(Client):
         if self.database:
             params["database"] = self.database
         params.update(self._validate_settings(context.settings))
-        headers = dict_copy(headers, insert_transport_settings(context))
+        headers = dict_copy(headers, context.transport_settings)
         try:
             response = self._raw_request(
                 block_gen,

@@ -188,6 +188,11 @@ def create_client(
       instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
       avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
       when this is True. Only available for query operations (not inserts). Default: False
+    :param native_codec: selects the codec for client-managed FORMAT Native query and insert paths. 'python' (default)
+      uses the Python/Cython codec. 'rust' prefers the compiled _ch_core codec and routes unsupported options or insert
+      types to Python. 'rust_strict' raises instead of routing. Falls back to the common setting 'native_codec', which
+      can be seeded by the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable. Does not affect Arrow, raw, JSON, or
+      caller-provided byte streams.
     :return: ClickHouse Connect Client instance
     """
     host, username, password, port, database, interface = _parse_connection_params(
@@ -325,6 +330,11 @@ async def create_async_client(
       instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
       avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
       when this is True. Only available for query operations (not inserts). Default: False
+    :param native_codec: selects the codec for client-managed FORMAT Native query and insert paths. 'python' (default)
+      uses the Python/Cython codec. 'rust' prefers the compiled _ch_core codec and routes unsupported options or insert
+      types to Python. 'rust_strict' raises instead of routing. Falls back to the common setting 'native_codec', which
+      can be seeded by the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable. Does not affect Arrow, raw, JSON, or
+      caller-provided byte streams.
     :return: ClickHouse Connect AsyncClient instance
     """
     try:

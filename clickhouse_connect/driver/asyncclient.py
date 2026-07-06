@@ -61,9 +61,10 @@ from clickhouse_connect.driver.query import (
     arrow_buffer,
     returns_empty_string_on_empty_body,
 )
+from clickhouse_connect.driver.rustcodec import NativeCodec, make_native_transform
 from clickhouse_connect.driver.streaming import StreamingFileAdapter, StreamingInsertSource, StreamingResponseSource
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.transform import NativeTransform, insert_transport_settings, rust_insert_requested
+from clickhouse_connect.driver.transform import Transform
 
 logger = logging.getLogger(__name__)
 columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
@@ -235,6 +236,7 @@ class AsyncClient(Client):
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
+        native_codec: NativeCodec | None = None,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
@@ -336,7 +338,7 @@ class AsyncClient(Client):
         self._session_lock = asyncio.Lock()
         self._read_format = "Native"
         self._write_format = "Native"
-        self._transform = NativeTransform()
+        self._transform: Transform = make_native_transform(native_codec)
         self._client_settings = {}
         self._initialized = False
         self._reported_libs = set()
@@ -1707,8 +1709,7 @@ class AsyncClient(Client):
 
         loop = asyncio.get_running_loop()
 
-        use_rust = rust_insert_requested(context)
-        active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10, use_rust=use_rust)
+        active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
         active_source.start_producer()
 
         async def rebuild_body():
@@ -1716,7 +1717,7 @@ class AsyncClient(Client):
             await active_source.close(timeout=None)
             context.current_row = 0
             context.current_block = 0
-            active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10, use_rust=use_rust)
+            active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
             active_source.start_producer()
             return active_source.async_generator()
 
@@ -1728,7 +1729,7 @@ class AsyncClient(Client):
         if self.database:
             params["database"] = self.database
         params.update(self._validate_settings(context.settings))
-        headers = dict_copy(headers, insert_transport_settings(context))
+        headers = dict_copy(headers, context.transport_settings)
 
         response = None
         try:

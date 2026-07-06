@@ -1,0 +1,436 @@
+import logging
+import sys
+from datetime import timezone
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from clickhouse_connect import common
+from clickhouse_connect.common import _native_codec_env_default
+from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import rustcodec
+from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.rustcodec import (
+    RustNativeTransform,
+    make_native_transform,
+    resolve_native_codec,
+    rust_query_ineligible_reason,
+)
+from clickhouse_connect.driver.transform import NativeTransform
+from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG
+
+
+class FakeSource:
+    def __init__(self, chunks, exception_tag=None):
+        self.gen = iter(chunks)
+        self.exception_tag = exception_tag
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _PresentCore:
+    """Stand-in for the compiled module; only its presence matters."""
+
+
+def eligible_ctx(**kwargs) -> QueryContext:
+    """Baseline rust-eligible context (mirrors a real UTC-server client)."""
+    return QueryContext(apply_server_tz=True, server_tz=timezone.utc, **kwargs)
+
+
+def _uint64_ctx(data, block_size=None) -> InsertContext:
+    return InsertContext("fake_table", ["key"], [get_from_name("UInt64")], data, block_size=block_size)
+
+
+@pytest.fixture(name="restore_native_codec")
+def restore_native_codec_fixture():
+    original = common.get_setting("native_codec")
+    yield
+    common.set_setting("native_codec", original)
+
+
+@pytest.fixture(name="clean_formats")
+def clean_formats_fixture():
+    from clickhouse_connect.datatypes.base import ch_read_formats, ch_write_formats
+
+    read_snapshot = dict(ch_read_formats)
+    write_snapshot = dict(ch_write_formats)
+    yield
+    ch_read_formats.clear()
+    ch_read_formats.update(read_snapshot)
+    ch_write_formats.clear()
+    ch_write_formats.update(write_snapshot)
+
+
+# --- Resolution --------------------------------------------------------------
+
+
+def test_resolve_native_codec_kwarg_beats_common_setting(restore_native_codec):
+    common.set_setting("native_codec", "rust")
+    assert resolve_native_codec("python") == "python"
+    assert resolve_native_codec(None) == "rust"
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [("rust", "rust"), (" RUST ", "rust")],
+)
+def test_native_codec_env_default_valid(monkeypatch, env_value, expected):
+    monkeypatch.setenv("CLICKHOUSE_CONNECT_NATIVE_CODEC", env_value)
+    assert _native_codec_env_default() == expected
+
+
+def test_native_codec_env_default_unset(monkeypatch):
+    monkeypatch.delenv("CLICKHOUSE_CONNECT_NATIVE_CODEC", raising=False)
+    assert _native_codec_env_default() == "python"
+
+
+def test_native_codec_env_default_invalid_warns(monkeypatch, caplog):
+    monkeypatch.setenv("CLICKHOUSE_CONNECT_NATIVE_CODEC", "bogus")
+    with caplog.at_level(logging.WARNING):
+        assert _native_codec_env_default() == "python"
+    assert any("CLICKHOUSE_CONNECT_NATIVE_CODEC" in record.getMessage() for record in caplog.records)
+
+
+def test_resolve_native_codec_invalid_kwarg():
+    with pytest.raises(ProgrammingError):
+        resolve_native_codec("bogus")
+
+
+# --- Availability ------------------------------------------------------------
+
+
+def test_resolve_rust_falls_back_when_module_missing(monkeypatch, caplog):
+    monkeypatch.setitem(sys.modules, "_ch_core", None)
+    monkeypatch.setattr(rustcodec, "_rust_unavailable_warned", False)
+    with caplog.at_level(logging.WARNING):
+        assert resolve_native_codec("rust") == "python"
+    assert any("_ch_core" in record.getMessage() for record in caplog.records)
+
+
+def test_resolve_rust_strict_raises_when_module_missing(monkeypatch):
+    monkeypatch.setitem(sys.modules, "_ch_core", None)
+    with pytest.raises(NotSupportedError):
+        resolve_native_codec("rust_strict")
+
+
+@pytest.mark.parametrize(("codec", "strict"), [("rust", False), ("rust_strict", True)])
+def test_make_native_transform_rust_variants(monkeypatch, codec, strict):
+    monkeypatch.setitem(sys.modules, "_ch_core", _PresentCore)
+    transform = make_native_transform(codec)
+    assert isinstance(transform, RustNativeTransform)
+    assert transform.strict is strict
+    assert transform.threaded_insert is True
+
+
+def test_make_native_transform_python():
+    transform = make_native_transform("python")
+    assert isinstance(transform, NativeTransform)
+    assert transform.threaded_insert is False
+
+
+# --- Eligibility -------------------------------------------------------------
+
+
+def _ctx_response_tz():
+    ctx = eligible_ctx()
+    ctx.set_response_tz(ZoneInfo("America/New_York"))
+    return ctx
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        pytest.param(lambda: eligible_ctx(use_numpy=True), id="use_numpy"),
+        pytest.param(lambda: eligible_ctx(as_pandas=True), id="as_pandas"),
+        pytest.param(lambda: eligible_ctx(query_formats={"Int*": "string"}), id="query_formats"),
+        pytest.param(lambda: eligible_ctx(column_formats={"x": "string"}), id="column_formats"),
+        pytest.param(lambda: eligible_ctx(use_none=False), id="use_none"),
+        pytest.param(lambda: eligible_ctx(encoding="latin-1"), id="encoding"),
+        pytest.param(lambda: eligible_ctx(query_tz="America/New_York"), id="query_tz"),
+        pytest.param(lambda: eligible_ctx(column_tzs={"x": "America/New_York"}), id="column_tzs"),
+        pytest.param(lambda: eligible_ctx(tz_mode="aware"), id="tz_mode_aware"),
+        pytest.param(lambda: eligible_ctx(tz_mode="schema"), id="tz_mode_schema"),
+        pytest.param(_ctx_response_tz, id="response_tz"),
+        pytest.param(lambda: QueryContext(apply_server_tz=True, server_tz=ZoneInfo("America/New_York")), id="non_utc_server"),
+    ],
+)
+def test_rust_query_ineligible(builder):
+    assert rust_query_ineligible_reason(builder()) is not None
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        pytest.param(eligible_ctx, id="baseline"),
+        pytest.param(lambda: eligible_ctx(column_oriented=True), id="column_oriented"),
+        pytest.param(lambda: eligible_ctx(streaming=True), id="streaming"),
+        pytest.param(lambda: eligible_ctx(rename_response_column="remove_prefix"), id="renamer"),
+    ],
+)
+def test_rust_query_eligible(builder):
+    assert rust_query_ineligible_reason(builder()) is None
+
+
+def test_rust_query_ineligible_global_read_format(clean_formats):
+    from clickhouse_connect.datatypes.format import set_read_format
+
+    set_read_format("IPv4", "string")
+    assert rust_query_ineligible_reason(eligible_ctx()) == "global read format override"
+
+
+# --- Routing -----------------------------------------------------------------
+
+
+def test_strict_ineligible_raises_and_closes_source():
+    src = FakeSource([])
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx(use_numpy=True))
+    assert src.closed is True
+
+
+def test_strict_global_read_format_raises_and_closes_source(clean_formats):
+    from clickhouse_connect.datatypes.format import set_read_format
+
+    set_read_format("IPv4", "string")
+    src = FakeSource([])
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
+
+
+def test_non_strict_ineligible_delegates_to_python(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
+    src = FakeSource([])
+    result = RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_numpy=True))
+    assert result is sentinel
+    assert src.closed is False
+
+
+# --- Insert build (FakeCore) -------------------------------------------------
+
+
+def test_build_insert_probe_not_implemented_non_strict(monkeypatch):
+    calls = []
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            calls.append(args)
+            raise NotImplementedError("unsupported")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    rust_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+    python_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+
+    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(rust_ctx))
+    python_out = b"".join(NativeTransform.build_insert(python_ctx))
+
+    assert rust_out == python_out
+    assert len(calls) == 1  # only the probe ran
+    assert rust_ctx.insert_exception is None
+
+
+def test_build_insert_probe_not_implemented_strict(monkeypatch):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise NotImplementedError("unsupported")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
+
+
+def test_build_insert_mid_block_failure(monkeypatch):
+    calls = {"n": 0}
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(names, type_names, columns, row_count, prefix):
+            calls["n"] += 1
+            if row_count == 0:
+                return b""
+            if calls["n"] == 2:
+                return b"rust_block"
+            raise ValueError("late")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+
+    chunks = list(RustNativeTransform(strict=False).build_insert(ctx))
+
+    assert chunks == [b"rust_block", b"INTERNAL EXCEPTION WHILE SERIALIZING"]
+    assert isinstance(ctx.insert_exception, ValueError)
+    assert str(ctx.insert_exception) == "late"
+
+
+def test_build_insert_global_write_format_strict_raises(monkeypatch, clean_formats):
+    from clickhouse_connect.datatypes.format import set_write_format
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run when a write format override is set")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    set_write_format("IPv4", "string")
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
+
+
+def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, clean_formats):
+    from clickhouse_connect.datatypes.format import set_write_format
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run when a write format override is set")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    set_write_format("IPv4", "string")
+    rust_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+    python_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+
+    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(rust_ctx))
+    python_out = b"".join(NativeTransform.build_insert(python_ctx))
+    assert rust_out == python_out
+
+
+def test_build_insert_success(monkeypatch):
+    calls = []
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(names, type_names, columns, row_count, prefix):
+            calls.append((names, type_names, columns, row_count, prefix))
+            return b"rust_block"
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    ctx = _uint64_ctx([(13,), (79,)])
+
+    chunks = list(RustNativeTransform(strict=False).build_insert(ctx))
+
+    assert calls[0][3] == 0  # probe carries row_count 0
+    assert chunks == [b"rust_block"]
+    assert ctx.insert_exception is None
+
+
+# --- Decode error taxonomy (fake decoder) ------------------------------------
+
+
+class _FakeBatch:
+    def __init__(self, names, type_names, columns=None, error=None):
+        self.column_names = names
+        self.column_type_names = type_names
+        self._columns = columns
+        self._error = error
+
+    def to_python_columns(self):
+        if self._error is not None:
+            raise self._error
+        return self._columns
+
+
+def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
+    class _FakeStreamDecoder:
+        def __init__(self, has_block_info=False):
+            self._feed = list(feed_batches)
+            self._finish = list(finish_batches)
+
+        def feed(self, chunk):
+            if feed_error is not None:
+                raise feed_error
+            out, self._feed = self._feed, []
+            return out
+
+        def finish(self):
+            return self._finish
+
+    class _FakeCore:
+        StreamDecoder = _FakeStreamDecoder
+
+    return _FakeCore
+
+
+@pytest.mark.parametrize(
+    ("exception_tag", "chunk", "expected"),
+    [
+        (None, b"random block bytes", NotSupportedError),
+        (None, b"prefix Code: 62 DB::Exception boom", StreamFailureError),
+        ("T", b"prefix Code: 62 DB::Exception boom", NotSupportedError),
+    ],
+    ids=["unsupported_plain", "untagged_server_error", "tagged_no_false_positive"],
+)
+def test_decode_valueerror_disambiguation(monkeypatch, exception_tag, chunk, expected):
+    core = _fake_decoder_core(feed_error=ValueError("Unsupported ClickHouse type 'X'"))
+    monkeypatch.setitem(sys.modules, "_ch_core", core)
+    src = FakeSource([chunk], exception_tag=exception_tag)
+    with pytest.raises(expected):
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
+
+
+def test_decode_later_block_unsupported_closes_source(monkeypatch):
+    batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
+    batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    with pytest.raises(NotSupportedError), result.column_block_stream as stream:
+        list(stream)
+    assert src.closed is True
+
+
+def test_decode_early_abandonment_closes_source(monkeypatch):
+    batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
+    batch1 = _FakeBatch(["a"], ["Int32"], columns=[[79]])
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    with result.column_block_stream as stream:
+        for _ in stream:
+            break
+    assert src.closed is True
+
+
+# --- Decode against real _ch_core --------------------------------------------
+
+
+@pytest.fixture(name="ch_core")
+def ch_core_fixture():
+    return pytest.importorskip("_ch_core")
+
+
+def test_decode_basic(ch_core):
+    data = ch_core.encode_native_block(["a", "b"], ["Int32", "String"], [[13, 79], ["user_1", "user_2"]], 2, None)
+    chunks = [data[i : i + 8] for i in range(0, len(data), 8)]
+    src = FakeSource(chunks)
+
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+
+    assert result.result_rows == [(13, "user_1"), (79, "user_2")]
+    assert result.column_names == ("a", "b")
+    assert [t.name for t in result.column_types] == ["Int32", "String"]
+
+
+def test_decode_empty_stream(ch_core):
+    result = RustNativeTransform(strict=True).parse_response(FakeSource([]), eligible_ctx())
+    assert result.result_rows == []
+
+
+def test_decode_truncated(ch_core):
+    data = ch_core.encode_native_block(["a", "b"], ["Int32", "String"], [[13, 79], ["user_1", "user_2"]], 2, None)
+    with pytest.raises(StreamFailureError):
+        RustNativeTransform(strict=True).parse_response(FakeSource([data[:-4]]), eligible_ctx())
+
+
+def test_decode_tagged_exception(ch_core):
+    src = FakeSource([TAGGED_EXCEPTION_BODY], exception_tag=TAGGED_EXCEPTION_TAG)
+    with pytest.raises(StreamFailureError) as excinfo:
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert str(excinfo.value) == "Big bam occurred right while reading the data"
