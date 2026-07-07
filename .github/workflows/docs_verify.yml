@@ -36,11 +36,15 @@ jobs:
 
       # The driver clones the aggregator, replaces the Python client folder with
       # this repo's docs/ (wiping it first, so deletions/renames are seen), and
-      # runs the checks (mint validate + mint broken-links) from the docs root.
+      # runs the checks from the docs root. --scoped swaps the full site-wide
+      # `mint validate` (~13 min) for a scoped validate of just the replaced
+      # folder (docs.json schema, navigation, MDX parse, snippet imports);
+      # link integrity is still checked site-wide by the lychee check.
       # It exits non-zero if any check fails, so a green step means all passed.
       - name: Run Mintlify docs checks
         run: |
           python3 /tmp/mintlify_docs_check.py \
             --repo https://github.com/ClickHouse/ClickHouse.git \
             --ref master \
-            --replace docs:integrations/language-clients/python
+            --replace docs:integrations/language-clients/python \
+            --scoped
