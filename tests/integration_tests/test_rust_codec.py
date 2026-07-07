@@ -28,6 +28,20 @@ DECODE_MATRIX = {
     "datetime_utc": "toDateTime(number, 'UTC')",
     "datetime_named_tz": "toDateTime(number, 'America/New_York')",
     "float64": "toFloat64(number) / 2",
+    "uuid": "toUUID(concat(leftPad(lower(hex(number)), 8, '0'), '-1122-3344-5566-778899aabbcc'))",
+    "nullable_uuid": (
+        "CAST(if(number % 3 = 0, NULL, toUUID(concat(leftPad(lower(hex(number)), 8, '0'), "
+        "'-1122-3344-5566-778899aabbcc'))) AS Nullable(UUID))"
+    ),
+    "decimal32": "toDecimal32(number / 3 - 1, 2)",
+    "decimal64": "toDecimal64(number / 3 - 2, 4)",
+    "decimal128": "toDecimal128(number / 3 - 2, 10)",
+    "decimal256": "toDecimal256(number / 3 - 2, 20)",
+    "nullable_decimal": "CAST(if(number % 3 = 0, NULL, toDecimal64(number / 3, 4)) AS Nullable(Decimal(18, 4)))",
+    "ipv4": "toIPv4(toUInt32(number * 16909060))",
+    "nullable_ipv4": "CAST(if(number % 3 = 0, NULL, toIPv4(toUInt32(number * 16909060))) AS Nullable(IPv4))",
+    "ipv6": "toIPv6(concat('2001:db8::', lower(hex(toUInt16(number + 1)))))",
+    "ipv6_v4_mapped": "toIPv6(toIPv4(toUInt32(number + 1)))",
 }
 
 
@@ -158,6 +172,15 @@ NP_DF_MATRIX = {
     "low_card_nullable_string": "CAST(if(number % 2 = 0, NULL, toString(number)) AS LowCardinality(Nullable(String)))",
     "enum8": "CAST(if(number % 2 = 0, 'a', 'b') AS Enum8('a' = 1, 'b' = 2))",
     "enum16": "CAST(if(number % 2 = 0, 'x', 'y') AS Enum16('x' = 100, 'y' = 200))",
+    "uuid": "toUUID(concat(leftPad(lower(hex(number)), 8, '0'), '-1122-3344-5566-778899aabbcc'))",
+    "nullable_uuid": (
+        "CAST(if(number % 3 = 0, NULL, toUUID(concat(leftPad(lower(hex(number)), 8, '0'), "
+        "'-1122-3344-5566-778899aabbcc'))) AS Nullable(UUID))"
+    ),
+    "decimal64": "toDecimal64(number / 3 - 2, 4)",
+    "decimal128": "toDecimal128(number / 3 - 2, 10)",
+    "ipv4": "toIPv4(toUInt32(number * 16909060))",
+    "ipv6": "toIPv6(concat('2001:db8::', lower(hex(toUInt16(number + 1)))))",
 }
 
 
@@ -228,12 +251,14 @@ def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):
         call(python_client.query_df, query)
 
 
-def test_rust_codec_uuid_df_unsupported(client_factory, call):
-    pytest.importorskip("pandas")
+def test_rust_codec_uuid_df_parity(client_factory, call):
+    pd = pytest.importorskip("pandas")
+    python_client = client_factory(native_codec="python")
+    query = "SELECT toUUID(concat(leftPad(lower(hex(number)), 8, '0'), '-1122-3344-5566-778899aabbcc')) AS u FROM numbers(3)"
+    python_df = call(python_client.query_df, query)
     for codec in ("rust", "rust_strict"):
         client = client_factory(native_codec=codec)
-        with pytest.raises(NotSupportedError):
-            call(client.query_df, "SELECT generateUUIDv4() AS u FROM numbers(3)")
+        pd.testing.assert_frame_equal(call(client.query_df, query), python_df)
 
 
 def test_rust_codec_abandoned_stream_no_read_ahead_thread(client_factory, call, client_mode):

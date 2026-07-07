@@ -4,8 +4,12 @@ use std::net::{IpAddr, Ipv4Addr};
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::{PyNotImplementedError, PyValueError};
 use pyo3::ffi;
+use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyByteArray, PyBytes, PyList, PyString, PyStringMethods, PyTuple};
+use pyo3::types::{
+    PyAnyMethods, PyByteArray, PyBytes, PyDate, PyDateTime, PyList, PyString, PyStringMethods,
+    PyTuple,
+};
 
 use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
@@ -237,6 +241,13 @@ fn build_low_cardinality_column(
 
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
+    if matches!(value_type, ChType::String) {
+        if let Some(column) =
+            lc_string_fast_column(py, name, value_type, values, row_count, nullable)?
+        {
+            return Ok(column);
+        }
+    }
 
     let mut indices = Vec::with_capacity(row_count);
     let mut dict_values = Vec::new();
@@ -743,8 +754,678 @@ fn try_fast_column(
         ChType::UInt64 => fast_column::<u64>(py, name, ch_type, values, row_count, nullable),
         ChType::Float32 => fast_column::<f32>(py, name, ch_type, values, row_count, nullable),
         ChType::Float64 => fast_column::<f64>(py, name, ch_type, values, row_count, nullable),
+        ChType::Date => fast_column::<DateVal>(py, name, ch_type, values, row_count, nullable),
+        ChType::Date32 => fast_column::<Date32Val>(py, name, ch_type, values, row_count, nullable),
+        ChType::DateTime { .. } => {
+            fast_column::<DateTimeVal>(py, name, ch_type, values, row_count, nullable)
+        }
+        ChType::DateTime64 { .. } => {
+            fast_column::<DateTime64Val>(py, name, ch_type, values, row_count, nullable)
+        }
+        ChType::Uuid => uuid_fast_column(py, name, ch_type, values, row_count, nullable),
+        ChType::Ipv4 => ipv4_fast_column(py, name, ch_type, values, row_count, nullable),
+        ChType::Enum8 { variants } => {
+            enum_fast_column(py, name, ch_type, variants, values, row_count, nullable)
+        }
+        ChType::Enum16 { variants } => {
+            enum_fast_column(py, name, ch_type, variants, values, row_count, nullable)
+        }
         _ => Ok(None),
     }
+}
+
+/// Narrowing i64 conversion for the fast paths. A generic helper so macro
+/// expansions do not trip clippy's fallible-conversion lint when the target
+/// is i64 itself.
+#[inline]
+fn narrow_i64<T: TryFrom<i64>>(value: i64) -> Result<T, ()> {
+    T::try_from(value).map_err(|_| ())
+}
+
+/// Temporal wire values: the fast path accepts exact raw ints only (the same
+/// values `convert_scalar` accepts without touching the object protocol);
+/// date/datetime/str objects and out-of-range ints go through the fallback,
+/// which carries each type's specific conversion and range errors.
+macro_rules! impl_fast_temporal {
+    ($name:ident, $prim:ty, $variant:ident) => {
+        #[derive(Clone, Copy)]
+        #[repr(transparent)]
+        struct $name($prim);
+
+        impl FastValue for $name {
+            const DEFAULT: Self = $name(0);
+
+            #[inline]
+            unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+                narrow_i64::<$prim>(exact_long_as_i64(ptr)?).map(Self)
+            }
+
+            fn from_scalar(scalar: Scalar) -> PyResult<Self> {
+                match scalar {
+                    Scalar::$variant(value) => Ok(Self(value)),
+                    _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+                }
+            }
+
+            fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
+                // SAFETY: $name is #[repr(transparent)] over $prim, so the Vec
+                // can be reinterpreted in place without copying.
+                let values = unsafe {
+                    let mut values = std::mem::ManuallyDrop::new(values);
+                    Vec::from_raw_parts(
+                        values.as_mut_ptr().cast::<$prim>(),
+                        values.len(),
+                        values.capacity(),
+                    )
+                };
+                Column::$variant(match validity {
+                    Some(validity) => PrimitiveColumn::new_nullable(values, validity),
+                    None => PrimitiveColumn::new(values),
+                })
+            }
+        }
+    };
+}
+
+impl_fast_temporal!(DateVal, u16, Date);
+impl_fast_temporal!(Date32Val, i32, Date32);
+impl_fast_temporal!(DateTimeVal, u32, DateTime);
+impl_fast_temporal!(DateTime64Val, i64, DateTime64);
+
+/// Multiplicative hasher for pointer-identity keys; object addresses are not
+/// attacker-controlled hash-DoS inputs, so a fast mix beats SipHash here.
+#[derive(Default)]
+struct PtrHasher(u64);
+
+impl std::hash::Hasher for PtrHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // The map's usize keys normally arrive via write_usize; fold byte
+        // input the same way so a std Hash impl change cannot panic.
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        // Fibonacci hashing: object addresses have aligned low zero bits, so
+        // mix before the map takes the low bits of the hash.
+        self.0 = (value as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+/// Cap on pointer-identity entries so a column of millions of distinct str
+/// objects with few distinct contents cannot grow a cache without bound.
+const PTR_CACHE_CAP: usize = 1 << 16;
+
+/// Error if a mutable container changed size after a conversion that may have
+/// run Python code, before the next borrowed read could go out of bounds.
+#[inline]
+fn check_not_resized<S: FastSeq>(seq: &S, name: &str, row_count: usize) -> PyResult<()> {
+    if S::MUTABLE && seq.size() != row_count {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} was resized during encoding"
+        )));
+    }
+    Ok(())
+}
+
+/// LowCardinality(String) fast path over an exact list or tuple. Returns
+/// `Ok(None)` for other containers; the caller falls through to the generic
+/// scalar loop.
+fn lc_string_fast_column(
+    py: Python<'_>,
+    name: &str,
+    value_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return lc_string_seq(py, name, value_type, &ListSeq(list), row_count, nullable).map(Some);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return lc_string_seq(py, name, value_type, &TupleSeq(tuple), row_count, nullable)
+            .map(Some);
+    }
+    Ok(None)
+}
+
+/// Build a LowCardinality(String) dictionary column with two cache levels:
+/// repeated str objects hit a pointer-identity map (no content read at all),
+/// and new exact-str objects read their UTF-8 once for a content-keyed map,
+/// allocating only when the content is genuinely new to the dictionary.
+/// Non-str values fall back to `convert_scalar` for identical accepted-type
+/// and error semantics; that fallback can run arbitrary Python (exotic buffer
+/// types), so it holds a strong reference and revalidates the container size.
+/// Pointer identity is only meaningful while no Python code has run since the
+/// key was cached: a list can drop the last reference to an already-scanned
+/// str mid-call, and the allocator can hand its address to a new str, so
+/// every fallback return clears the pointer cache. Entries cached after the
+/// clear are valid until the next fallback. A tuple keeps every item alive
+/// for the whole call, so its cache never needs clearing.
+fn lc_string_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    value_type: &ChType,
+    seq: &S,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let mut indices = Vec::with_capacity(row_count);
+    let mut dict_values: Vec<Scalar> = Vec::new();
+    let mut ptr_slots: HashMap<usize, i32, std::hash::BuildHasherDefault<PtrHasher>> =
+        HashMap::default();
+    let mut content_slots: HashMap<Vec<u8>, i32> = HashMap::new();
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+
+    if nullable && row_count > 0 {
+        dict_values.push(default_scalar(value_type)?);
+    }
+
+    let dict_slot = |dict_values: &Vec<Scalar>| {
+        i32::try_from(dict_values.len()).map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {name:?} LowCardinality dictionary exceeds i32 index capacity"
+            ))
+        })
+    };
+
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every fallback revalidates; the borrowed pointer is consumed before
+        // any Python code can run.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but LowCardinality({value_type}) is not nullable"
+                )));
+            };
+            indices.push(0);
+            null_map.push(1);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        if let Some(&slot) = ptr_slots.get(&(ptr as usize)) {
+            indices.push(slot);
+            continue;
+        }
+        let slot = if unsafe { ffi::PyUnicode_CheckExact(ptr) } != 0 {
+            // SAFETY: ptr is a valid borrowed reference, verified an exact
+            // str; reading its UTF-8 runs no Python code.
+            let obj =
+                unsafe { Bound::from_borrowed_ptr(py, ptr).downcast_into_unchecked::<PyString>() };
+            let bytes = obj.to_str()?.as_bytes();
+            let slot = match content_slots.get(bytes) {
+                Some(&slot) => slot,
+                None => {
+                    let slot = dict_slot(&dict_values)?;
+                    content_slots.insert(bytes.to_vec(), slot);
+                    dict_values.push(Scalar::Bytes(bytes.to_vec()));
+                    slot
+                }
+            };
+            // The container still holds this item (no Python ran since the
+            // borrowed read), so its address is stable and unique among the
+            // column's live values.
+            if ptr_slots.len() < PTR_CACHE_CAP {
+                ptr_slots.insert(ptr as usize, slot);
+            }
+            slot
+        } else {
+            // SAFETY: ptr is valid here; the strong reference keeps the item
+            // alive across any Python code the fallback runs.
+            let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+            let scalar = convert_scalar(py, value_type, &obj, name, row)?;
+            if S::MUTABLE {
+                // The fallback may have run Python code: a same-size item
+                // replacement can free a cached str whose address the
+                // allocator may reuse, so drop all pointer-identity entries.
+                check_not_resized(seq, name, row_count)?;
+                ptr_slots.clear();
+            }
+            let Scalar::Bytes(bytes) = scalar else {
+                return Err(PyValueError::new_err("internal scalar type mismatch"));
+            };
+            match content_slots.get(bytes.as_slice()) {
+                Some(&slot) => slot,
+                None => {
+                    let slot = dict_slot(&dict_values)?;
+                    content_slots.insert(bytes.clone(), slot);
+                    dict_values.push(Scalar::Bytes(bytes));
+                    slot
+                }
+            }
+        };
+        indices.push(slot);
+    }
+
+    let dict_column = column_from_scalars(value_type, dict_values, None)?;
+    Ok(match null_map {
+        Some(nulls) => Column::Dictionary(DictionaryColumn::new_nullable(
+            indices,
+            dict_column,
+            Bitmap::from_ch_null_map(&nulls),
+        )),
+        None => Column::Dictionary(DictionaryColumn::new(indices, dict_column)),
+    })
+}
+
+/// UUID fast path over an exact list or tuple. Returns `Ok(None)` for other
+/// containers; the caller falls through to the generic scalar loop.
+fn uuid_fast_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return uuid_seq(py, &ListSeq(list), ch_type, name, row_count, nullable).map(Some);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return uuid_seq(py, &TupleSeq(tuple), ch_type, name, row_count, nullable).map(Some);
+    }
+    Ok(None)
+}
+
+/// Build a UUID column: exact `uuid.UUID` items read the `int` attribute and
+/// write the 16 wire bytes (hi u64 LE, then lo u64 LE) straight into the
+/// column buffer; anything else (str, int, bytes) falls back to
+/// `convert_scalar`. Both the attribute read (a patched class attribute) and
+/// the fallback can run Python code, so the container size is revalidated
+/// after each before the next borrowed read.
+fn uuid_seq<S: FastSeq>(
+    py: Python<'_>,
+    seq: &S,
+    ch_type: &ChType,
+    name: &str,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let uuid_type = py
+        .import(intern!(py, "uuid"))?
+        .getattr(intern!(py, "UUID"))?;
+    let uuid_type_ptr = uuid_type.as_ptr();
+    let int_attr = intern!(py, "int");
+    let mut data = Vec::with_capacity(16 * row_count);
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every conversion revalidates; the borrowed pointer is consumed
+        // before any Python code can run.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            data.extend_from_slice(&[0u8; 16]);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        // SAFETY: ptr is valid here; the strong reference keeps the item
+        // alive across any Python code the conversion runs.
+        let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let fast = if unsafe { ffi::Py_TYPE(ptr) }.cast::<ffi::PyObject>() == uuid_type_ptr {
+            obj.getattr(int_attr).and_then(|i| i.extract::<u128>()).ok()
+        } else {
+            None
+        };
+        match fast {
+            Some(v) => {
+                data.extend_from_slice(&((v >> 64) as u64).to_le_bytes());
+                data.extend_from_slice(&(v as u64).to_le_bytes());
+            }
+            None => {
+                let Scalar::Bytes(bytes) = convert_scalar(py, ch_type, &obj, name, row)? else {
+                    return Err(PyValueError::new_err("internal scalar type mismatch"));
+                };
+                data.extend_from_slice(&bytes);
+            }
+        }
+        check_not_resized(seq, name, row_count)?;
+    }
+
+    Ok(Column::Uuid(match null_map {
+        Some(nulls) => FixedBinaryColumn::new_nullable(data, 16, Bitmap::from_ch_null_map(&nulls)),
+        None => FixedBinaryColumn::new(data, 16),
+    }))
+}
+
+/// IPv4 fast path over an exact list or tuple. Returns `Ok(None)` for other
+/// containers; the caller falls through to the generic scalar loop.
+fn ipv4_fast_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return ipv4_seq(py, &ListSeq(list), ch_type, name, row_count, nullable).map(Some);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return ipv4_seq(py, &TupleSeq(tuple), ch_type, name, row_count, nullable).map(Some);
+    }
+    Ok(None)
+}
+
+/// Build an IPv4 column: exact `ipaddress.IPv4Address` items read the `_ip`
+/// slot directly (or the attribute when the slot offset cannot be resolved),
+/// exact ints and strs convert without constructing exceptions, and anything
+/// else falls back to `convert_scalar`. The attribute read (a patched class
+/// attribute) and the fallback can run Python code, so the container size is
+/// revalidated after each before the next borrowed read.
+fn ipv4_seq<S: FastSeq>(
+    py: Python<'_>,
+    seq: &S,
+    ch_type: &ChType,
+    name: &str,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let ipv4_type = py
+        .import(intern!(py, "ipaddress"))?
+        .getattr(intern!(py, "IPv4Address"))?;
+    let ipv4_type_ptr = ipv4_type.as_ptr();
+    let ip_attr = intern!(py, "_ip");
+    // Re-resolved after any edge that runs Python, which can patch the class.
+    let mut ip_slot = slot_object_offset(&ipv4_type, ip_attr);
+    let mut values = Vec::<u32>::with_capacity(row_count);
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every conversion revalidates; the borrowed pointer is consumed
+        // before any Python code can run.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            values.push(0);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        if unsafe { ffi::Py_TYPE(ptr) }.cast::<ffi::PyObject>() == ipv4_type_ptr {
+            if let Some(offset) = ip_slot {
+                // SAFETY: ptr is an exact instance of the class the offset
+                // was resolved from; the slot holds a strong reference (kept
+                // alive by the instance) or NULL, and reading it runs no
+                // Python code.
+                let slot = unsafe { *ptr.cast::<u8>().offset(offset).cast::<*mut ffi::PyObject>() };
+                if !slot.is_null() {
+                    // SAFETY: GIL held; slot is a valid object pointer.
+                    if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(slot) } {
+                        values.push(v);
+                        continue;
+                    }
+                }
+            }
+            // SAFETY: ptr is valid here; the strong reference keeps the item
+            // alive across any Python code the conversion runs.
+            let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+            match obj.getattr(ip_attr).and_then(|o| o.extract::<u32>()) {
+                Ok(v) => values.push(v),
+                Err(_) => values.push(ipv4_fallback(py, ch_type, &obj, name, row)?),
+            }
+            check_not_resized(seq, name, row_count)?;
+            ip_slot = slot_object_offset(&ipv4_type, ip_attr);
+            continue;
+        }
+        // SAFETY: GIL held; ptr is a valid borrowed item pointer.
+        if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(ptr) } {
+            values.push(v);
+            continue;
+        }
+        if unsafe { ffi::PyUnicode_CheckExact(ptr) } != 0 {
+            // SAFETY: ptr is a valid borrowed reference, verified an exact
+            // str; reading its UTF-8 runs no Python code.
+            let obj =
+                unsafe { Bound::from_borrowed_ptr(py, ptr).downcast_into_unchecked::<PyString>() };
+            let v = obj
+                .to_str()?
+                .parse::<Ipv4Addr>()
+                .map(|addr| u32::from_be_bytes(addr.octets()))
+                .map_err(|_| conversion_error(name, row, "IPv4"))?;
+            values.push(v);
+            continue;
+        }
+        // SAFETY: ptr is valid here; the strong reference keeps the item
+        // alive across any Python code the fallback runs.
+        let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        values.push(ipv4_fallback(py, ch_type, &obj, name, row)?);
+        check_not_resized(seq, name, row_count)?;
+        ip_slot = slot_object_offset(&ipv4_type, ip_attr);
+    }
+
+    Ok(Column::Ipv4(match null_map {
+        Some(nulls) => PrimitiveColumn::new_nullable(values, Bitmap::from_ch_null_map(&nulls)),
+        None => PrimitiveColumn::new(values),
+    }))
+}
+
+/// Instance offset of `attr` when it resolves to a plain object slot
+/// (`__slots__` member descriptor, `Py_T_OBJECT_EX`, no flags) defined on
+/// exactly `class`. Lets a loop over exact instances read the slot directly,
+/// like CPython's LOAD_ATTR_SLOT specialization. `None` (patched or exotic
+/// class attribute) means callers must use a normal attribute read.
+fn slot_object_offset(class: &Bound<'_, PyAny>, attr: &Bound<'_, PyString>) -> Option<isize> {
+    let descr = class.getattr(attr).ok()?;
+    if unsafe { ffi::Py_TYPE(descr.as_ptr()) != std::ptr::addr_of_mut!(ffi::PyMemberDescr_Type) } {
+        return None;
+    }
+    // SAFETY: descr is verified an exact member_descriptor, so its layout is
+    // PyMemberDescrObject; d_member points at the defining PyMemberDef (the
+    // ffi binding mistypes the field, hence the cast).
+    unsafe {
+        let descr = descr.as_ptr().cast::<ffi::PyMemberDescrObject>();
+        if (*descr).d_common.d_type.cast::<ffi::PyObject>() != class.as_ptr() {
+            return None;
+        }
+        let member = (*descr).d_member.cast::<ffi::PyMemberDef>();
+        if member.is_null() || (*member).name.is_null() {
+            return None;
+        }
+        if (*member).type_code != ffi::Py_T_OBJECT_EX || (*member).flags != 0 {
+            return None;
+        }
+        let offset = (*member).offset;
+        (offset > 0).then_some(offset)
+    }
+}
+
+fn ipv4_fallback(
+    py: Python<'_>,
+    ch_type: &ChType,
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+    row: usize,
+) -> PyResult<u32> {
+    match convert_scalar(py, ch_type, obj, name, row)? {
+        Scalar::Ipv4(v) => Ok(v),
+        _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+    }
+}
+
+/// Enum code width plumbing for the enum sequence fast path.
+trait EnumCode: Copy + Default {
+    const TYPE_NAME: &'static str;
+
+    fn from_enum_scalar(scalar: Scalar) -> PyResult<Self>;
+
+    fn into_enum_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column;
+}
+
+macro_rules! impl_enum_code {
+    ($ty:ty, $variant:ident, $type_name:literal) => {
+        impl EnumCode for $ty {
+            const TYPE_NAME: &'static str = $type_name;
+
+            fn from_enum_scalar(scalar: Scalar) -> PyResult<Self> {
+                match scalar {
+                    Scalar::$variant(value) => Ok(value),
+                    _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+                }
+            }
+
+            fn into_enum_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
+                Column::$variant(match validity {
+                    Some(validity) => PrimitiveColumn::new_nullable(values, validity),
+                    None => PrimitiveColumn::new(values),
+                })
+            }
+        }
+    };
+}
+
+impl_enum_code!(i8, Enum8, "Enum8");
+impl_enum_code!(i16, Enum16, "Enum16");
+
+/// Enum8/Enum16 fast path over an exact list or tuple. Returns `Ok(None)` for
+/// other containers; the caller falls through to the generic scalar loop.
+fn enum_fast_column<C: EnumCode>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    variants: &[(String, C)],
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return enum_seq(
+            py,
+            &ListSeq(list),
+            ch_type,
+            variants,
+            name,
+            row_count,
+            nullable,
+        )
+        .map(Some);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return enum_seq(
+            py,
+            &TupleSeq(tuple),
+            ch_type,
+            variants,
+            name,
+            row_count,
+            nullable,
+        )
+        .map(Some);
+    }
+    Ok(None)
+}
+
+/// Build an Enum column with two lookup levels, following `lc_string_seq`:
+/// repeated str objects hit a pointer-identity map, and new exact-str objects
+/// read their UTF-8 once for a content lookup against the variant labels. An
+/// exact str whose label is not defined is an error; anything else (raw int
+/// codes, str subclasses) falls back to `convert_scalar`. The fallback can
+/// run arbitrary Python, so it revalidates the container size and clears the
+/// pointer-identity cache, whose entries are only valid while no Python code
+/// has run since they were cached.
+fn enum_seq<C: EnumCode, S: FastSeq>(
+    py: Python<'_>,
+    seq: &S,
+    ch_type: &ChType,
+    variants: &[(String, C)],
+    name: &str,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let mut content_codes: HashMap<&[u8], C> = HashMap::with_capacity(variants.len());
+    for (label, code) in variants {
+        // First definition wins, matching enum8_value's linear scan.
+        content_codes.entry(label.as_bytes()).or_insert(*code);
+    }
+    let mut ptr_codes: HashMap<usize, C, std::hash::BuildHasherDefault<PtrHasher>> =
+        HashMap::default();
+    let mut codes = Vec::with_capacity(row_count);
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every fallback revalidates; the borrowed pointer is consumed before
+        // any Python code can run.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            codes.push(C::default());
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        if let Some(&code) = ptr_codes.get(&(ptr as usize)) {
+            codes.push(code);
+            continue;
+        }
+        if unsafe { ffi::PyUnicode_CheckExact(ptr) } != 0 {
+            // SAFETY: ptr is a valid borrowed reference, verified an exact
+            // str; reading its UTF-8 runs no Python code.
+            let obj =
+                unsafe { Bound::from_borrowed_ptr(py, ptr).downcast_into_unchecked::<PyString>() };
+            let label = obj.to_str()?;
+            let Some(&code) = content_codes.get(label.as_bytes()) else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} {} label {label:?} is not defined",
+                    C::TYPE_NAME
+                )));
+            };
+            // The container still holds this item (no Python ran since the
+            // borrowed read), so its address is stable and unique among the
+            // column's live values.
+            if ptr_codes.len() < PTR_CACHE_CAP {
+                ptr_codes.insert(ptr as usize, code);
+            }
+            codes.push(code);
+            continue;
+        }
+        // SAFETY: ptr is valid here; the strong reference keeps the item
+        // alive across any Python code the fallback runs.
+        let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let scalar = convert_scalar(py, ch_type, &obj, name, row)?;
+        codes.push(C::from_enum_scalar(scalar)?);
+        if S::MUTABLE {
+            check_not_resized(seq, name, row_count)?;
+            // The fallback may have freed a cached str whose address the
+            // allocator can reuse, so drop all pointer-identity entries.
+            ptr_codes.clear();
+        }
+    }
+
+    Ok(C::into_enum_column(
+        codes,
+        null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls)),
+    ))
 }
 
 #[derive(Debug)]
@@ -1166,6 +1847,26 @@ fn fixed_string_value(
 }
 
 fn date_days(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<i64> {
+    // Precedence: int (incl. subclasses) -> date/datetime instance -> duck
+    // tail (__index__, then toordinal). Cheap type checks avoid constructing
+    // a TypeError per value; an object that is both a date instance and
+    // int-convertible resolves as a date here. PyDate_Check also matches
+    // datetime, a date subclass, like the tail's toordinal call.
+    if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
+        // A wider-than-i64 int maps to the tail's conversion error without
+        // re-running the failing extraction.
+        return value
+            .extract::<i64>()
+            .map_err(|_| conversion_error(column, row, "Date"));
+    }
+    if value.is_instance_of::<PyDate>() {
+        let ordinal = value
+            .call_method0("toordinal")
+            .and_then(|o| o.extract::<i64>())
+            .map_err(|_| conversion_error(column, row, "Date"))?;
+        return Ok(ordinal - EPOCH_DATE_ORDINAL);
+    }
+    // Duck-typed tail, e.g. numpy ints via __index__.
     if let Ok(days) = value.extract::<i64>() {
         return Ok(days);
     }
@@ -1177,6 +1878,20 @@ fn date_days(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<i64
 }
 
 fn datetime_seconds(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<i64> {
+    // Precedence: int -> datetime instance -> duck tail; see date_days.
+    if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
+        return value
+            .extract::<i64>()
+            .map_err(|_| conversion_error(column, row, "DateTime"));
+    }
+    if value.is_instance_of::<PyDateTime>() {
+        let ts = value
+            .call_method0("timestamp")
+            .and_then(|o| o.extract::<f64>())
+            .map_err(|_| conversion_error(column, row, "DateTime"))?;
+        return finite_trunc_to_i64(ts, column, row, "DateTime");
+    }
+    // Duck-typed tail, e.g. numpy ints via __index__.
     if let Ok(secs) = value.extract::<i64>() {
         return Ok(secs);
     }
@@ -1194,6 +1909,25 @@ fn datetime64_ticks(
     column: &str,
     row: usize,
 ) -> PyResult<i64> {
+    // Precedence: int -> datetime instance -> duck tail; see date_days.
+    if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
+        return value
+            .extract::<i64>()
+            .map_err(|_| conversion_error(column, row, "DateTime64"));
+    }
+    if value.is_instance_of::<PyDateTime>() {
+        let secs = dt64_timestamp_secs(value, column, row)?;
+        // is_instance_of imported the datetime C API, so the raw exact check
+        // and struct accessor are safe. A subclass may override the
+        // microsecond attribute, so only an exact datetime skips the getattr.
+        let micros = if unsafe { ffi::PyDateTime_CheckExact(value.as_ptr()) } != 0 {
+            i64::from(unsafe { ffi::PyDateTime_DATE_GET_MICROSECOND(value.as_ptr()) })
+        } else {
+            dt64_microsecond(value, column, row)?
+        };
+        return dt64_ticks_math(secs, micros, precision, column, row);
+    }
+
     if let Ok(ticks) = value.extract::<i64>() {
         return Ok(ticks);
     }
@@ -1206,15 +1940,33 @@ fn datetime64_ticks(
         value.clone()
     };
 
+    let secs = dt64_timestamp_secs(&value, column, row)?;
+    let micros = dt64_microsecond(&value, column, row)?;
+    dt64_ticks_math(secs, micros, precision, column, row)
+}
+
+fn dt64_timestamp_secs(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<i64> {
     let secs = value
         .call_method0("timestamp")
         .and_then(|o| o.extract::<f64>())
         .map_err(|_| conversion_error(column, row, "DateTime64"))?;
-    let secs = finite_floor_to_i64(secs, column, row, "DateTime64")?;
-    let micros = value
+    finite_floor_to_i64(secs, column, row, "DateTime64")
+}
+
+fn dt64_microsecond(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<i64> {
+    value
         .getattr("microsecond")
         .and_then(|o| o.extract::<i64>())
-        .map_err(|_| conversion_error(column, row, "DateTime64"))?;
+        .map_err(|_| conversion_error(column, row, "DateTime64"))
+}
+
+fn dt64_ticks_math(
+    secs: i64,
+    micros: i64,
+    precision: u8,
+    column: &str,
+    row: usize,
+) -> PyResult<i64> {
     if !(0..1_000_000).contains(&micros) {
         return Err(PyValueError::new_err(format!(
             "column {column:?} row {row} DateTime64 microsecond {micros} is outside range"
@@ -1263,16 +2015,26 @@ fn finite_floor_to_i64(value: f64, column: &str, row: usize, type_name: &str) ->
 }
 
 fn uuid_bytes(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<Vec<u8>> {
+    // Precedence: str -> int (incl. subclasses) -> `int` attribute -> duck
+    // int (__index__) -> 16 raw bytes. Type checks come before extract so
+    // UUID inputs do not construct a failed extraction per value.
     if let Ok(s) = value.downcast::<PyString>() {
         return uuid_int_to_wire(parse_uuid_hex(s.to_str()?, column, row)?);
     }
-    if let Ok(x) = value.extract::<u128>() {
+    if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
+        let x = value
+            .extract::<u128>()
+            .map_err(|_| conversion_error(column, row, "UUID"))?;
         return uuid_int_to_wire(x);
     }
-    if let Ok(int_attr) = value.getattr("int") {
-        if let Ok(x) = int_attr.extract::<u128>() {
-            return uuid_int_to_wire(x);
-        }
+    if let Ok(x) = value
+        .getattr(intern!(value.py(), "int"))
+        .and_then(|i| i.extract::<u128>())
+    {
+        return uuid_int_to_wire(x);
+    }
+    if let Ok(x) = value.extract::<u128>() {
+        return uuid_int_to_wire(x);
     }
     let bytes = buffer_to_vec(value).map_err(|_| conversion_error(column, row, "UUID"))?;
     if bytes.len() != 16 {
@@ -1309,8 +2071,13 @@ fn uuid_int_to_wire(value: u128) -> PyResult<Vec<u8>> {
 }
 
 fn ipv4_value(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<u32> {
-    if let Ok(v) = value.extract::<u32>() {
-        return Ok(v);
+    // Precedence: int (incl. subclasses) -> str -> `_ip` attribute -> duck
+    // int (__index__) -> `packed` attribute. Type checks come before extract
+    // so IPv4Address inputs do not construct a failed extraction per value.
+    if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
+        return value
+            .extract::<u32>()
+            .map_err(|_| conversion_error(column, row, "IPv4"));
     }
     if let Ok(s) = value.downcast::<PyString>() {
         return s
@@ -1319,8 +2086,14 @@ fn ipv4_value(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<u3
             .map(|addr| u32::from_be_bytes(addr.octets()))
             .map_err(|_| conversion_error(column, row, "IPv4"));
     }
-    if let Ok(ip) = value.getattr("_ip").and_then(|o| o.extract::<u32>()) {
+    if let Ok(ip) = value
+        .getattr(intern!(value.py(), "_ip"))
+        .and_then(|o| o.extract::<u32>())
+    {
         return Ok(ip);
+    }
+    if let Ok(v) = value.extract::<u32>() {
+        return Ok(v);
     }
     if let Ok(packed) = value.getattr("packed").and_then(|o| buffer_to_vec(&o)) {
         if packed.len() == 4 {

@@ -94,6 +94,24 @@ def _temporal_struct_fmt(inner_type: str):
     return None
 
 
+def _decimal_wire_width(precision: int) -> int:
+    """Wire byte width of Decimal(P, S), derived from the precision."""
+    if precision <= 9:
+        return 4
+    if precision <= 18:
+        return 8
+    if precision <= 38:
+        return 16
+    return 32
+
+
+def _uuid_wire_bytes(value: uuid.UUID) -> bytes:
+    """UUID wire form: little-endian high half then little-endian low half."""
+    return (value.int >> 64).to_bytes(8, "little") + (
+        value.int & 0xFFFFFFFFFFFFFFFF
+    ).to_bytes(8, "little")
+
+
 def _encode_lc_dict_values(dict_values, value_type):
     """Serialize a LowCardinality block dictionary (the inner type's bulk form)."""
     buf = bytearray()
@@ -109,6 +127,10 @@ def _encode_lc_dict_values(dict_values, value_type):
     elif (temporal_fmt := _temporal_struct_fmt(value_type)) is not None:
         for v in dict_values:
             buf.extend(struct.pack(temporal_fmt, v))
+    elif value_type == "UUID":
+        for v in dict_values:
+            u = v if isinstance(v, uuid.UUID) else uuid.UUID(int=v)
+            buf.extend(_uuid_wire_bytes(u))
     else:
         raise ValueError(f"_encode_lc_dict_values: unsupported inner type {value_type}")
     return buf
@@ -213,6 +235,22 @@ def build_native_block(columns, *, block_info=False):
             fmt = "b" if inner_type.startswith("Enum8(") else "<h"
             for v in values:
                 buf.extend(struct.pack(fmt, v if v is not None else 0))
+        elif inner_type == "UUID":
+            for v in values:
+                buf.extend(_uuid_wire_bytes(v if v is not None else uuid.UUID(int=0)))
+        elif inner_type == "IPv4":
+            for v in values:
+                addr = ipaddress.IPv4Address(v if v is not None else 0)
+                buf.extend(int(addr).to_bytes(4, "little"))
+        elif inner_type == "IPv6":
+            for v in values:
+                buf.extend(ipaddress.IPv6Address(v if v is not None else 0).packed)
+        elif inner_type.startswith("Decimal("):
+            # Values are the raw unscaled integers.
+            precision = int(inner_type[len("Decimal("):-1].split(",")[0])
+            width = _decimal_wire_width(precision)
+            for v in values:
+                buf.extend(int(v if v is not None else 0).to_bytes(width, "little", signed=True))
         else:
             raise ValueError(f"build_native_block: unsupported type {inner_type}")
     return bytes(buf)
@@ -555,6 +593,336 @@ class TestEncodeFastPaths:
         assert self._encode("Int64", values, 3) == build_native_block([("v", "Int64", [1, 7, 3])])
         with pytest.raises(ValueError, match="row 1 cannot be converted to Int64"):
             self._encode("Int64", (1, "x", 3), 3)
+
+
+class TestLowCardinalityDictCache:
+    """LC read exits materialize each dictionary value once and reuse it."""
+
+    def _batch(self, type_name, vals):
+        encoded = _ch_core.encode_native_block(["lc"], [type_name], [vals], len(vals))
+        return _ch_core.ColBatch.decode_native(encoded)
+
+    def test_column_data_reuses_dictionary_objects(self):
+        col = self._batch("LowCardinality(String)", ["a", "b", "a", "b", "a"]).column_data(0)
+        assert list(col) == ["a", "b", "a", "b", "a"]
+        assert col[0] is col[2] and col[2] is col[4]
+        assert col[1] is col[3]
+
+    def test_to_python_columns_and_rows_reuse(self):
+        batch = self._batch("LowCardinality(String)", ["a", "b", "a", "b", "a"])
+        col = batch.to_python_columns()[0]
+        assert col[0] is col[2]
+        rows = batch.to_python_rows()
+        assert [r[0] for r in rows] == ["a", "b", "a", "b", "a"]
+        assert rows[0][0] is rows[2][0]
+
+    def test_nullable_lc_read_values_and_reuse(self):
+        vals = ["x", None, "y", "x", None]
+        col = self._batch("LowCardinality(Nullable(String))", vals).column_data(0)
+        assert list(col) == vals
+        assert col[0] is col[3]
+
+    def test_lc_non_string_inner(self):
+        vals = [7, 9, 7, 9, 7]
+        col = self._batch("LowCardinality(Int64)", vals).column_data(0)
+        assert list(col) == vals
+
+    def test_all_null_lc_never_materializes_dictionary(self):
+        # Null rows never reference the dictionary, so its slots stay
+        # unmaterialized on every exit.
+        batch = self._batch("LowCardinality(Nullable(UUID))", [None, None])
+        assert list(batch.column_data(0)) == [None, None]
+        assert list(batch.to_python_columns()[0]) == [None, None]
+        assert [r[0] for r in batch.to_python_rows()] == [None, None]
+
+
+class TestLowCardinalityInsertFastPath:
+    def _encode(self, type_name, vals, n=None):
+        n = len(vals) if n is None else n
+        return _ch_core.encode_native_block(["lc"], [type_name], [vals], n)
+
+    def test_containers_agree_and_round_trip(self):
+        uniq = [f"tag_{i}" for i in range(5)]
+        vals = [uniq[i % 5] for i in range(20)] + ["solo"]
+        # Runtime-built distinct objects with equal content must dedupe by content.
+        vals += ["tag_%d" % (i % 3) for i in range(6)]
+        from_list = self._encode("LowCardinality(String)", vals)
+        assert from_list == self._encode("LowCardinality(String)", tuple(vals), len(vals))
+        assert from_list == self._encode("LowCardinality(String)", _NdarrayLikeColumn(vals), len(vals))
+        assert list(_ch_core.ColBatch.decode_native(from_list).column_data(0)) == vals
+
+    def test_nullable_none_and_empty_string(self):
+        vals = ["x", None, "", "x", None, ""]
+        fast = self._encode("LowCardinality(Nullable(String))", vals)
+        generic = self._encode("LowCardinality(Nullable(String))", _NdarrayLikeColumn(vals), len(vals))
+        assert fast == generic
+        batch = _ch_core.ColBatch.decode_native(fast)
+        assert list(batch.column_data(0)) == vals
+
+    def test_bytes_values_use_fallback(self):
+        vals = [b"\xff", "x", b"\xff", "x"]
+        fast = self._encode("LowCardinality(String)", vals)
+        generic = self._encode("LowCardinality(String)", _NdarrayLikeColumn(vals), len(vals))
+        assert fast == generic
+
+    def test_none_in_non_nullable_lc_raises(self):
+        with pytest.raises(ValueError, match="row 1 is None but LowCardinality\\(String\\) is not nullable"):
+            self._encode("LowCardinality(String)", ["a", None])
+
+    def test_bad_value_reports_row(self):
+        with pytest.raises(ValueError, match="row 2 cannot be converted to String"):
+            self._encode("LowCardinality(String)", ["a", "b", 13])
+
+    @pytest.mark.parametrize("size", [4, 8, 16, 32, 64])
+    def test_item_replacement_during_fallback_invalidates_ptr_cache(self, size):
+        # A fallback __buffer__ drops the last ref to an already-scanned str;
+        # the allocator can hand its address to a new same-size str, which
+        # must not false-hit the pointer-identity cache.
+        vals = ["A" * size, None, "C" * size]
+
+        class EvilBuf:
+            def __buffer__(self, flags):
+                vals[0] = "x"  # drop the sole ref to the scanned "A"*size
+                vals[2] = "B" * size  # same size class, may reuse its address
+                return memoryview(b"EV")
+
+            def __release_buffer__(self, view):
+                pass
+
+        vals[1] = EvilBuf()
+        encoded = self._encode("LowCardinality(String)", vals, 3)
+        decoded = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+        assert decoded == ["A" * size, "EV", "B" * size]
+
+    def test_distinct_values_beyond_ptr_cache_cap(self):
+        vals = [f"v_{i}" for i in range(70_000)]
+        encoded = self._encode("LowCardinality(String)", vals)
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == vals
+
+    def test_str_subclass_uses_fallback(self):
+        class S(str):
+            pass
+
+        vals = [S("a"), "b", S("a"), "b"]
+        fast = self._encode("LowCardinality(String)", vals)
+        generic = self._encode("LowCardinality(String)", _NdarrayLikeColumn(vals), len(vals))
+        assert fast == generic
+
+    def test_lone_surrogate_raises_like_generic(self):
+        vals = ["ok", "\ud800"]
+        with pytest.raises(UnicodeEncodeError):
+            self._encode("LowCardinality(String)", vals)
+        with pytest.raises(UnicodeEncodeError):
+            self._encode("LowCardinality(String)", _NdarrayLikeColumn(vals), len(vals))
+
+
+class TestTemporalInsertFastPath:
+    def _encode(self, type_name, vals, n=None):
+        n = len(vals) if n is None else n
+        return _ch_core.encode_native_block(["t"], [type_name], [vals], n)
+
+    @pytest.mark.parametrize("type_name", ["DateTime", "DateTime64(3)", "DateTime64(6)"])
+    def test_datetime_inputs_match_generic_container(self, type_name):
+        class SubDT(dt.datetime):
+            pass
+
+        vals = [
+            dt.datetime(2024, 5, 4, 3, 2, 1),
+            dt.datetime(2024, 1, 15, 12, 34, 56, 789000, tzinfo=dt.timezone.utc),
+            SubDT(2024, 5, 4, 3, 2, 1, 123456),
+            1700000000,
+        ]
+        fast = self._encode(type_name, vals)
+        assert fast == self._encode(type_name, tuple(vals), len(vals))
+        assert fast == self._encode(type_name, _NdarrayLikeColumn(vals), len(vals))
+
+    def test_datetime64_string_fallback_matches_generic(self):
+        vals = ["2024-01-15T12:34:56.789000+00:00", 5]
+        fast = self._encode("DateTime64(3)", vals)
+        assert fast == self._encode("DateTime64(3)", _NdarrayLikeColumn(vals), 2)
+
+    def test_date_inputs_match_generic_and_helper(self):
+        vals = [dt.date(2024, 1, 2), 19737, dt.date(1970, 1, 1)]
+        fast = self._encode("Date", vals)
+        assert fast == self._encode("Date", _NdarrayLikeColumn(vals), 3)
+        expected_days = [dt.date(2024, 1, 2).toordinal() - 719163, 19737, 0]
+        assert fast == build_native_block([("t", "Date", expected_days)])
+
+    def test_nullable_datetime_with_none(self):
+        vals = [dt.datetime(2024, 1, 15, 12, 0, 0, tzinfo=dt.timezone.utc), None, 5]
+        fast = self._encode("Nullable(DateTime)", vals)
+        assert fast == self._encode("Nullable(DateTime)", _NdarrayLikeColumn(vals), 3)
+
+    def test_out_of_range_errors_unchanged(self):
+        with pytest.raises(ValueError, match="outside UInt32 range"):
+            self._encode("DateTime", [2**32])
+        with pytest.raises(ValueError, match="outside UInt16 range"):
+            self._encode("Date", [65536])
+        with pytest.raises(ValueError, match="row 0 is None but DateTime is not Nullable"):
+            self._encode("DateTime", [None])
+
+    def test_negative_ints(self):
+        # Negative is out of range for DateTime (falls back to the specific
+        # range error) but a valid pre-epoch value for Date32.
+        with pytest.raises(ValueError, match="outside UInt32 range"):
+            self._encode("DateTime", [-1])
+        fast = self._encode("Date32", [-100, 0, 100])
+        assert fast == self._encode("Date32", _NdarrayLikeColumn([-100, 0, 100]), 3)
+        decoded = list(_ch_core.ColBatch.decode_native(fast).column_data(0))
+        assert decoded == [dt.date(1969, 9, 23), dt.date(1970, 1, 1), dt.date(1970, 4, 11)]
+
+
+class TestScalarObjectInsertFastPath:
+    """UUID, IPv4, and Enum8/16 fast paths over exact lists and tuples."""
+
+    _E8 = "Enum8('alpha' = 1, 'beta' = 2, 'gamma' = 3)"
+    _E16 = "Enum16('alpha' = -5, 'beta' = 0, 'gamma' = 1000)"
+
+    def _encode(self, type_name, vals, n=None):
+        n = len(vals) if n is None else n
+        return _ch_core.encode_native_block(["v"], [type_name], [vals], n)
+
+    def _decode(self, encoded):
+        return list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+
+    def test_uuid_containers_agree_and_round_trip(self):
+        vals = [
+            uuid.UUID(int=0),
+            uuid.UUID("00112233-4455-6677-8899-aabbccddeeff"),
+            uuid.UUID(int=(1 << 128) - 1),
+        ]
+        fast = self._encode("UUID", vals)
+        assert fast == self._encode("UUID", tuple(vals), len(vals))
+        assert fast == self._encode("UUID", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == vals
+
+    def test_uuid_mixed_types_use_fallback(self):
+        class SubUUID(uuid.UUID):
+            pass
+
+        known = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+        vals = [known, str(known), known.int, known.bytes, SubUUID(int=known.int)]
+        fast = self._encode("UUID", vals)
+        assert fast == self._encode("UUID", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == [known] * 5
+
+    def test_nullable_uuid(self):
+        vals = [uuid.UUID(int=9), None, uuid.UUID(int=0), None]
+        fast = self._encode("Nullable(UUID)", vals)
+        assert fast == self._encode("Nullable(UUID)", tuple(vals), len(vals))
+        assert fast == self._encode("Nullable(UUID)", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == vals
+
+    def test_uuid_errors_unchanged(self):
+        with pytest.raises(ValueError, match="row 1 cannot be converted to UUID"):
+            self._encode("UUID", [uuid.UUID(int=1), 1.5])
+        with pytest.raises(ValueError, match="row 1 is None but UUID is not Nullable"):
+            self._encode("UUID", [uuid.UUID(int=1), None])
+
+    def test_ipv4_containers_agree_and_round_trip(self):
+        vals = [
+            ipaddress.IPv4Address("0.0.0.0"),
+            ipaddress.IPv4Address("255.255.255.255"),
+            ipaddress.IPv4Address("192.0.2.1"),
+        ]
+        fast = self._encode("IPv4", vals)
+        assert fast == self._encode("IPv4", tuple(vals), len(vals))
+        assert fast == self._encode("IPv4", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == vals
+
+    def test_ipv4_mixed_types_without_object_wrappers(self):
+        import enum
+
+        class IntLike(enum.IntEnum):
+            ADDR = 16909060
+
+        vals = [ipaddress.IPv4Address("1.2.3.4"), "1.2.3.4", 16909060, IntLike.ADDR]
+        fast = self._encode("IPv4", vals)
+        assert fast == self._encode("IPv4", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == [ipaddress.IPv4Address("1.2.3.4")] * 4
+
+    def test_nullable_ipv4(self):
+        vals = [ipaddress.IPv4Address("1.2.3.4"), None, ipaddress.IPv4Address("0.0.0.0")]
+        fast = self._encode("Nullable(IPv4)", vals)
+        assert fast == self._encode("Nullable(IPv4)", tuple(vals), len(vals))
+        assert fast == self._encode("Nullable(IPv4)", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == vals
+
+    def test_ipv4_errors_unchanged(self):
+        with pytest.raises(ValueError, match="row 0 cannot be converted to IPv4"):
+            self._encode("IPv4", ["1.2.3.999"])
+        with pytest.raises(ValueError, match="row 0 cannot be converted to IPv4"):
+            self._encode("IPv4", [_NdarrayLikeColumn([1])])
+        with pytest.raises(ValueError, match="row 1 cannot be converted to IPv4"):
+            self._encode("IPv4", [1, 2**32])
+
+    def test_enum8_labels_and_codes_round_trip(self):
+        vals = ["alpha", "beta", 3, "alpha", 99]
+        fast = self._encode(self._E8, vals)
+        assert fast == self._encode(self._E8, tuple(vals), len(vals))
+        assert fast == self._encode(self._E8, _NdarrayLikeColumn(vals), len(vals))
+        # Unknown raw codes pass through and read back as None.
+        assert self._decode(fast) == ["alpha", "beta", "gamma", "alpha", None]
+
+    def test_enum16_labels_and_codes_round_trip(self):
+        vals = ["gamma", -5, "beta", "gamma"]
+        fast = self._encode(self._E16, vals)
+        assert fast == self._encode(self._E16, _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == ["gamma", "alpha", "beta", "gamma"]
+
+    def test_nullable_enum8(self):
+        vals = ["alpha", None, "gamma", None]
+        fast = self._encode(f"Nullable({self._E8})", vals)
+        assert fast == self._encode(f"Nullable({self._E8})", tuple(vals), len(vals))
+        assert fast == self._encode(f"Nullable({self._E8})", _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == vals
+
+    @pytest.mark.parametrize("type_name,enum_name", [(_E8, "Enum8"), (_E16, "Enum16")])
+    def test_enum_unknown_label_raises(self, type_name, enum_name):
+        expected = f'row 1 {enum_name} label "delta" is not defined'
+        with pytest.raises(ValueError, match=expected):
+            self._encode(type_name, ["alpha", "delta"])
+        with pytest.raises(ValueError, match=expected):
+            self._encode(type_name, _NdarrayLikeColumn(["alpha", "delta"]), 2)
+
+    def test_enum_str_subclass_uses_fallback(self):
+        class S(str):
+            pass
+
+        vals = [S("alpha"), "beta", S("gamma")]
+        fast = self._encode(self._E8, vals)
+        assert fast == self._encode(self._E8, _NdarrayLikeColumn(vals), len(vals))
+        assert self._decode(fast) == ["alpha", "beta", "gamma"]
+
+    @pytest.mark.parametrize("size", [4, 8, 16, 32, 64])
+    def test_enum_item_replacement_during_fallback_invalidates_ptr_cache(self, size):
+        # A fallback __index__ drops the last ref to an already-scanned label;
+        # the allocator can hand its address to a new same-size str, which
+        # must not false-hit the pointer-identity cache.
+        a, b = "A" * size, "B" * size
+        tname = f"Enum8('{a}' = 1, '{b}' = 2, 'EV' = 3)"
+        vals = ["A" * size, None, "C" * size]
+
+        class Evil:
+            def __index__(self):
+                vals[0] = "x"  # drop the sole ref to the scanned label
+                vals[2] = "B" * size  # same size class, may reuse its address
+                return 3
+
+        vals[1] = Evil()
+        assert self._decode(self._encode(tname, vals, 3)) == [a, "EV", b]
+
+    def test_enum_list_resized_during_fallback_raises(self):
+        vals = ["alpha", None, "beta", "gamma"]
+
+        class Evil:
+            def __index__(self):
+                del vals[2:]
+                return 2
+
+        vals[1] = Evil()
+        with pytest.raises(ValueError, match="resized during encoding"):
+            self._encode(self._E8, vals, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -1075,6 +1443,213 @@ class TestDecodeEnum:
         assert result.schema.field("d").type == pa.int16()
         assert result.column("c").to_pylist() == [1, 2, 3]
         assert result.column("d").to_pylist() == [-5, 0, 1000]
+
+
+# ---------------------------------------------------------------------------
+# UUID
+# ---------------------------------------------------------------------------
+
+class TestDecodeUUID:
+    _KNOWN = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+    _VALUES = [uuid.UUID(int=0), _KNOWN, uuid.UUID(int=(1 << 128) - 1)]
+
+    def test_values(self):
+        data = build_native_block([("u", "UUID", self._VALUES)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == ["UUID"]
+        got = list(batch.column_data(0))
+        assert got == self._VALUES
+        assert all(type(v) is uuid.UUID for v in got)
+        assert got[1] == uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+        assert all(v.is_safe is uuid.SafeUUID.unsafe for v in got)
+
+    def test_paths_agree(self):
+        data = build_native_block([("u", "UUID", self._VALUES)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [row[0] for row in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == self._VALUES
+
+    def test_nullable(self):
+        vals = [self._KNOWN, None, uuid.UUID(int=0), None]
+        data = build_native_block([("u", "Nullable(UUID)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+        assert [row[0] for row in batch.to_python_rows()] == vals
+
+    def test_low_cardinality(self):
+        vals = [self._KNOWN, uuid.UUID(int=0), self._KNOWN, self._KNOWN]
+        data = build_native_block([("u", "LowCardinality(UUID)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        got = list(batch.column_data(0))
+        assert got == vals
+        assert all(v.is_safe is uuid.SafeUUID.unsafe for v in got)
+
+    def test_low_cardinality_nullable(self):
+        vals = [self._KNOWN, None, self._KNOWN, None]
+        data = build_native_block([("u", "LowCardinality(Nullable(UUID))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+        assert [row[0] for row in batch.to_python_rows()] == vals
+
+    def test_low_cardinality_all_null(self):
+        vals = [None, None, None]
+        data = build_native_block([("u", "LowCardinality(Nullable(UUID))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+
+    def test_round_trip(self):
+        vals = [self._KNOWN, uuid.UUID(int=79)]
+        encoded = _ch_core.encode_native_block(["u"], ["UUID"], [vals], len(vals))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == vals
+
+
+# ---------------------------------------------------------------------------
+# IPv4
+# ---------------------------------------------------------------------------
+
+class TestDecodeIPv4:
+    _VALUES = [
+        ipaddress.IPv4Address("0.0.0.0"),
+        ipaddress.IPv4Address("255.255.255.255"),
+        ipaddress.IPv4Address("1.2.3.4"),
+    ]
+
+    def test_values(self):
+        data = build_native_block([("v", "IPv4", self._VALUES)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == ["IPv4"]
+        got = list(batch.column_data(0))
+        assert got == self._VALUES
+        assert all(type(v) is ipaddress.IPv4Address for v in got)
+        assert got[2] == ipaddress.ip_address("1.2.3.4")
+
+    def test_paths_agree(self):
+        data = build_native_block([("v", "IPv4", self._VALUES)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [row[0] for row in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == self._VALUES
+
+    def test_nullable(self):
+        vals = [ipaddress.IPv4Address("1.2.3.4"), None, ipaddress.IPv4Address("0.0.0.0")]
+        data = build_native_block([("v", "Nullable(IPv4)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+        assert [row[0] for row in batch.to_python_rows()] == vals
+
+    def test_round_trip(self):
+        vals = [ipaddress.IPv4Address("192.0.2.1"), ipaddress.IPv4Address("198.51.100.7")]
+        encoded = _ch_core.encode_native_block(["v"], ["IPv4"], [vals], len(vals))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == vals
+
+
+# ---------------------------------------------------------------------------
+# IPv6
+# ---------------------------------------------------------------------------
+
+class TestDecodeIPv6:
+    _VALUES = [
+        ipaddress.IPv6Address("::"),
+        ipaddress.IPv6Address("::1"),
+        ipaddress.IPv6Address("2001:db8:85a3:8d3:1319:8a2e:370:7348"),
+        ipaddress.IPv6Address("::ffff:1.2.3.4"),
+    ]
+
+    def test_values(self):
+        data = build_native_block([("v", "IPv6", self._VALUES)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == ["IPv6"]
+        got = list(batch.column_data(0))
+        assert got == self._VALUES
+        # Always IPv6Address, even for a v4-mapped value.
+        assert all(type(v) is ipaddress.IPv6Address for v in got)
+        # str() reads _scope_id, so it verifies the attribute was set.
+        assert [str(v) for v in got] == [str(v) for v in self._VALUES]
+
+    def test_paths_agree(self):
+        data = build_native_block([("v", "IPv6", self._VALUES)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [row[0] for row in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == self._VALUES
+
+    def test_nullable(self):
+        vals = [ipaddress.IPv6Address("::1"), None, ipaddress.IPv6Address("::ffff:1.2.3.4")]
+        data = build_native_block([("v", "Nullable(IPv6)", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == vals
+        assert [row[0] for row in batch.to_python_rows()] == vals
+
+    def test_round_trip(self):
+        vals = [ipaddress.IPv6Address("2001:db8::1"), ipaddress.IPv6Address("::ffff:192.0.2.9")]
+        encoded = _ch_core.encode_native_block(["v"], ["IPv6"], [vals], len(vals))
+        got = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+        assert got == vals
+        assert all(type(v) is ipaddress.IPv6Address for v in got)
+
+
+# ---------------------------------------------------------------------------
+# Decimal
+# ---------------------------------------------------------------------------
+
+class TestDecodeDecimal:
+    # (precision, scale, unscaled values); precision picks the wire width
+    # (<=9 -> 32-bit, <=18 -> 64, <=38 -> 128, <=76 -> 256).
+    _CASES = [
+        (9, 4, [0, 5, -5, -12000, 999_999_999, -999_999_999]),
+        (18, 6, [0, 7, -123456, 123456, 10**18 - 1, -(10**18 - 1)]),
+        (38, 10, [0, -3, 10**9 + 1, 10**38 - 1, -(10**38 - 1)]),
+        (76, 20, [0, 42, -42, 10**19, -(10**41 + 7), 10**76 - 1, -(10**76 - 1)]),
+        (9, 0, [0, -13, 999_999_999]),
+        (76, 0, [0, 10**76 - 1, -(10**76 - 1)]),
+    ]
+
+    @staticmethod
+    def _reference(unscaled, precision, scale):
+        with decimal.localcontext() as ctx:
+            ctx.prec = precision
+            return decimal.Decimal(unscaled).scaleb(-scale)
+
+    @pytest.mark.parametrize("precision,scale,unscaled", _CASES)
+    def test_matches_python_reference(self, precision, scale, unscaled):
+        type_name = f"Decimal({precision}, {scale})"
+        data = build_native_block([("d", type_name, unscaled)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert batch.column_type_names == [type_name]
+        got = list(batch.column_data(0))
+        expected = [self._reference(u, precision, scale) for u in unscaled]
+        assert got == expected
+        assert [v.as_tuple() for v in got] == [e.as_tuple() for e in expected]
+
+    def test_paths_agree(self):
+        unscaled = [0, -3, 10**38 - 1]
+        data = build_native_block([("d", "Decimal(38, 10)", unscaled)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [row[0] for row in batch.to_python_rows()]
+        expected = [self._reference(u, 38, 10) for u in unscaled]
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_nullable(self):
+        vals = [12345, None, -12345, None]
+        data = build_native_block([("d", "Nullable(Decimal(18, 4))", vals)])
+        batch = _ch_core.ColBatch.decode_native(data)
+        expected = [None if v is None else self._reference(v, 18, 4) for v in vals]
+        assert list(batch.column_data(0)) == expected
+        assert [row[0] for row in batch.to_python_rows()] == expected
+
+    def test_round_trip(self):
+        vals = [decimal.Decimal("123.4567"), decimal.Decimal("-1.5")]
+        encoded = _ch_core.encode_native_block(["d"], ["Decimal(20, 4)"], [vals], len(vals))
+        got = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+        expected = [decimal.Decimal("123.4567"), decimal.Decimal("-1.5000")]
+        assert got == expected
+        assert [v.as_tuple() for v in got] == [e.as_tuple() for e in expected]
 
 
 # ---------------------------------------------------------------------------
