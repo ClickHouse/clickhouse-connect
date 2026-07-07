@@ -14,7 +14,7 @@ _CH_MODIFIER_DIALECT = "_ch_modifier"
 
 
 def full_table(table_name: str, schema: str | None = None) -> str:
-    if table_name.startswith("(") or "." in table_name or not schema:
+    if table_name.startswith("(") or not schema:
         return quote_identifier(table_name)
     return f"{quote_identifier(schema)}.{quote_identifier(table_name)}"
 
@@ -239,6 +239,30 @@ class ClickHouseSelect(Select[Any]):
 
     inherit_cache = True
 
+    def add_columns(self, *entities: Any) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().add_columns(*entities))
+
+    def with_only_columns(
+        self,
+        *entities: Any,
+        maintain_column_froms: bool = False,
+        **kwargs: Any,
+    ) -> "ClickHouseSelect":
+        return cast(
+            "ClickHouseSelect",
+            super().with_only_columns(
+                *entities,
+                maintain_column_froms=maintain_column_froms,
+                **kwargs,
+            ),
+        )
+
+    def column(self, column: Any) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().column(column))
+
+    def reduce_columns(self, only_synonyms: bool = True) -> "ClickHouseSelect":
+        return cast("ClickHouseSelect", super().reduce_columns(only_synonyms=only_synonyms))
+
     def final(self, table: FromClause | None = None) -> "ClickHouseSelect":
         return cast("ClickHouseSelect", final(self, table=table))
 
@@ -288,4 +312,8 @@ class ClickHouseSelect(Select[Any]):
 def select(*entities: Any) -> ClickHouseSelect:
     """Runtime drop-in for sqlalchemy.select that adds the ClickHouse chainables as typed methods.
     Result rows type as Any until the generic follow-up lands."""
+    # SQLAlchemy 1.4 disables Select.__init__; use its future-style class factory when present.
+    create_future_select = getattr(ClickHouseSelect, "_create_future_select", None)
+    if create_future_select is not None:
+        return cast("ClickHouseSelect", create_future_select(*entities))
     return ClickHouseSelect(*entities)

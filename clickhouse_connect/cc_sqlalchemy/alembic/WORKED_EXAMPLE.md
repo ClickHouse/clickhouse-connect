@@ -528,7 +528,201 @@ op.drop_column(
 )
 ```
 
-For DDL that Alembic does not model, use `op.execute(...)` directly with a raw SQL string.
+For DDL that Alembic does not model, use `op.execute(...)` directly with a raw SQL string. That includes `ON CLUSTER` DDL, which is deliberately outside the helper API for now. When you need per-statement ClickHouse settings on the raw path, pass them with `op.execute(sql, execution_options={"settings": {...}})`. Those settings apply in online mode only and are dropped in offline `alembic upgrade --sql` output, so prefer the helpers below when you want the setting to survive as a rendered `SETTINGS` clause.
+
+## Optional: ClickHouse DDL helpers
+
+The integration also registers runtime `op.*` helpers for ClickHouse-specific DDL that standard Alembic does not model: skip indexes, projections, table settings, materialized views, and dictionaries. They render valid ClickHouse SQL in both online and offline `--sql` mode, quote identifiers for you, and helpers with a `clickhouse_settings={...}` parameter render it as an inline `SETTINGS` clause where ClickHouse accepts one. Because Alembic attaches these methods dynamically, static type checkers may not recognize them in migration scripts.
+
+Import the value objects from the integration package:
+
+```python
+from sqlalchemy import Column
+
+from clickhouse_connect.cc_sqlalchemy import types
+from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseIndex, ClickHouseProjection
+```
+
+### Skip indexes
+
+Add one skip index. The `expression` and `type_` are raw ClickHouse SQL passthrough, so index types keep their full parameter form:
+
+```python
+op.add_clickhouse_index(
+    "events",
+    "idx_event_name",
+    "event_name",
+    "bloom_filter(0.01)",
+    granularity=4,
+    schema="alembic_demo",
+)
+```
+
+Use `first=True` or `after_index="existing_index_name"` only to place an index relative to other indexes. `after_index` is not a column placement option.
+
+Add several skip indexes in a single statement. This is the recommended shape on replicated deployments. See the batching note below:
+
+```python
+op.add_clickhouse_indexes(
+    "events",
+    [
+        ClickHouseIndex("idx_event_name", "event_name", "bloom_filter(0.01)", granularity=4),
+        ClickHouseIndex("idx_payload", "payload", "minmax", granularity=1),
+    ],
+    schema="alembic_demo",
+)
+```
+
+`ADD INDEX` is metadata only. It does not backfill existing parts. Backfill with a separate `MATERIALIZE INDEX`, which runs as a mutation:
+
+```python
+op.materialize_clickhouse_index(
+    "events",
+    "idx_event_name",
+    if_exists=True,
+    schema="alembic_demo",
+    clickhouse_settings={"mutations_sync": 1},
+)
+```
+
+Drop a skip index. `DROP INDEX` schedules a mutation, so `alter_sync` applies:
+
+```python
+op.drop_clickhouse_index(
+    "events",
+    "idx_event_name",
+    if_exists=True,
+    schema="alembic_demo",
+    clickhouse_settings={"alter_sync": 2},
+)
+```
+
+Use `op.drop_clickhouse_indexes(table_name, ["idx_a", "idx_b"], if_exists=True, ...)` to drop several skip indexes in one statement.
+
+### Projections
+
+Projections follow the same add, materialize, drop shape. The `select` body is raw SQL passthrough:
+
+```python
+op.add_clickhouse_projection(
+    "events",
+    "proj_by_name",
+    "SELECT event_name, count() GROUP BY event_name",
+    schema="alembic_demo",
+)
+
+op.materialize_clickhouse_projection(
+    "events",
+    "proj_by_name",
+    if_exists=True,
+    schema="alembic_demo",
+    clickhouse_settings={"mutations_sync": 1},
+)
+
+op.drop_clickhouse_projection(
+    "events",
+    "proj_by_name",
+    if_exists=True,
+    schema="alembic_demo",
+)
+```
+
+Use `op.add_clickhouse_projections(table_name, [ClickHouseProjection(...), ...])` to add several in one statement, the same way as `add_clickhouse_indexes`.
+Use `first=True` or `after_projection="existing_projection_name"` only to place a projection relative to other projections.
+Use `op.drop_clickhouse_projections(table_name, ["proj_a", "proj_b"], if_exists=True, ...)` to drop several in one statement.
+
+### Table settings
+
+Modify or reset MergeTree table settings after creation:
+
+```python
+op.modify_clickhouse_table_settings(
+    "events",
+    {"index_granularity": 4096, "merge_with_ttl_timeout": 3600},
+    schema="alembic_demo",
+)
+
+op.reset_clickhouse_table_settings(
+    "events",
+    ["merge_with_ttl_timeout"],
+    schema="alembic_demo",
+)
+```
+
+`MODIFY SETTING` is its own statement and is never combined with schema alters, because replicated databases reject a statement that mixes settings changes with schema changes.
+
+### Materialized views
+
+Create and drop materialized views with an explicit target table. The `select` argument is raw SQL passthrough:
+
+```python
+op.create_clickhouse_materialized_view(
+    "events_mv",
+    "events_rollup",
+    "SELECT id, event_name FROM alembic_demo.events",
+    if_not_exists=True,
+    schema="alembic_demo",
+    to_schema="alembic_demo",
+)
+
+op.drop_clickhouse_materialized_view(
+    "events_mv",
+    if_exists=True,
+    schema="alembic_demo",
+)
+```
+
+This helper intentionally models the `TO ... AS SELECT ...` form. ClickHouse rejects combining `TO` with `ENGINE` or `POPULATE`, so use `op.execute(...)` for exotic materialized view shapes. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings.
+
+### Dictionaries
+
+Create and drop dictionaries directly:
+
+```python
+op.create_clickhouse_dictionary(
+    "my_dictionary",
+    [
+        Column("id", types.UInt32()),
+        Column("value", types.String()),
+    ],
+    primary_key="id",
+    source="CLICKHOUSE(TABLE 'dictionary_source')",
+    layout="FLAT",
+    lifetime="MIN 0 MAX 10",
+    if_not_exists=True,
+    schema="alembic_demo",
+)
+
+op.drop_clickhouse_dictionary(
+    "my_dictionary",
+    if_exists=True,
+    schema="alembic_demo",
+)
+```
+
+Reload a dictionary created through the `Dictionary` construct. This runs on the node that receives it and is not distributed:
+
+```python
+op.reload_clickhouse_dictionary("my_dictionary", schema="alembic_demo")
+```
+
+### Why the plural helpers emit one statement
+
+On a `ReplicatedMergeTree` table, emitting several separate `ALTER TABLE` statements against the same table can fail with `Code: 517 CANNOT_ASSIGN_ALTER`. Each ALTER commits table metadata through a ZooKeeper compare-and-set on the metadata version, and concurrent alters can lose that race. Combining compatible subcommands into one comma-joined `ALTER TABLE` removes the race for the common case.
+
+`add_clickhouse_indexes` and `add_clickhouse_projections` do exactly that. They combine only homogeneous pure-metadata subcommands, which is the one shape valid on both plain and replicated databases. `MATERIALIZE` operations always run as separate statements, and `MODIFY SETTING` is always its own statement, because a replicated database allows only one command bucket per statement and rejects mixing a materialize or a settings change with schema alters.
+
+### Which sync setting applies
+
+The two ClickHouse sync settings apply to different operations, and using the wrong one has no effect:
+
+- `MATERIALIZE INDEX` and `MATERIALIZE PROJECTION` run as mutations. They wait according to `mutations_sync`.
+- `DROP INDEX` and `DROP PROJECTION` schedule a mutation. They wait according to `alter_sync`.
+- `ADD INDEX`, `ADD PROJECTION`, `MODIFY SETTING`, and `RESET SETTING` are metadata only. There is no mutation to wait for, so neither sync setting changes their behavior.
+
+Recommend values 0, 1, or 2 only. The value 3 is documented but not implemented for OSS `ReplicatedMergeTree` and falls through to no wait at all.
+
+On a replicated database, all DDL goes through a distributed queue governed by `distributed_ddl_task_timeout` and `distributed_ddl_output_mode`. The defaults are migration safe.
 
 ## What This Example Covered
 
@@ -541,6 +735,7 @@ This walkthrough focused on the parts of the integration most users need first:
 - applying and rolling back revisions with the Alembic CLI
 - inserting and querying data before and after schema changes
 - using optional manual column operations when autogenerate is not enough
+- using the ClickHouse DDL helpers for skip indexes, projections, table settings, materialized views, and dictionaries
 
 ## Migrating from `clickhouse_sqlalchemy`
 

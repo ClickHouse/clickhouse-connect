@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import Column
@@ -12,6 +13,20 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import format_str, quote_identifier
+
+
+def render_setting_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return format_str(str(value))
+
+
+def render_settings(settings: Mapping[str, Any] | None) -> str:
+    if not settings:
+        return ""
+    return ", ".join(f"{key} = {render_setting_value(value)}" for key, value in settings.items())
 
 
 class ClickHouseDDLHelper:
@@ -85,9 +100,7 @@ class ClickHouseDDLHelper:
 
     @staticmethod
     def render_settings(settings: dict[str, Any] | None) -> str:
-        if not settings:
-            return ""
-        return ", ".join(f"{key} = {ClickHouseDDLHelper._render_setting_value(value)}" for key, value in settings.items())
+        return render_settings(settings)
 
     @staticmethod
     def render_comment(comment: str | None) -> str:
@@ -98,11 +111,7 @@ class ClickHouseDDLHelper:
 
     @staticmethod
     def _render_setting_value(value: Any) -> str:
-        if isinstance(value, bool):
-            return "1" if value else "0"
-        if isinstance(value, (int, float)):
-            return str(value)
-        return format_str(str(value))
+        return render_setting_value(value)
 
 
 def column_specification(dialect, column: Column) -> str:
