@@ -14,11 +14,17 @@ from clickhouse_connect.driver.asyncqueue import Full as AsyncQueueFull
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.transform import Transform
-from clickhouse_connect.driver.types import Closable
+from clickhouse_connect.driver.types import ByteSource, Closable
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["StreamingResponseSource", "StreamingFileAdapter", "StreamingInsertSource", "SyncStreamingInsertSource"]
+__all__ = [
+    "StreamingResponseSource",
+    "StreamingFileAdapter",
+    "StreamingInsertSource",
+    "SyncStreamingInsertSource",
+    "ReadAheadSource",
+]
 
 if "br" in available_compression:
     import brotli
@@ -346,6 +352,94 @@ class StreamingInsertSource:
                 continue
             except RuntimeError:
                 return False
+        return False
+
+
+class ReadAheadSource(Closable):
+    """Reads chunks from a byte source on a daemon thread into a bounded queue so transport overlaps decode.
+
+    The consumer generator re-raises any producer-side exception verbatim, in stream order, so the wrapping
+    codec's error mapping, exception-tag scanning, and last-chunk heuristics run unchanged on the consumer thread.
+    """
+
+    def __init__(self, source: ByteSource, maxsize: int = 16):
+        self.source: ByteSource | None = source
+        self.exception_tag = getattr(source, "exception_tag", None)
+        self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
+        self._stop_event = threading.Event()
+        self._gen_cache: Iterator[bytes] | None = None
+        self._thread = threading.Thread(target=self._producer, name="clickhouse-read-ahead", daemon=True)
+        self._thread.start()
+
+    @property
+    def gen(self) -> Iterator[bytes]:
+        if self._gen_cache is None:
+            self._gen_cache = self._consume()
+        return self._gen_cache
+
+    def _consume(self) -> Iterator[bytes]:
+        while True:
+            tag, payload = self.queue.get()
+            if tag == "data":
+                yield cast(bytes, payload)
+            elif tag == "error":
+                raise cast(BaseException, payload)
+            else:  # eof
+                return
+
+    def _producer(self):
+        source = self.source
+        if source is None:
+            return
+        try:
+            for chunk in source.gen:
+                if not self._put(("data", chunk)):
+                    return
+        except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
+            self._put(("error", ex))
+        finally:
+            self._put(("eof", None))
+
+    def _drain(self):
+        try:
+            while True:
+                self.queue.get_nowait()
+        except queue.Empty:
+            pass
+
+    def _release_source(self):
+        source, self.source = self.source, None
+        if source is not None:
+            source.close()
+
+    def close(self):
+        # Join the producer before closing the source. A _put-blocked producer returns within one _put
+        # timeout of the stop event; a read-blocked producer exits after its in-flight read returns. Closing
+        # the source only after the join keeps the transport single-reader: the sync source drains on close,
+        # which would race a producer still reading it.
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        self._drain()
+        self._release_source()
+
+    async def aclose(self):
+        self._stop_event.set()
+        if self._thread.is_alive():
+            # Join off the event loop so the worst-case wait never blocks it.
+            await asyncio.get_running_loop().run_in_executor(None, self._thread.join, 1.0)
+        self._drain()
+        # Release on the loop thread: the async source's close cancels its producer task, which must not
+        # run from an executor thread.
+        self._release_source()
+
+    def _put(self, item: tuple[str, object]) -> bool:
+        while not self._stop_event.is_set():
+            try:
+                self.queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
         return False
 
 

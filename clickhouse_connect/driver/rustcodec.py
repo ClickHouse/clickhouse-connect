@@ -5,11 +5,14 @@ from typing import Any, Literal
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ch_read_formats, ch_write_formats
+from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamFailureError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
+from clickhouse_connect.driver.rustnumpy import build_converters, convert_block
+from clickhouse_connect.driver.streaming import ReadAheadSource
 from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
 from clickhouse_connect.driver.types import ByteSource
 
@@ -65,12 +68,13 @@ def make_native_transform(native_codec: NativeCodec | None = None) -> Transform:
 def rust_query_ineligible_reason(context: QueryContext) -> str | None:
     """Return a short reason the rust decoder cannot serve this query, or None if it can.
 
-    column_oriented, streaming, block_info, column_renamer, and settings/transport_settings/external_data are honored
-    and not listed here. The columns-only LIMIT 0 branch is answered from FORMAT JSON metadata in both clients before
-    any transform runs.
+    column_oriented, streaming, block_info, column_renamer, numpy/pandas output, and
+    settings/transport_settings/external_data are honored and not listed here. The columns-only LIMIT 0 branch is
+    answered from FORMAT JSON metadata in both clients before any transform runs.
     """
-    if context.use_numpy or context.as_pandas:
-        return "numpy/pandas output"
+    if context.use_numpy and options.arrow is None:
+        # numpy and pandas output route through the zero-copy Arrow exit, which needs pyarrow.
+        return "pyarrow not installed"
     if context.query_formats or context.column_formats:
         return "query/column formats"
     if ch_read_formats:
@@ -162,8 +166,12 @@ class RustNativeTransform:
             source.close()
             raise NotSupportedError('The rust native codec is unavailable (_ch_core not importable); use native_codec="python"')
 
+        # Read-ahead: a daemon thread pulls transport chunks into a bounded queue so the network read overlaps
+        # decode. The consumer generator re-raises producer errors verbatim, in stream order, so the exception
+        # mapping, tag scanning, and last-chunk heuristics below run unchanged on the consuming thread.
+        read_source = ReadAheadSource(source)
         decoder = core.StreamDecoder(has_block_info=context.block_info)
-        exception_tag = getattr(source, "exception_tag", None)
+        exception_tag = read_source.exception_tag
         scanner = _ExceptionTagScanner(exception_tag) if exception_tag else None
         last_chunk = b""
 
@@ -172,29 +180,29 @@ class RustNativeTransform:
             # consuming thread with the same mapping the Python codec uses; the source is closed before every raise.
             nonlocal last_chunk
             try:
-                for chunk in source.gen:
+                for chunk in read_source.gen:
                     last_chunk = chunk
                     if scanner is not None:
                         hit = scanner.push(chunk)
                         if hit is not None:
-                            source.close()
+                            read_source.close()
                             raise StreamFailureError(extract_exception_with_tag(hit, exception_tag) or extract_error_message(hit))
                     yield from decoder.feed(chunk)
                 yield from decoder.finish()
             except StreamFailureError:
                 raise
             except EOFError as ex:
-                source.close()
+                read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
                     raise StreamFailureError(extract_error_message(last_chunk)) from ex
                 raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
             except ValueError as ex:
-                source.close()
+                read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
                     raise StreamFailureError(extract_error_message(last_chunk)) from ex
                 raise _unsupported_decode_error(ex) from ex
             except Exception as ex:
-                source.close()
+                read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
                     raise StreamFailureError(extract_error_message(last_chunk)) from ex
                 if ex.__class__.__name__ == "ClientPayloadError":
@@ -205,20 +213,42 @@ class RustNativeTransform:
         try:
             first = next(blocks)
         except StopIteration:
-            source.close()
-            return QueryResult([])
+            read_source.close()
+            return NumpyResult() if context.use_numpy else QueryResult([])
 
         renamer = context.column_renamer
         try:
             names = tuple(renamer(name) if renamer is not None else name for name in first.column_names)
             col_types = tuple(registry.get_from_name(type_name) for type_name in first.column_type_names)
-            first_columns = first.to_python_columns()
+            if context.use_numpy:
+                converters = build_converters(col_types, context)
+                first_columns = convert_block(first, converters)
+            else:
+                first_columns = first.to_python_columns()
         except NotImplementedError as ex:
-            source.close()
+            read_source.close()
             raise _unsupported_decode_error(ex) from ex
         except Exception:
-            source.close()
+            read_source.close()
             raise
+
+        if context.use_numpy:
+            d_types = [col.dtype if hasattr(col, "dtype") else "O" for col in first_columns]
+
+            def np_block_gen() -> Generator[list, None, None]:
+                yield first_columns
+                for batch in blocks:
+                    try:
+                        columns = convert_block(batch, converters)
+                    except NotImplementedError as ex:
+                        read_source.close()
+                        raise _unsupported_decode_error(ex) from ex
+                    except Exception:
+                        read_source.close()
+                        raise
+                    yield columns
+
+            return NumpyResult(np_block_gen(), names, col_types, d_types, read_source)
 
         def block_gen() -> Generator[list, None, None]:
             yield first_columns
@@ -226,14 +256,14 @@ class RustNativeTransform:
                 try:
                     columns = batch.to_python_columns()
                 except NotImplementedError as ex:
-                    source.close()
+                    read_source.close()
                     raise _unsupported_decode_error(ex) from ex
                 except Exception:
-                    source.close()
+                    read_source.close()
                     raise
                 yield columns
 
-        return QueryResult(None, block_gen(), names, col_types, context.column_oriented, source)
+        return QueryResult(None, block_gen(), names, col_types, context.column_oriented, read_source)
 
     def build_insert(self, context: InsertContext) -> Generator[bytes, None, None]:
         core = _ch_core_module()
@@ -248,6 +278,17 @@ class RustNativeTransform:
                     'native_codec="rust_strict" does not support global write format overrides; use native_codec="python" or "rust"'
                 )
             logger.debug("Global write format override set; using the Python codec")
+            return NativeTransform.build_insert(context)
+
+        if context.col_simple_formats or context.col_type_formats or context.type_formats:
+            # The rust encoder ignores user column/query formats. Gate on the compiled format dicts, which are
+            # built from the user dict at init. _convert_pandas injects a harmless column_formats["int"] hint
+            # for datetime columns post-init, and the rust encoder already accepts the raw int values it feeds.
+            if self.strict:
+                raise NotSupportedError(
+                    'native_codec="rust_strict" does not support per-column or per-type write formats; use native_codec="python" or "rust"'
+                )
+            logger.debug("Per-column or per-type write format set; using the Python codec")
             return NativeTransform.build_insert(context)
 
         column_names = list(context.column_names)

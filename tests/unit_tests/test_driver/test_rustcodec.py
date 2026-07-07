@@ -41,8 +41,16 @@ def eligible_ctx(**kwargs) -> QueryContext:
     return QueryContext(apply_server_tz=True, server_tz=timezone.utc, **kwargs)
 
 
-def _uint64_ctx(data, block_size=None) -> InsertContext:
-    return InsertContext("fake_table", ["key"], [get_from_name("UInt64")], data, block_size=block_size)
+def _uint64_ctx(data, block_size=None, query_formats=None, column_formats=None) -> InsertContext:
+    return InsertContext(
+        "fake_table",
+        ["key"],
+        [get_from_name("UInt64")],
+        data,
+        block_size=block_size,
+        query_formats=query_formats,
+        column_formats=column_formats,
+    )
 
 
 @pytest.fixture(name="restore_native_codec")
@@ -144,8 +152,6 @@ def _ctx_response_tz():
 @pytest.mark.parametrize(
     "builder",
     [
-        pytest.param(lambda: eligible_ctx(use_numpy=True), id="use_numpy"),
-        pytest.param(lambda: eligible_ctx(as_pandas=True), id="as_pandas"),
         pytest.param(lambda: eligible_ctx(query_formats={"Int*": "string"}), id="query_formats"),
         pytest.param(lambda: eligible_ctx(column_formats={"x": "string"}), id="column_formats"),
         pytest.param(lambda: eligible_ctx(use_none=False), id="use_none"),
@@ -169,10 +175,19 @@ def test_rust_query_ineligible(builder):
         pytest.param(lambda: eligible_ctx(column_oriented=True), id="column_oriented"),
         pytest.param(lambda: eligible_ctx(streaming=True), id="streaming"),
         pytest.param(lambda: eligible_ctx(rename_response_column="remove_prefix"), id="renamer"),
+        pytest.param(lambda: eligible_ctx(use_numpy=True), id="use_numpy"),
+        pytest.param(lambda: eligible_ctx(use_numpy=True, as_pandas=True), id="as_pandas"),
     ],
 )
 def test_rust_query_eligible(builder):
     assert rust_query_ineligible_reason(builder()) is None
+
+
+def test_rust_query_ineligible_pyarrow_missing(monkeypatch):
+    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
+    assert rust_query_ineligible_reason(eligible_ctx(use_numpy=True)) == "pyarrow not installed"
+    # Non-numpy queries never touch the Arrow exit, so a missing pyarrow is irrelevant.
+    assert rust_query_ineligible_reason(eligible_ctx()) is None
 
 
 def test_rust_query_ineligible_global_read_format(clean_formats):
@@ -188,7 +203,7 @@ def test_rust_query_ineligible_global_read_format(clean_formats):
 def test_strict_ineligible_raises_and_closes_source():
     src = FakeSource([])
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx(use_numpy=True))
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx(use_none=False))
     assert src.closed is True
 
 
@@ -206,7 +221,7 @@ def test_non_strict_ineligible_delegates_to_python(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
     src = FakeSource([])
-    result = RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_numpy=True))
+    result = RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
     assert result is sentinel
     assert src.closed is False
 
@@ -299,6 +314,61 @@ def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, cle
     rust_out = b"".join(RustNativeTransform(strict=False).build_insert(rust_ctx))
     python_out = b"".join(NativeTransform.build_insert(python_ctx))
     assert rust_out == python_out
+
+
+_USER_FORMATS = [
+    pytest.param({"column_formats": {"absent_col": "string"}}, id="column_format"),
+    pytest.param({"query_formats": {"IPv4": "string"}}, id="query_format"),
+]
+
+
+@pytest.mark.parametrize("fmt", _USER_FORMATS)
+def test_build_insert_user_format_strict_raises(monkeypatch, fmt):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run when a user format is set")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)], **fmt))
+
+
+@pytest.mark.parametrize("fmt", _USER_FORMATS)
+def test_build_insert_user_format_non_strict_falls_back(monkeypatch, fmt):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run when a user format is set")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_uint64_ctx([(13,), (79,)], block_size=1, **fmt)))
+    python_out = b"".join(NativeTransform.build_insert(_uint64_ctx([(13,), (79,)], block_size=1, **fmt)))
+    assert rust_out == python_out
+
+
+def test_build_insert_datetime_dataframe_routes_rust(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    calls = []
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(names, type_names, columns, row_count, prefix):
+            calls.append((names, type_names, columns, row_count, prefix))
+            return b"rust_block"
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    df = pd.DataFrame({"ts": pd.to_datetime(["2020-01-01 00:00:13", "2020-01-01 00:01:19"])})
+    ctx = InsertContext("fake_table", ["ts"], [get_from_name("DateTime")], df)
+
+    chunks = list(RustNativeTransform(strict=True).build_insert(ctx))
+
+    # _convert_pandas injects the "int" hint into column_formats, but the compiled dicts stay empty,
+    # so rust_strict still serves the insert instead of raising.
+    assert ctx.column_formats == {"ts": "int"}
+    assert ctx.col_simple_formats == {}
+    assert chunks == [b"rust_block"]
+    assert len(calls) == 2  # probe + one block
 
 
 def test_build_insert_success(monkeypatch):

@@ -10,6 +10,7 @@ import zstandard
 
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.streaming import (
+    ReadAheadSource,
     StreamingInsertSource,
     StreamingResponseSource,
     SyncStreamingInsertSource,
@@ -455,6 +456,79 @@ async def test_streaming_insert_backpressure():
 
     assert len(received) == 100
     assert received == chunks
+
+
+class MockByteSource:
+    """Mock ByteSource for ReadAheadSource tests."""
+
+    def __init__(self, chunks, exception_tag=None, error=None):
+        self._chunks = list(chunks)
+        self._error = error
+        self.exception_tag = exception_tag
+        self.closed = False
+
+    @property
+    def gen(self):
+        yield from self._chunks
+        if self._error is not None:
+            raise self._error
+
+    def close(self):
+        self.closed = True
+
+
+def test_read_ahead_chunk_order():
+    src = MockByteSource([b"a", b"b", b"c"])
+    read_source = ReadAheadSource(src)
+    assert list(read_source.gen) == [b"a", b"b", b"c"]
+    read_source.close()
+    assert src.closed is True
+
+
+def test_read_ahead_gen_cached():
+    read_source = ReadAheadSource(MockByteSource([b"a"]))
+    assert read_source.gen is read_source.gen
+    read_source.close()
+
+
+def test_read_ahead_error_forwarded_verbatim():
+    err = ValueError("boom")
+    src = MockByteSource([b"a", b"b"], error=err)
+    read_source = ReadAheadSource(src)
+    collected = []
+    with pytest.raises(ValueError, match="boom") as excinfo:
+        for chunk in read_source.gen:
+            collected.append(chunk)
+    assert collected == [b"a", b"b"]  # forwarded in stream order, error last
+    assert excinfo.value is err  # verbatim, not re-wrapped
+    read_source.close()
+
+
+def test_read_ahead_tagged_exception_chunk_unchanged():
+    # exception_tag is delegated and the chunk passes through verbatim so the codec scanner can find it.
+    src = MockByteSource([b"prefix __exception__T\r\nboom\r\n"], exception_tag="T")
+    read_source = ReadAheadSource(src)
+    assert read_source.exception_tag == "T"
+    assert list(read_source.gen) == [b"prefix __exception__T\r\nboom\r\n"]
+    read_source.close()
+
+
+def test_read_ahead_close_during_block_terminates_thread():
+    # A large producer fills the bounded queue while the consumer reads nothing, so the producer blocks in _put.
+    src = MockByteSource([bytes([i % 256]) for i in range(500)])
+    read_source = ReadAheadSource(src, maxsize=2)
+    assert next(read_source.gen) == b"\x00"
+    read_source.close()
+    assert src.closed is True
+    assert read_source._thread.is_alive() is False
+
+
+def test_read_ahead_join_on_close():
+    src = MockByteSource([b"a", b"b"])
+    read_source = ReadAheadSource(src)
+    read_source.close()
+    assert read_source._thread.is_alive() is False
+    assert src.closed is True
 
 
 if __name__ == "__main__":

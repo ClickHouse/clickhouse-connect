@@ -62,7 +62,12 @@ from clickhouse_connect.driver.query import (
     returns_empty_string_on_empty_body,
 )
 from clickhouse_connect.driver.rustcodec import NativeCodec, make_native_transform
-from clickhouse_connect.driver.streaming import StreamingFileAdapter, StreamingInsertSource, StreamingResponseSource
+from clickhouse_connect.driver.streaming import (
+    ReadAheadSource,
+    StreamingFileAdapter,
+    StreamingInsertSource,
+    StreamingResponseSource,
+)
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import Transform
 
@@ -726,8 +731,11 @@ class AsyncClient(Client):
         query_result.summary = self._summary(response)
 
         # Attach streaming_source to query_result.source to ensure it gets closed
-        #  when the query result is closed (e.g. by StreamContext.__exit__)
-        query_result.source = streaming_source
+        #  when the query result is closed (e.g. by StreamContext.__exit__). The rust codec wraps the
+        #  byte source in a ReadAheadSource whose close() stops the read-ahead thread and chains through
+        #  to streaming_source, so do not clobber it.
+        if not isinstance(query_result.source, ReadAheadSource):
+            query_result.source = streaming_source
 
         return query_result
 
