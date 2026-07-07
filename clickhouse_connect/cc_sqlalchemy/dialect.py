@@ -13,7 +13,7 @@ from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 from clickhouse_connect.dbapi.cursor import Cursor
-from clickhouse_connect.driver.binding import format_str, quote_identifier
+from clickhouse_connect.driver.binding import quote_identifier
 
 
 class ClickHouseDialect(DefaultDialect):
@@ -105,7 +105,10 @@ class ClickHouseDialect(DefaultDialect):
 
     @staticmethod
     def has_database(connection, db_name):
-        return (connection.execute(text(f"SELECT name FROM system.databases WHERE name = {format_str(db_name)}"))).rowcount > 0
+        # Use SHOW DATABASES (like get_schema_names) rather than system.databases:
+        # DataLakeCatalog databases are hidden from system.databases unless
+        # show_data_lake_catalogs_in_system_tables=1, but SHOW DATABASES lists them.
+        return db_name in [row.name for row in connection.execute(text("SHOW DATABASES"))]
 
     def get_table_names(self, connection, schema=None, **kw):
         cmd = "SHOW TABLES"
