@@ -14,7 +14,7 @@ from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.rustnumpy import build_converters, convert_block
 from clickhouse_connect.driver.streaming import ReadAheadSource
 from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
-from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.driver.types import ByteSource, Closable
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,46 @@ def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
     return b"Code: " in chunk
 
 
+class _BufferedQueryResult(QueryResult):
+    """QueryResult over a fully decoded batch, materialized in one fused pass on first access.
+
+    The stream is fully consumed and closed at parse time; stream accessors raise StreamClosedError and
+    the second orientation accessed transposes from the first, the same states a fully consumed
+    python-codec result reaches.
+    """
+
+    def __init__(self, batch: Any, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
+        super().__init__(None, None, names, col_types, column_oriented, source)
+        self._block_gen = None
+        self._batch = batch
+
+    def _take_batch(self) -> Any:
+        batch, self._batch = self._batch, None
+        return batch
+
+    @property
+    def result_rows(self) -> Any:
+        if self._result_rows is None and self._batch is not None:
+            try:
+                self._result_rows = self._take_batch().to_python_rows()
+            except NotImplementedError as ex:
+                raise _unsupported_decode_error(ex) from ex
+        return QueryResult.result_rows.fget(self)
+
+    @property
+    def result_columns(self) -> Any:
+        if self._result_columns is None and self._result_rows is None and self._batch is not None:
+            try:
+                self._result_columns = self._take_batch().to_python_columns()
+            except NotImplementedError as ex:
+                raise _unsupported_decode_error(ex) from ex
+        return QueryResult.result_columns.fget(self)
+
+    def close(self) -> None:
+        self._batch = None
+        super().close()
+
+
 class RustNativeTransform:
     """FORMAT Native codec backed by the compiled _ch_core module."""
 
@@ -220,6 +260,22 @@ class RustNativeTransform:
         try:
             names = tuple(renamer(name) if renamer is not None else name for name in first.column_names)
             col_types = tuple(registry.get_from_name(type_name) for type_name in first.column_type_names)
+        except Exception:
+            read_source.close()
+            raise
+
+        if not context.use_numpy and not context.streaming:
+            # Buffered query: hold the decoded chunks (~wire size) and materialize the whole result in one
+            # fused pass on first access, instead of building per-block lists that QueryResult re-copies
+            # into the final structure. raw_blocks closes the source before raising, so consuming it needs
+            # no extra guard.
+            batches = [first]
+            batches.extend(blocks)
+            read_source.close()
+            merged = core.ColBatch.from_batches(batches)
+            return _BufferedQueryResult(merged, names, col_types, context.column_oriented, read_source)
+
+        try:
             if context.use_numpy:
                 converters = build_converters(col_types, context)
                 first_columns = convert_block(first, converters)

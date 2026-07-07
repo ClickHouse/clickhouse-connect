@@ -9,7 +9,7 @@ from clickhouse_connect import common
 from clickhouse_connect.common import _native_codec_env_default
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import rustcodec
-from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamClosedError, StreamFailureError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.rustcodec import (
@@ -406,6 +406,25 @@ class _FakeBatch:
         return self._columns
 
 
+class _FakeMerged:
+    def __init__(self, batches):
+        self._batches = batches
+
+    def to_python_columns(self):
+        cols = None
+        for batch in self._batches:
+            batch_cols = batch.to_python_columns()
+            if cols is None:
+                cols = [list(col) for col in batch_cols]
+            else:
+                for acc, col in zip(cols, batch_cols):
+                    acc.extend(col)
+        return cols
+
+    def to_python_rows(self):
+        return list(zip(*self.to_python_columns()))
+
+
 def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
     class _FakeStreamDecoder:
         def __init__(self, has_block_info=False):
@@ -421,8 +440,14 @@ def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
         def finish(self):
             return self._finish
 
+    class _FakeColBatch:
+        @staticmethod
+        def from_batches(batches):
+            return _FakeMerged(batches)
+
     class _FakeCore:
         StreamDecoder = _FakeStreamDecoder
+        ColBatch = _FakeColBatch
 
     return _FakeCore
 
@@ -450,7 +475,7 @@ def test_decode_later_block_unsupported_closes_source(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
     with pytest.raises(NotSupportedError), result.column_block_stream as stream:
         list(stream)
     assert src.closed is True
@@ -461,11 +486,44 @@ def test_decode_early_abandonment_closes_source(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], columns=[[79]])
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
     with result.column_block_stream as stream:
         for _ in stream:
             break
     assert src.closed is True
+
+
+def test_decode_buffered_unsupported_raises_on_access(monkeypatch):
+    batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
+    batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
+    with pytest.raises(NotSupportedError):
+        _ = result.result_rows
+
+
+def test_decode_buffered_result_is_materialized(monkeypatch):
+    batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
+    batch1 = _FakeBatch(["a"], ["Int32"], columns=[[79]])
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
+    assert result.result_rows == [(13,), (79,)]
+    assert result.result_columns == [[13, 79]]
+    with pytest.raises(StreamClosedError):
+        _ = result.column_block_stream
+
+
+def test_decode_buffered_column_oriented(monkeypatch):
+    batch0 = _FakeBatch(["a", "b"], ["Int32", "Int32"], columns=[[13], [1]])
+    batch1 = _FakeBatch(["a", "b"], ["Int32", "Int32"], columns=[[79], [2]])
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(column_oriented=True))
+    assert result.result_columns == [[13, 79], [1, 2]]
 
 
 # --- Decode against real _ch_core --------------------------------------------

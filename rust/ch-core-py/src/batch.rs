@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_long, CString};
 use std::sync::Arc;
 
 use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
@@ -210,7 +210,7 @@ impl ColBatch {
             .map(|f| prepare_column_ctx(py, &f.ch_type))
             .collect::<PyResult<_>>()?;
         for chunk in &self.inner.chunks {
-            check_chunk_width(chunk, num_cols)?;
+            check_chunk_shape(chunk, num_cols)?;
         }
         unsafe {
             let list_ptr = ffi::PyList_New(total_rows as ffi::Py_ssize_t);
@@ -222,33 +222,44 @@ impl ColBatch {
             // panic paths drop the list; list_dealloc tolerates NULL slots.
             let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
 
-            let mut out_row: usize = 0;
-            for chunk in &self.inner.chunks {
-                for row_idx in 0..chunk.num_rows {
-                    let tuple_ptr = ffi::PyTuple_New(num_cols as ffi::Py_ssize_t);
-                    if tuple_ptr.is_null() {
-                        return Err(PyErr::fetch(py));
-                    }
-                    // Safety: sole owned reference, as for the list above;
-                    // tuple_dealloc also tolerates NULL slots on early exit.
-                    let tuple = Bound::from_owned_ptr(py, tuple_ptr);
-
-                    for (col_idx, (col, ctx)) in chunk.columns.iter().zip(&ctxs).enumerate() {
-                        let item = column_value_to_owned_ptr(py, col, ctx, row_idx)?;
-                        // Safety: col_idx < num_cols, the tuple's allocated
-                        // length, and the tuple takes over the owned item.
-                        ffi::PyTuple_SET_ITEM(tuple.as_ptr(), col_idx as ffi::Py_ssize_t, item);
-                    }
-
-                    // Safety: out_row < total_rows, the list's allocated
-                    // length; into_ptr moves the tuple's ownership to the list.
-                    ffi::PyList_SET_ITEM(
-                        list.as_ptr(),
-                        out_row as ffi::Py_ssize_t,
-                        tuple.into_ptr(),
-                    );
-                    out_row += 1;
+            // Allocate every row tuple up front, moved into the list at once,
+            // so the error path drops them through list_dealloc. Column-major
+            // fill leaves NULL slots at later column indexes while an error
+            // unwinds; tuple_dealloc tolerates them.
+            for out_row in 0..total_rows {
+                let tuple_ptr = ffi::PyTuple_New(num_cols as ffi::Py_ssize_t);
+                if tuple_ptr.is_null() {
+                    return Err(PyErr::fetch(py));
                 }
+                // Safety: out_row < total_rows, the list's allocated length;
+                // the list takes over the owned tuple.
+                ffi::PyList_SET_ITEM(list.as_ptr(), out_row as ffi::Py_ssize_t, tuple_ptr);
+            }
+
+            // Column-major fill: dispatch each column's type once per chunk
+            // and write into slot col_idx of each row's tuple.
+            let mut base: usize = 0;
+            for chunk in &self.inner.chunks {
+                let rows = chunk.num_rows;
+                for (col_idx, (col, ctx)) in chunk.columns.iter().zip(&ctxs).enumerate() {
+                    let mut sink = |i: usize, item: *mut ffi::PyObject| {
+                        // Safety: base + i < total_rows, the chunk-row sum the
+                        // list was filled to, so GET_ITEM borrows a live tuple;
+                        // col_idx < num_cols, its allocated length; the tuple
+                        // takes over the owned item.
+                        let tuple =
+                            ffi::PyList_GET_ITEM(list.as_ptr(), (base + i) as ffi::Py_ssize_t);
+                        ffi::PyTuple_SET_ITEM(tuple, col_idx as ffi::Py_ssize_t, item);
+                    };
+                    if fill_fixed_width(py, col, rows, &mut sink)? {
+                        continue;
+                    }
+                    for row_idx in 0..rows {
+                        let item = column_value_to_owned_ptr(py, col, ctx, row_idx)?;
+                        sink(row_idx, item);
+                    }
+                }
+                base += rows;
             }
 
             Ok(list)
@@ -475,22 +486,32 @@ fn make_datetime<'py>(
     }
 }
 
-/// Build one column as a Python list across `chunks`, one owned pointer per
-/// cell via `column_value_to_owned_ptr`. Shared by `column_data` and
-/// `to_python_columns` so every path applies one host-value policy.
-/// Reject a chunk whose column count differs from the schema. The core does
-/// not validate later blocks against the first block's schema, so malformed
-/// multi-block payloads must fail here before any raw list or tuple fill.
-fn check_chunk_width(chunk: &RustColBatch, num_cols: usize) -> PyResult<()> {
+/// Reject a chunk whose column count differs from the schema or whose column
+/// lengths differ from the chunk row count. The core only debug_asserts these
+/// invariants, so malformed payloads must fail here before any fill loop reads
+/// a short buffer or Bool padding bits.
+fn check_chunk_shape(chunk: &RustColBatch, num_cols: usize) -> PyResult<()> {
     if chunk.columns.len() != num_cols {
         return Err(PyValueError::new_err(format!(
             "Malformed payload: chunk has {} columns, expected {num_cols}",
             chunk.columns.len()
         )));
     }
+    for (idx, col) in chunk.columns.iter().enumerate() {
+        if col.len() != chunk.num_rows {
+            return Err(PyValueError::new_err(format!(
+                "Malformed payload: column {idx} has {} rows, chunk expects {}",
+                col.len(),
+                chunk.num_rows
+            )));
+        }
+    }
     Ok(())
 }
 
+/// Build one column as a Python list across `chunks`, one owned pointer per
+/// cell. Shared by `column_data` and `to_python_columns` so every path applies
+/// one host-value policy.
 fn column_to_pylist<'py>(
     py: Python<'py>,
     chunks: &[Arc<RustColBatch>],
@@ -503,6 +524,13 @@ fn column_to_pylist<'py>(
                 "Malformed payload: chunk has {} columns, expected at least {}",
                 chunk.columns.len(),
                 col_idx + 1
+            )));
+        }
+        if chunk.columns[col_idx].len() != chunk.num_rows {
+            return Err(PyValueError::new_err(format!(
+                "Malformed payload: column {col_idx} has {} rows, chunk expects {}",
+                chunk.columns[col_idx].len(),
+                chunk.num_rows
             )));
         }
     }
@@ -520,8 +548,18 @@ fn column_to_pylist<'py>(
         let mut out_row: usize = 0;
         for chunk in chunks {
             let col = &chunk.columns[col_idx];
-            // Hoist the validity branch out of the per-cell loop; most
-            // columns are non-nullable.
+            let base = out_row;
+            let mut sink = |i: usize, item: *mut ffi::PyObject| {
+                // Safety: base + i < total_rows, the chunk-row sum the list
+                // was allocated with, and the list takes over the owned item.
+                ffi::PyList_SET_ITEM(list.as_ptr(), (base + i) as ffi::Py_ssize_t, item);
+            };
+            if fill_fixed_width(py, col, chunk.num_rows, &mut sink)? {
+                out_row += chunk.num_rows;
+                continue;
+            }
+            // Fallback per-cell path. Hoist the validity branch out of the
+            // per-cell loop; most columns are non-nullable.
             match column_validity(col) {
                 None => {
                     for row_idx in 0..chunk.num_rows {
@@ -602,6 +640,19 @@ unsafe fn none_owned_ptr() -> *mut ffi::PyObject {
 
 /// # Safety
 ///
+/// Returns an owned reference; the caller must take over the reference count.
+unsafe fn bool_owned_ptr(value: bool) -> *mut ffi::PyObject {
+    let ptr = if value {
+        ffi::Py_True()
+    } else {
+        ffi::Py_False()
+    };
+    ffi::Py_INCREF(ptr);
+    ptr
+}
+
+/// # Safety
+///
 /// `ptr` must be an owned reference or null; on `Ok` the caller takes over
 /// the reference count.
 unsafe fn ptr_to_result(py: Python<'_>, ptr: *mut ffi::PyObject) -> PyResult<*mut ffi::PyObject> {
@@ -642,6 +693,170 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::Dictionary(c) => c.validity.as_ref(),
         Column::Decimal(c) => c.validity.as_ref(),
     }
+}
+
+/// Tight per-value loop for one primitive column: `make` is the per-value FFI
+/// constructor, resolved once by the caller's variant dispatch rather than per
+/// cell. The nullable arm checks the bitmap per cell but keeps the single
+/// dispatch.
+///
+/// # Safety
+///
+/// Requires the GIL. `make` must return an owned reference or null; each
+/// pointer passed to `sink` is an owned reference the sink must take over
+/// exactly once.
+unsafe fn fill_prim<T, F, S>(
+    py: Python<'_>,
+    values: &[T],
+    validity: Option<&Bitmap>,
+    make: F,
+    sink: &mut S,
+) -> PyResult<()>
+where
+    T: Copy,
+    F: Fn(T) -> *mut ffi::PyObject,
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    match validity {
+        None => {
+            for (i, &v) in values.iter().enumerate() {
+                let item = make(v);
+                if item.is_null() {
+                    return Err(PyErr::fetch(py));
+                }
+                sink(i, item);
+            }
+        }
+        Some(bm) => {
+            for (i, &v) in values.iter().enumerate() {
+                let item = if bm.is_valid(i) {
+                    let made = make(v);
+                    if made.is_null() {
+                        return Err(PyErr::fetch(py));
+                    }
+                    made
+                } else {
+                    none_owned_ptr()
+                };
+                sink(i, item);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Materialize the first `rows` cells of a fixed-width column into `sink`,
+/// dispatching the Column variant once and iterating the values buffer
+/// directly. Returns Ok(false), touching nothing, for a variant with no fast
+/// path (strings, temporal, enum, LowCardinality, ...); those stay on the
+/// per-cell route. Only variants whose ColumnCtx is irrelevant belong here.
+///
+/// # Safety
+///
+/// Requires the GIL. Each pointer passed to `sink` is an owned reference the
+/// sink must take over exactly once.
+unsafe fn fill_fixed_width<S>(
+    py: Python<'_>,
+    col: &Column,
+    rows: usize,
+    sink: &mut S,
+) -> PyResult<bool>
+where
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    // Safety, for the constructor closures below: pure CPython constructors
+    // called with the GIL held; fill_prim null-checks every result.
+    match col {
+        Column::Int8(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLong(c_long::from(v)) },
+            sink,
+        )?,
+        Column::Int16(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLong(c_long::from(v)) },
+            sink,
+        )?,
+        Column::Int32(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLong(c_long::from(v)) },
+            sink,
+        )?,
+        Column::Int64(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLongLong(v) },
+            sink,
+        )?,
+        Column::UInt8(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLong(c_long::from(v)) },
+            sink,
+        )?,
+        Column::UInt16(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLong(c_long::from(v)) },
+            sink,
+        )?,
+        Column::UInt32(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromUnsignedLongLong(v.into()) },
+            sink,
+        )?,
+        Column::UInt64(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromUnsignedLongLong(v) },
+            sink,
+        )?,
+        Column::Float32(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyFloat_FromDouble(v.into()) },
+            sink,
+        )?,
+        Column::Float64(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyFloat_FromDouble(v) },
+            sink,
+        )?,
+        Column::Bool(c) => match &c.validity {
+            None => {
+                for i in 0..rows {
+                    sink(i, bool_owned_ptr(c.get(i)));
+                }
+            }
+            Some(bm) => {
+                for i in 0..rows {
+                    let item = if bm.is_valid(i) {
+                        bool_owned_ptr(c.get(i))
+                    } else {
+                        none_owned_ptr()
+                    };
+                    sink(i, item);
+                }
+            }
+        },
+        _ => return Ok(false),
+    }
+    Ok(true)
 }
 
 /// Build the cell at `index` as an owned pointer, assuming the cell is not

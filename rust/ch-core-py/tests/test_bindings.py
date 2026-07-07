@@ -410,6 +410,153 @@ class TestEncodeNativeBlock:
             _ch_core.encode_native_block(["e"], ["Enum8('ok' = 1)"], [["missing"]], 1)
 
 
+class TestEncodeFastPaths:
+    """Exact list/tuple and buffer-protocol fast paths for primitive columns."""
+
+    def _encode(self, type_name, values, row_count=None):
+        n = len(values) if row_count is None else row_count
+        return _ch_core.encode_native_block(["v"], [type_name], [values], n)
+
+    @pytest.mark.parametrize(
+        "type_name,values",
+        [
+            ("Int8", [-128, -1, 0, 127]),
+            ("Int16", [-32768, 0, 32767]),
+            ("Int32", [-(2**31), 0, 2**31 - 1]),
+            ("Int64", [-(2**63), -1, 0, 2**63 - 1]),
+            ("UInt8", [0, 255]),
+            ("UInt16", [0, 65535]),
+            ("UInt32", [0, 2**32 - 1]),
+            ("UInt64", [0, 1, 2**64 - 1]),
+            ("Float32", [0.0, -1.5, 3.25]),
+            ("Float64", [0.0, -1.5, 1e300]),
+            ("Bool", [True, False, True]),
+        ],
+    )
+    def test_edge_values_match_helper_and_container_kinds_agree(self, type_name, values):
+        from_list = self._encode(type_name, list(values))
+        assert from_list == build_native_block([("v", type_name, values)])
+        assert self._encode(type_name, tuple(values), len(values)) == from_list
+        # Non-list, non-buffer container takes the generic path; same bytes.
+        assert self._encode(type_name, _NdarrayLikeColumn(values), len(values)) == from_list
+
+    @pytest.mark.parametrize(
+        "type_name,values",
+        [
+            ("Int8", [0, 128]),
+            ("Int8", [-129]),
+            ("Int64", [2**63]),
+            ("Int64", [-(2**63) - 1]),
+            ("UInt8", [256]),
+            ("UInt64", [-1]),
+            ("UInt64", [2**64]),
+            ("Float64", [10**400]),
+        ],
+    )
+    def test_out_of_range_raises_conversion_error(self, type_name, values):
+        with pytest.raises(ValueError, match=f"row {len(values) - 1} cannot be converted to {type_name}"):
+            self._encode(type_name, values)
+
+    def test_none_in_non_nullable_raises(self):
+        with pytest.raises(ValueError, match='column "v" row 1 is None but Int64 is not Nullable'):
+            self._encode("Int64", [3, None, 5])
+
+    @pytest.mark.parametrize("make", [list, tuple])
+    def test_nullable_list_and_tuple(self, make):
+        values = [3, None, -(2**63), None, 2**63 - 1]
+        encoded = self._encode("Nullable(Int64)", make(values), len(values))
+        assert encoded == build_native_block([("v", "Nullable(Int64)", values)])
+
+    def test_fallback_types_still_accepted(self):
+        import enum
+
+        class IntLike(enum.IntEnum):
+            SEVEN = 7
+
+        values = [True, IntLike.SEVEN, 3]
+        assert self._encode("Int64", values) == build_native_block([("v", "Int64", [1, 7, 3])])
+        # Exact ints take the fast path into floats; bool goes through the fallback.
+        assert self._encode("Float64", [1, True, 2.5]) == build_native_block(
+            [("v", "Float64", [1.0, 1.0, 2.5])]
+        )
+
+    def test_float32_overflow_becomes_inf(self):
+        encoded = self._encode("Float32", [1e300])
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_data(0)[0] == float("inf")
+
+    def test_list_resized_during_fallback_raises(self):
+        values = [1, None, 3, 4]
+
+        class Evil:
+            def __index__(self):
+                del values[2:]
+                return 7
+
+        values[1] = Evil()
+        with pytest.raises(ValueError, match="resized during encoding"):
+            self._encode("Int64", values, 4)
+
+    @pytest.mark.parametrize(
+        "type_name,dtype,values",
+        [
+            ("Int8", "int8", [-128, 0, 127]),
+            ("Int64", "int64", [-(2**63), 0, 2**63 - 1]),
+            ("UInt64", "uint64", [0, 2**64 - 1]),
+            ("Float32", "float32", [0.0, -1.5, 3.25]),
+            ("Float64", "float64", [0.0, -1.5, 1e300]),
+        ],
+    )
+    def test_numpy_buffer_matches_list_path(self, type_name, dtype, values):
+        np = pytest.importorskip("numpy")
+        arr = np.array(values, dtype=dtype)
+        assert self._encode(type_name, arr, len(values)) == self._encode(type_name, list(values))
+
+    def test_numpy_strided_view_matches_list_path(self):
+        np = pytest.importorskip("numpy")
+        arr = np.arange(10, dtype="int64")[::2]
+        assert self._encode("Int64", arr, 5) == self._encode("Int64", list(arr))
+
+    def test_numpy_mismatched_dtype_falls_back(self):
+        np = pytest.importorskip("numpy")
+        arr = np.array([1, 2, 3], dtype="int32")
+        assert self._encode("Int64", arr, 3) == self._encode("Int64", [1, 2, 3])
+
+    def test_numpy_nullable_is_all_valid(self):
+        np = pytest.importorskip("numpy")
+        arr = np.array([1.5, 2.5], dtype="float64")
+        expected = build_native_block([("v", "Nullable(Float64)", [1.5, 2.5])])
+        assert self._encode("Nullable(Float64)", arr, 2) == expected
+
+    @pytest.mark.parametrize(
+        "type_name,dtype,values",
+        [
+            ("Int64", ">i8", [1, 2, 3]),
+            ("Float64", ">f8", [1.5, -2.5, 1e300]),
+        ],
+    )
+    def test_numpy_non_native_byte_order_matches_list_path(self, type_name, dtype, values):
+        np = pytest.importorskip("numpy")
+        arr = np.array(values, dtype=dtype)
+        assert self._encode(type_name, arr, len(values)) == self._encode(type_name, list(values))
+
+    def test_char_format_buffer_still_raises_for_uint8(self):
+        view = memoryview(b"AB").cast("c")
+        with pytest.raises(ValueError, match="cannot be converted to UInt8"):
+            self._encode("UInt8", view, 2)
+
+    def test_tuple_fallback_types_still_accepted(self):
+        import enum
+
+        class IntLike(enum.IntEnum):
+            SEVEN = 7
+
+        values = (True, IntLike.SEVEN, 3)
+        assert self._encode("Int64", values, 3) == build_native_block([("v", "Int64", [1, 7, 3])])
+        with pytest.raises(ValueError, match="row 1 cannot be converted to Int64"):
+            self._encode("Int64", (1, "x", 3), 3)
+
+
 # ---------------------------------------------------------------------------
 # Integer types
 # ---------------------------------------------------------------------------
@@ -1382,6 +1529,49 @@ class TestFromBatches:
         assert table.schema.names == ["id", "name"]
         assert table.schema == pa.RecordBatchReader.from_stream(reference).read_all().schema
         assert table.num_rows == 0
+
+
+class TestMaterializeFastPath:
+    """Edge values and multi-chunk slot accounting for the typed fill loops."""
+
+    _EDGE_COLUMNS = [
+        ("i8", "Int8", [-128, -1, 127]),
+        ("i64", "Int64", [-(2**63), 0, 2**63 - 1]),
+        ("u32", "UInt32", [0, 2**31, 2**32 - 1]),
+        ("u64", "UInt64", [0, 2**63, 2**64 - 1]),
+        ("f64", "Float64", [-0.5, 0.0, 1.5]),
+        ("b", "Bool", [True, False, True]),
+        ("n", "Nullable(Int64)", [-(2**63), None, 2**63 - 1]),
+    ]
+
+    def test_edge_values_rows_columns_and_column_data(self):
+        batch = _ch_core.ColBatch.decode_native(build_native_block(self._EDGE_COLUMNS))
+        expected_cols = [values for _, _, values in self._EDGE_COLUMNS]
+        assert [list(c) for c in batch.to_python_columns()] == expected_cols
+        assert list(batch.to_python_rows()) == list(zip(*expected_cols))
+        for idx, col in enumerate(expected_cols):
+            assert list(batch.column_data(idx)) == col
+
+    def test_multi_chunk_mixed_fast_and_fallback_columns(self):
+        block = build_native_block(
+            [
+                ("v", "Int64", [-(2**63), 2**63 - 1]),
+                ("s", "String", ["user_1", "user_2"]),
+                ("u", "UInt32", [2**32 - 1, 7]),
+            ]
+        )
+        # The same batch three times stresses the per-chunk row-offset
+        # bookkeeping with duplicate Arc chunks.
+        (part,) = _ch_core.BlockDecoder(block)
+        merged = _ch_core.ColBatch.from_batches([part, part, part])
+        assert merged.num_chunks == 3
+        expected_rows = [(-(2**63), "user_1", 2**32 - 1), (2**63 - 1, "user_2", 7)] * 3
+        assert list(merged.to_python_rows()) == expected_rows
+        assert [list(c) for c in merged.to_python_columns()] == [
+            [-(2**63), 2**63 - 1] * 3,
+            ["user_1", "user_2"] * 3,
+            [2**32 - 1, 7] * 3,
+        ]
 
 
 class TestBlockInfo:

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 
+use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::{PyNotImplementedError, PyValueError};
+use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyByteArray, PyBytes, PyString, PyStringMethods};
+use pyo3::types::{PyAnyMethods, PyByteArray, PyBytes, PyList, PyString, PyStringMethods, PyTuple};
 
 use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
@@ -166,6 +168,9 @@ fn build_plain_column(
 ) -> PyResult<Column> {
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
+    if let Some(column) = try_fast_column(py, name, ch_type, values, row_count, false)? {
+        return Ok(column);
+    }
     let mut scalars = Vec::with_capacity(row_count);
     for row in 0..row_count {
         let value = column_values.get_item(row)?;
@@ -194,6 +199,9 @@ fn build_nullable_column(
 
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
+    if let Some(column) = try_fast_column(py, name, inner, values, row_count, true)? {
+        return Ok(column);
+    }
     let mut null_map = Vec::with_capacity(row_count);
     let mut scalars = Vec::with_capacity(row_count);
     for row in 0..row_count {
@@ -335,6 +343,408 @@ fn check_row_count(name: &str, values: &ColumnValues<'_>, row_count: usize) -> P
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Fast paths for primitive numeric columns. The ChType dispatch runs once per
+// column; the per-value loop reads borrowed pointers from an exact list or
+// tuple, or a matching buffer-protocol container copies straight into Vec<T>.
+// Anything the exact-type checks reject falls back to `convert_scalar` per
+// item, so accepted-type and error semantics match the generic path.
+// ---------------------------------------------------------------------------
+
+/// Per-value conversion for the primitive fast paths.
+trait FastValue: Copy {
+    const DEFAULT: Self;
+
+    /// Convert an exact-type Python object without running Python code.
+    /// `Err(())` means "no fast conversion, use the generic fallback" and
+    /// guarantees no Python exception is left pending.
+    ///
+    /// # Safety
+    ///
+    /// Requires the GIL; `ptr` must be a valid, non-null object pointer.
+    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()>;
+
+    /// Unwrap the `Scalar` produced by the `convert_scalar` fallback.
+    fn from_scalar(scalar: Scalar) -> PyResult<Self>;
+
+    /// Copy a matching buffer-protocol container. `Ok(None)` for types with
+    /// no buffer representation or containers that do not match.
+    fn from_buffer(
+        py: Python<'_>,
+        values: &Bound<'_, PyAny>,
+        row_count: usize,
+    ) -> PyResult<Option<Vec<Self>>> {
+        let _ = (py, values, row_count);
+        Ok(None)
+    }
+
+    fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column;
+}
+
+/// Read an exact `int` as i64. On overflow the pending exception is cleared
+/// and `Err(())` sends the value through the generic fallback, which produces
+/// the standard conversion error.
+///
+/// # Safety
+///
+/// Requires the GIL; `ptr` must be a valid, non-null object pointer.
+#[inline]
+unsafe fn exact_long_as_i64(ptr: *mut ffi::PyObject) -> Result<i64, ()> {
+    if ffi::PyLong_CheckExact(ptr) == 0 {
+        return Err(());
+    }
+    let value = ffi::PyLong_AsLongLong(ptr);
+    if value == -1 && !ffi::PyErr_Occurred().is_null() {
+        ffi::PyErr_Clear();
+        return Err(());
+    }
+    Ok(value)
+}
+
+macro_rules! impl_fast_prim_common {
+    ($ty:ty, $variant:ident) => {
+        fn from_scalar(scalar: Scalar) -> PyResult<Self> {
+            match scalar {
+                Scalar::$variant(value) => Ok(value),
+                _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+            }
+        }
+
+        fn from_buffer(
+            py: Python<'_>,
+            values: &Bound<'_, PyAny>,
+            row_count: usize,
+        ) -> PyResult<Option<Vec<Self>>> {
+            buffer_values::<$ty>(py, values, row_count)
+        }
+
+        fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
+            Column::$variant(match validity {
+                Some(validity) => PrimitiveColumn::new_nullable(values, validity),
+                None => PrimitiveColumn::new(values),
+            })
+        }
+    };
+}
+
+macro_rules! impl_fast_narrow_int {
+    ($ty:ty, $variant:ident) => {
+        impl FastValue for $ty {
+            const DEFAULT: Self = 0;
+
+            #[inline]
+            unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+                <$ty>::try_from(exact_long_as_i64(ptr)?).map_err(|_| ())
+            }
+
+            impl_fast_prim_common!($ty, $variant);
+        }
+    };
+}
+
+impl_fast_narrow_int!(i8, Int8);
+impl_fast_narrow_int!(i16, Int16);
+impl_fast_narrow_int!(i32, Int32);
+impl_fast_narrow_int!(u8, UInt8);
+impl_fast_narrow_int!(u16, UInt16);
+impl_fast_narrow_int!(u32, UInt32);
+
+impl FastValue for i64 {
+    const DEFAULT: Self = 0;
+
+    #[inline]
+    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+        exact_long_as_i64(ptr)
+    }
+
+    impl_fast_prim_common!(i64, Int64);
+}
+
+impl FastValue for u64 {
+    const DEFAULT: Self = 0;
+
+    #[inline]
+    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+        if ffi::PyLong_CheckExact(ptr) == 0 {
+            return Err(());
+        }
+        let value = ffi::PyLong_AsUnsignedLongLong(ptr);
+        if value == u64::MAX && !ffi::PyErr_Occurred().is_null() {
+            ffi::PyErr_Clear();
+            return Err(());
+        }
+        Ok(value)
+    }
+
+    impl_fast_prim_common!(u64, UInt64);
+}
+
+impl FastValue for f64 {
+    const DEFAULT: Self = 0.0;
+
+    #[inline]
+    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+        if ffi::PyFloat_CheckExact(ptr) != 0 {
+            return Ok(ffi::PyFloat_AS_DOUBLE(ptr));
+        }
+        // Exact int: same result as extract::<f64>'s PyFloat_AsDouble, which
+        // reaches PyLong_AsDouble through int.__float__.
+        if ffi::PyLong_CheckExact(ptr) != 0 {
+            let value = ffi::PyLong_AsDouble(ptr);
+            if value == -1.0 && !ffi::PyErr_Occurred().is_null() {
+                ffi::PyErr_Clear();
+                return Err(());
+            }
+            return Ok(value);
+        }
+        Err(())
+    }
+
+    impl_fast_prim_common!(f64, Float64);
+}
+
+impl FastValue for f32 {
+    const DEFAULT: Self = 0.0;
+
+    #[inline]
+    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+        // Matches extract::<f32>: extract as f64, then `as` cast.
+        f64::from_exact(ptr).map(|value| value as f32)
+    }
+
+    impl_fast_prim_common!(f32, Float32);
+}
+
+/// Bool wire byte (0/1); a distinct type so u8 can serve UInt8.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct WireBool(u8);
+
+impl FastValue for WireBool {
+    const DEFAULT: Self = WireBool(0);
+
+    #[inline]
+    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+        if ptr == ffi::Py_True() {
+            Ok(WireBool(1))
+        } else if ptr == ffi::Py_False() {
+            Ok(WireBool(0))
+        } else {
+            Err(())
+        }
+    }
+
+    fn from_scalar(scalar: Scalar) -> PyResult<Self> {
+        match scalar {
+            Scalar::Bool(value) => Ok(WireBool(u8::from(value))),
+            _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+        }
+    }
+
+    fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
+        // SAFETY: WireBool is #[repr(transparent)] over u8, so the buffer can
+        // be viewed as bytes directly.
+        let bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(values.as_ptr().cast(), values.len()) };
+        Column::Bool(match validity {
+            Some(validity) => BoolColumn::from_wire_bytes_nullable(bytes, validity),
+            None => BoolColumn::from_wire_bytes(bytes),
+        })
+    }
+}
+
+/// Copy a one-dimensional buffer whose element type matches `T` exactly
+/// (itemsize, signedness, and alignment are validated by `PyBuffer::get`).
+/// Non-buffer containers and mismatched dtypes return `Ok(None)`.
+///
+/// The format string is revalidated here because `PyBuffer::get` in pyo3
+/// 0.23 accepts b'>' as a matching byte order on little-endian targets and
+/// maps format b'c' (char) to a 1-byte unsigned integer; both would change
+/// the encoded values versus the generic per-item path. Any such buffer
+/// falls through to the generic path instead.
+fn buffer_values<T: Element>(
+    py: Python<'_>,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Option<Vec<T>>> {
+    let Ok(buffer) = PyBuffer::<T>::get(values) else {
+        return Ok(None);
+    };
+    let (order, code) = match *buffer.format().to_bytes() {
+        [code] => (b'@', code),
+        [order, code] => (order, code),
+        _ => return Ok(None),
+    };
+    let native_order = match order {
+        b'@' => true,
+        b'<' | b'=' => cfg!(target_endian = "little"),
+        b'>' | b'!' => cfg!(target_endian = "big"),
+        _ => false,
+    };
+    if !native_order || code == b'c' {
+        return Ok(None);
+    }
+    if buffer.dimensions() != 1 || buffer.item_count() != row_count {
+        return Ok(None);
+    }
+    buffer.to_vec(py).map(Some)
+}
+
+/// Borrowed positional access to an exact list or tuple.
+trait FastSeq {
+    /// Whether Python code run from a conversion fallback can resize the
+    /// container, invalidating later `get` calls.
+    const MUTABLE: bool;
+
+    /// # Safety
+    ///
+    /// Requires the GIL and `index < size()`. The returned pointer is
+    /// borrowed and must be consumed before any Python code runs.
+    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject;
+
+    fn size(&self) -> usize;
+}
+
+struct ListSeq<'a, 'py>(&'a Bound<'py, PyList>);
+
+impl FastSeq for ListSeq<'_, '_> {
+    const MUTABLE: bool = true;
+
+    #[inline]
+    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
+        ffi::PyList_GET_ITEM(self.0.as_ptr(), index as ffi::Py_ssize_t)
+    }
+
+    fn size(&self) -> usize {
+        self.0.len()
+    }
+}
+
+struct TupleSeq<'a, 'py>(&'a Bound<'py, PyTuple>);
+
+impl FastSeq for TupleSeq<'_, '_> {
+    const MUTABLE: bool = false;
+
+    #[inline]
+    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
+        ffi::PyTuple_GET_ITEM(self.0.as_ptr(), index as ffi::Py_ssize_t)
+    }
+
+    fn size(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Convert `row_count` items from an exact list/tuple into a typed vector,
+/// plus a validity bitmap when `nullable`. Items that fail the exact-type
+/// check fall back to `convert_scalar`. The fallback can run arbitrary Python
+/// (`__index__`, `__float__`, ...), so it holds a strong reference to its
+/// item and the container size is revalidated afterwards, before the next
+/// borrowed read could go out of bounds on a shrunk list.
+fn seq_values<T: FastValue, S: FastSeq>(
+    py: Python<'_>,
+    seq: &S,
+    ch_type: &ChType,
+    name: &str,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<(Vec<T>, Option<Bitmap>)> {
+    let mut values = Vec::with_capacity(row_count);
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every fallback revalidates; the borrowed pointer is consumed before
+        // any Python code can run.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            values.push(T::DEFAULT);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        // SAFETY: GIL held; ptr is a valid borrowed item pointer.
+        match unsafe { T::from_exact(ptr) } {
+            Ok(value) => values.push(value),
+            Err(()) => {
+                // SAFETY: ptr is valid here; taking a strong reference keeps
+                // the item alive across any Python code the fallback runs.
+                let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+                let scalar = convert_scalar(py, ch_type, &obj, name, row)?;
+                values.push(T::from_scalar(scalar)?);
+                if S::MUTABLE && seq.size() != row_count {
+                    return Err(PyValueError::new_err(format!(
+                        "column {name:?} was resized during encoding"
+                    )));
+                }
+            }
+        }
+    }
+    Ok((
+        values,
+        null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls)),
+    ))
+}
+
+fn fast_column<T: FastValue>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        let (vals, validity) =
+            seq_values::<T, _>(py, &ListSeq(list), ch_type, name, row_count, nullable)?;
+        return Ok(Some(T::into_column(vals, validity)));
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        let (vals, validity) =
+            seq_values::<T, _>(py, &TupleSeq(tuple), ch_type, name, row_count, nullable)?;
+        return Ok(Some(T::into_column(vals, validity)));
+    }
+    if let Some(vals) = T::from_buffer(py, values, row_count)? {
+        // A buffer holds no Python objects, so a nullable column is all-valid.
+        let validity = nullable.then(|| Bitmap::all_valid(row_count));
+        return Ok(Some(T::into_column(vals, validity)));
+    }
+    Ok(None)
+}
+
+/// Fast column build for primitive numeric types. Returns `Ok(None)` when the
+/// type or container has no fast path; the caller falls through to the
+/// generic scalar loop.
+fn try_fast_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    match ch_type {
+        ChType::Bool => fast_column::<WireBool>(py, name, ch_type, values, row_count, nullable),
+        ChType::Int8 => fast_column::<i8>(py, name, ch_type, values, row_count, nullable),
+        ChType::Int16 => fast_column::<i16>(py, name, ch_type, values, row_count, nullable),
+        ChType::Int32 => fast_column::<i32>(py, name, ch_type, values, row_count, nullable),
+        ChType::Int64 => fast_column::<i64>(py, name, ch_type, values, row_count, nullable),
+        ChType::UInt8 => fast_column::<u8>(py, name, ch_type, values, row_count, nullable),
+        ChType::UInt16 => fast_column::<u16>(py, name, ch_type, values, row_count, nullable),
+        ChType::UInt32 => fast_column::<u32>(py, name, ch_type, values, row_count, nullable),
+        ChType::UInt64 => fast_column::<u64>(py, name, ch_type, values, row_count, nullable),
+        ChType::Float32 => fast_column::<f32>(py, name, ch_type, values, row_count, nullable),
+        ChType::Float64 => fast_column::<f64>(py, name, ch_type, values, row_count, nullable),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Debug)]
