@@ -141,6 +141,18 @@ def test_public_same_key_statement_wins(mock_engine):
     assert seen == [{"max_execution_time": 60}]
 
 
+def test_public_engine_level_default_composes(mock_engine):
+    # Engine-level defaults are the recommended shape; they must compose like connection-level ones.
+    engine, client = mock_engine
+    derived = engine.execution_options(settings={"log_comment": "eng_default"})
+    with derived.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")  # force dialect init before we assert
+        client.query.reset_mock()
+        stmt = text("SELECT 13").execution_options(settings={"max_execution_time": 30})
+        conn.execute(stmt)
+    assert _query_settings(client) == [{"log_comment": "eng_default", "max_execution_time": 30}]
+
+
 def test_public_statement_only_unchanged(mock_engine):
     engine, client = mock_engine
     seen = _run_with_settings(engine, client, None, {"max_threads": 3})
