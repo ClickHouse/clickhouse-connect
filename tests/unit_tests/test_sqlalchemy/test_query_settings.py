@@ -1,7 +1,11 @@
 """Per-query ClickHouse settings threading through the DB-API cursor and dialect (issue #838)."""
 
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.dbapi.cursor import Cursor
@@ -86,3 +90,70 @@ def test_dialect_do_execute_missing_settings_key_forwards_none():
     context = _FakeContext({})
     ClickHouseDialect().do_execute(Cursor(client), "SELECT 13", None, context=context)
     assert _query_settings(client)[0] is None
+
+
+class _StubColType:
+    name = "Int32"
+
+
+class _OneRowResult:
+    result_set = [[13]]
+    column_names = ["v"]
+    column_types = [_StubColType()]
+    summary: dict[str, Any] = {}
+
+
+@pytest.fixture(name="mock_engine")
+def mock_engine_fixture():
+    client = Mock()
+    client.query.return_value = _OneRowResult()
+    with patch("clickhouse_connect.dbapi.connection.create_client", return_value=client):
+        engine: Engine = create_engine("clickhousedb://user_1:pwd@localhost:8123/default")
+        try:
+            yield engine, client
+        finally:
+            engine.dispose()
+
+
+def _run_with_settings(engine, client, conn_settings, stmt_settings):
+    """Execute one statement through the public path and return the settings dicts seen by the client."""
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")  # force dialect init before we assert
+        if conn_settings is not None:
+            conn = conn.execution_options(settings=conn_settings)
+        client.query.reset_mock()
+        stmt = text("SELECT 13")
+        if stmt_settings is not None:
+            stmt = stmt.execution_options(settings=stmt_settings)
+        conn.execute(stmt)
+    return _query_settings(client)
+
+
+def test_public_disjoint_settings_compose(mock_engine):
+    engine, client = mock_engine
+    seen = _run_with_settings(engine, client, {"log_comment": "req_1"}, {"max_execution_time": 30})
+    assert seen == [{"log_comment": "req_1", "max_execution_time": 30}]
+
+
+def test_public_same_key_statement_wins(mock_engine):
+    engine, client = mock_engine
+    seen = _run_with_settings(engine, client, {"max_execution_time": 30}, {"max_execution_time": 60})
+    assert seen == [{"max_execution_time": 60}]
+
+
+def test_public_statement_only_unchanged(mock_engine):
+    engine, client = mock_engine
+    seen = _run_with_settings(engine, client, None, {"max_threads": 3})
+    assert seen == [{"max_threads": 3}]
+
+
+def test_public_connection_only_unchanged(mock_engine):
+    engine, client = mock_engine
+    seen = _run_with_settings(engine, client, {"log_comment": "req_1"}, None)
+    assert seen == [{"log_comment": "req_1"}]
+
+
+def test_public_no_settings_forwards_none(mock_engine):
+    engine, client = mock_engine
+    seen = _run_with_settings(engine, client, None, None)
+    assert seen == [None]
