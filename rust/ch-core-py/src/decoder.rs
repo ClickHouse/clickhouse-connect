@@ -41,6 +41,9 @@ pub(crate) fn decode_err(e: DecodeError) -> PyErr {
         DecodeError::InvalidArray { column, reason } => PyValueError::new_err(format!(
             "Invalid Array layout for column '{column}': {reason}"
         )),
+        DecodeError::InvalidTuple { column, reason } => PyValueError::new_err(format!(
+            "Invalid Tuple layout for column '{column}': {reason}"
+        )),
         DecodeError::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             PyEOFError::new_err(format!("Truncated Native data: {e}"))
         }

@@ -1904,6 +1904,9 @@ fn column_from_scalars(
         ChType::Array(_) => Err(PyNotImplementedError::new_err(
             "Array columns are built by build_array_column, not the scalar path",
         )),
+        ChType::Tuple(_) | ChType::Map(..) => Err(PyNotImplementedError::new_err(
+            "Tuple and Map columns are not supported for insert",
+        )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
@@ -2080,6 +2083,9 @@ fn convert_scalar(
         ChType::Array(_) => Err(PyNotImplementedError::new_err(
             "Array columns are built by build_array_column, not the scalar path",
         )),
+        ChType::Tuple(_) | ChType::Map(..) => Err(PyNotImplementedError::new_err(
+            "Tuple and Map columns are not supported for insert",
+        )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
@@ -2117,6 +2123,9 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         } => Ok(Scalar::Bytes(vec![0; decimal_width(*precision)?])),
         ChType::Array(_) => Err(PyNotImplementedError::new_err(
             "Array columns are built by build_array_column, not the scalar path",
+        )),
+        ChType::Tuple(_) | ChType::Map(..) => Err(PyNotImplementedError::new_err(
+            "Tuple and Map columns are not supported for insert",
         )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",

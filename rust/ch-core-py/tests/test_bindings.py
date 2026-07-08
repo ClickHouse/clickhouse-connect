@@ -239,15 +239,88 @@ def _encode_plain_body(inner_type, values):
     return bytes(buf)
 
 
-def _element_state_prefix(type_name):
-    """State prefix hoisted to the front of a column, recursing through Array.
+def _split_top_level_commas(s):
+    """Split on commas at paren-depth 0, skipping single-quote and backtick spans."""
+    parts, start, depth, quote = [], 0, 0, None
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                if quote == "`" and i + 1 < len(s) and s[i + 1] == "`":
+                    i += 2
+                    continue
+                quote = None
+        elif ch in "'`":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(s[start:i])
+            start = i + 1
+        i += 1
+    parts.append(s[start:])
+    return [p.strip() for p in parts]
 
-    Only LowCardinality contributes bytes (its u64 key version); Array recurses
-    into its element, every leaf/Nullable writes nothing. Matches the core's
-    write_state_prefix.
+
+def _parse_tuple_element(part):
+    """Parse one `Tuple(...)` element into (name_or_None, type_str)."""
+    if part.startswith("`"):
+        end = part.index("`", 1)
+        return part[1:end], part[end + 1:].strip()
+    # A named element has a top-level space before its type; an unnamed one
+    # (including Decimal(9, 4) or DateTime64(3, 'tz')) has its spaces nested.
+    depth, quote = 0, None
+    for i, ch in enumerate(part):
+        if quote is not None:
+            if ch == quote:
+                quote = None
+        elif ch in "'`":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == " " and depth == 0:
+            return part[:i], part[i + 1:].strip()
+    return None, part
+
+
+def _parse_tuple_elements(type_name):
+    """List of (name_or_None, type_str) for a `Tuple(...)` type string."""
+    inner = type_name[len("Tuple("):-1].strip()
+    if not inner:
+        return []
+    return [_parse_tuple_element(p) for p in _split_top_level_commas(inner)]
+
+
+def _parse_map_types(type_name):
+    """(key_type, value_type) for a `Map(K, V)` type string."""
+    key, value = _split_top_level_commas(type_name[len("Map("):-1])
+    return key, value
+
+
+def _element_state_prefix(type_name):
+    """State prefix hoisted to the front of a column, recursing into containers.
+
+    Only LowCardinality contributes bytes (its u64 key version). Array, Tuple,
+    Map, and Nullable recurse into their inner types in serialization order;
+    every leaf writes nothing. Matches the core's read_state_prefix chain.
     """
     if type_name.startswith("Array("):
         return _element_state_prefix(type_name[len("Array("):-1])
+    if type_name.startswith("Nullable("):
+        return _element_state_prefix(type_name[len("Nullable("):-1])
+    if type_name.startswith("Tuple("):
+        return b"".join(_element_state_prefix(t) for _, t in _parse_tuple_elements(type_name))
+    if type_name.startswith("Map("):
+        key, value = _parse_map_types(type_name)
+        return _element_state_prefix(key) + _element_state_prefix(value)
     if type_name.startswith("LowCardinality("):
         return _lc_key_version()
     return b""
@@ -257,10 +330,19 @@ def _build_body_no_prefix(type_name, values):
     """Column body with its state prefix omitted (already hoisted by the caller)."""
     if type_name.startswith("Array("):
         return _build_array_body(type_name, values)
+    if type_name.startswith("Map("):
+        return _build_map_body(type_name, values)
+    if type_name.startswith("Tuple("):
+        return _build_tuple_body(type_name, values, nullable=False)
     if type_name.startswith("LowCardinality("):
         return _build_low_cardinality_body_no_prefix(type_name, values)
     if type_name.startswith("Nullable("):
         inner = type_name[len("Nullable("):-1]
+        # Nullable(Tuple) is the only nullable container: the tuple-level null
+        # map precedes the tuple body (a null row still carries placeholder
+        # element values on the wire).
+        if inner.startswith("Tuple("):
+            return _build_tuple_body(inner, values, nullable=True)
         buf = bytearray()
         for v in values:
             buf.append(0x01 if v is None else 0x00)
@@ -282,6 +364,48 @@ def _build_array_body(type_name, rows):
         flat.extend(row)
         offsets.extend(struct.pack("<Q", len(flat)))
     return bytes(offsets) + _build_body_no_prefix(inner, flat)
+
+
+def _build_tuple_body(type_name, rows, nullable):
+    """Tuple(T1, ...) body: optional tuple null map, then each element column.
+
+    Each row is a sequence of element values in declaration order. A None row
+    (only for Nullable(Tuple)) sets the null map bit and writes each element's
+    default as a placeholder, exactly as the server serializes a null tuple row.
+    The zero-element Tuple() writes one placeholder byte ('0') per row.
+    """
+    elements = _parse_tuple_elements(type_name)
+    buf = bytearray()
+    if nullable:
+        for row in rows:
+            buf.append(0x01 if row is None else 0x00)
+    if not elements:
+        buf.extend(b"0" * len(rows))
+        return bytes(buf)
+    columns = [[] for _ in elements]
+    for row in rows:
+        for ix in range(len(elements)):
+            columns[ix].append(None if row is None else row[ix])
+    for (_, etype), column in zip(elements, columns):
+        buf.extend(_build_body_no_prefix(etype, column))
+    return bytes(buf)
+
+
+def _build_map_body(type_name, rows):
+    """Map(K, V) body: absolute end-offsets (no leading zero), then the flattened
+    keys column and the flattened values column. Each row is a dict."""
+    key_type, value_type = _parse_map_types(type_name)
+    keys, values = [], []
+    offsets = bytearray()
+    for row in rows:
+        for k, v in row.items():
+            keys.append(k)
+            values.append(v)
+        offsets.extend(struct.pack("<Q", len(keys)))
+    buf = bytearray(offsets)
+    buf.extend(_build_body_no_prefix(key_type, keys))
+    buf.extend(_build_body_no_prefix(value_type, values))
+    return bytes(buf)
 
 
 def build_native_block(columns, *, block_info=False):
@@ -317,6 +441,15 @@ def build_native_block(columns, *, block_info=False):
         if type_name.startswith("Array("):
             buf.extend(_element_state_prefix(type_name))
             buf.extend(_build_array_body(type_name, values))
+            continue
+
+        nullable_tuple = (
+            type_name.startswith("Nullable(")
+            and type_name[len("Nullable("):-1].startswith("Tuple(")
+        )
+        if type_name.startswith("Tuple(") or type_name.startswith("Map(") or nullable_tuple:
+            buf.extend(_element_state_prefix(type_name))
+            buf.extend(_build_body_no_prefix(type_name, values))
             continue
 
         is_nullable = type_name.startswith("Nullable(")
@@ -2194,6 +2327,218 @@ class TestArrayInsertFastPath:
 
 
 # ---------------------------------------------------------------------------
+# Tuple
+# ---------------------------------------------------------------------------
+
+_TUP_KNOWN_UUID = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+
+# (type_name, wire_rows, expected). Each wire row is a sequence of element
+# values; expected None means the decoded column equals wire_rows (as tuples).
+_TUPLE_UNNAMED = [
+    ("Tuple(Int32, String)", [(13, "user_1"), (-1, ""), (79, "sventon")], None),
+    ("Tuple(UInt64, Float64, Bool)",
+     [(0, 1.5, True), (18446744073709551615, -2.5, False)], None),
+    ("Tuple(Int32)", [(13,), (79,), (-2147483648,)], None),
+    ("Tuple(Nullable(Int32), String)", [(13, "a"), (None, "b"), (79, "c")], None),
+    ("Tuple(UUID, IPv4)",
+     [(uuid.UUID(int=0), ipaddress.IPv4Address("1.2.3.4")),
+      (_TUP_KNOWN_UUID, ipaddress.IPv4Address("255.255.255.255"))], None),
+    ("Tuple(LowCardinality(String), Int32)",
+     [("red", 1), ("red", 2), ("blue", 3)], None),
+    ("Tuple(Array(Int64), String)",
+     [([13, 79], "a"), ([], "b"), ([5, 5, 5], "c")], None),
+    ("Tuple(UInt8, Tuple(UInt8, String))",
+     [(1, (2, "x")), (3, (4, "y"))], None),
+    ("Tuple(Map(String, UInt8), Int32)",
+     [({"k1": 1, "k2": 2}, 10), ({}, 20)], None),
+]
+
+_TUPLE_NAMED = [
+    ("Tuple(a Int32, b String)",
+     [(13, "x"), (79, "y")], [{"a": 13, "b": "x"}, {"a": 79, "b": "y"}]),
+    ("Tuple(id UInt64, val Nullable(Int32))",
+     [(1, 13), (2, None)], [{"id": 1, "val": 13}, {"id": 2, "val": None}]),
+    ("Tuple(`a b` Int32, c String)",
+     [(13, "x")], [{"a b": 13, "c": "x"}]),
+]
+
+
+class TestTuple:
+    @pytest.mark.parametrize("type_name,wire_rows,expected", _TUPLE_UNNAMED)
+    def test_unnamed_to_tuple(self, type_name, wire_rows, expected):
+        if expected is None:
+            expected = [tuple(r) for r in wire_rows]
+        built = build_native_block([("t", type_name, wire_rows)])
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == expected
+        assert all(isinstance(v, tuple) for v in decoded)
+
+    @pytest.mark.parametrize("type_name,wire_rows,expected", _TUPLE_NAMED)
+    def test_named_to_dict(self, type_name, wire_rows, expected):
+        built = build_native_block([("t", type_name, wire_rows)])
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == expected
+        assert all(isinstance(v, dict) for v in decoded)
+
+    @pytest.mark.parametrize(
+        "type_name,wire_rows,expected",
+        [
+            ("Tuple(Int32, String)", [(13, "a"), (79, "b")], [(13, "a"), (79, "b")]),
+            ("Tuple(x Int32, y String)", [(13, "a")], [{"x": 13, "y": "a"}]),
+            ("Tuple(Array(Int64), Nullable(String))",
+             [([13], "a"), ([], None)], [([13], "a"), ([], None)]),
+        ],
+    )
+    def test_all_exit_paths_agree(self, type_name, wire_rows, expected):
+        built = build_native_block([("t", type_name, wire_rows)])
+        batch = _ch_core.ColBatch.decode_native(built)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_nullable_tuple_null_rows_are_none(self):
+        # Nullable(Tuple) decodes null rows to None and non-null rows to their
+        # value, across all exit paths. A nullable field inside a non-null tuple
+        # keeps its own None. (clickhouse-connect mis-decodes this rare type, so
+        # the Rust path is the correct reference, not a parity target.)
+        type_name = "Nullable(Tuple(Nullable(Int32), String))"
+        wire_rows = [(13, "a"), None, (None, "b"), None]
+        expected = [(13, "a"), None, (None, "b"), None]
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("t", type_name, wire_rows)]))
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_nullable_named_tuple_null_rows_are_none(self):
+        type_name = "Nullable(Tuple(a UInt64, b String))"
+        wire_rows = [(13, "x"), None, (5, "y")]
+        expected = [{"a": 13, "b": "x"}, None, {"a": 5, "b": "y"}]
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("t", type_name, wire_rows)]))
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_empty_tuple_is_empty_tuple_per_row(self):
+        # Tuple() has one placeholder byte per row and decodes to an empty tuple.
+        built = build_native_block([("t", "Tuple()", [(), (), ()])])
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == [(), (), ()]
+
+    def test_decimal_and_date_element_machinery(self):
+        # Decimal/Date elements carry raw wire values in the helper (unscaled
+        # integer, epoch days) and decode through the recursive per-field
+        # context: the Decimal field builds its scaled decimal.Decimal.
+        day = (dt.date(2024, 1, 2) - dt.date(1970, 1, 1)).days
+        wire_rows = [(100, day), (-350, 0)]
+        built = build_native_block([("t", "Tuple(Decimal(9, 2), Date)", wire_rows)])
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == [
+            (decimal.Decimal("1.00"), dt.date(2024, 1, 2)),
+            (decimal.Decimal("-3.50"), dt.date(1970, 1, 1)),
+        ]
+
+    def test_multi_block_concatenation(self):
+        type_name = "Tuple(Int32, String)"
+        rows_a = [(13, "a"), (79, "b")]
+        rows_b = [(5, "c")]
+        block_a = build_native_block([("t", type_name, rows_a)])
+        block_b = build_native_block([("t", type_name, rows_b)])
+        decoded = list(_ch_core.ColBatch.decode_native(block_a + block_b).column_data(0))
+        assert decoded == [(13, "a"), (79, "b"), (5, "c")]
+
+    def test_truncated_tuple_raises_eof(self):
+        built = build_native_block([("t", "Tuple(Int32, Int32)", [(13, 79)])])
+        with pytest.raises(EOFError):
+            _ch_core.ColBatch.decode_native(built[:-2])
+
+
+# ---------------------------------------------------------------------------
+# Map
+# ---------------------------------------------------------------------------
+
+_MAP_DECODE = [
+    ("Map(String, UInt8)", [{"k1": 1, "k2": 2}, {}, {"x": 255}], None),
+    ("Map(UInt64, String)", [{13: "a", 79: "b"}, {}, {5: "c"}], None),
+    ("Map(String, Nullable(Int32))", [{"a": 13, "b": None}, {}, {"c": 79}], None),
+    ("Map(LowCardinality(String), UInt64)",
+     [{"red": 1, "blue": 2}, {}, {"red": 3}], None),
+    ("Map(UInt8, Array(Int32))", [{1: [13, 79], 2: []}, {}, {3: [5]}], None),
+    ("Map(String, Tuple(UInt8, String))", [{"k": (1, "x")}, {}], None),
+    ("Map(UInt64, Map(UInt64, String))", [{1: {2: "a"}}, {}, {3: {}}], None),
+]
+
+
+class TestMap:
+    @pytest.mark.parametrize("type_name,wire_rows,expected", _MAP_DECODE)
+    def test_round_trip(self, type_name, wire_rows, expected):
+        if expected is None:
+            expected = wire_rows
+        built = build_native_block([("m", type_name, wire_rows)])
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == expected
+        assert all(isinstance(v, dict) for v in decoded)
+
+    @pytest.mark.parametrize(
+        "type_name,wire_rows",
+        [
+            ("Map(String, UInt8)", [{"a": 13, "b": 79}, {}, {"c": 5}]),
+            ("Map(UInt64, Nullable(String))", [{13: "x", 79: None}, {}]),
+            ("Map(String, Array(Int32))", [{"k": [13, 79]}, {}]),
+        ],
+    )
+    def test_all_exit_paths_agree(self, type_name, wire_rows):
+        built = build_native_block([("m", type_name, wire_rows)])
+        batch = _ch_core.ColBatch.decode_native(built)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == wire_rows
+
+    def test_duplicate_keys_last_value_wins(self):
+        # dict input cannot express duplicate keys, so build the entries by hand:
+        # one row with keys [1, 1] and values [10, 20]. dict(zip(...)) keeps the
+        # first position and the last value.
+        body = struct.pack("<Q", 2) + b"\x01\x01" + b"\x0a\x14"
+        block = build_native_block_from_bodies([("m", "Map(UInt8, UInt8)", body)], 1)
+        decoded = list(_ch_core.ColBatch.decode_native(block).column_data(0))
+        assert decoded == [{1: 20}]
+
+    def test_decimal_value_machinery(self):
+        # A Decimal value carries a raw unscaled integer in the helper and
+        # decodes through the value field's context into a scaled decimal.Decimal.
+        built = build_native_block(
+            [("m", "Map(String, Decimal(9, 2))", [{"a": 100, "b": -350}, {}])]
+        )
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == [{"a": decimal.Decimal("1.00"), "b": decimal.Decimal("-3.50")}, {}]
+
+    def test_empty_maps(self):
+        built = build_native_block([("m", "Map(String, UInt8)", [{}, {}, {}])])
+        decoded = list(_ch_core.ColBatch.decode_native(built).column_data(0))
+        assert decoded == [{}, {}, {}]
+
+    def test_multi_block_concatenation(self):
+        type_name = "Map(String, UInt8)"
+        rows_a = [{"a": 13}, {}]
+        rows_b = [{"b": 79, "c": 5}]
+        block_a = build_native_block([("m", type_name, rows_a)])
+        block_b = build_native_block([("m", type_name, rows_b)])
+        decoded = list(_ch_core.ColBatch.decode_native(block_a + block_b).column_data(0))
+        assert decoded == [{"a": 13}, {}, {"b": 79, "c": 5}]
+
+    def test_non_monotonic_offsets_rejected(self):
+        # A Map's offsets share the Array offset validation: a decreasing run is
+        # rejected by the core decoder.
+        body = struct.pack("<Q", 2) + struct.pack("<Q", 1) + b"\x01\x01" + b"\x0a\x14"
+        block = build_native_block_from_bodies([("m", "Map(UInt8, UInt8)", body)], 2)
+        with pytest.raises(ValueError, match="Invalid Array layout"):
+            _ch_core.ColBatch.decode_native(block)
+
+
+# ---------------------------------------------------------------------------
 # Multi-column
 # ---------------------------------------------------------------------------
 
@@ -2387,6 +2732,27 @@ class TestArrowExport:
         assert col.null_count == 1
         assert col.to_pylist() == [1, None, 3]
 
+    def test_arrow_tuple(self):
+        # Tuple exports as an Arrow struct; a named tuple keeps its element names,
+        # an unnamed one uses the core's positional field names.
+        pa = pytest.importorskip("pyarrow")
+        data = build_native_block([("t", "Tuple(a Int32, b String)", [(13, "x"), (79, "y")])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        result = pa.RecordBatchReader.from_stream(batch).read_all()
+        assert pa.types.is_struct(result.schema.field("t").type)
+        assert result.column("t").to_pylist() == [{"a": 13, "b": "x"}, {"a": 79, "b": "y"}]
+
+    def test_arrow_map(self):
+        # Map exports as an Arrow large_list of a key/value struct.
+        pa = pytest.importorskip("pyarrow")
+        data = build_native_block([("m", "Map(String, UInt8)", [{"k1": 1, "k2": 2}, {}])])
+        batch = _ch_core.ColBatch.decode_native(data)
+        result = pa.RecordBatchReader.from_stream(batch).read_all()
+        assert result.column("m").to_pylist() == [
+            [{"key": "k1", "value": 1}, {"key": "k2", "value": 2}],
+            [],
+        ]
+
 
 # ---------------------------------------------------------------------------
 # PipeDecoder fd ownership
@@ -2477,15 +2843,16 @@ class TestArrowCapsuleLifecycle:
 
 class TestUnsupportedType:
     def test_raises_value_error(self):
-        # Tuple is not a supported column type, so it surfaces as a clean
-        # UnsupportedType -> ValueError. (UUID, IPv4/IPv6, Enum, and Array are
-        # decoded by the core now, so they no longer exercise this path.)
+        # JSON is not a supported column type, so it surfaces as a clean
+        # UnsupportedType -> ValueError. (UUID, IPv4/IPv6, Enum, Array, Tuple,
+        # and Map are decoded by the core now, so they no longer exercise this
+        # path.)
         buf = bytearray()
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint_string("id"))
-        buf.extend(_encode_varint_string("Tuple(UInt8, UInt8)"))
-        with pytest.raises(ValueError, match="Unsupported ClickHouse type 'Tuple\\(UInt8, UInt8\\)'"):
+        buf.extend(_encode_varint_string("JSON"))
+        with pytest.raises(ValueError, match="Unsupported ClickHouse type 'JSON'"):
             _ch_core.ColBatch.decode_native(bytes(buf))
 
 

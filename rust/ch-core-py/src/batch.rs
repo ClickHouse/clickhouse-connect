@@ -6,7 +6,7 @@ use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDict, PyList, PyString};
+use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDict, PyList, PyString, PyTuple};
 
 /// Wrapper to make ArrowArrayStream Send-safe for PyCapsule.
 #[repr(transparent)]
@@ -352,6 +352,15 @@ struct ColumnCtx<'py> {
     /// Recursively-prepared context for the element type of an Array column;
     /// `None` for any other type.
     element: Option<Box<ColumnCtx<'py>>>,
+    /// Recursively-prepared per-field contexts. For a Tuple column, one per
+    /// element in declaration order; for a Map column, exactly two (the key
+    /// context then the value context). `None` for any other type.
+    fields: Option<Vec<ColumnCtx<'py>>>,
+    /// Pre-built element-name keys for a NAMED Tuple column, materialized as a
+    /// `dict` keyed by these (clickhouse-connect's default read format).
+    /// `None` for an unnamed Tuple (materialized as a `tuple`) and every
+    /// non-Tuple type.
+    tuple_names: Option<Vec<Bound<'py, PyString>>>,
 }
 
 /// Cached objects to build a `uuid.UUID` the way the Cython codec does:
@@ -488,6 +497,40 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         _ => None,
     };
 
+    // A Tuple builds one field context per element and, for a named tuple, the
+    // pre-built name keys. A Map builds exactly two field contexts (key then
+    // value); its entries live in a nested Tuple column reached directly, so it
+    // needs no tuple_names. `resolved` is the Nullable-unwrapped type, so a
+    // `Nullable(Tuple(...))` reaches the Tuple arm here.
+    let (fields, tuple_names) = match resolved {
+        ChType::Tuple(elements) => {
+            let fields = elements
+                .iter()
+                .map(|(_, t)| prepare_column_ctx(py, t))
+                .collect::<PyResult<Vec<_>>>()?;
+            let named = !elements.is_empty() && elements.iter().all(|(name, _)| name.is_some());
+            // `named` guarantees every element has a name; the empty-string
+            // fallback keeps the map total (one key per field) without an
+            // unwrap even though it is never taken.
+            let names = if named {
+                Some(
+                    elements
+                        .iter()
+                        .map(|(name, _)| PyString::new(py, name.as_deref().unwrap_or_default()))
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            (Some(fields), names)
+        }
+        ChType::Map(key, value) => {
+            let fields = vec![prepare_column_ctx(py, key)?, prepare_column_ctx(py, value)?];
+            (Some(fields), None)
+        }
+        _ => (None, None),
+    };
+
     Ok(ColumnCtx {
         tz,
         fromtimestamp,
@@ -497,6 +540,8 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         ip,
         decimal_cls,
         element,
+        fields,
+        tuple_names,
     })
 }
 
@@ -804,6 +849,12 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::Decimal(c) => c.validity.as_ref(),
         // Arrays carry no array-level validity; element nulls live on `values`.
         Column::Array(_) => None,
+        // A Nullable(Tuple) carries tuple-level validity here; element nulls
+        // live on the field columns. A plain Tuple has `validity == None`.
+        Column::Tuple(c) => c.validity.as_ref(),
+        // Maps are never nullable at the map level; value nulls live on the
+        // values column inside `entries`.
+        Column::Map(_) => None,
     }
 }
 
@@ -1295,6 +1346,117 @@ unsafe fn column_value_nonnull_ptr(
             }
             Ok(list.into_ptr())
         }
+        // Tuple(T1, ...): an unnamed tuple materializes as a Python `tuple`, a
+        // named tuple as a `dict` keyed by the element names, matching
+        // clickhouse-connect's default read format. Field values recurse
+        // through column_value_to_owned_ptr, so a Nullable/LowCardinality/nested
+        // container element composes and a Nullable element yields None.
+        Column::Tuple(c) => {
+            let fctx = ctx.fields.as_deref().ok_or_else(|| ctx_missing("Tuple"))?;
+            if fctx.len() != c.fields.len() {
+                return Err(ctx_missing("Tuple"));
+            }
+            match &ctx.tuple_names {
+                Some(names) => {
+                    let dict_ptr = ffi::PyDict_New();
+                    if dict_ptr.is_null() {
+                        return Err(PyErr::fetch(py));
+                    }
+                    // Safety: dict_ptr came from PyDict_New; binding it drops the
+                    // partially-filled dict on the error path.
+                    let dict =
+                        Bound::from_owned_ptr(py, dict_ptr).downcast_into_unchecked::<PyDict>();
+                    for (field_idx, field_col) in c.fields.iter().enumerate() {
+                        let item =
+                            column_value_to_owned_ptr(py, field_col, &fctx[field_idx], index, None)?;
+                        // Take ownership so an error before/at insertion drops it;
+                        // PyDict_SetItem does not steal, it increfs the value.
+                        let value = Bound::from_owned_ptr(py, item);
+                        if ffi::PyDict_SetItem(
+                            dict.as_ptr(),
+                            names[field_idx].as_ptr(),
+                            value.as_ptr(),
+                        ) < 0
+                        {
+                            return Err(PyErr::fetch(py));
+                        }
+                    }
+                    Ok(dict.into_ptr())
+                }
+                None => {
+                    let tuple_ptr = ffi::PyTuple_New(c.fields.len() as ffi::Py_ssize_t);
+                    if tuple_ptr.is_null() {
+                        return Err(PyErr::fetch(py));
+                    }
+                    // Safety: tuple_ptr came from PyTuple_New; binding it drops the
+                    // partially-filled tuple on the error path (tuple_dealloc
+                    // Py_XDECREFs each slot, tolerating the NULL slots).
+                    let tuple =
+                        Bound::from_owned_ptr(py, tuple_ptr).downcast_into_unchecked::<PyTuple>();
+                    for (field_idx, field_col) in c.fields.iter().enumerate() {
+                        let item =
+                            column_value_to_owned_ptr(py, field_col, &fctx[field_idx], index, None)?;
+                        // Safety: field_idx < tuple len, and the tuple takes over
+                        // the owned item.
+                        ffi::PyTuple_SET_ITEM(tuple.as_ptr(), field_idx as ffi::Py_ssize_t, item);
+                    }
+                    Ok(tuple.into_ptr())
+                }
+            }
+        }
+        // Map(K, V): materialize row `index` as a Python `dict`. The entries are
+        // the flattened Tuple(keys, values) column sliced by the Array-shaped
+        // offsets; guard every offset access like the Array arm. Keys are
+        // inserted in wire order, so a duplicate key keeps its first position and
+        // last value, matching clickhouse-connect's dict(zip(keys, values)).
+        Column::Map(c) => {
+            let fctx = ctx.fields.as_deref().ok_or_else(|| ctx_missing("Map"))?;
+            if fctx.len() != 2 {
+                return Err(ctx_missing("Map"));
+            }
+            let entries = match c.entries.as_ref() {
+                Column::Tuple(t) if t.fields.len() == 2 => t,
+                _ => return Err(map_entries_err()),
+            };
+            let keys_col = &entries.fields[0];
+            let values_col = &entries.fields[1];
+            let start = c
+                .offsets
+                .get(index)
+                .copied()
+                .and_then(|o| usize::try_from(o).ok())
+                .ok_or_else(map_bounds_err)?;
+            let end = c
+                .offsets
+                .get(index + 1)
+                .copied()
+                .and_then(|o| usize::try_from(o).ok())
+                .ok_or_else(map_bounds_err)?;
+            // Bound against the buffers actually indexed below (the decoder
+            // guarantees both equal entries.len(), but guard the exact slices
+            // like the Array arm rather than the declared tuple length).
+            if start > end || end > keys_col.len().min(values_col.len()) {
+                return Err(map_bounds_err());
+            }
+            let dict_ptr = ffi::PyDict_New();
+            if dict_ptr.is_null() {
+                return Err(PyErr::fetch(py));
+            }
+            // Safety: dict_ptr came from PyDict_New; binding it drops the
+            // partially-filled dict on the error path.
+            let dict = Bound::from_owned_ptr(py, dict_ptr).downcast_into_unchecked::<PyDict>();
+            for slot in start..end {
+                let key = column_value_to_owned_ptr(py, keys_col, &fctx[0], slot, None)?;
+                let key = Bound::from_owned_ptr(py, key);
+                let value = column_value_to_owned_ptr(py, values_col, &fctx[1], slot, None)?;
+                let value = Bound::from_owned_ptr(py, value);
+                // PyDict_SetItem increfs both; the Bounds drop our refs after.
+                if ffi::PyDict_SetItem(dict.as_ptr(), key.as_ptr(), value.as_ptr()) < 0 {
+                    return Err(PyErr::fetch(py));
+                }
+            }
+            Ok(dict.into_ptr())
+        }
     }
 }
 
@@ -1308,6 +1470,18 @@ fn ctx_missing(what: &str) -> PyErr {
 /// buffer (out of order, negative, or an end past the element count).
 fn array_bounds_err() -> PyErr {
     PyValueError::new_err("Malformed payload: Array offsets are out of range")
+}
+
+/// Error for a Map column whose offsets are out of range for the entries
+/// buffer (out of order, negative, or an end past the entry count).
+fn map_bounds_err() -> PyErr {
+    PyValueError::new_err("Malformed payload: Map offsets are out of range")
+}
+
+/// Error for a Map column whose entries are not a two-field key/value tuple;
+/// an internal invariant violation (the core always builds this shape).
+fn map_entries_err() -> PyErr {
+    PyValueError::new_err("internal error: Map entries are not a two-field tuple")
 }
 
 /// Error for a UUID/IPv6 cell whose fixed width is not 16 bytes.
