@@ -71,7 +71,7 @@ The code above yields an `output.csv` file with the following content:
 4,"4"
 ```
 
-Similarly, you could save data in [TabSeparated](/core/reference/formats/TabSeparated/TabSeparated) and other formats. See [Formats for Input and Output Data](/core/reference/formats) for an overview of all available format options.
+Similarly, you could save data in [TabSeparated](/reference/formats/TabSeparated/TabSeparated) and other formats. See [Formats for Input and Output Data](/reference/formats) for an overview of all available format options.
 
 ## Multithreaded, multiprocess, and async/event driven use cases {#multithreaded-multiprocess-and-asyncevent-driven-use-cases}
 
@@ -113,8 +113,8 @@ See also: [run_async example](https://github.com/ClickHouse/clickhouse-connect/b
 ## Managing ClickHouse session IDs {#managing-clickhouse-session-ids}
 
 Each ClickHouse query occurs within the context of a ClickHouse "session". Sessions are currently used for two purposes:
-- To associate specific ClickHouse settings with multiple queries (see the [user settings](/core/reference/settings/session-settings)). The ClickHouse `SET` command is used to change the settings for the scope of a user session.
-- To track [temporary tables.](/core/reference/statements/create/table#temporary-tables)
+- To associate specific ClickHouse settings with multiple queries (see the [user settings](/reference/settings/session-settings)). The ClickHouse `SET` command is used to change the settings for the scope of a user session.
+- To track [temporary tables.](/reference/statements/create/table#temporary-tables)
 
 By default, each query executed with a ClickHouse Connect `Client` instance uses that client's session ID. `SET` statements and temporary tables work as expected when using a single client. However, the ClickHouse server doesn't allow concurrent queries within the same session (the client will raise a `ProgrammingError` if attempted). For applications that execute concurrent queries, use one of the following patterns:
 1. Create a separate `Client` instance for each thread/process/event handler that needs session isolation. This preserves per-client session state (temporary tables and `SET` values).

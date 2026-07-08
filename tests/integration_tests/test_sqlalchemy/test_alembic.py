@@ -9,10 +9,16 @@ from alembic import command
 from alembic.config import Config
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import Column, MetaData, Table, inspect, literal_column, text
+from alembic.util import CommandError
+from sqlalchemy import Column, Index, MetaData, Table, inspect, literal_column, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.schema import CreateTable
 
-from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseImpl
+from clickhouse_connect.cc_sqlalchemy.alembic import (
+    ClickHouseImpl,
+    ClickHouseIndex,
+    ClickHouseProjection,
+)
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     Boolean,
     DateTime64,
@@ -385,6 +391,65 @@ def test_alembic_operations_add_column_public_api_live(test_engine: Engine, test
         assert str(payload["server_default"]) == "'{}'"
 
 
+def test_standard_index_operations_fail_before_partial_ddl_live(test_engine: Engine, test_db: str, ch_name):
+    table_name = ch_name("alembic_standard_index")
+    create_table_name = ch_name("alembic_standard_index_create")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (`id` String) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+            op.add_column(table_name, Column("payload", String(), index=True), schema=test_db)
+
+        columns = inspect(conn).get_columns(table_name, schema=test_db)
+        assert [column["name"] for column in columns] == ["id"]
+
+        with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+            op.create_table(
+                create_table_name,
+                Column("id", String(), nullable=False),
+                Index("idx_payload", "id"),
+                MergeTree(order_by="id"),
+                schema=test_db,
+            )
+
+        exists = conn.execute(
+            text("SELECT count() FROM system.tables WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": create_table_name},
+        ).scalar()
+        assert exists == 0
+
+        indexed_table = Table(
+            create_table_name,
+            MetaData(schema=test_db),
+            Column("id", String(), nullable=False),
+            Index("idx_payload", "id"),
+            MergeTree(order_by="id"),
+        )
+        with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+            context.impl.create_table(indexed_table)
+
+        exists = conn.execute(
+            text("SELECT count() FROM system.tables WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": create_table_name},
+        ).scalar()
+        assert exists == 0
+
+        copy_from = Table(table_name, MetaData(), Column("id", String()), schema=test_db)
+        with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+            with op.batch_alter_table(table_name, schema=test_db, recreate="always", copy_from=copy_from) as batch_op:
+                batch_op.create_index("idx_payload", ["id"])
+
+        still_exists = conn.execute(
+            text("SELECT count() FROM system.tables WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": table_name},
+        ).scalar()
+        assert still_exists == 1
+
+
 def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
     table_name = ch_name("alembic_events")
     metadata = MetaData(schema=test_db)
@@ -644,3 +709,286 @@ def test_alembic_reflected_replacing_merge_tree_downgrade_live(test_engine: Engi
             {"database": test_db, "table_name": table_name},
         ).scalar()
         assert "ReplacingMergeTree" in engine_full
+
+
+def test_alembic_index_lifecycle_live(test_engine: Engine, test_db: str, ch_name):
+    """add_clickhouse_indexes emits one ALTER for two indexes, then materialize and drop apply on a live table."""
+    table_name = ch_name("alembic_index")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (`id` String, `name` String) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.add_clickhouse_indexes(
+            table_name,
+            [
+                ClickHouseIndex("idx_name", "name", "bloom_filter(0.01)", granularity=4),
+                ClickHouseIndex("idx_id", "id", "minmax", granularity=1),
+            ],
+            schema=test_db,
+        )
+        op.add_clickhouse_index(table_name, "idx_after_name", "id", "minmax", after_index="idx_name", schema=test_db)
+
+        names = [
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM system.data_skipping_indices WHERE database = :db AND table = :table ORDER BY name"),
+                {"db": test_db, "table": table_name},
+            ).fetchall()
+        ]
+        assert names == ["idx_after_name", "idx_id", "idx_name"]
+
+        op.materialize_clickhouse_index(table_name, "idx_name", if_exists=True, schema=test_db, clickhouse_settings={"mutations_sync": 1})
+
+        op.drop_clickhouse_indexes(
+            table_name,
+            ["idx_name", "idx_after_name"],
+            if_exists=True,
+            schema=test_db,
+            clickhouse_settings={"alter_sync": 2},
+        )
+
+        remaining = [
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM system.data_skipping_indices WHERE database = :db AND table = :table ORDER BY name"),
+                {"db": test_db, "table": table_name},
+            ).fetchall()
+        ]
+        assert remaining == ["idx_id"]
+
+
+def test_alembic_projection_lifecycle_live(test_engine: Engine, test_db: str, ch_name):
+    """add, materialize, and drop of a projection apply on a live table."""
+    table_name = ch_name("alembic_projection")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (`id` Int32, `category` String) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.add_clickhouse_projection(
+            table_name,
+            "proj_category",
+            "SELECT category, count() GROUP BY category",
+            schema=test_db,
+        )
+        op.add_clickhouse_projections(
+            table_name,
+            [
+                ClickHouseProjection("proj_id", "SELECT id ORDER BY id", after_projection="proj_category"),
+                ClickHouseProjection("proj_category_id", "SELECT category, id ORDER BY category, id"),
+            ],
+            schema=test_db,
+        )
+
+        create_sql = conn.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{table_name}`")).scalar()
+        assert "PROJECTION proj_category" in create_sql
+        assert "PROJECTION proj_id" in create_sql
+        assert "PROJECTION proj_category_id" in create_sql
+
+        op.materialize_clickhouse_projection(
+            table_name,
+            "proj_category",
+            if_exists=True,
+            schema=test_db,
+            clickhouse_settings={"mutations_sync": 1},
+        )
+
+        op.drop_clickhouse_projections(
+            table_name,
+            ["proj_category", "proj_id", "proj_category_id"],
+            if_exists=True,
+            schema=test_db,
+        )
+
+        create_sql = conn.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{table_name}`")).scalar()
+        assert "proj_category" not in create_sql
+        assert "proj_id" not in create_sql
+        assert "proj_category_id" not in create_sql
+
+
+def test_alembic_modify_and_reset_table_settings_live(test_engine: Engine, test_db: str, ch_name):
+    """modify_clickhouse_table_settings then reset_clickhouse_table_settings apply and revert a MergeTree setting."""
+    table_name = ch_name("alembic_settings")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (`id` Int32) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        # clickhouse_settings appends a trailing query SETTINGS clause after the MODIFY/RESET SETTING list.
+        op.modify_clickhouse_table_settings(
+            table_name, {"merge_with_ttl_timeout": 3600}, schema=test_db, clickhouse_settings={"alter_sync": 2}
+        )
+        create_sql = conn.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{table_name}`")).scalar()
+        assert "merge_with_ttl_timeout = 3600" in create_sql
+
+        op.reset_clickhouse_table_settings(table_name, ["merge_with_ttl_timeout"], schema=test_db, clickhouse_settings={"alter_sync": 2})
+        create_sql = conn.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{table_name}`")).scalar()
+        assert "merge_with_ttl_timeout = 3600" not in create_sql
+
+
+def test_alembic_rename_table_round_trip_live(test_engine: Engine, test_db: str, ch_name):
+    """rename_table emits RENAME TABLE so the object moves to the new name and the old name is gone."""
+    old_name = ch_name("alembic_rename_old")
+    new_name = ch_name("alembic_rename_new")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{old_name}` (`id` Int32) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.rename_table(old_name, new_name, schema=test_db)
+
+        present = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM system.tables WHERE database = :db AND name IN (:old, :new)"),
+                {"db": test_db, "old": old_name, "new": new_name},
+            ).fetchall()
+        }
+        assert present == {new_name}
+
+
+def test_alembic_materialized_view_helpers_live(test_engine: Engine, test_db: str, ch_name):
+    """create/drop materialized view helpers apply a TO-table view on a live server."""
+    source_name = ch_name("alembic_mv_source")
+    sink_name = ch_name("alembic_mv_sink")
+    view_name = ch_name("alembic_mv")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{source_name}` (`id` UInt32, `value` String) ENGINE MergeTree ORDER BY id"))
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{sink_name}` (`id` UInt32, `value` String) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.create_clickhouse_materialized_view(
+            view_name,
+            sink_name,
+            f"SELECT id, value FROM `{test_db}`.`{source_name}`",
+            if_not_exists=True,
+            schema=test_db,
+            to_schema=test_db,
+        )
+
+        conn.execute(text(f"INSERT INTO `{test_db}`.`{source_name}` VALUES (13, 'user_1')"))
+        rows = conn.execute(text(f"SELECT id, value FROM `{test_db}`.`{sink_name}` ORDER BY id")).fetchall()
+        assert rows == [(13, "user_1")]
+
+        op.drop_clickhouse_materialized_view(view_name, if_exists=True, schema=test_db)
+        still_exists = conn.execute(
+            text("SELECT count() FROM system.tables WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": view_name},
+        ).scalar()
+        assert still_exists == 0
+
+
+def test_alembic_materialized_view_raw_sql_colon_literal_live(test_engine: Engine, test_db: str, ch_name):
+    """Raw SELECT fragments with colon literals must reach ClickHouse without SQLAlchemy bind parsing."""
+    source_name = ch_name("alembic_mv_colon_source")
+    sink_name = ch_name("alembic_mv_colon_sink")
+    view_name = ch_name("alembic_mv_colon")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{source_name}` (`id` UInt32) ENGINE MergeTree ORDER BY id"))
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{sink_name}` (`id` UInt32, `value` String) ENGINE MergeTree ORDER BY id"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.create_clickhouse_materialized_view(
+            view_name,
+            sink_name,
+            f"SELECT id, 'path\\\\:tenant' AS value FROM `{test_db}`.`{source_name}`",
+            schema=test_db,
+            to_schema=test_db,
+        )
+
+        conn.execute(text(f"INSERT INTO `{test_db}`.`{source_name}` VALUES (13)"))
+        rows = conn.execute(text(f"SELECT id, value FROM `{test_db}`.`{sink_name}` ORDER BY id")).fetchall()
+        assert rows == [(13, "path\\:tenant")]
+
+
+def test_alembic_dictionary_helpers_live(test_engine: Engine, test_db: str, ch_name, test_config):
+    """create/drop dictionary helpers apply on a live server."""
+    if test_config.cloud:
+        pytest.skip("Dictionary source references a local table not accessible on Cloud")
+    source_name = ch_name("alembic_dict_helper_source")
+    dictionary_name = ch_name("alembic_dict_helper")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{source_name}` (`id` UInt32, `value` String) ENGINE MergeTree ORDER BY id"))
+        conn.execute(text(f"INSERT INTO `{test_db}`.`{source_name}` VALUES (13, 'user_1')"))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.create_clickhouse_dictionary(
+            dictionary_name,
+            [Column("id", UInt32), Column("value", String)],
+            primary_key="id",
+            source=f"CLICKHOUSE(TABLE '{source_name}')",
+            layout="FLAT",
+            lifetime="MIN 0 MAX 10",
+            if_not_exists=True,
+            schema=test_db,
+            clickhouse_settings={"log_queries": 0},
+        )
+
+        op.reload_clickhouse_dictionary(dictionary_name, schema=test_db)
+        status, element_count = conn.execute(
+            text("SELECT status, element_count FROM system.dictionaries WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": dictionary_name},
+        ).fetchone()
+        assert status == "LOADED"
+        assert element_count == 1
+
+        op.drop_clickhouse_dictionary(dictionary_name, if_exists=True, schema=test_db)
+        still_exists = conn.execute(
+            text("SELECT count() FROM system.dictionaries WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": dictionary_name},
+        ).scalar()
+        assert still_exists == 0
+
+
+def test_alembic_reload_dictionary_live(test_engine: Engine, test_db: str, ch_name, test_config):
+    """reload_clickhouse_dictionary issues SYSTEM RELOAD DICTIONARY so a Dictionary construct loads its source data."""
+    if test_config.cloud:
+        pytest.skip("Dictionary reload sources a local table not accessible on Cloud")
+    source_name = ch_name("alembic_dict_source")
+    dictionary_name = ch_name("alembic_reload_dict")
+    metadata = MetaData(schema=test_db)
+    dictionary = Dictionary(
+        dictionary_name,
+        metadata,
+        Column("id", UInt32),
+        Column("value", String),
+        source=f"CLICKHOUSE(TABLE '{source_name}')",
+        layout="FLAT",
+        lifetime="MIN 0 MAX 10",
+        primary_key="id",
+    )
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{source_name}` (`id` UInt32, `value` String) ENGINE MergeTree ORDER BY id"))
+        conn.execute(text(f"INSERT INTO `{test_db}`.`{source_name}` VALUES (13, 'user_1')"))
+        conn.execute(CreateTable(dictionary))
+
+        context = MigrationContext.configure(connection=conn, opts={"version_table": ch_name("alembic_version")})
+        op = Operations(context)
+
+        op.reload_clickhouse_dictionary(dictionary_name, schema=test_db)
+
+        status, element_count = conn.execute(
+            text("SELECT status, element_count FROM system.dictionaries WHERE database = :db AND name = :name"),
+            {"db": test_db, "name": dictionary_name},
+        ).fetchone()
+        assert status == "LOADED"
+        assert element_count == 1
