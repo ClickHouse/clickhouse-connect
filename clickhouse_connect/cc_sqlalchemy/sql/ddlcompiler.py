@@ -189,15 +189,18 @@ class ChDDLCompiler(DDLCompiler):
         text = f"{quote_identifier(column.name)} {ClickHouseDDLHelper.effective_column_type(column).compile()}"
         materialized = ClickHouseDDLHelper.get_option(column, "materialized")
         alias = ClickHouseDDLHelper.get_option(column, "alias")
+        # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive in ClickHouse.
         if materialized is not None:
             text += f" MATERIALIZED {self.render_default_string(materialized)}"
-            return text
-        if alias is not None:
+        elif alias is not None:
             text += f" ALIAS {self.render_default_string(alias)}"
-            return text
-        default = self.get_column_default_string(column)
-        if default is not None:
-            text += f" DEFAULT {default}"
+        else:
+            default = self.get_column_default_string(column)
+            if default is not None:
+                text += f" DEFAULT {default}"
+        # ClickHouse requires the clause order COMMENT, then CODEC, then TTL.
+        if column.comment:
+            text += f" COMMENT {self.sql_compiler.render_literal_value(column.comment, sqltypes.STRINGTYPE)}"
         codec = ClickHouseDDLHelper.get_option(column, "codec")
         if codec is not None:
             codec_sql = codec if isinstance(codec, str) else ", ".join(str(item) for item in codec)
@@ -205,6 +208,4 @@ class ChDDLCompiler(DDLCompiler):
         ttl = ClickHouseDDLHelper.get_option(column, "ttl")
         if ttl is not None:
             text += f" TTL {self.render_default_string(ttl)}"
-        if column.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(column.comment, sqltypes.STRINGTYPE)}"
         return text
