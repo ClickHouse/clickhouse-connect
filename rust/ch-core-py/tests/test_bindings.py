@@ -136,18 +136,27 @@ def _encode_lc_dict_values(dict_values, value_type):
     return buf
 
 
-def _build_low_cardinality_body(type_name, values):
-    """Encode a LowCardinality(T) column body (SharedDictionariesWithAdditionalKeys).
+def _lc_key_version() -> bytes:
+    """LowCardinality per-column state prefix: the u64 key version."""
+    return struct.pack("<Q", 1)
 
-    Wire layout, matching server SerializationLowCardinality: a u64 key version
-    prefix, then per block a u64 index-type word (HasAdditionalKeysBit set, UInt8
-    index width here), a u64 dictionary size, the dictionary values, a u64 row
-    count, and the UInt8 index per row. For a Nullable inner type, dictionary
-    slot 0 is the NULL sentinel (default inner value) and null rows index it.
+
+def _build_low_cardinality_body_no_prefix(type_name, values):
+    """LowCardinality(T) body without the hoisted key version.
+
+    Per block: a u64 index-type word (HasAdditionalKeysBit set, UInt8 index width
+    here), a u64 dictionary size, the dictionary values, a u64 row count, and the
+    UInt8 index per row. For a Nullable inner type, dictionary slot 0 is the NULL
+    sentinel and null rows index it. A zero-length run writes nothing at all
+    (server limit == 0 early return), which is how an Array of all-empty rows
+    encodes its LowCardinality element column.
     """
     inner = type_name[len("LowCardinality("):-1]
     nullable = inner.startswith("Nullable(")
     value_type = inner[len("Nullable("):-1] if nullable else inner
+
+    if len(values) == 0:
+        return b""
 
     dict_values = []
     slot_of = {}
@@ -166,14 +175,113 @@ def _build_low_cardinality_body(type_name, values):
         raise ValueError("_build_low_cardinality_body: test helper only emits UInt8 indices")
 
     buf = bytearray()
-    buf.extend(struct.pack("<Q", 1))  # key version (per-column state prefix)
     buf.extend(struct.pack("<Q", 0x200))  # HasAdditionalKeysBit | UInt8 index width (tag 0)
     buf.extend(struct.pack("<Q", len(dict_values)))
     buf.extend(_encode_lc_dict_values(dict_values, value_type))
     buf.extend(struct.pack("<Q", len(values)))
     for i in indices:
         buf.append(i)
-    return buf
+    return bytes(buf)
+
+
+def _build_low_cardinality_body(type_name, values):
+    """Full LowCardinality(T) column body: the hoisted key version then the rest."""
+    return _lc_key_version() + _build_low_cardinality_body_no_prefix(type_name, values)
+
+
+def _encode_plain_body(inner_type, values):
+    """Encode a plain (non-wrapper) column body; None renders as the type default."""
+    buf = bytearray()
+    if inner_type in _FIXED_TYPES:
+        fmt, _ = _FIXED_TYPES[inner_type]
+        default = 0 if "Int" in inner_type or "UInt" in inner_type else (
+            0.0 if "Float" in inner_type else 0
+        )
+        for v in values:
+            buf.extend(struct.pack(fmt, v if v is not None else default))
+    elif (temporal_fmt := _temporal_struct_fmt(inner_type)) is not None:
+        for v in values:
+            buf.extend(struct.pack(temporal_fmt, v if v is not None else 0))
+    elif inner_type == "String":
+        for v in values:
+            s = v if v is not None else ""
+            encoded = s if isinstance(s, bytes) else s.encode("utf-8")
+            buf.extend(_encode_varint(len(encoded)))
+            buf.extend(encoded)
+    elif inner_type.startswith("FixedString("):
+        width = int(inner_type[len("FixedString("):-1])
+        for v in values:
+            b = v if v is not None else b"\x00" * width
+            if isinstance(b, str):
+                b = b.encode("utf-8")
+            buf.extend(bytes(b[:width]).ljust(width, b"\x00"))
+    elif inner_type.startswith("Enum8(") or inner_type.startswith("Enum16("):
+        fmt = "b" if inner_type.startswith("Enum8(") else "<h"
+        for v in values:
+            buf.extend(struct.pack(fmt, v if v is not None else 0))
+    elif inner_type == "UUID":
+        for v in values:
+            buf.extend(_uuid_wire_bytes(v if v is not None else uuid.UUID(int=0)))
+    elif inner_type == "IPv4":
+        for v in values:
+            addr = ipaddress.IPv4Address(v if v is not None else 0)
+            buf.extend(int(addr).to_bytes(4, "little"))
+    elif inner_type == "IPv6":
+        for v in values:
+            buf.extend(ipaddress.IPv6Address(v if v is not None else 0).packed)
+    elif inner_type.startswith("Decimal("):
+        precision = int(inner_type[len("Decimal("):-1].split(",")[0])
+        width = _decimal_wire_width(precision)
+        for v in values:
+            buf.extend(int(v if v is not None else 0).to_bytes(width, "little", signed=True))
+    else:
+        raise ValueError(f"build_native_block: unsupported type {inner_type}")
+    return bytes(buf)
+
+
+def _element_state_prefix(type_name):
+    """State prefix hoisted to the front of a column, recursing through Array.
+
+    Only LowCardinality contributes bytes (its u64 key version); Array recurses
+    into its element, every leaf/Nullable writes nothing. Matches the core's
+    write_state_prefix.
+    """
+    if type_name.startswith("Array("):
+        return _element_state_prefix(type_name[len("Array("):-1])
+    if type_name.startswith("LowCardinality("):
+        return _lc_key_version()
+    return b""
+
+
+def _build_body_no_prefix(type_name, values):
+    """Column body with its state prefix omitted (already hoisted by the caller)."""
+    if type_name.startswith("Array("):
+        return _build_array_body(type_name, values)
+    if type_name.startswith("LowCardinality("):
+        return _build_low_cardinality_body_no_prefix(type_name, values)
+    if type_name.startswith("Nullable("):
+        inner = type_name[len("Nullable("):-1]
+        buf = bytearray()
+        for v in values:
+            buf.append(0x01 if v is None else 0x00)
+        buf.extend(_encode_plain_body(inner, values))
+        return bytes(buf)
+    return _encode_plain_body(type_name, values)
+
+
+def _build_array_body(type_name, rows):
+    """Array(T) body: absolute end-offsets (no leading zero) then the element body.
+
+    The element body is the flattened element column written WITHOUT its state
+    prefix, which is hoisted to the front of the whole column.
+    """
+    inner = type_name[len("Array("):-1]
+    flat = []
+    offsets = bytearray()
+    for row in rows:
+        flat.extend(row)
+        offsets.extend(struct.pack("<Q", len(flat)))
+    return bytes(offsets) + _build_body_no_prefix(inner, flat)
 
 
 def build_native_block(columns, *, block_info=False):
@@ -181,7 +289,9 @@ def build_native_block(columns, *, block_info=False):
 
     Each column is (name, type_name, values).
     Supports: Bool, Int8-64, UInt8-64, Float32, Float64, String, FixedString(N),
-    Nullable(*), and LowCardinality(*) over those inner types.
+    UUID, IPv4, IPv6, Enum8/16, Decimal, temporal, Nullable(*), LowCardinality(*),
+    and Array(*) over those inner types. For Array(T) each value is a sequence of
+    elements.
     """
     buf = bytearray()
     if block_info:
@@ -196,63 +306,25 @@ def build_native_block(columns, *, block_info=False):
         buf.extend(_encode_varint_string(name))
         buf.extend(_encode_varint_string(type_name))
 
+        # A zero-row block carries only column headers, no body (server rows>0 gate).
+        if num_rows == 0:
+            continue
+
         if type_name.startswith("LowCardinality("):
             buf.extend(_build_low_cardinality_body(type_name, values))
             continue
 
+        if type_name.startswith("Array("):
+            buf.extend(_element_state_prefix(type_name))
+            buf.extend(_build_array_body(type_name, values))
+            continue
+
         is_nullable = type_name.startswith("Nullable(")
-        inner_type = type_name
+        inner_type = type_name[len("Nullable("):-1] if is_nullable else type_name
         if is_nullable:
-            inner_type = type_name[len("Nullable("):-1]
             for v in values:
                 buf.append(0x01 if v is None else 0x00)
-
-        if inner_type in _FIXED_TYPES:
-            fmt, _ = _FIXED_TYPES[inner_type]
-            default = 0 if "Int" in inner_type or "UInt" in inner_type else (
-                0.0 if "Float" in inner_type else 0
-            )
-            for v in values:
-                buf.extend(struct.pack(fmt, v if v is not None else default))
-        elif (temporal_fmt := _temporal_struct_fmt(inner_type)) is not None:
-            for v in values:
-                buf.extend(struct.pack(temporal_fmt, v if v is not None else 0))
-        elif inner_type == "String":
-            for v in values:
-                s = v if v is not None else ""
-                encoded = s if isinstance(s, bytes) else s.encode("utf-8")
-                buf.extend(_encode_varint(len(encoded)))
-                buf.extend(encoded)
-        elif inner_type.startswith("FixedString("):
-            width = int(inner_type[len("FixedString("):-1])
-            for v in values:
-                b = v if v is not None else b"\x00" * width
-                if isinstance(b, str):
-                    b = b.encode("utf-8")
-                buf.extend(bytes(b[:width]).ljust(width, b"\x00"))
-        elif inner_type.startswith("Enum8(") or inner_type.startswith("Enum16("):
-            # Enum is a plain signed-int buffer on the wire; values are the codes.
-            fmt = "b" if inner_type.startswith("Enum8(") else "<h"
-            for v in values:
-                buf.extend(struct.pack(fmt, v if v is not None else 0))
-        elif inner_type == "UUID":
-            for v in values:
-                buf.extend(_uuid_wire_bytes(v if v is not None else uuid.UUID(int=0)))
-        elif inner_type == "IPv4":
-            for v in values:
-                addr = ipaddress.IPv4Address(v if v is not None else 0)
-                buf.extend(int(addr).to_bytes(4, "little"))
-        elif inner_type == "IPv6":
-            for v in values:
-                buf.extend(ipaddress.IPv6Address(v if v is not None else 0).packed)
-        elif inner_type.startswith("Decimal("):
-            # Values are the raw unscaled integers.
-            precision = int(inner_type[len("Decimal("):-1].split(",")[0])
-            width = _decimal_wire_width(precision)
-            for v in values:
-                buf.extend(int(v if v is not None else 0).to_bytes(width, "little", signed=True))
-        else:
-            raise ValueError(f"build_native_block: unsupported type {inner_type}")
+        buf.extend(_encode_plain_body(inner_type, values))
     return bytes(buf)
 
 
@@ -443,7 +515,7 @@ class TestEncodeNativeBlock:
         with pytest.raises(ValueError, match="FixedString binary value"):
             _ch_core.encode_native_block(["fs"], ["FixedString(4)"], [[b"xy"]], 1)
         with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
-            _ch_core.encode_native_block(["v"], ["Array(Int8)"], [[[13]]], 1)
+            _ch_core.encode_native_block(["v"], ["Tuple(Int8, Int8)"], [[(13, 79)]], 1)
         with pytest.raises(ValueError, match="label"):
             _ch_core.encode_native_block(["e"], ["Enum8('ok' = 1)"], [["missing"]], 1)
 
@@ -1653,6 +1725,281 @@ class TestDecodeDecimal:
 
 
 # ---------------------------------------------------------------------------
+# Array
+# ---------------------------------------------------------------------------
+
+_ARR_KNOWN_UUID = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+_ARR_NY = ZoneInfo("America/New_York")
+
+# DateTime element: tz-aware New York input round-trips to tz-aware New York.
+_ARR_DT_TZ_ROWS = [
+    [dt.datetime(2024, 1, 15, 7, 34, 56, tzinfo=_ARR_NY)],
+    [],
+    [
+        dt.datetime(2000, 6, 15, 12, 0, 0, tzinfo=_ARR_NY),
+        dt.datetime(1970, 1, 1, 0, 0, 0, tzinfo=_ARR_NY),
+    ],
+]
+
+# DateTime64(3) has no timezone, so tz-aware UTC input decodes to the naive UTC
+# wall clock; passing UTC keeps the expectation independent of the host locale.
+_ARR_DT64_UTC_ROWS = [
+    [dt.datetime(2024, 1, 15, 12, 34, 56, 789000, tzinfo=dt.timezone.utc)],
+    [],
+    [
+        dt.datetime(1970, 1, 1, 0, 0, 0, 1000, tzinfo=dt.timezone.utc),
+        dt.datetime(2000, 6, 15, 12, 0, 0, 500000, tzinfo=dt.timezone.utc),
+    ],
+]
+_ARR_DT64_EXPECTED = [
+    [dt.datetime(2024, 1, 15, 12, 34, 56, 789000)],
+    [],
+    [
+        dt.datetime(1970, 1, 1, 0, 0, 0, 1000),
+        dt.datetime(2000, 6, 15, 12, 0, 0, 500000),
+    ],
+]
+
+# (type_name, py_rows, expected) with expected=None meaning it equals py_rows.
+# Every case has multiple rows, at least one empty array, ragged lengths, and
+# nullable element types mix None with values.
+_ARR_ROUND_TRIP = [
+    ("Array(Int32)", [[13, 79], [], [-1, 0, 2147483647], [7]], None),
+    ("Array(Int64)", [[13], [], [9223372036854775807, -9223372036854775808], [5, 5]], None),
+    ("Array(UInt64)", [[0, 18446744073709551615], [], [13, 79, 5]], None),
+    ("Array(Float64)", [[1.5, -2.5], [], [0.0, 1e300]], None),
+    ("Array(Bool)", [[True, False, True], [], [False]], None),
+    ("Array(String)", [["user_1", "user_2"], [], ["", "sventon"]], None),
+    ("Array(FixedString(3))", [[b"abc", b"xyz"], [], [b"a\x00\x00"]], None),
+    ("Array(Date)", [[dt.date(2024, 1, 2), dt.date(1970, 1, 1)], [], [dt.date(2000, 6, 15)]], None),
+    ("Array(DateTime('America/New_York'))", _ARR_DT_TZ_ROWS, None),
+    ("Array(DateTime64(3))", _ARR_DT64_UTC_ROWS, _ARR_DT64_EXPECTED),
+    ("Array(UUID)", [[uuid.UUID(int=0), _ARR_KNOWN_UUID], [], [uuid.UUID(int=79)]], None),
+    (
+        "Array(IPv4)",
+        [
+            [ipaddress.IPv4Address("0.0.0.0"), ipaddress.IPv4Address("1.2.3.4")],
+            [],
+            [ipaddress.IPv4Address("255.255.255.255")],
+        ],
+        None,
+    ),
+    (
+        "Array(IPv6)",
+        [
+            [ipaddress.IPv6Address("::1")],
+            [],
+            [ipaddress.IPv6Address("2001:db8::1"), ipaddress.IPv6Address("::ffff:1.2.3.4")],
+        ],
+        None,
+    ),
+    (
+        "Array(Decimal(9, 2))",
+        [[decimal.Decimal("1.00"), decimal.Decimal("-3.50")], [], [decimal.Decimal("9999999.99")]],
+        None,
+    ),
+    (
+        "Array(Decimal(38, 10))",
+        [[decimal.Decimal("1.5"), decimal.Decimal("-2.25")], [], [decimal.Decimal("0")]],
+        None,
+    ),
+    ("Array(Enum8('a' = 1, 'b' = 2))", [["a", "b"], [], ["b", "a", "b"]], None),
+    ("Array(Nullable(Int32))", [[13, None, 79], [], [None], [7]], None),
+    ("Array(Nullable(String))", [["user_1", None], [], [None, "x"]], None),
+    ("Array(LowCardinality(String))", [["red", "green", "red"], [], ["blue"]], None),
+    ("Array(LowCardinality(Nullable(String)))", [["x", None, "x"], [], [None, "y"]], None),
+    ("Array(Array(Int32))", [[[13, 79], [5]], [], [[7]], [[], [1, 2, 3]]], None),
+]
+
+# (type_name, py_rows, wire_rows, expected): wire_rows is the raw wire form the
+# helper serializes, py_rows is what the encoder is given, expected is the decode.
+# Excludes LowCardinality-in-array because the encoder sets the index word's
+# NeedUpdateDictionary bit that the helper does not, so their bytes differ.
+_ARR_GOLDEN = [
+    ("Array(Int32)", [[13, 79], [], [7]], [[13, 79], [], [7]], [[13, 79], [], [7]]),
+    ("Array(String)", [["user_1", "user_2"], [], ["x"]], [["user_1", "user_2"], [], ["x"]], [["user_1", "user_2"], [], ["x"]]),
+    ("Array(FixedString(3))", [[b"abc"], [], [b"xyz", b"a\x00\x00"]], [[b"abc"], [], [b"xyz", b"a\x00\x00"]], [[b"abc"], [], [b"xyz", b"a\x00\x00"]]),
+    ("Array(UInt64)", [[0, 18446744073709551615], [], [13]], [[0, 18446744073709551615], [], [13]], [[0, 18446744073709551615], [], [13]]),
+    ("Array(Nullable(Int32))", [[13, None], [], [7]], [[13, None], [], [7]], [[13, None], [], [7]]),
+    ("Array(Array(Int32))", [[[13, 79], [5]], [], [[7]]], [[[13, 79], [5]], [], [[7]]], [[[13, 79], [5]], [], [[7]]]),
+    (
+        "Array(UUID)",
+        [[uuid.UUID(int=0), _ARR_KNOWN_UUID], [], [uuid.UUID(int=79)]],
+        [[uuid.UUID(int=0), _ARR_KNOWN_UUID], [], [uuid.UUID(int=79)]],
+        [[uuid.UUID(int=0), _ARR_KNOWN_UUID], [], [uuid.UUID(int=79)]],
+    ),
+    (
+        "Array(IPv4)",
+        [[ipaddress.IPv4Address("1.2.3.4")], [], [ipaddress.IPv4Address("0.0.0.0"), ipaddress.IPv4Address("255.255.255.255")]],
+        [[ipaddress.IPv4Address("1.2.3.4")], [], [ipaddress.IPv4Address("0.0.0.0"), ipaddress.IPv4Address("255.255.255.255")]],
+        [[ipaddress.IPv4Address("1.2.3.4")], [], [ipaddress.IPv4Address("0.0.0.0"), ipaddress.IPv4Address("255.255.255.255")]],
+    ),
+    (
+        "Array(IPv6)",
+        [[ipaddress.IPv6Address("::1")], [], [ipaddress.IPv6Address("2001:db8::1")]],
+        [[ipaddress.IPv6Address("::1")], [], [ipaddress.IPv6Address("2001:db8::1")]],
+        [[ipaddress.IPv6Address("::1")], [], [ipaddress.IPv6Address("2001:db8::1")]],
+    ),
+    (
+        "Array(Date)",
+        [[dt.date(2024, 1, 2)], [], [dt.date(1970, 1, 1), dt.date(2000, 6, 15)]],
+        [
+            [dt.date(2024, 1, 2).toordinal() - 719163],
+            [],
+            [0, dt.date(2000, 6, 15).toordinal() - 719163],
+        ],
+        [[dt.date(2024, 1, 2)], [], [dt.date(1970, 1, 1), dt.date(2000, 6, 15)]],
+    ),
+    (
+        "Array(DateTime64(3))",
+        [
+            [dt.datetime(2024, 1, 15, 12, 34, 56, 789000, tzinfo=dt.timezone.utc)],
+            [],
+            [dt.datetime(1970, 1, 1, 0, 0, 0, 1000, tzinfo=dt.timezone.utc)],
+        ],
+        [[1705322096789], [], [1]],
+        [
+            [dt.datetime(2024, 1, 15, 12, 34, 56, 789000)],
+            [],
+            [dt.datetime(1970, 1, 1, 0, 0, 0, 1000)],
+        ],
+    ),
+    (
+        "Array(Decimal(9, 2))",
+        [[decimal.Decimal("1.00"), decimal.Decimal("-3.50")], [], [decimal.Decimal("0.00")]],
+        [[100, -350], [], [0]],
+        [[decimal.Decimal("1.00"), decimal.Decimal("-3.50")], [], [decimal.Decimal("0.00")]],
+    ),
+    (
+        "Array(Enum8('a' = 1, 'b' = 2))",
+        [["a", "b"], [], ["a"]],
+        [[1, 2], [], [1]],
+        [["a", "b"], [], ["a"]],
+    ),
+]
+
+
+class TestArray:
+    @pytest.mark.parametrize("type_name,py_rows,expected", _ARR_ROUND_TRIP)
+    def test_round_trip(self, type_name, py_rows, expected):
+        if expected is None:
+            expected = py_rows
+        encoded = _ch_core.encode_native_block(["a"], [type_name], [py_rows], len(py_rows))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == expected
+
+    @pytest.mark.parametrize("type_name,py_rows,wire_rows,expected", _ARR_GOLDEN)
+    def test_golden_bytes(self, type_name, py_rows, wire_rows, expected):
+        encoded = _ch_core.encode_native_block(["a"], [type_name], [py_rows], len(py_rows))
+        built = build_native_block([("a", type_name, wire_rows)])
+        assert encoded == built
+        assert list(_ch_core.ColBatch.decode_native(built).column_data(0)) == expected
+
+    def test_golden_decode_low_cardinality_in_array(self):
+        # encode == build is not asserted: the encoder sets the index word's
+        # NeedUpdateDictionary bit while the helper does not, so their bytes
+        # differ. Cover it by decode-of-helper-bytes plus an encode round-trip.
+        rows = [["red", "green", "red"], [], ["blue"]]
+        built = build_native_block([("c", "Array(LowCardinality(String))", rows)])
+        assert list(_ch_core.ColBatch.decode_native(built).column_data(0)) == rows
+        encoded = _ch_core.encode_native_block(
+            ["c"], ["Array(LowCardinality(String))"], [rows], len(rows)
+        )
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    def test_low_cardinality_in_array_all_empty(self):
+        # Every array empty (total_elements == 0): the LowCardinality element
+        # body is absent entirely, so only the hoisted key version and the zero
+        # offsets remain. With no index word to differ, encode == build holds.
+        rows = [[], [], []]
+        built = build_native_block([("c", "Array(LowCardinality(String))", rows)])
+        encoded = _ch_core.encode_native_block(
+            ["c"], ["Array(LowCardinality(String))"], [rows], len(rows)
+        )
+        assert encoded == built
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    @pytest.mark.parametrize(
+        "type_name,rows",
+        [
+            ("Array(Int32)", [[13, 79], [], [7, 5, 5]]),
+            ("Array(Nullable(String))", [["user_1", None], [], [None, "x"]]),
+        ],
+    )
+    def test_all_exit_paths_agree(self, type_name, rows):
+        encoded = _ch_core.encode_native_block(["a"], [type_name], [rows], len(rows))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == rows
+
+    def test_multi_block_concatenation(self):
+        rows_a = [[13, 79], [], [7]]
+        rows_b = [[5], [1, 2], []]
+        block_a = _ch_core.encode_native_block(["a"], ["Array(Int32)"], [rows_a], len(rows_a))
+        block_b = _ch_core.encode_native_block(["a"], ["Array(Int32)"], [rows_b], len(rows_b))
+        merged = _ch_core.ColBatch.from_batches(
+            [
+                _ch_core.ColBatch.decode_native(block_a),
+                _ch_core.ColBatch.decode_native(block_b),
+            ]
+        )
+        assert merged.num_chunks == 2
+        assert list(merged.column_data(0)) == rows_a + rows_b
+        concat = _ch_core.ColBatch.decode_native(block_a + block_b)
+        assert list(concat.column_data(0)) == rows_a + rows_b
+
+    def test_zero_rows(self):
+        encoded = _ch_core.encode_native_block(["a"], ["Array(Int32)"], [[]], 0)
+        assert encoded == build_native_block([("a", "Array(Int32)", [])])
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.num_rows == 0
+        assert batch.column_type_names == ["Array(Int32)"]
+        assert list(batch.column_data(0)) == []
+
+    def test_nullable_array_type_rejected(self):
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["a"], ["Nullable(Array(Int32))"], [[[13]]], 1)
+
+    def test_none_row_rejected(self):
+        with pytest.raises(ValueError, match="is None but Array"):
+            _ch_core.encode_native_block(["a"], ["Array(Int32)"], [[None]], 1)
+
+    @pytest.mark.parametrize("bad", ["abc", b"abc", bytearray(b"abc")])
+    def test_bare_str_or_bytes_row_rejected(self, bad):
+        with pytest.raises(ValueError, match="str or bytes"):
+            _ch_core.encode_native_block(["a"], ["Array(Int32)"], [[bad]], 1)
+
+    def test_unsupported_element_rejected(self):
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["a"], ["Array(Tuple(Int8, Int8))"], [[[(1, 2)]]], 1)
+
+    def test_deeply_nested_type_rejected_not_crash(self):
+        # Past the parser depth cap the type is rejected without a stack overflow.
+        deep = "Array(" * 200 + "Int32" + ")" * 200
+        with pytest.raises(NotImplementedError):
+            _ch_core.encode_native_block(["c"], [deep], [[]], 0)
+
+    def test_unordered_row_rejected(self):
+        for bad in ({3, 1, 2}, {13: 0, 79: 0}):
+            with pytest.raises(ValueError):
+                _ch_core.encode_native_block(["v"], ["Array(Int32)"], [[bad]], 1)
+
+    def test_malformed_offsets_decode_error(self):
+        buf = bytearray()
+        buf.extend(_encode_varint(1))
+        buf.extend(_encode_varint(2))
+        buf.extend(_encode_varint_string("a"))
+        buf.extend(_encode_varint_string("Array(Int32)"))
+        buf.extend(struct.pack("<Q", 2))  # row 0 end offset
+        buf.extend(struct.pack("<Q", 1))  # row 1 end offset decreases -> invalid
+        with pytest.raises(ValueError, match="Invalid Array layout"):
+            _ch_core.ColBatch.decode_native(bytes(buf))
+
+
+# ---------------------------------------------------------------------------
 # Multi-column
 # ---------------------------------------------------------------------------
 
@@ -1936,15 +2283,15 @@ class TestArrowCapsuleLifecycle:
 
 class TestUnsupportedType:
     def test_raises_value_error(self):
-        # Array is not a supported column type, so it surfaces as a clean
-        # UnsupportedType -> ValueError. (UUID, IPv4/IPv6, and Enum are decoded
-        # by the core now, so they no longer exercise this path.)
+        # Tuple is not a supported column type, so it surfaces as a clean
+        # UnsupportedType -> ValueError. (UUID, IPv4/IPv6, Enum, and Array are
+        # decoded by the core now, so they no longer exercise this path.)
         buf = bytearray()
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint_string("id"))
-        buf.extend(_encode_varint_string("Array(UInt8)"))
-        with pytest.raises(ValueError, match="Unsupported ClickHouse type 'Array\\(UInt8\\)'"):
+        buf.extend(_encode_varint_string("Tuple(UInt8, UInt8)"))
+        with pytest.raises(ValueError, match="Unsupported ClickHouse type 'Tuple\\(UInt8, UInt8\\)'"):
             _ch_core.ColBatch.decode_native(bytes(buf))
 
 

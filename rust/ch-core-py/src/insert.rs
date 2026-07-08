@@ -7,15 +7,15 @@ use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAnyMethods, PyByteArray, PyBytes, PyDate, PyDateTime, PyList, PyString, PyStringMethods,
-    PyTuple,
+    PyAnyMethods, PyByteArray, PyBytes, PyDate, PyDateTime, PyDict, PyFrozenSet, PyList, PySet,
+    PyString, PyStringMethods, PyTuple,
 };
 
 use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
-    BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn, PrimitiveColumn,
-    Utf8Column,
+    ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn,
+    PrimitiveColumn, Utf8Column,
 };
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
 use ch_core_rs::schema::{ChType, Field, Schema};
@@ -159,8 +159,66 @@ fn build_column(
         ChType::LowCardinality(inner) => {
             build_low_cardinality_column(py, name, inner, values, row_count)
         }
+        ChType::Array(inner) => build_array_column(py, name, inner, values, row_count),
         _ => build_plain_column(py, name, ch_type, values, row_count),
     }
+}
+
+/// Build an `Array(T)` column: each row is a sequence of elements, flattened
+/// into one shared element list with an Arrow LargeList offsets run. The element
+/// column is built recursively through `build_column`, so any element shape
+/// (Nullable, LowCardinality, nested Array, leaf) composes. Arrays are never
+/// nullable at the array level, so a None row is an error.
+fn build_array_column(
+    py: Python<'_>,
+    name: &str,
+    inner: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Column> {
+    let column_values = ColumnValues::new(values, name)?;
+    check_row_count(name, &column_values, row_count)?;
+
+    let mut offsets = Vec::with_capacity(row_count + 1);
+    offsets.push(0i64);
+    let flat = PyList::empty(py);
+    for row in 0..row_count {
+        let value = column_values.get_item(row)?;
+        if value.is_none() {
+            return Err(PyValueError::new_err(format!(
+                "column {name:?} row {row} is None but Array({inner}) is not Nullable"
+            )));
+        }
+        if is_string_or_bytes_like(&value) {
+            return Err(PyValueError::new_err(format!(
+                "column {name:?} row {row} is a str or bytes, not an Array sequence"
+            )));
+        }
+        if value.downcast::<PySet>().is_ok()
+            || value.downcast::<PyFrozenSet>().is_ok()
+            || value.downcast::<PyDict>().is_ok()
+        {
+            return Err(PyValueError::new_err(format!(
+                "column {name:?} row {row} is an unordered set/dict, which has no defined Array element order"
+            )));
+        }
+        flat.call_method1(intern!(py, "extend"), (&value,))
+            .map_err(|_| {
+                PyValueError::new_err(format!(
+                    "column {name:?} row {row} is not a valid Array value"
+                ))
+            })?;
+        let cumulative = i64::try_from(flat.len()).map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {name:?} Array element count exceeds i64 offset capacity"
+            ))
+        })?;
+        offsets.push(cumulative);
+    }
+
+    let total = flat.len();
+    let element_column = build_column(py, name, inner, flat.as_any(), total)?;
+    Ok(Column::Array(ArrayColumn::new(offsets, element_column)))
 }
 
 fn build_plain_column(
@@ -195,7 +253,10 @@ fn build_nullable_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
-    if matches!(inner, ChType::Nullable(_) | ChType::LowCardinality(_)) {
+    if matches!(
+        inner,
+        ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_)
+    ) {
         return Err(PyNotImplementedError::new_err(format!(
             "unsupported Nullable inner type {inner} for column {name:?}"
         )));
@@ -1578,6 +1639,9 @@ fn column_from_scalars(
                 None => DecimalColumn::new(data, width, *precision, *scale),
             }))
         }
+        ChType::Array(_) => Err(PyNotImplementedError::new_err(
+            "Array columns are built by build_array_column, not the scalar path",
+        )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
@@ -1751,6 +1815,9 @@ fn convert_scalar(
                 &text, width, *precision, *scale, column, row,
             )?))
         }
+        ChType::Array(_) => Err(PyNotImplementedError::new_err(
+            "Array columns are built by build_array_column, not the scalar path",
+        )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
@@ -1786,6 +1853,9 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
             scale: _,
             ..
         } => Ok(Scalar::Bytes(vec![0; decimal_width(*precision)?])),
+        ChType::Array(_) => Err(PyNotImplementedError::new_err(
+            "Array columns are built by build_array_column, not the scalar path",
+        )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
@@ -2415,11 +2485,28 @@ fn twos_complement_in_place(bytes: &mut [u8]) {
 // Binding-local parser for the supported canonical ClickHouse type names.
 // ---------------------------------------------------------------------------
 
+/// Wrapper/container nesting cap, mirroring the core decoder's parser. A crafted
+/// deep type string would otherwise overflow the stack (an uncatchable crash)
+/// before producing a ChType; bounding the parse also bounds every recursive
+/// walk over the result, including `build_array_column`.
+const MAX_TYPE_DEPTH: usize = 100;
+
 fn parse_ch_type(type_name: &str) -> Option<ChType> {
+    parse_ch_type_depth(type_name, 0)
+}
+
+fn parse_ch_type_depth(type_name: &str, depth: usize) -> Option<ChType> {
+    if depth > MAX_TYPE_DEPTH {
+        return None;
+    }
+
     if let Some(inner) = type_name.strip_prefix("Nullable(") {
         if let Some(inner) = inner.strip_suffix(')') {
-            let inner_type = parse_ch_type(inner)?;
-            if matches!(inner_type, ChType::Nullable(_) | ChType::LowCardinality(_)) {
+            let inner_type = parse_ch_type_depth(inner, depth + 1)?;
+            if matches!(
+                inner_type,
+                ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_)
+            ) {
                 return None;
             }
             return Some(ChType::Nullable(Box::new(inner_type)));
@@ -2428,7 +2515,14 @@ fn parse_ch_type(type_name: &str) -> Option<ChType> {
 
     if let Some(inner) = type_name.strip_prefix("LowCardinality(") {
         if let Some(inner) = inner.strip_suffix(')') {
-            return parse_ch_type(inner).map(|t| ChType::LowCardinality(Box::new(t)));
+            return parse_ch_type_depth(inner, depth + 1)
+                .map(|t| ChType::LowCardinality(Box::new(t)));
+        }
+    }
+
+    if let Some(inner) = type_name.strip_prefix("Array(") {
+        if let Some(inner) = inner.strip_suffix(')') {
+            return parse_ch_type_depth(inner, depth + 1).map(|t| ChType::Array(Box::new(t)));
         }
     }
 

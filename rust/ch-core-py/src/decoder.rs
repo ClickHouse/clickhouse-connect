@@ -38,6 +38,9 @@ pub(crate) fn decode_err(e: DecodeError) -> PyErr {
         DecodeError::InvalidLowCardinality { column, reason } => PyValueError::new_err(format!(
             "Invalid LowCardinality layout for column '{column}': {reason}"
         )),
+        DecodeError::InvalidArray { column, reason } => PyValueError::new_err(format!(
+            "Invalid Array layout for column '{column}': {reason}"
+        )),
         DecodeError::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             PyEOFError::new_err(format!("Truncated Native data: {e}"))
         }

@@ -347,6 +347,9 @@ struct ColumnCtx<'py> {
     ip: Option<IpCtx<'py>>,
     /// The `decimal.Decimal` class, for a Decimal column.
     decimal_cls: Option<Bound<'py, PyAny>>,
+    /// Recursively-prepared context for the element type of an Array column;
+    /// `None` for any other type.
+    element: Option<Box<ColumnCtx<'py>>>,
 }
 
 /// Cached objects to build a `uuid.UUID` the way the Cython codec does:
@@ -474,6 +477,15 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         _ => (None, None, None),
     };
 
+    // `.inner()` only strips Nullable, so an Array column's resolved type is the
+    // `Array(elem)` itself. Recurse into the element to build its machinery,
+    // which transparently covers every element shape (Nullable, LowCardinality,
+    // nested Array, temporal-with-tz, enum, uuid, ip, decimal).
+    let element = match resolved {
+        ChType::Array(elem) => Some(Box::new(prepare_column_ctx(py, elem)?)),
+        _ => None,
+    };
+
     Ok(ColumnCtx {
         tz,
         fromtimestamp,
@@ -482,6 +494,7 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         uuid,
         ip,
         decimal_cls,
+        element,
     })
 }
 
@@ -785,6 +798,8 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         // dictionary convention, not as a dictionary entry.
         Column::Dictionary(c) => c.validity.as_ref(),
         Column::Decimal(c) => c.validity.as_ref(),
+        // Arrays carry no array-level validity; element nulls live on `values`.
+        Column::Array(_) => None,
     }
 }
 
@@ -1187,6 +1202,47 @@ unsafe fn column_value_nonnull_ptr(
             let mut scratch = DecimalScratch::default();
             decimal_value_ptr(cls, &mut scratch, c, index)
         }
+        // Array(T): materialize row `index` as a Python list of its elements.
+        // The offsets buffer is public and could be hand-built, so guard every
+        // access: reject a negative offset, out-of-order pair, or an end past
+        // the element buffer rather than index out of bounds or panic. Element
+        // nulls are handled by column_value_to_owned_ptr, so Array(Nullable(T))
+        // yields None elements correctly.
+        Column::Array(c) => {
+            let ectx = ctx.element.as_deref().ok_or_else(|| ctx_missing("Array"))?;
+            let start = c
+                .offsets
+                .get(index)
+                .copied()
+                .and_then(|o| usize::try_from(o).ok())
+                .ok_or_else(array_bounds_err)?;
+            let end = c
+                .offsets
+                .get(index + 1)
+                .copied()
+                .and_then(|o| usize::try_from(o).ok())
+                .ok_or_else(array_bounds_err)?;
+            if start > end || end > c.values.len() {
+                return Err(array_bounds_err());
+            }
+            let count = end - start;
+            let list_ptr = ffi::PyList_New(count as ffi::Py_ssize_t);
+            if list_ptr.is_null() {
+                return Err(PyErr::fetch(py));
+            }
+            // Safety: list_ptr came from PyList_New, so it is a list and this is
+            // the sole owned reference. Binding it makes the error and panic
+            // paths drop the partially-filled list; list_dealloc tolerates the
+            // NULL slots not yet filled.
+            let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+            for slot in 0..count {
+                let item = column_value_to_owned_ptr(py, &c.values, ectx, start + slot)?;
+                // Safety: slot < count, the list's allocated length, and the
+                // list takes over the owned item.
+                ffi::PyList_SET_ITEM(list.as_ptr(), slot as ffi::Py_ssize_t, item);
+            }
+            Ok(list.into_ptr())
+        }
     }
 }
 
@@ -1194,6 +1250,12 @@ unsafe fn column_value_nonnull_ptr(
 /// internal invariant violation, not a payload condition.
 fn ctx_missing(what: &str) -> PyErr {
     PyValueError::new_err(format!("internal error: missing {what} column context"))
+}
+
+/// Error for an Array column whose offsets are out of range for the element
+/// buffer (out of order, negative, or an end past the element count).
+fn array_bounds_err() -> PyErr {
+    PyValueError::new_err("Malformed payload: Array offsets are out of range")
 }
 
 /// Error for a UUID/IPv6 cell whose fixed width is not 16 bytes.
