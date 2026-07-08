@@ -17,7 +17,7 @@ from clickhouse_connect.driver.parser import parse_callable
 logger = logging.getLogger(__name__)
 
 engine_map: dict[str, type["TableEngine"]] = {}
-EngineExpr = str | TextClause | ColumnElement | InstrumentedAttribute[Any]
+EngineExpr = str | TextClause | ColumnElement | InstrumentedAttribute
 EngineParam = EngineExpr | Sequence[EngineExpr] | None
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
 

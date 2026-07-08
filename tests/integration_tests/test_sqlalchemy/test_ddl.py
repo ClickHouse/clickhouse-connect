@@ -207,19 +207,9 @@ def test_final_modifier_error_cases(test_engine: Engine, test_db: str):
 
 
 def test_expression_sorting_key(test_engine: Engine, test_db: str):
-    """Create a MergeTree with a DESC + expression sorting key and confirm it reflects back."""
+    """Create a MergeTree with a function-expression sorting key and confirm the server reflects it."""
     common.set_setting("invalid_setting_action", "drop")
     with test_engine.begin() as conn:
-        client = conn.connection.driver_connection.client
-        if not client.min_version("24.11"):
-            pytest.skip("DESC and expression sorting keys require ClickHouse 24.11+")
-        # Reverse keys were experimental in earlier versions and stabilized (setting removed) later.
-        has_reverse_setting = conn.execute(
-            text("SELECT count() FROM system.settings WHERE name = 'allow_experimental_reverse_key'")
-        ).scalar()
-        if has_reverse_setting:
-            conn.execute(text("SET allow_experimental_reverse_key = 1"))
-
         conn.execute(text("DROP TABLE IF EXISTS expr_sorting_key_test"))
         metadata = MetaData(schema=test_db)
         genre = db.Column("genre", String)
@@ -233,15 +223,39 @@ def test_expression_sorting_key(test_engine: Engine, test_db: str):
             score,
             book_id,
             author_id,
-            MergeTree(order_by=[genre, score.desc(), db.func.cityHash64(book_id, author_id)]),
+            MergeTree(order_by=[genre, score, db.func.cityHash64(book_id, author_id)]),
         )
         table.create(conn)
 
         create_sql = conn.execute(text("SHOW CREATE TABLE expr_sorting_key_test")).scalar()
-        assert "DESC" in create_sql
         assert "cityHash64" in create_sql
 
         conn.execute(text("DROP TABLE IF EXISTS expr_sorting_key_test"))
+
+
+def test_desc_sorting_key(test_engine: Engine, test_db: str):
+    """DESC sorting keys are stable from ClickHouse 26.6; verify end-to-end where supported."""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        if not conn.connection.driver_connection.client.min_version("26.6"):
+            pytest.skip("DESC sorting keys are experimental before ClickHouse 26.6")
+        conn.execute(text("DROP TABLE IF EXISTS desc_sorting_key_test"))
+        metadata = MetaData(schema=test_db)
+        book_id = db.Column("book_id", UInt64)
+        score = db.Column("score", UInt32)
+        table = db.Table(
+            "desc_sorting_key_test",
+            metadata,
+            book_id,
+            score,
+            MergeTree(order_by=[book_id, score.desc()]),
+        )
+        table.create(conn)
+
+        create_sql = conn.execute(text("SHOW CREATE TABLE desc_sorting_key_test")).scalar()
+        assert "DESC" in create_sql
+
+        conn.execute(text("DROP TABLE IF EXISTS desc_sorting_key_test"))
 
 
 def test_engine_clause_string_literal_roundtrip(test_engine: Engine, test_db: str):
