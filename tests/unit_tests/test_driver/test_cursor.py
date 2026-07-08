@@ -272,7 +272,7 @@ def test_executemany_bulk_insert_with_simple_backtick_columns():
     rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
     cursor.executemany("INSERT INTO test_table (`id`, `name`) VALUES (%(id)s, %(name)s)", rows)
 
-    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"])
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
     client.query.assert_not_called()
 
 
@@ -294,7 +294,7 @@ def test_executemany_bulk_insert_with_dotted_backtick_columns():
         rows,
     )
 
-    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["directory.id", "directory.type"])
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["directory.id", "directory.type"], settings=None)
     client.query.assert_not_called()
 
 
