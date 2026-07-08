@@ -40,7 +40,7 @@ env:
   # Label on a merged PR in THIS repo that triggers the expedited path.
   SYNC_LABEL: sync-docs
   # Which releases trigger a sync: major (X.0.0), minor (X.Y.0), or all.
-  RELEASE_SCOPE: major
+  RELEASE_SCOPE: all
 
 # The cross-repo work is done with a GitHub App token (see the sync job); this
 # workflow only needs to read its own repository.
