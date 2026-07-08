@@ -112,10 +112,11 @@ class ClickHouseDialect(DefaultDialect):
 
     @staticmethod
     def has_database(connection, db_name):
-        # Use SHOW DATABASES (like get_schema_names) rather than system.databases:
-        # DataLakeCatalog databases are hidden from system.databases unless
-        # show_data_lake_catalogs_in_system_tables=1, but SHOW DATABASES lists them.
-        return db_name in [row.name for row in connection.execute(text("SHOW DATABASES"))]
+        # EXISTS DATABASE consults DatabaseCatalog directly, so it sees DataLakeCatalog
+        # and other remote databases that system.databases omitted by default before server 26.5.
+        result = connection.execute(text(f"EXISTS DATABASE {quote_identifier(db_name)}"))
+        row = result.fetchone()
+        return row[0] == 1
 
     def get_table_names(self, connection, schema=None, **kw):
         cmd = "SHOW TABLES"
