@@ -42,6 +42,14 @@ DECODE_MATRIX = {
     "nullable_ipv4": "CAST(if(number % 3 = 0, NULL, toIPv4(toUInt32(number * 16909060))) AS Nullable(IPv4))",
     "ipv6": "toIPv6(concat('2001:db8::', lower(hex(toUInt16(number + 1)))))",
     "ipv6_v4_mapped": "toIPv6(toIPv4(toUInt32(number + 1)))",
+    "array_int": "range(number % 4)",
+    "array_string": "arrayMap(x -> toString(x), range(number % 4))",
+    "array_nullable_int": "arrayMap(x -> if(x % 2 = 0, NULL, toInt64(x)), range(number % 4))",
+    "array_low_card_string": "CAST(arrayMap(x -> toString(x % 3), range(number % 4)) AS Array(LowCardinality(String)))",
+    "array_nested": "arrayMap(x -> range(x % 3), range(number % 4))",
+    "array_uuid": "arrayMap(x -> toUUID(concat(leftPad(lower(hex(x)), 8, '0'), '-1122-3344-5566-778899aabbcc')), range(number % 4))",
+    "array_datetime": "arrayMap(x -> toDateTime(x), range(number % 4))",
+    "array_decimal": "arrayMap(x -> toDecimal64(x, 4), range(number % 4))",
 }
 
 
@@ -102,7 +110,7 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
 def test_rust_codec_unsupported_decode(client_factory, call, native_codec):
     client = client_factory(native_codec=native_codec)
     with pytest.raises(NotSupportedError):
-        call(client.query, "SELECT [1, 2, 3] AS arr")
+        call(client.query, "SELECT map('a', 1) AS m")
 
 
 def test_rust_codec_eligibility_routing(client_factory, call):
@@ -181,6 +189,11 @@ NP_DF_MATRIX = {
     "decimal128": "toDecimal128(number / 3 - 2, 10)",
     "ipv4": "toIPv4(toUInt32(number * 16909060))",
     "ipv6": "toIPv6(concat('2001:db8::', lower(hex(toUInt16(number + 1)))))",
+    # Array cells compare by value; element scalars are python-native under rust vs
+    # numpy scalars under python (documented df-parity gap pending a decision).
+    "array_int": "range(number % 4)",
+    "array_string": "arrayMap(x -> toString(x), range(number % 4))",
+    "array_nullable_int": "arrayMap(x -> if(x % 2 = 0, NULL, toInt64(x)), range(number % 4))",
 }
 
 

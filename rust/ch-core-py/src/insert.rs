@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::c_long;
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::buffer::{Element, PyBuffer};
@@ -165,10 +166,11 @@ fn build_column(
 }
 
 /// Build an `Array(T)` column: each row is a sequence of elements, flattened
-/// into one shared element list with an Arrow LargeList offsets run. The element
-/// column is built recursively through `build_column`, so any element shape
-/// (Nullable, LowCardinality, nested Array, leaf) composes. Arrays are never
-/// nullable at the array level, so a None row is an error.
+/// into one strong-reference element run with an Arrow LargeList offsets run.
+/// The element column is built once over the flat run, so elements hit the
+/// same per-type fast paths as a plain column and nested Arrays compose
+/// recursively. Arrays are never nullable at the array level, so a None row
+/// is an error.
 fn build_array_column(
     py: Python<'_>,
     name: &str,
@@ -179,46 +181,265 @@ fn build_array_column(
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
 
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return array_column_from_seq(py, name, inner, &ListSeq(list), row_count);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return array_column_from_seq(py, name, inner, &TupleSeq(tuple), row_count);
+    }
+
+    // Generic outer container: safe indexed reads, same per-row flatten.
     let mut offsets = Vec::with_capacity(row_count + 1);
     offsets.push(0i64);
-    let flat = PyList::empty(py);
+    let mut flat = FlatRefs::default();
     for row in 0..row_count {
         let value = column_values.get_item(row)?;
-        if value.is_none() {
-            return Err(PyValueError::new_err(format!(
-                "column {name:?} row {row} is None but Array({inner}) is not Nullable"
-            )));
+        flatten_array_row(py, name, inner, &value, row, &mut flat)?;
+        offsets.push(flat.end_offset(name)?);
+    }
+    let element_column = build_element_column(py, name, inner, &flat.ptrs)
+        .map_err(|err| remap_element_err(py, name, &offsets, err))?;
+    Ok(Column::Array(ArrayColumn::new(offsets, element_column)))
+}
+
+/// Array flatten over an exact list or tuple of rows: borrowed row reads, one
+/// flat element run. A row that is not an exact list or tuple flattens through
+/// `list.extend`, which can run Python, so the container size is revalidated
+/// before the next borrowed read.
+fn array_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    inner: &ChType,
+    seq: &S,
+    row_count: usize,
+) -> PyResult<Column> {
+    let mut offsets = Vec::with_capacity(row_count + 1);
+    offsets.push(0i64);
+    let mut flat = FlatRefs::default();
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every fallback revalidates; the strong reference keeps the row
+        // alive across any Python code the fallback runs.
+        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        flatten_array_row(py, name, inner, &value, row, &mut flat)?;
+        check_not_resized(seq, name, row_count)?;
+        offsets.push(flat.end_offset(name)?);
+    }
+    let element_column = build_element_column(py, name, inner, &flat.ptrs)
+        .map_err(|err| remap_element_err(py, name, &offsets, err))?;
+    Ok(Column::Array(ArrayColumn::new(offsets, element_column)))
+}
+
+/// Rewrite an element-run error's flat index as the outer row and element
+/// index, using the offsets built alongside the flat run. Nested Arrays remap
+/// at each level, so the final message leads with the outermost row. An error
+/// that is not a ValueError or whose text does not carry the `column "name"
+/// row N` prefix passes through unchanged.
+fn remap_element_err(py: Python<'_>, name: &str, offsets: &[i64], err: PyErr) -> PyErr {
+    if !err.is_instance_of::<PyValueError>(py) {
+        return err;
+    }
+    let Ok(text) = err.value(py).str() else {
+        return err;
+    };
+    let Ok(text) = text.to_str() else {
+        return err;
+    };
+    let prefix = format!("column {name:?} row ");
+    let Some(rest) = text.strip_prefix(&prefix) else {
+        return err;
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let Ok(flat) = rest[..digits].parse::<i64>() else {
+        return err;
+    };
+    let row = offsets[1..].partition_point(|&end| end <= flat);
+    if row + 1 >= offsets.len() {
+        return err;
+    }
+    let element = flat - offsets[row];
+    let tail = &rest[digits..];
+    PyValueError::new_err(format!("{prefix}{row} element {element}{tail}"))
+}
+
+/// Append one Array row's elements to the flat run. Exact list/tuple rows
+/// copy borrowed pointers without running Python; anything else keeps the
+/// generic path's accepted containers and error messages via `list.extend`.
+fn flatten_array_row(
+    py: Python<'_>,
+    name: &str,
+    inner: &ChType,
+    value: &Bound<'_, PyAny>,
+    row: usize,
+    flat: &mut FlatRefs,
+) -> PyResult<()> {
+    if let Ok(list) = value.downcast_exact::<PyList>() {
+        // SAFETY: copying exact-list items runs no Python code.
+        unsafe { flat.extend_from_seq(&ListSeq(list)) };
+        return Ok(());
+    }
+    if let Ok(tuple) = value.downcast_exact::<PyTuple>() {
+        // SAFETY: copying exact-tuple items runs no Python code.
+        unsafe { flat.extend_from_seq(&TupleSeq(tuple)) };
+        return Ok(());
+    }
+    if value.is_none() {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} row {row} is None but Array({inner}) is not Nullable"
+        )));
+    }
+    if value.downcast::<PyString>().is_ok() {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} row {row} is a str, not an Array sequence"
+        )));
+    }
+    // bytes-like rows flatten as int elements, matching the python codec's
+    // `data.extend(row)` iteration semantics.
+    if let Ok(bytes) = value.downcast::<PyBytes>() {
+        return flat.extend_from_byte_run(py, bytes.as_bytes());
+    }
+    if let Ok(bytes) = value.downcast::<PyByteArray>() {
+        return flat.extend_from_byte_run(py, &bytes.to_vec());
+    }
+    if value.downcast::<PySet>().is_ok()
+        || value.downcast::<PyFrozenSet>().is_ok()
+        || value.downcast::<PyDict>().is_ok()
+    {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} row {row} is an unordered set/dict, which has no defined Array element order"
+        )));
+    }
+    let items = PyList::empty(py);
+    items
+        .call_method1(intern!(py, "extend"), (value,))
+        .map_err(|err| {
+            let wrapped = PyValueError::new_err(format!(
+                "column {name:?} row {row} is not a valid Array value"
+            ));
+            wrapped.set_cause(py, Some(err));
+            wrapped
+        })?;
+    // SAFETY: items is an owned exact list; copying its items runs no Python
+    // code and the strong references outlive the temporary list.
+    unsafe { flat.extend_from_seq(&ListSeq(&items)) };
+    Ok(())
+}
+
+/// Strong references to flattened Array elements. Holding a reference per
+/// element keeps every pointer in the run valid across any Python code the
+/// element conversion runs, so the run can be consumed with borrowed reads.
+#[derive(Default)]
+struct FlatRefs {
+    ptrs: Vec<*mut ffi::PyObject>,
+}
+
+impl FlatRefs {
+    /// Append every element of `seq` as a strong reference.
+    ///
+    /// # Safety
+    ///
+    /// Requires the GIL; `seq` must allow borrowed reads with no Python code
+    /// running during the copy (an exact list or tuple).
+    unsafe fn extend_from_seq<S: FastSeq>(&mut self, seq: &S) {
+        let len = seq.size();
+        self.ptrs.reserve(len);
+        for index in 0..len {
+            let item = seq.get(index);
+            ffi::Py_INCREF(item);
+            self.ptrs.push(item);
         }
-        if is_string_or_bytes_like(&value) {
-            return Err(PyValueError::new_err(format!(
-                "column {name:?} row {row} is a str or bytes, not an Array sequence"
-            )));
+    }
+
+    /// Append each byte of `bytes` as an owned Python int element.
+    fn extend_from_byte_run(&mut self, py: Python<'_>, bytes: &[u8]) -> PyResult<()> {
+        self.ptrs.reserve(bytes.len());
+        for &byte in bytes {
+            // SAFETY: GIL held; PyLong_FromLong returns an owned reference
+            // (a cached small int here) that Drop releases.
+            let item = unsafe { ffi::PyLong_FromLong(c_long::from(byte)) };
+            if item.is_null() {
+                return Err(PyErr::fetch(py));
+            }
+            self.ptrs.push(item);
         }
-        if value.downcast::<PySet>().is_ok()
-            || value.downcast::<PyFrozenSet>().is_ok()
-            || value.downcast::<PyDict>().is_ok()
-        {
-            return Err(PyValueError::new_err(format!(
-                "column {name:?} row {row} is an unordered set/dict, which has no defined Array element order"
-            )));
-        }
-        flat.call_method1(intern!(py, "extend"), (&value,))
-            .map_err(|_| {
-                PyValueError::new_err(format!(
-                    "column {name:?} row {row} is not a valid Array value"
-                ))
-            })?;
-        let cumulative = i64::try_from(flat.len()).map_err(|_| {
+        Ok(())
+    }
+
+    fn end_offset(&self, name: &str) -> PyResult<i64> {
+        i64::try_from(self.ptrs.len()).map_err(|_| {
             PyValueError::new_err(format!(
                 "column {name:?} Array element count exceeds i64 offset capacity"
             ))
-        })?;
-        offsets.push(cumulative);
+        })
     }
+}
 
-    let total = flat.len();
-    let element_column = build_column(py, name, inner, flat.as_any(), total)?;
-    Ok(Column::Array(ArrayColumn::new(offsets, element_column)))
+impl Drop for FlatRefs {
+    fn drop(&mut self) {
+        // SAFETY: FlatRefs is only built and dropped inside a frame that holds
+        // a `Python` token, so the GIL is held here.
+        for &ptr in &self.ptrs {
+            unsafe { ffi::Py_DECREF(ptr) };
+        }
+    }
+}
+
+/// Build the flattened Array element column. Mirrors `build_column`'s wrapper
+/// dispatch with the flat run standing in for the Python container, feeding
+/// the same seq fast paths and generic scalar loops.
+fn build_element_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    ptrs: &[*mut ffi::PyObject],
+) -> PyResult<Column> {
+    let row_count = ptrs.len();
+    let seq = PtrSeq(ptrs);
+    match ch_type {
+        ChType::Array(inner) => array_column_from_seq(py, name, inner, &seq, row_count),
+        ChType::Nullable(inner) => {
+            if matches!(
+                inner.as_ref(),
+                ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_)
+            ) {
+                return Err(PyNotImplementedError::new_err(format!(
+                    "unsupported Nullable inner type {inner} for column {name:?}"
+                )));
+            }
+            if let Some(column) = try_fast_column_seq(py, name, inner, &seq, row_count, true)? {
+                return Ok(column);
+            }
+            nullable_scalar_column(py, name, inner, &PtrRows { py, ptrs }, row_count)
+        }
+        ChType::LowCardinality(inner) => {
+            let (nullable, value_type) = match inner.as_ref() {
+                ChType::Nullable(value_type) => (true, value_type.as_ref()),
+                other => (false, other),
+            };
+            if !is_low_cardinality_inner(value_type) {
+                return Err(PyNotImplementedError::new_err(format!(
+                    "unsupported LowCardinality inner type {value_type} for column {name:?}"
+                )));
+            }
+            if matches!(value_type, ChType::String) {
+                return lc_string_seq(py, name, value_type, &seq, row_count, nullable);
+            }
+            lc_scalar_column(
+                py,
+                name,
+                value_type,
+                &PtrRows { py, ptrs },
+                row_count,
+                nullable,
+            )
+        }
+        _ => {
+            if let Some(column) = try_fast_column_seq(py, name, ch_type, &seq, row_count, false)? {
+                return Ok(column);
+            }
+            plain_scalar_column(py, name, ch_type, &PtrRows { py, ptrs }, row_count)
+        }
+    }
 }
 
 fn build_plain_column(
@@ -233,9 +454,19 @@ fn build_plain_column(
     if let Some(column) = try_fast_column(py, name, ch_type, values, row_count, false)? {
         return Ok(column);
     }
+    plain_scalar_column(py, name, ch_type, &column_values, row_count)
+}
+
+fn plain_scalar_column<'py, R: RowAccess<'py>>(
+    py: Python<'py>,
+    name: &str,
+    ch_type: &ChType,
+    rows: &R,
+    row_count: usize,
+) -> PyResult<Column> {
     let mut scalars = Vec::with_capacity(row_count);
     for row in 0..row_count {
-        let value = column_values.get_item(row)?;
+        let value = rows.value(row)?;
         if value.is_none() {
             return Err(PyValueError::new_err(format!(
                 "column {name:?} row {row} is None but {ch_type} is not Nullable"
@@ -267,10 +498,20 @@ fn build_nullable_column(
     if let Some(column) = try_fast_column(py, name, inner, values, row_count, true)? {
         return Ok(column);
     }
+    nullable_scalar_column(py, name, inner, &column_values, row_count)
+}
+
+fn nullable_scalar_column<'py, R: RowAccess<'py>>(
+    py: Python<'py>,
+    name: &str,
+    inner: &ChType,
+    rows: &R,
+    row_count: usize,
+) -> PyResult<Column> {
     let mut null_map = Vec::with_capacity(row_count);
     let mut scalars = Vec::with_capacity(row_count);
     for row in 0..row_count {
-        let value = column_values.get_item(row)?;
+        let value = rows.value(row)?;
         if value.is_none() {
             null_map.push(1);
             scalars.push(default_scalar(inner)?);
@@ -309,7 +550,17 @@ fn build_low_cardinality_column(
             return Ok(column);
         }
     }
+    lc_scalar_column(py, name, value_type, &column_values, row_count, nullable)
+}
 
+fn lc_scalar_column<'py, R: RowAccess<'py>>(
+    py: Python<'py>,
+    name: &str,
+    value_type: &ChType,
+    rows: &R,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
     let mut indices = Vec::with_capacity(row_count);
     let mut dict_values = Vec::new();
     let mut slots = HashMap::<ScalarKey, i32>::new();
@@ -320,7 +571,7 @@ fn build_low_cardinality_column(
     }
 
     for row in 0..row_count {
-        let value = column_values.get_item(row)?;
+        let value = rows.value(row)?;
         if value.is_none() {
             if !nullable {
                 return Err(PyValueError::new_err(format!(
@@ -404,6 +655,33 @@ impl<'py> ColumnValues<'py> {
                 self.name
             ))
         })
+    }
+}
+
+/// Positional row access for the generic scalar loops: a Python column
+/// container or a flattened strong-reference run.
+trait RowAccess<'py> {
+    fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>>;
+}
+
+impl<'py> RowAccess<'py> for ColumnValues<'py> {
+    fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
+        self.get_item(row)
+    }
+}
+
+/// Row access over flattened Array element pointers, kept valid by the
+/// `FlatRefs` strong references.
+struct PtrRows<'a, 'py> {
+    py: Python<'py>,
+    ptrs: &'a [*mut ffi::PyObject],
+}
+
+impl<'py> RowAccess<'py> for PtrRows<'_, 'py> {
+    fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
+        // SAFETY: FlatRefs holds a strong reference for every pointer in the
+        // run for the whole build.
+        Ok(unsafe { Bound::from_borrowed_ptr(self.py, self.ptrs[row]) })
     }
 }
 
@@ -709,6 +987,26 @@ impl FastSeq for TupleSeq<'_, '_> {
     }
 }
 
+/// Flattened Array element run; the `FlatRefs` strong references keep every
+/// pointer valid for the whole build and the slice can never be resized, so
+/// fallbacks that run Python need no revalidation.
+struct PtrSeq<'a>(&'a [*mut ffi::PyObject]);
+
+impl FastSeq for PtrSeq<'_> {
+    const MUTABLE: bool = false;
+
+    #[inline]
+    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
+        debug_assert!(index < self.0.len());
+        // SAFETY: the trait contract requires index < size().
+        *self.0.get_unchecked(index)
+    }
+
+    fn size(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Convert `row_count` items from an exact list/tuple into a typed vector,
 /// plus a validity bitmap when `nullable`. Items that fail the exact-type
 /// check fall back to `convert_scalar`. The fallback can run arbitrary Python
@@ -766,35 +1064,9 @@ fn seq_values<T: FastValue, S: FastSeq>(
     ))
 }
 
-fn fast_column<T: FastValue>(
-    py: Python<'_>,
-    name: &str,
-    ch_type: &ChType,
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-    nullable: bool,
-) -> PyResult<Option<Column>> {
-    if let Ok(list) = values.downcast_exact::<PyList>() {
-        let (vals, validity) =
-            seq_values::<T, _>(py, &ListSeq(list), ch_type, name, row_count, nullable)?;
-        return Ok(Some(T::into_column(vals, validity)));
-    }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
-        let (vals, validity) =
-            seq_values::<T, _>(py, &TupleSeq(tuple), ch_type, name, row_count, nullable)?;
-        return Ok(Some(T::into_column(vals, validity)));
-    }
-    if let Some(vals) = T::from_buffer(py, values, row_count)? {
-        // A buffer holds no Python objects, so a nullable column is all-valid.
-        let validity = nullable.then(|| Bitmap::all_valid(row_count));
-        return Ok(Some(T::into_column(vals, validity)));
-    }
-    Ok(None)
-}
-
-/// Fast column build for primitive numeric types. Returns `Ok(None)` when the
-/// type or container has no fast path; the caller falls through to the
-/// generic scalar loop.
+/// Fast column build for types with a per-value fast path. Returns `Ok(None)`
+/// when the type or container has no fast path; the caller falls through to
+/// the generic scalar loop.
 fn try_fast_column(
     py: Python<'_>,
     name: &str,
@@ -803,34 +1075,100 @@ fn try_fast_column(
     row_count: usize,
     nullable: bool,
 ) -> PyResult<Option<Column>> {
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return try_fast_column_seq(py, name, ch_type, &ListSeq(list), row_count, nullable);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return try_fast_column_seq(py, name, ch_type, &TupleSeq(tuple), row_count, nullable);
+    }
+    try_buffer_column(py, ch_type, values, row_count, nullable)
+}
+
+/// Per-type dispatch over a borrowed-pointer run; runs once per column.
+fn try_fast_column_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    seq: &S,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    fn prim<T: FastValue, S: FastSeq>(
+        py: Python<'_>,
+        name: &str,
+        ch_type: &ChType,
+        seq: &S,
+        row_count: usize,
+        nullable: bool,
+    ) -> PyResult<Option<Column>> {
+        let (values, validity) = seq_values::<T, S>(py, seq, ch_type, name, row_count, nullable)?;
+        Ok(Some(T::into_column(values, validity)))
+    }
+
     match ch_type {
-        ChType::Bool => fast_column::<WireBool>(py, name, ch_type, values, row_count, nullable),
-        ChType::Int8 => fast_column::<i8>(py, name, ch_type, values, row_count, nullable),
-        ChType::Int16 => fast_column::<i16>(py, name, ch_type, values, row_count, nullable),
-        ChType::Int32 => fast_column::<i32>(py, name, ch_type, values, row_count, nullable),
-        ChType::Int64 => fast_column::<i64>(py, name, ch_type, values, row_count, nullable),
-        ChType::UInt8 => fast_column::<u8>(py, name, ch_type, values, row_count, nullable),
-        ChType::UInt16 => fast_column::<u16>(py, name, ch_type, values, row_count, nullable),
-        ChType::UInt32 => fast_column::<u32>(py, name, ch_type, values, row_count, nullable),
-        ChType::UInt64 => fast_column::<u64>(py, name, ch_type, values, row_count, nullable),
-        ChType::Float32 => fast_column::<f32>(py, name, ch_type, values, row_count, nullable),
-        ChType::Float64 => fast_column::<f64>(py, name, ch_type, values, row_count, nullable),
-        ChType::Date => fast_column::<DateVal>(py, name, ch_type, values, row_count, nullable),
-        ChType::Date32 => fast_column::<Date32Val>(py, name, ch_type, values, row_count, nullable),
+        ChType::Bool => prim::<WireBool, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Int8 => prim::<i8, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Int16 => prim::<i16, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Int32 => prim::<i32, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Int64 => prim::<i64, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::UInt8 => prim::<u8, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::UInt16 => prim::<u16, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::UInt32 => prim::<u32, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::UInt64 => prim::<u64, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Float32 => prim::<f32, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Float64 => prim::<f64, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Date => prim::<DateVal, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Date32 => prim::<Date32Val, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::DateTime { .. } => {
-            fast_column::<DateTimeVal>(py, name, ch_type, values, row_count, nullable)
+            prim::<DateTimeVal, S>(py, name, ch_type, seq, row_count, nullable)
         }
         ChType::DateTime64 { .. } => {
-            fast_column::<DateTime64Val>(py, name, ch_type, values, row_count, nullable)
+            prim::<DateTime64Val, S>(py, name, ch_type, seq, row_count, nullable)
         }
-        ChType::Uuid => uuid_fast_column(py, name, ch_type, values, row_count, nullable),
-        ChType::Ipv4 => ipv4_fast_column(py, name, ch_type, values, row_count, nullable),
+        ChType::Uuid => uuid_seq(py, seq, ch_type, name, row_count, nullable).map(Some),
+        ChType::Ipv4 => ipv4_seq(py, seq, ch_type, name, row_count, nullable).map(Some),
         ChType::Enum8 { variants } => {
-            enum_fast_column(py, name, ch_type, variants, values, row_count, nullable)
+            enum_seq(py, seq, ch_type, variants, name, row_count, nullable).map(Some)
         }
         ChType::Enum16 { variants } => {
-            enum_fast_column(py, name, ch_type, variants, values, row_count, nullable)
+            enum_seq(py, seq, ch_type, variants, name, row_count, nullable).map(Some)
         }
+        _ => Ok(None),
+    }
+}
+
+/// Copy from a buffer-protocol container whose element type matches exactly.
+fn try_buffer_column(
+    py: Python<'_>,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    fn buf<T: FastValue>(
+        py: Python<'_>,
+        values: &Bound<'_, PyAny>,
+        row_count: usize,
+        nullable: bool,
+    ) -> PyResult<Option<Column>> {
+        Ok(T::from_buffer(py, values, row_count)?.map(|vals| {
+            // A buffer holds no Python objects, so a nullable column is all-valid.
+            let validity = nullable.then(|| Bitmap::all_valid(row_count));
+            T::into_column(vals, validity)
+        }))
+    }
+
+    match ch_type {
+        ChType::Int8 => buf::<i8>(py, values, row_count, nullable),
+        ChType::Int16 => buf::<i16>(py, values, row_count, nullable),
+        ChType::Int32 => buf::<i32>(py, values, row_count, nullable),
+        ChType::Int64 => buf::<i64>(py, values, row_count, nullable),
+        ChType::UInt8 => buf::<u8>(py, values, row_count, nullable),
+        ChType::UInt16 => buf::<u16>(py, values, row_count, nullable),
+        ChType::UInt32 => buf::<u32>(py, values, row_count, nullable),
+        ChType::UInt64 => buf::<u64>(py, values, row_count, nullable),
+        ChType::Float32 => buf::<f32>(py, values, row_count, nullable),
+        ChType::Float64 => buf::<f64>(py, values, row_count, nullable),
         _ => Ok(None),
     }
 }
@@ -1078,25 +1416,6 @@ fn lc_string_seq<S: FastSeq>(
     })
 }
 
-/// UUID fast path over an exact list or tuple. Returns `Ok(None)` for other
-/// containers; the caller falls through to the generic scalar loop.
-fn uuid_fast_column(
-    py: Python<'_>,
-    name: &str,
-    ch_type: &ChType,
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-    nullable: bool,
-) -> PyResult<Option<Column>> {
-    if let Ok(list) = values.downcast_exact::<PyList>() {
-        return uuid_seq(py, &ListSeq(list), ch_type, name, row_count, nullable).map(Some);
-    }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
-        return uuid_seq(py, &TupleSeq(tuple), ch_type, name, row_count, nullable).map(Some);
-    }
-    Ok(None)
-}
-
 /// Build a UUID column: exact `uuid.UUID` items read the `int` attribute and
 /// write the 16 wire bytes (hi u64 LE, then lo u64 LE) straight into the
 /// column buffer; anything else (str, int, bytes) falls back to
@@ -1164,25 +1483,6 @@ fn uuid_seq<S: FastSeq>(
         Some(nulls) => FixedBinaryColumn::new_nullable(data, 16, Bitmap::from_ch_null_map(&nulls)),
         None => FixedBinaryColumn::new(data, 16),
     }))
-}
-
-/// IPv4 fast path over an exact list or tuple. Returns `Ok(None)` for other
-/// containers; the caller falls through to the generic scalar loop.
-fn ipv4_fast_column(
-    py: Python<'_>,
-    name: &str,
-    ch_type: &ChType,
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-    nullable: bool,
-) -> PyResult<Option<Column>> {
-    if let Ok(list) = values.downcast_exact::<PyList>() {
-        return ipv4_seq(py, &ListSeq(list), ch_type, name, row_count, nullable).map(Some);
-    }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
-        return ipv4_seq(py, &TupleSeq(tuple), ch_type, name, row_count, nullable).map(Some);
-    }
-    Ok(None)
 }
 
 /// Build an IPv4 column: exact `ipaddress.IPv4Address` items read the `_ip`
@@ -1361,44 +1661,6 @@ macro_rules! impl_enum_code {
 
 impl_enum_code!(i8, Enum8, "Enum8");
 impl_enum_code!(i16, Enum16, "Enum16");
-
-/// Enum8/Enum16 fast path over an exact list or tuple. Returns `Ok(None)` for
-/// other containers; the caller falls through to the generic scalar loop.
-fn enum_fast_column<C: EnumCode>(
-    py: Python<'_>,
-    name: &str,
-    ch_type: &ChType,
-    variants: &[(String, C)],
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-    nullable: bool,
-) -> PyResult<Option<Column>> {
-    if let Ok(list) = values.downcast_exact::<PyList>() {
-        return enum_seq(
-            py,
-            &ListSeq(list),
-            ch_type,
-            variants,
-            name,
-            row_count,
-            nullable,
-        )
-        .map(Some);
-    }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
-        return enum_seq(
-            py,
-            &TupleSeq(tuple),
-            ch_type,
-            variants,
-            name,
-            row_count,
-            nullable,
-        )
-        .map(Some);
-    }
-    Ok(None)
-}
 
 /// Build an Enum column with two lookup levels, following `lc_string_seq`:
 /// repeated str objects hit a pointer-identity map, and new exact-str objects

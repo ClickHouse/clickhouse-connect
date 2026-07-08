@@ -1925,6 +1925,11 @@ class TestArray:
         [
             ("Array(Int32)", [[13, 79], [], [7, 5, 5]]),
             ("Array(Nullable(String))", [["user_1", None], [], [None, "x"]]),
+            ("Array(Enum8('a' = 1, 'b' = 2))", [["a", "b"], [], ["b", "a", "b"]]),
+            ("Array(DateTime('America/New_York'))", _ARR_DT_TZ_ROWS),
+            ("Array(UUID)", [[uuid.UUID(int=0), _ARR_KNOWN_UUID], [], [uuid.UUID(int=79)]]),
+            ("Array(LowCardinality(Nullable(String)))", [["x", None, "x"], [], [None, "y"]]),
+            ("Array(Array(Int64))", [[[13, 79], [5]], [], [[7]], [[], [1, 2, 3]]]),
         ],
     )
     def test_all_exit_paths_agree(self, type_name, rows):
@@ -1967,10 +1972,76 @@ class TestArray:
         with pytest.raises(ValueError, match="is None but Array"):
             _ch_core.encode_native_block(["a"], ["Array(Int32)"], [[None]], 1)
 
-    @pytest.mark.parametrize("bad", ["abc", b"abc", bytearray(b"abc")])
-    def test_bare_str_or_bytes_row_rejected(self, bad):
-        with pytest.raises(ValueError, match="str or bytes"):
-            _ch_core.encode_native_block(["a"], ["Array(Int32)"], [[bad]], 1)
+    def test_bare_str_row_rejected(self):
+        with pytest.raises(ValueError, match="is a str, not an Array sequence"):
+            _ch_core.encode_native_block(["a"], ["Array(Int32)"], [["abc"]], 1)
+
+    def test_bytes_like_rows_flatten_as_int_elements(self):
+        rows = [b"\x01\x02", bytearray(b"\x03"), memoryview(b"\x04\x05"), []]
+        expected = _ch_core.encode_native_block(
+            ["a"], ["Array(UInt8)"], [[[1, 2], [3], [4, 5], []]], 4
+        )
+        assert _ch_core.encode_native_block(["a"], ["Array(UInt8)"], [rows], 4) == expected
+
+    def test_bytes_row_for_string_elements_raises_conversion_error(self):
+        with pytest.raises(ValueError, match="row 0 element 0 cannot be converted to String"):
+            _ch_core.encode_native_block(["a"], ["Array(String)"], [[b"ab"]], 1)
+
+    def test_element_error_reports_outer_row_and_element(self):
+        for outer in ([[1, 2], ["x"]], _NdarrayLikeColumn([[1, 2], ["x"]])):
+            with pytest.raises(
+                ValueError, match='column "v" row 1 element 0 cannot be converted to Int32'
+            ):
+                _ch_core.encode_native_block(["v"], ["Array(Int32)"], [outer], 2)
+        with pytest.raises(
+            ValueError, match='column "v" row 0 element 1 is None but Int32 is not Nullable'
+        ):
+            _ch_core.encode_native_block(["v"], ["Array(Int32)"], [[[1, None]]], 1)
+
+    def test_nested_element_error_reports_outer_path(self):
+        rows = [[[1]], [[2], ["x"]]]
+        with pytest.raises(
+            ValueError,
+            match='column "v" row 1 element 1 element 0 cannot be converted to Int32',
+        ):
+            _ch_core.encode_native_block(["v"], ["Array(Array(Int32))"], [rows], 2)
+
+    def test_array_lc_reuses_dictionary_objects(self):
+        rows = [["red", "red", "green"], [], ["red", "green"]]
+        encoded = _ch_core.encode_native_block(
+            ["c"], ["Array(LowCardinality(String))"], [rows], len(rows)
+        )
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        col = batch.column_data(0)
+        assert list(col) == rows
+        assert col[0][0] is col[0][1]
+        assert col[0][0] is col[2][0]
+        cols = batch.to_python_columns()[0]
+        assert cols[0][0] is cols[0][1] and cols[0][0] is cols[2][0]
+        out_rows = batch.to_python_rows()
+        assert out_rows[0][0][0] is out_rows[0][0][1]
+        assert out_rows[0][0][0] is out_rows[2][0][0]
+
+    def test_nested_array_lc_reuses_dictionary_objects(self):
+        rows = [[["a", "a"], ["a"]], [], [["a"]]]
+        encoded = _ch_core.encode_native_block(
+            ["c"], ["Array(Array(LowCardinality(String)))"], [rows], len(rows)
+        )
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        col = batch.column_data(0)
+        assert list(col) == rows
+        assert col[0][0][0] is col[0][1][0]
+        assert col[0][0][0] is col[2][0][0]
+
+    def test_array_lc_nullable_reuse_and_values(self):
+        rows = [["x", None, "x"], [], [None, "x"]]
+        encoded = _ch_core.encode_native_block(
+            ["c"], ["Array(LowCardinality(Nullable(String)))"], [rows], len(rows)
+        )
+        col = _ch_core.ColBatch.decode_native(encoded).column_data(0)
+        assert list(col) == rows
+        assert col[0][0] is col[0][2]
+        assert col[0][0] is col[2][1]
 
     def test_unsupported_element_rejected(self):
         with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
@@ -1997,6 +2068,129 @@ class TestArray:
         buf.extend(struct.pack("<Q", 1))  # row 1 end offset decreases -> invalid
         with pytest.raises(ValueError, match="Invalid Array layout"):
             _ch_core.ColBatch.decode_native(bytes(buf))
+
+
+class TestArrayInsertFastPath:
+    """Exact list/tuple row flattening into one flat element run."""
+
+    def _encode(self, type_name, rows, row_count=None):
+        n = len(rows) if row_count is None else row_count
+        return _ch_core.encode_native_block(["v"], [type_name], [rows], n)
+
+    def test_row_and_outer_container_kinds_agree(self):
+        rows = [[13, 79], [], [7, 5, 5]]
+        from_lists = self._encode("Array(Int64)", rows)
+        assert from_lists == build_native_block([("v", "Array(Int64)", rows)])
+        assert self._encode("Array(Int64)", tuple(rows), 3) == from_lists
+        assert self._encode("Array(Int64)", [tuple(r) for r in rows]) == from_lists
+        assert self._encode("Array(Int64)", _NdarrayLikeColumn(rows), 3) == from_lists
+
+    def test_exotic_row_containers_match_list_rows(self):
+        expected = self._encode("Array(Int64)", [[0, 1, 2], [7], [], [3, 4]])
+        rows = [range(3), _NdarrayLikeColumn([7]), (x for x in []), (3, 4)]
+        assert self._encode("Array(Int64)", rows, 4) == expected
+
+    def test_mixed_rows_agree_across_outer_containers(self):
+        rows = [[1, 2], (3,), range(2)]
+        expected = self._encode("Array(Int64)", [[1, 2], [3], [0, 1]])
+        assert self._encode("Array(Int64)", rows, 3) == expected
+        assert self._encode("Array(Int64)", _NdarrayLikeColumn(rows), 3) == expected
+
+    def test_nested_tuple_rows(self):
+        rows = [((1, 2), [3]), [], [(7,)], [[], (1, 2, 3)]]
+        expected_rows = [[[1, 2], [3]], [], [[7]], [[], [1, 2, 3]]]
+        encoded = self._encode("Array(Array(Int64))", rows, 4)
+        assert encoded == self._encode("Array(Array(Int64))", expected_rows)
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == expected_rows
+
+    def test_nullable_element_tuple_rows(self):
+        rows = [(13, None), (), (None, 7)]
+        encoded = self._encode("Array(Nullable(Int64))", rows, 3)
+        assert encoded == self._encode("Array(Nullable(Int64))", [list(r) for r in rows])
+        expected = [[13, None], [], [None, 7]]
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == expected
+
+    def test_string_and_lc_tuple_rows(self):
+        rows = [("a", "bb"), (), ("a",)]
+        for type_name in ("Array(String)", "Array(LowCardinality(String))"):
+            fast = self._encode(type_name, rows, 3)
+            assert fast == self._encode(type_name, [list(r) for r in rows])
+
+    def test_lc_non_string_element_round_trip(self):
+        rows = [[13, 79, 13], [], [79]]
+        encoded = self._encode("Array(LowCardinality(UInt32))", rows)
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    def test_empty_rows_tuple_outer(self):
+        assert self._encode("Array(Int64)", (), 0) == build_native_block(
+            [("v", "Array(Int64)", [])]
+        )
+        assert self._encode("Array(Int64)", ((), (), ()), 3) == build_native_block(
+            [("v", "Array(Int64)", [[], [], []])]
+        )
+
+    def test_invalid_row_in_fallback_reports_row(self):
+        with pytest.raises(ValueError, match="row 1 is not a valid Array value"):
+            self._encode("Array(Int64)", [[1], 5, [3]], 3)
+
+    def test_row_fallback_preserves_cause(self):
+        class Boom(Exception):
+            pass
+
+        class EvilRow:
+            def __iter__(self):
+                raise Boom("iteration exploded")
+
+        with pytest.raises(ValueError, match="row 1 is not a valid Array value") as excinfo:
+            self._encode("Array(Int64)", [[1], EvilRow()], 2)
+        assert isinstance(excinfo.value.__cause__, Boom)
+
+    def test_flat_refs_refcount_balance(self):
+        shared = 1 << 40
+
+        rows = [[shared, shared], [], [shared]]
+        before = sys.getrefcount(shared)
+        self._encode("Array(Int64)", rows, 3)
+        assert sys.getrefcount(shared) == before
+
+        rows = [[shared], ["x"]]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match="element 0 cannot be converted"):
+            self._encode("Array(Int64)", rows, 2)
+        assert sys.getrefcount(shared) == before
+
+        rows = [[shared], 5]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match="not a valid Array value"):
+            self._encode("Array(Int64)", rows, 2)
+        assert sys.getrefcount(shared) == before
+
+    def test_outer_list_resized_during_row_fallback_raises(self):
+        rows = [[1], None, [3], [4]]
+
+        class Evil:
+            def __iter__(self):
+                del rows[2:]
+                return iter([7])
+
+        rows[1] = Evil()
+        with pytest.raises(ValueError, match="resized during encoding"):
+            self._encode("Array(Int64)", rows, 4)
+
+    def test_outer_list_resized_during_element_fallback_encodes_snapshot(self):
+        # Element conversion runs Python that clears the outer list after the
+        # flatten pass; the flat run holds strong references, so the original
+        # rows still encode.
+        rows = [[1], [], [3]]
+
+        class Evil:
+            def __index__(self):
+                rows.clear()
+                return 9
+
+        rows[1] = [Evil()]
+        expected = self._encode("Array(Int64)", [[1], [9], [3]])
+        assert self._encode("Array(Int64)", rows, 3) == expected
 
 
 # ---------------------------------------------------------------------------

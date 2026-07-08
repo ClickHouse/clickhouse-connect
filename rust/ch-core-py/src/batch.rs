@@ -259,8 +259,10 @@ impl ColBatch {
                         fill_dictionary(py, dict, ctx, rows, &mut sink)?;
                         continue;
                     }
+                    let mut dict_cache = new_array_dict_cache(col);
                     for row_idx in 0..rows {
-                        let item = column_value_to_owned_ptr(py, col, ctx, row_idx)?;
+                        let item =
+                            column_value_to_owned_ptr(py, col, ctx, row_idx, dict_cache.as_mut())?;
                         sink(row_idx, item);
                     }
                 }
@@ -666,10 +668,12 @@ fn column_to_pylist<'py>(
             }
             // Fallback per-cell path. Hoist the validity branch out of the
             // per-cell loop; most columns are non-nullable.
+            let mut dict_cache = new_array_dict_cache(col);
             match column_validity(col) {
                 None => {
                     for row_idx in 0..chunk.num_rows {
-                        let item = column_value_nonnull_ptr(py, col, ctx, row_idx)?;
+                        let item =
+                            column_value_nonnull_ptr(py, col, ctx, row_idx, dict_cache.as_mut())?;
                         // Safety: out_row < total_rows, the same chunk-row sum
                         // the list was allocated with, and the list takes over
                         // the owned item.
@@ -680,7 +684,7 @@ fn column_to_pylist<'py>(
                 Some(bm) => {
                     for row_idx in 0..chunk.num_rows {
                         let item = if bm.is_valid(row_idx) {
-                            column_value_nonnull_ptr(py, col, ctx, row_idx)?
+                            column_value_nonnull_ptr(py, col, ctx, row_idx, dict_cache.as_mut())?
                         } else {
                             none_owned_ptr()
                         };
@@ -1080,7 +1084,7 @@ where
                 // Safety: slot < col.values.len() (checked by get_mut); the
                 // returned pointer is a valid owned reference; Py takes it
                 // over and the Vec drops every cached entry on any exit path.
-                let ptr = unsafe { column_value_nonnull_ptr(py, &col.values, ctx, slot)? };
+                let ptr = unsafe { column_value_nonnull_ptr(py, &col.values, ctx, slot, None)? };
                 *entry = Some(unsafe { Py::from_owned_ptr(py, ptr) });
             }
             Ok(entry
@@ -1114,8 +1118,33 @@ fn lc_index_err() -> PyErr {
     PyValueError::new_err("Malformed payload: LowCardinality index out of dictionary range")
 }
 
+/// Lazy cache of materialized dictionary slot objects, one entry per slot.
+type DictSlotCache = Vec<Option<Py<PyAny>>>;
+
+/// A cache for the Dictionary column in an Array column's element chain, if
+/// any. One cache per array column per chunk, threaded through the per-cell
+/// path so repeated LowCardinality labels materialize once and share the
+/// object, matching `fill_dictionary`'s reuse policy. Slots fill lazily on
+/// first reference by a valid index.
+fn new_array_dict_cache(col: &Column) -> Option<DictSlotCache> {
+    fn chain_dictionary(col: &Column) -> Option<&DictionaryColumn> {
+        match col {
+            Column::Array(c) => chain_dictionary(&c.values),
+            Column::Dictionary(d) => Some(d),
+            _ => None,
+        }
+    }
+    let Column::Array(c) = col else { return None };
+    chain_dictionary(&c.values).map(|dict| {
+        let mut slots = Vec::with_capacity(dict.values.len());
+        slots.resize_with(dict.values.len(), || None);
+        slots
+    })
+}
+
 /// Build the cell at `index` as an owned pointer, assuming the cell is not
-/// null; callers check validity first.
+/// null; callers check validity first. `dict_cache` is the Array element
+/// chain's dictionary cache, if the caller materializes one.
 ///
 /// # Safety
 ///
@@ -1125,6 +1154,7 @@ unsafe fn column_value_nonnull_ptr(
     col: &Column,
     ctx: &ColumnCtx<'_>,
     index: usize,
+    mut dict_cache: Option<&mut DictSlotCache>,
 ) -> PyResult<*mut ffi::PyObject> {
     match col {
         Column::Bool(c) => ptr_to_result(py, ffi::PyBool_FromLong(c.get(index).into())),
@@ -1175,7 +1205,23 @@ unsafe fn column_value_nonnull_ptr(
                 .and_then(|i| usize::try_from(i).ok())
                 .filter(|&slot| slot < c.values.len())
                 .ok_or_else(lc_index_err)?;
-            column_value_nonnull_ptr(py, &c.values, ctx, slot)
+            match dict_cache {
+                // Array element path: build each referenced slot once per
+                // chunk and emit clone_ref of the cached object.
+                Some(cache) => {
+                    let entry = cache.get_mut(slot).ok_or_else(lc_index_err)?;
+                    if entry.is_none() {
+                        let ptr = column_value_nonnull_ptr(py, &c.values, ctx, slot, None)?;
+                        *entry = Some(Py::from_owned_ptr(py, ptr));
+                    }
+                    Ok(entry
+                        .as_ref()
+                        .expect("entry filled above")
+                        .clone_ref(py)
+                        .into_ptr())
+                }
+                None => column_value_nonnull_ptr(py, &c.values, ctx, slot, None),
+            }
         }
         // Enum8/Enum16 carry only the physical signed int; map it to its label
         // string through the per-column value->name map. A value with no defined
@@ -1236,7 +1282,13 @@ unsafe fn column_value_nonnull_ptr(
             // NULL slots not yet filled.
             let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
             for slot in 0..count {
-                let item = column_value_to_owned_ptr(py, &c.values, ectx, start + slot)?;
+                let item = column_value_to_owned_ptr(
+                    py,
+                    &c.values,
+                    ectx,
+                    start + slot,
+                    dict_cache.as_deref_mut(),
+                )?;
                 // Safety: slot < count, the list's allocated length, and the
                 // list takes over the owned item.
                 ffi::PyList_SET_ITEM(list.as_ptr(), slot as ffi::Py_ssize_t, item);
@@ -1460,10 +1512,11 @@ unsafe fn column_value_to_owned_ptr(
     col: &Column,
     ctx: &ColumnCtx<'_>,
     index: usize,
+    dict_cache: Option<&mut DictSlotCache>,
 ) -> PyResult<*mut ffi::PyObject> {
     if column_validity(col).is_some_and(|v| !v.is_valid(index)) {
         Ok(none_owned_ptr())
     } else {
-        column_value_nonnull_ptr(py, col, ctx, index)
+        column_value_nonnull_ptr(py, col, ctx, index, dict_cache)
     }
 }
