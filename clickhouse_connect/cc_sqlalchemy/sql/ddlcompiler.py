@@ -191,10 +191,8 @@ class ChDDLCompiler(DDLCompiler):
         alias = ClickHouseDDLHelper.get_option(column, "alias")
         if materialized is not None:
             text += f" MATERIALIZED {self.render_default_string(materialized)}"
-            return text
         if alias is not None:
             text += f" ALIAS {self.render_default_string(alias)}"
-            return text
         default = self.get_column_default_string(column)
         if default is not None:
             text += f" DEFAULT {default}"
