@@ -19,6 +19,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     build_engine,
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification
 from clickhouse_connect.driver.binding import format_str
 
 dialect = ClickHouseDialect()
@@ -435,3 +436,76 @@ def test_engine_clause_literal_value_allowed():
     created_at = db.column("created_at")
     ddl_add = _engine_ddl("books_test", [db.Column("created_at", UInt64)], MergeTree(order_by=created_at + 79))
     assert ddl_add == "CREATE TABLE `books_test` (`created_at` UInt64) Engine MergeTree ORDER BY `created_at` + 79"
+
+
+def _column_spec(column):
+    return column_specification(dialect, column)
+
+
+@pytest.mark.parametrize(
+    "build_column,expected",
+    [
+        (
+            lambda: db.Column("derived", UInt64, clickhouse_materialized=db.text("id * 2"), comment="derived value"),
+            "`derived` UInt64 MATERIALIZED id * 2 COMMENT 'derived value'",
+        ),
+        (
+            lambda: db.Column("derived", UInt64, clickhouse_alias=db.text("id * 2"), comment="derived value"),
+            "`derived` UInt64 ALIAS id * 2 COMMENT 'derived value'",
+        ),
+    ],
+)
+def test_materialized_alias_columns_keep_comment(build_column, expected):
+    assert _column_spec(build_column()) == expected
+
+
+@pytest.mark.parametrize(
+    "build_column,expected",
+    [
+        (
+            lambda: db.Column(
+                "val",
+                UInt64,
+                server_default=db.text("5"),
+                comment="a value",
+                clickhouse_codec="ZSTD(1)",
+                clickhouse_ttl=db.text("created_at + INTERVAL 1 DAY"),
+            ),
+            "`val` UInt64 DEFAULT 5 COMMENT 'a value' CODEC(ZSTD(1)) TTL created_at + INTERVAL 1 DAY",
+        ),
+        (
+            lambda: db.Column(
+                "val",
+                UInt64,
+                clickhouse_materialized=db.text("id * 2"),
+                comment="a value",
+                clickhouse_codec="ZSTD(1)",
+                clickhouse_ttl=db.text("created_at + INTERVAL 1 DAY"),
+            ),
+            "`val` UInt64 MATERIALIZED id * 2 COMMENT 'a value' CODEC(ZSTD(1)) TTL created_at + INTERVAL 1 DAY",
+        ),
+    ],
+)
+def test_column_clause_order_comment_before_codec_before_ttl(build_column, expected):
+    # ClickHouse's column grammar requires COMMENT, then CODEC, then TTL.
+    assert _column_spec(build_column()) == expected
+
+
+@pytest.mark.parametrize(
+    "build_column,expected",
+    [
+        (
+            lambda: db.Column(
+                "c", UInt64, clickhouse_materialized=db.text("1"), clickhouse_alias=db.text("2"), server_default=db.text("3")
+            ),
+            "`c` UInt64 MATERIALIZED 1",
+        ),
+        (
+            lambda: db.Column("c", UInt64, clickhouse_alias=db.text("2"), server_default=db.text("3")),
+            "`c` UInt64 ALIAS 2",
+        ),
+    ],
+)
+def test_default_kinds_are_mutually_exclusive(build_column, expected):
+    # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive; only the highest-precedence one is emitted.
+    assert _column_spec(build_column()) == expected
