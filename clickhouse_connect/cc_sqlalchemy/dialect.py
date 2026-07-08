@@ -71,10 +71,17 @@ class ClickHouseDialect(DefaultDialect):
 
     @staticmethod
     def _ch_query_settings(context: Any) -> dict[str, Any] | None:
-        # Pull per-statement ClickHouse settings from execution_options["settings"].
+        # Deep-merge one level of execution_options["settings"], statement wins per key.
         if context is None:
             return None
-        return context.execution_options.get("settings")
+        merged = context.execution_options.get("settings")
+        stmt = getattr(context, "invoked_statement", None)
+        stmt_settings = stmt.get_execution_options().get("settings") if stmt is not None else None
+        if not stmt_settings:
+            return merged
+        if not merged:
+            return dict(stmt_settings)
+        return {**merged, **stmt_settings}
 
     def do_execute(self, cursor, statement, parameters, context=None):
         cast(Cursor, cursor).execute(statement, parameters, settings=self._ch_query_settings(context))
