@@ -16,8 +16,14 @@ from clickhouse_connect.driver.types import ByteSource
 
 
 class IntBase(ArrayType, registered=False):
+    _array_type: str
+
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
+            return
+        np = options.np
+        if np is not None and isinstance(column, np.ndarray) and column.dtype.kind in ("i", "u"):
+            data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
             return
         if self.nullable:
             first = next((x for x in column if x is not None), None)
@@ -31,7 +37,7 @@ class IntBase(ArrayType, registered=False):
             column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
         elif not isinstance(column[0], int):
             column = [int(x) for x in column]
-        write_array(self._array_type, column, dest)
+        data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
 class Int8(IntBase):
@@ -105,7 +111,7 @@ class BigInt(ClickHouseType, registered=False):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         signed = self._signed
         sz = self.byte_size
-        column = []
+        column: list[Any] = []
         app = column.append
         ifb = int.from_bytes
         if self.read_format(ctx) == "string":
@@ -189,6 +195,10 @@ class Float(ArrayType, registered=False):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
             return
+        np = options.np
+        if np is not None and isinstance(column, np.ndarray) and column.dtype.kind == "f":
+            data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
+            return
         if self.nullable:
             first = next((x for x in column if x is not None), None)
             if not isinstance(first, float):
@@ -197,7 +207,7 @@ class Float(ArrayType, registered=False):
                 column = [0 if x is None else x for x in column]
         elif not isinstance(column[0], float):
             column = [float(x) for x in column]
-        write_array(self._array_type, column, dest)
+        data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
 class Float32(Float):
@@ -373,19 +383,9 @@ class Decimal(ClickHouseType):
         column = source.read_array(self._array_type, num_rows)
         dec = decimal.Decimal
         scale = self.scale
-        prec = self.prec
         if scale == 0:
-            return [dec(str(x)) for x in column]
-        new_col = []
-        app = new_col.append
-        for x in column:
-            if x >= 0:
-                digits = str(x).rjust(prec, "0")
-                app(dec(f"{digits[:-scale]}.{digits[-scale:]}"))
-            else:
-                digits = str(-x).rjust(prec, "0")
-                app(dec(f"-{digits[:-scale]}.{digits[-scale:]}"))
-        return new_col
+            return [dec(x) for x in column]
+        return [dec(x).scaleb(-scale) for x in column]
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         with decimal.localcontext() as dec_ctx:
@@ -409,23 +409,21 @@ class BigDecimal(Decimal, registered=False):
     def _read_column_binary(self, source: ByteSource, num_rows: int, _ctx: QueryContext, _read_state: Any):
         dec = decimal.Decimal
         scale = self.scale
-        prec = self.prec
-        column = []
+        column: list[Any] = []
         app = column.append
         sz = self.byte_size
         ifb = int.from_bytes
         if scale == 0:
             for _ in range(num_rows):
-                app(dec(str(ifb(source.read_bytes(sz), "little", signed=True))))
+                app(dec(ifb(source.read_bytes(sz), "little", signed=True)))
             return column
-        for _ in range(num_rows):
-            x = ifb(source.read_bytes(sz), "little", signed=True)
-            if x >= 0:
-                digits = str(x).rjust(prec, "0")
-                app(dec(f"{digits[:-scale]}.{digits[-scale:]}"))
-            else:
-                digits = str(-x).rjust(prec, "0")
-                app(dec(f"-{digits[:-scale]}.{digits[-scale:]}"))
+        # localcontext with ctx.prec = self.prec is required because scaleb()
+        # rounds to context precision. Default prec is 28 which would silently
+        # truncate Decimal128 (prec up to 38) and Decimal256 (prec up to 76) values.
+        with decimal.localcontext() as ctx:
+            ctx.prec = self.prec
+            for _ in range(num_rows):
+                app(dec(ifb(source.read_bytes(sz), "little", signed=True)).scaleb(-scale))
         return column
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, _ctx):

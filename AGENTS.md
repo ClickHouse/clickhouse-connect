@@ -6,6 +6,7 @@ Required reading:
 
 - Before making substantial code changes, read `.agents/architecture.md`.
 - Before doing code review, review feedback, or PR analysis, read `.agents/review.md`.
+- Before investigating server behavior, type serialization, wire protocol, format parsing, or settings handling, read `.agents/server-map.md` and follow the workflow in `Server Behavior Is Authoritative` below.
 
 Do not treat those docs as replacements for this file. They are required reference material. This file remains the source of truth for agent behavior.
 
@@ -35,10 +36,20 @@ Act like an experienced maintainer of a public Python database driver.
 
 - Use `uv` for pip-style package management, for example `uv pip install pandas`.
 - Run formatting and linting with `ruff`.
-- Run Pylance on every Python file you edit and address real issues it finds.
-- Ignore Pyright. Do not distort code just to satisfy static analysis when runtime behavior is already correct.
+- Type-check with `mypy`. It is the authoritative static type checker for this repo and runs in CI. See `Type Checking` below.
 - Prefer `rg` over slower text search tools when inspecting the repo.
 - `gh` is available for GitHub inspection when needed.
+
+## Type Checking
+
+This is a typed library. It ships PEP 561 type information: `clickhouse_connect/py.typed` is published so downstream type checkers consume our annotations, and CI type-checks the package with `mypy`. The annotations are part of the public contract, so a wrong or missing annotation on the public surface is a bug.
+
+- `mypy` is the authority. Run it from the repo root with no arguments (`mypy`). Configuration lives in `[tool.mypy]` in `pyproject.toml` and targets the `clickhouse_connect` package on Python 3.10.
+- New and changed code must pass `mypy` cleanly. Do not introduce type errors.
+- Public-facing API must carry correct, complete type annotations. That includes the top-level entry points (`get_client`, `get_async_client`, `create_client`), public `clickhouse_connect.driver.*` names, `Client` and `AsyncClient` method signatures, the DB-API layer, and the SQLAlchemy dialect. Downstream users type-check against these, so treat their signatures with the same care as their runtime behavior.
+- A per-module baseline in `pyproject.toml` (`ignore_errors = true`, issue #692) still exempts a shrinking set of modules that predate the typing work. This list only shrinks. Do not add modules to it. When you clean up a baselined module so it passes, remove its entry in the same change.
+- The `ignore_missing_imports` overrides for some optional dependencies and the compiled Cython modules are expected. Do not "fix" them by adding stubs unless that is the actual task.
+- Stay practical. Prefer accurate annotations over contortions. If runtime-correct code cannot satisfy the checker without distortion, use a narrow, commented `# type: ignore[code]` and flag it, rather than reshaping the code. The default expectation is that `mypy` passes.
 
 ## Repo Workflow
 
@@ -49,7 +60,51 @@ Act like an experienced maintainer of a public Python database driver.
 
 ## Server Behavior Is Authoritative
 
-When in doubt about how the ClickHouse server actually behaves, how a type is serialized, how a setting takes effect, how an error is produced, or what a protocol detail means, go read the server source at `https://github.com/ClickHouse/ClickHouse`. That is the source of truth. Do not guess, do not infer from this client's code alone, and do not assume documentation is current. Check the server code itself.
+When in doubt about how the ClickHouse server actually behaves, how a type is serialized, how a setting takes effect, how an error is produced, or what a protocol detail means, go read the server source. That is the source of truth. Do not guess, do not infer from this client's code alone, and do not assume documentation is current.
+
+### Local server source checkout
+
+A shallow clone of the ClickHouse server source should live at `.server-src/`, pinned to the tag recorded in `.server-ref` at the repo root. Both `.server-src/` and `.server-ref` are gitignored, so they will not be present on a fresh checkout. Treat the tag in `.server-ref` as the version you are comparing client behavior against.
+
+Server investigation work is much higher quality with the actual server source available locally. If you need it and it is missing, try to set it up before continuing.
+
+- If `.server-src/` or `.server-ref` is missing, tell the user that server investigation is best done against the real server source and that you recommend setting it up. Then try to create them. If the user has not specified a version, default to the most recent stable ClickHouse release tag. Write that tag to `.server-ref` and do a shallow clone of `https://github.com/ClickHouse/ClickHouse` at that tag into `.server-src/`. Example: `git clone --depth 1 --branch <tag> https://github.com/ClickHouse/ClickHouse.git .server-src` followed by writing `<tag>` to `.server-ref`.
+- If you cannot set them up for any reason, tell the user plainly. You may continue without the local source, but flag in your answer that the investigation was done without it and the result is less reliable.
+- Do not silently re-clone an existing `.server-src/` and do not fall back to reading GitHub ad hoc when a local checkout is present.
+- If the user asks you to investigate against a different version, tell them the current `.server-ref` tag and ask whether to switch before proceeding. **Switch in place, do not blow away the existing checkout.** Inside `.server-src/`, run `git fetch --depth 1 origin tag <new-tag>` and then `git checkout <new-tag>`, and write `<new-tag>` to `.server-ref`. This reuses the existing `.git` directory and is much faster than re-cloning, especially when bouncing between tags.
+- Re-cloning `.server-src/` from scratch is a last resort, reserved for cases where the existing checkout is corrupt or in an unrecoverable state. Tell the user before doing it. Do not treat it as routine.
+- Cite the tag explicitly in your answer, for example: "at v26.3.9.8-lts, `JSONEachRowRowInputFormat::readRow` does X".
+
+### Navigation
+
+Before grepping blindly through the server tree, read `.agents/server-map.md`. It is a curated index of where client-relevant concerns live: wire protocol, type serialization, individual type implementations, formats, settings, errors, compression, and server tests. Use it as your first stop, then open the specific files it points at.
+
+If the map's pointers do not exist at the pinned tag, flag it plainly and tell the user before writing code that assumes them.
+
+### Always delegate server C++ reading to the `clickhouse-server-reader` sub-agent
+
+ClickHouse is a large C++ codebase. Reading it directly in the main conversation bloats context fast and crowds out the client-side code you are actually changing. Delegate it.
+
+The project ships a custom sub-agent definition at `.claude/agents/clickhouse-server-reader.md` that owns the discipline (citation rules, confirmed vs inferred, tag resolution, navigation via `.agents/server-map.md`). Use it for all server source reading.
+
+Default workflow:
+
+1. In the main conversation, identify the **specific questions** you need answered about server behavior. Examples: "how is a `Decimal(76, 10)` value laid out on the wire", "does `JSONEachRow` emit trailing newlines on empty result sets", "what is the exact null-mask byte order for `Nullable(LowCardinality(String))`".
+2. Spawn the `clickhouse-server-reader` sub-agent with those questions. Keep the prompt focused on the questions themselves. The sub-agent already knows to read `.server-ref`, consult `.agents/server-map.md`, cite tag and paths, and mark each claim as **confirmed** or **inferred**.
+3. Work from the sub-agent's summary. Do not pull raw C++ into the main thread.
+4. If the summary is insufficient, send a follow-up question to the same sub-agent rather than reading the code yourself.
+5. If the sub-agent flags that a question was unusually subtle and its read was uncertain, re-spawn it with a stronger model rather than guessing.
+
+The main thread should stay focused on the client change. The sub-agent eats the C++ context.
+
+### What the final answer must contain
+
+When you reconcile the sub-agent's findings into your reply to the user, preserve:
+
+- The resolved server tag the sub-agent compared against.
+- The specific server paths and function or class names it relied on. No line numbers, they rot.
+- The sub-agent's **confirmed** vs **inferred** distinction. Do not collapse them.
+- Specific client-side file and line references for the behavior you are reconciling.
 
 ## Change Style
 
@@ -68,8 +123,17 @@ When in doubt about how the ClickHouse server actually behaves, how a type is se
 - Limit parentheses.
 - Use single spaces between sentences.
 
-## Test Data
+## Writing Tests
 
+- A bug fix needs a regression test. Write tests that FAIL on the unpatched code and PASS with your fix, and confirm both directions before claiming the fix works.
+- If existing tests break due to your changes, do not edit the tests to make them pass, unless the tests were asserting fundamentally incorrect behavior. If that was the case, call it out explicitly. If you cannot justify the new expected value from the issue or from `Server Behavior Is Authoritative`, your code is wrong, not the test.
+- Derive expected values from the spec and from empirically testing against the server.
+- Inspect existing tests covering similar areas to make sure you are writing tests in the right style and with the right coverage.
+- Make sure to test both the happy path as well as sad paths. Make sure to cover all relevant edge cases.
+- When testing types, cover the full type matrix: ClickHouse type hints compose and formatting is recursive, so a change to how a value is formatted must be tested across all the shapes it can take: scalar, Array(T), Tuple(...), Array(Tuple(...)),  Nullable(T), and spelling and case variants of the type name.
+- Aim to be complete, but also terse. Don't use two tests to cover what could be done in one.
+- When possible, use parametrized tests. Express a matrix of cases with `@pytest.mark.parametrize` instead of using near-duplicate test bodies. This is the right place for the type-shape and case-variant coverage above.
+- Client behavior must hold for both the sync and async clients. For integration tests use the `param_client` and call fixtures from `tests/integration_tests/conftest.py`, which run one test body against both transports via the client_mode parameter. See `tests/integration_tests/test_temporal.py` for the pattern. Do not write a sync-only test for a change that touches shared client code.
 - Do not use `42` as the generic representative integer in tests.
 - Do not use names like `alice` or `bob` as generic placeholders.
 - Prefer values like `13`, `79`, `user_1`, and `user_2`, or similarly neutral domain-appropriate values.

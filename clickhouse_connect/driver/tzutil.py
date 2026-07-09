@@ -1,10 +1,11 @@
 import os
+import re
 import zoneinfo
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 
 tzlocal = None
 try:
-    import tzlocal  # Maybe we can use the tzlocal module to get a safe timezone
+    import tzlocal  # type: ignore[no-redef]  # Maybe we can use the tzlocal module to get a safe timezone
 except ImportError:
     pass
 
@@ -44,17 +45,37 @@ UTC_EQUIVALENTS = (
 # extra to get the IANA zone data.
 TZDATA_HINT = "install the tzdata package (e.g. `pip install clickhouse-connect[tzdata]`) if no system zoneinfo database is available"
 
+# ClickHouse servers without an IANA tz database report Fixed/UTC+HH:MM:SS
+# or Fixed/UTC-HH:MM:SS for any non-UTC
+# timezone (in column types, X-ClickHouse-Timezone, and SELECT timezone()). Hours, minutes,
+# and seconds are always zero-padded to two digits; the server rejects single-digit forms
+# like `Fixed/UTC+5:30:00`. Range validation is done in resolve_zone() rather than in the
+# regex because the server also accepts the boundary value +/-24:00:00, which Python's
+# datetime.timezone cannot represent as a non-UTC offset and must not be silently collapsed to UTC.
+_FIXED_TZ_RE = re.compile(r"^Fixed/UTC([+-])(\d{2}):(\d{2}):(\d{2})$")
+
 
 def resolve_zone(tz_name: str) -> tzinfo:
     """Resolve an IANA timezone name to a tzinfo.
 
     Short-circuits UTC-equivalent names to datetime.timezone.utc so that representing UTC
-    does not require an IANA zoneinfo database to be available on the host. Other names are
-    resolved via zoneinfo.ZoneInfo and will raise ZoneInfoNotFoundError if the host has
-    no system zoneinfo and the tzdata package is not installed.
+    does not require an IANA zoneinfo database to be available on the host. Also recognizes
+    ClickHouse's Fixed/UTC+HH:MM:SS and Fixed/UTC-HH:MM:SS offset format
+    (emitted by servers without IANA tz data) and returns a stdlib datetime.timezone.
+    Other names are resolved via zoneinfo.ZoneInfo and will raise ZoneInfoNotFoundError
+    if the host has no system zoneinfo and the tzdata package is not installed.
     """
     if tz_name in UTC_EQUIVALENTS:
         return timezone.utc
+    fixed = _FIXED_TZ_RE.match(tz_name)
+    if fixed:
+        sign, hh, mm, ss = fixed.groups()
+        h, m, s = int(hh), int(mm), int(ss)
+        if h < 24 and m < 60 and s < 60:
+            offset = timedelta(hours=h, minutes=m, seconds=s)
+            if sign == "-":
+                offset = -offset
+            return timezone.utc if offset == timedelta(0) else timezone(offset)
     try:
         return zoneinfo.ZoneInfo(tz_name)
     except ValueError as ex:
@@ -63,11 +84,23 @@ def resolve_zone(tz_name: str) -> tzinfo:
         raise zoneinfo.ZoneInfoNotFoundError(str(ex)) from ex
 
 
-def normalize_timezone(tz: tzinfo) -> tuple[tzinfo, bool]:
+def normalize_timezone(tz: tzinfo, trust_fixed_offset: bool = False) -> tuple[tzinfo, bool]:
+    # Server-init paths pass trust_fixed_offset=True for tzs derived from a ClickHouse-reported
+    # Fixed/UTC+HH:MM:SS or Fixed/UTC-HH:MM:SS string. Those are self-describing and
+    # DST-safe by definition, but their tzname(None) (e.g. "UTC+05:30") is not an IANA
+    # key and would otherwise fall through to the unsafe branch, silently dropping the
+    # server tz under tz_source="auto".
+    #
+    # The local-init path (bottom of this module) deliberately does NOT set this flag because
+    # a stdlib datetime.timezone returned from datetime.now().astimezone().tzinfo is the current
+    # local offset (e.g. PDT), and we want the tzlocal-recovery branch below to upgrade it to
+    # a real IANA zone so the local time tracks across DST.
+    if trust_fixed_offset and isinstance(tz, timezone):
+        return tz, True
+
     # ZoneInfo exposes the IANA key on `.key`; fall back to tzname(None) for other tzinfo
-    # subclasses (datetime.timezone, fixed offsets). pytz used to return the IANA name from
-    # tzname(None), but ZoneInfo returns None, which would collapse every named zone into the
-    # "unsafe" fallback branch.
+    # subclasses. pytz used to return the IANA name from tzname(None), but ZoneInfo returns
+    # None, which would collapse every named zone into the "unsafe" fallback branch.
     tz_key = getattr(tz, "key", None) or tz.tzname(None)
 
     if tz_key in UTC_EQUIVALENTS:
@@ -99,8 +132,135 @@ def is_utc_timezone(tz: tzinfo | str | None) -> bool:
     return tz.tzname(None) in UTC_EQUIVALENTS
 
 
-def utcfromtimestamp(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+def utc_equivalent_tzaware_datetime(ts: int, microseconds: int, tz_info: tzinfo) -> datetime:
+    """Build a UTC-equivalent timezone-aware datetime via epoch arithmetic.
+
+    For UTC-equivalent timezones (UTC, Etc/UTC, GMT, etc.), construct the datetime
+    using epoch arithmetic rather than datetime.fromtimestamp(), then attach the
+    timezone. This avoids timezone conversion machinery that's unnecessary for UTC.
+
+    Sub-second precision must be supplied via the microseconds argument; the ts
+    value is interpreted as integer seconds.
+
+    Args:
+        ts: Integer Unix timestamp (seconds since epoch)
+        microseconds: Microsecond component (0-999999)
+        tz_info: A UTC-equivalent timezone object
+
+    Returns:
+        Timezone-aware datetime in the specified timezone
+    """
+    seconds = int(ts)
+
+    days = seconds // 86400
+    secs_in_day = seconds % 86400
+
+    year, month, day = _epoch_days_to_date_components(days)
+
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return datetime(year, month, day, hour, minute, second, microseconds, tzinfo=tz_info)
+
+
+def utcfromtimestamp_with_microseconds(ts: int, microseconds: int = 0) -> datetime:
+    """Convert integer Unix timestamp to naive UTC datetime with explicit microseconds.
+
+    More efficient than calling utcfromtimestamp() and then .replace(microsecond=...)
+    because it constructs the datetime once with all components.
+
+    Args:
+        ts: Integer Unix timestamp (seconds since epoch)
+        microseconds: Microsecond component (0-999999)
+
+    Returns:
+        Naive UTC datetime with specified microseconds
+    """
+    seconds = int(ts)
+
+    days = seconds // 86400
+    secs_in_day = seconds % 86400
+
+    year, month, day = _epoch_days_to_date_components(days)
+
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return datetime(year, month, day, hour, minute, second, microseconds)
+
+
+def utcfromtimestamp(ts: int) -> datetime:
+    """Convert integer Unix timestamp to naive UTC datetime via epoch arithmetic.
+
+    Avoids the expensive datetime.fromtimestamp() + replace() round-trip. Sub-second
+    precision is not supported; pass an integer number of seconds. For sub-second
+    inputs, use utcfromtimestamp_with_microseconds.
+    """
+    seconds = int(ts)
+
+    days = seconds // 86400
+    secs_in_day = seconds % 86400
+
+    year, month, day = _epoch_days_to_date_components(days)
+
+    hour = secs_in_day // 3600
+    secs_in_day %= 3600
+    minute = secs_in_day // 60
+    second = secs_in_day % 60
+
+    return datetime(year, month, day, hour, minute, second, 0)
+
+
+_MONTH_DAYS = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365)
+_MONTH_DAYS_LEAP = (0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366)
+
+
+def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
+    """Convert days since epoch to (year, month, day).
+
+    This is a pure Python implementation of the same algorithm as
+    the Cython epoch_days_to_date, but returns components instead of a date object.
+    """
+    if 0 <= days < 47482:
+        cycles = (days + 365) // 1461
+        rem = (days + 365) - cycles * 1461
+        years = rem // 365
+        rem -= years * 365
+        year = (cycles << 2) + years + 1969
+        if years == 4:
+            return year - 1, 12, 31
+        if years == 3:
+            m_list = _MONTH_DAYS_LEAP
+        else:
+            m_list = _MONTH_DAYS
+    else:
+        cycles400 = (days + 134774) // 146097
+        rem = days + 134774 - (cycles400 * 146097)
+        cycles100 = rem // 36524
+        rem -= cycles100 * 36524
+        cycles = rem // 1461
+        rem -= cycles * 1461
+        years = rem // 365
+        rem -= years * 365
+        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
+        if years == 4 or cycles100 == 4:
+            return year - 1, 12, 31
+        if years == 3 and year % 100 != 0:
+            m_list = _MONTH_DAYS_LEAP
+        else:
+            m_list = _MONTH_DAYS
+
+    month = (rem + 24) >> 5
+    prev = m_list[month]
+    while rem < prev:
+        month -= 1
+        prev = m_list[month]
+
+    return year, month + 1, rem + 1 - prev
 
 
 def _detect_local_tz() -> tzinfo:
@@ -110,7 +270,9 @@ def _detect_local_tz() -> tzinfo:
             return resolve_zone(env_tz)
         except zoneinfo.ZoneInfoNotFoundError:
             pass
-    return datetime.now().astimezone().tzinfo
+    local = datetime.now().astimezone().tzinfo
+    assert local is not None
+    return local
 
 
 local_tz, local_tz_dst_safe = normalize_timezone(_detect_local_tz())

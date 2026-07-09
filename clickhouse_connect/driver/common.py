@@ -3,6 +3,7 @@ import asyncio
 import struct
 import sys
 from collections.abc import Callable, Generator, MutableSequence, Sequence
+from io import IOBase
 from typing import Any
 
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError, StreamClosedError
@@ -50,13 +51,14 @@ def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: st
         buff = struct.Struct(f"<{len(column)}{code}")
         dest += buff.pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        col_msg = ""
-        if col_name:
-            col_msg = f" for source column `{col_name}`"
-        raise DataError(
-            f"Unable to create Python array{col_msg}.  This is usually caused by trying to insert None "
-            + "values into a ClickHouse column that is not Nullable"
-        ) from ex
+        col_msg = f" for column `{col_name}`" if col_name else ""
+        if isinstance(ex, OverflowError):
+            error_detail = "value out of range"
+        elif isinstance(ex, TypeError):
+            error_detail = "type mismatch (usually None in non-Nullable column)"
+        else:
+            error_detail = type(ex).__name__
+        raise DataError(f"Unable to create native array{col_msg}: {error_detail}") from ex
 
 
 def write_uint64(value: int, dest: MutableSequence):
@@ -101,12 +103,52 @@ def decimal_size(prec: int):
 
 
 def unescape_identifier(x: str) -> str:
-    if x.startswith("`") and x.endswith("`"):
-        return x[1:-1]
-    return x
+    """
+    Remove backtick quoting from a ClickHouse identifier, including compound
+    identifiers such as `directory`.`id` (the wire form of a Nested sub-column),
+    which normalizes to directory.id. Dots outside of backticks are treated as
+    separators between identifier parts, while dots inside backticks are kept.
+
+    Inside a quoted part the escapes produced by quote_identifier are reversed:
+    a doubled backtick and a backslash-escaped character each yield the single
+    literal character they encode, so both `a``b` and `a\\`b` normalize to a`b.
+    """
+    parts = []
+    buf = ""
+    in_quote = False
+    i = 0
+    length = len(x)
+    while i < length:
+        ch = x[i]
+        if in_quote:
+            if ch == "`":
+                # A doubled backtick is an escaped literal backtick; a lone
+                # backtick closes the quoted part.
+                if i + 1 < length and x[i + 1] == "`":
+                    buf += "`"
+                    i += 2
+                    continue
+                in_quote = False
+            elif ch == "\\" and i + 1 < length:
+                # A backslash escapes the next character (for example \` or \\).
+                buf += x[i + 1]
+                i += 2
+                continue
+            else:
+                buf += ch
+        elif ch == "`":
+            in_quote = True
+        elif ch == ".":
+            parts.append(buf)
+            buf = ""
+        else:
+            buf += ch
+        i += 1
+    parts.append(buf)
+    return ".".join(parts)
 
 
-def dict_copy(source: dict = None, update: dict | None = None) -> dict:
+def dict_copy(source: dict | None = None, update: dict | None = None) -> dict:
     copy = source.copy() if source else {}
     if update:
         copy.update(update)
@@ -152,10 +194,13 @@ class SliceView(Sequence):
 
     slots = ("_source", "_range")
 
+    _source: Sequence
+    _range: range
+
     def __init__(self, source: Sequence, source_slice: slice | None = None):
         if isinstance(source, SliceView):
             self._source = source._source
-            self._range = source._range[source_slice]
+            self._range = source._range if source_slice is None else source._range[source_slice]
         else:
             self._source = source
             if source_slice is None:
@@ -199,7 +244,7 @@ class StreamContext:
 
     __slots__ = "source", "gen", "_in_context"
 
-    def __init__(self, source: Closable, gen: Generator):
+    def __init__(self, source: Closable | IOBase, gen: Generator):
         self.source = source
         self.gen = gen
         self._in_context = False

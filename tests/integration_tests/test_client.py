@@ -6,6 +6,7 @@ from time import sleep
 import pytest
 
 from clickhouse_connect import create_client, datatypes
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
@@ -44,6 +45,13 @@ def test_command(param_client, call):
     assert int(version.split(".")[0]) >= 19
 
 
+def test_query_error_exposes_structured_code(param_client, call):
+    with pytest.raises(DatabaseError) as excinfo:
+        call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
+    assert excinfo.value.code == 60
+    assert excinfo.value.name == "UNKNOWN_TABLE"
+
+
 def test_client_name(param_client, client_mode):
     user_agent = param_client.headers["User-Agent"]
     assert "test" in user_agent or "param" in user_agent
@@ -55,6 +63,26 @@ def test_transport_settings(param_client, call):
     result = call(param_client.query, "SELECT name,database FROM system.tables", transport_settings={"X-Workload": "ONLINE"})
     assert result.column_names == ("name", "database")
     assert len(result.result_set) > 0
+
+
+def test_client_headers(client_factory, call):
+    client = client_factory(
+        headers={
+            "CF-Access-Client-Id": "test_client_id",
+            "CF-Access-Client-Secret": "test_client_secret",
+        }
+    )
+
+    assert client.headers["CF-Access-Client-Id"] == "test_client_id"
+    assert client.headers["CF-Access-Client-Secret"] == "test_client_secret"
+    assert call(client.command, "SELECT 79") == 79
+
+
+def test_legacy_default_database_sentinel(client_factory, call):
+    # "__default__" was the old default value for database and must still mean "not specified".
+    client = client_factory(database="__default__")
+    assert client.database is None
+    assert call(client.command, "SELECT 13") == 13
 
 
 def test_none_database(param_client, call):
@@ -253,6 +281,31 @@ def test_show_create(param_client, call):
     result = call(param_client.query, "SHOW CREATE TABLE system.tables")
     result.close()
     assert "statement" in result.column_names
+
+
+def test_show_row_policies(param_client, call, table_context: Callable, test_config: TestConfig):
+    if test_config.cloud:
+        pytest.skip("Skipping row policy test in cloud env")
+    if not param_client.min_version("20"):
+        pytest.skip(f"Not supported server version {param_client.server_version}")
+
+    for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+        result = call(param_client.query, statement)
+        assert result.result_rows == [[""]]
+        result.close()
+
+    policy = "test_show_row_policies_policy"
+    with table_context("test_show_row_policies", ["id UInt32"]) as table:
+        target = f"{quote_identifier(param_client.database)}.{table.table}"
+        call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
+        try:
+            assert call(param_client.command, f"SHOW ROW POLICIES ON {target}") == ""
+            assert call(param_client.command, f"SHOW POLICIES ON {target}") == ""
+
+            call(param_client.command, f"CREATE ROW POLICY {policy} ON {target} USING id = 13 TO ALL")
+            assert policy in call(param_client.command, f"SHOW ROW POLICIES ON {target}")
+        finally:
+            call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
 
 
 def test_empty_result(param_client, call):

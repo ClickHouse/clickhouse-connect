@@ -19,6 +19,7 @@ def test_proxies(client_factory, call, test_config: TestConfig):
             http_proxy=test_config.proxy_address,
         )
         assert "2" in call(client.command, "SELECT version()")
+        assert call(client.ping) is True
 
         try:
             os.environ["HTTP_PROXY"] = f"http://{test_config.proxy_address}"
@@ -35,6 +36,7 @@ def test_proxies(client_factory, call, test_config: TestConfig):
                 # Async client uses aiohttp
                 assert hasattr(client, "_proxy_url") and client._proxy_url is not None
             assert "2" in call(client.command, "SELECT version()")
+            assert call(client.ping) is True
 
             os.environ["no_proxy"] = f"{test_config.host}:{test_config.port}"
             client = client_factory(
@@ -51,6 +53,7 @@ def test_proxies(client_factory, call, test_config: TestConfig):
                 # Async client uses aiohttp
                 assert not hasattr(client, "_proxy_url") or client._proxy_url is None
             assert "2" in call(client.command, "SELECT version()")
+            assert call(client.ping) is True
         finally:
             os.environ.pop("HTTP_PROXY", None)
             os.environ.pop("no_proxy", None)
@@ -65,6 +68,7 @@ def test_proxies(client_factory, call, test_config: TestConfig):
             https_proxy=test_config.proxy_address,
         )
         assert "2" in call(client.command, "SELECT version()")
+        assert call(client.ping) is True
 
         try:
             os.environ["HTTPS_PROXY"] = f"{test_config.proxy_address}"
@@ -82,5 +86,6 @@ def test_proxies(client_factory, call, test_config: TestConfig):
                 # Async client uses aiohttp
                 assert hasattr(client, "_proxy_url") and client._proxy_url is not None
             assert "2" in call(client.command, "SELECT version()")
+            assert call(client.ping) is True
         finally:
             os.environ.pop("HTTPS_PROXY", None)

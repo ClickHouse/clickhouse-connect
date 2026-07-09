@@ -33,18 +33,23 @@ class StreamingResponseSource(Closable):
         self.exception_tag = exception_tag
 
         # maxsize=10 means max ~10 socket reads buffered
-        self.queue = AsyncSyncQueue(maxsize=10)
+        self.queue: AsyncSyncQueue[bytes | Exception] = AsyncSyncQueue(maxsize=10)
 
         self._decompressor = None
         self._decompressor_initialized = False
 
         # Multiple accesses to .gen must return the same generator, not create new ones
-        self._gen_cache = None
+        self._gen_cache: Iterator[bytes] | None = None
 
-        self._producer_task = None
+        self._producer_task: asyncio.Task | None = None
         self._producer_started = threading.Event()
         self._producer_error: Exception | None = None
         self._producer_completed = False
+
+    def _release_lease(self):
+        release = getattr(self.response, "_lease_release", None)
+        if release is not None:
+            release()
 
     async def start_producer(self, loop: asyncio.AbstractEventLoop):
         """Start the async producer task.
@@ -78,6 +83,7 @@ class StreamingResponseSource(Closable):
 
             finally:
                 self.queue.shutdown()
+                self._release_lease()
 
         self._producer_task = loop.create_task(producer())
         self._producer_started.set()
@@ -179,6 +185,7 @@ class StreamingResponseSource(Closable):
             if not self._producer_completed:
                 self.response.close()
                 await asyncio.sleep(0.05)
+        self._release_lease()
 
     def close(self):
         """Synchronous cleanup resources"""
@@ -190,6 +197,7 @@ class StreamingResponseSource(Closable):
         if self.response and not self.response.closed:
             if not self._producer_completed:
                 self.response.close()
+        self._release_lease()
 
 
 class StreamingFileAdapter:
@@ -249,7 +257,7 @@ class StreamingInsertSource:
         self.transform = transform
         self.context = context
         self.loop = loop
-        self.queue = AsyncSyncQueue(maxsize=maxsize)
+        self.queue: AsyncSyncQueue[bytes | bytearray | Exception] = AsyncSyncQueue(maxsize=maxsize)
         self._producer_future = None
         self._started = False
 
@@ -303,11 +311,15 @@ class StreamingInsertSource:
                 except Exception:
                     pass
 
-    async def close(self):
+    async def close(self, timeout: float | None = 1.0):
+        """Shut down the queue and wait for the producer thread to terminate. Pass ``timeout=None`` to wait without a deadline."""
         self.queue.shutdown()
         if self._producer_future and not self._producer_future.done():
             try:
-                await asyncio.wait_for(self._producer_future, timeout=1.0)
+                if timeout is None:
+                    await self._producer_future
+                else:
+                    await asyncio.wait_for(asyncio.shield(self._producer_future), timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning("Insert producer did not finish within timeout")
             except Exception:

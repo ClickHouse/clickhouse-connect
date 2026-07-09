@@ -5,18 +5,23 @@ from setuptools import find_packages, setup
 
 c_modules = []
 
-try:
-    from Cython import __version__ as cython_version
-    from Cython.Build import cythonize
+skip_cython = os.environ.get("CLICKHOUSE_CONNECT_SKIP_CYTHON") == "1"
 
-    print(f"Using Cython {cython_version} to build cython modules")
-    c_modules = cythonize("clickhouse_connect/driverc/*.pyx", language_level="3str")
-except ImportError as ex:
-    print("Cython Install Failed, Not Building C Extensions: ", ex)
-    cythonize = None
-except Exception as ex:
-    print("Cython Build Failed, Not Building C Extensions: ", ex)
-    cythonize = None
+if skip_cython:
+    print("CLICKHOUSE_CONNECT_SKIP_CYTHON set, not building C extensions")
+else:
+    try:
+        from Cython import __version__ as cython_version
+        from Cython.Build import cythonize
+
+        print(f"Using Cython {cython_version} to build cython modules")
+        c_modules = cythonize("clickhouse_connect/driverc/*.pyx", language_level="3str")
+    except ImportError as ex:
+        print("Cython Install Failed, Not Building C Extensions: ", ex)
+        cythonize = None
+    except Exception as ex:
+        print("Cython Build Failed, Not Building C Extensions: ", ex)
+        cythonize = None
 
 
 def run_setup(try_c: bool = True):
@@ -54,8 +59,9 @@ def run_setup(try_c: bool = True):
         long_description_content_type="text/markdown",
         url="https://github.com/ClickHouse/clickhouse-connect",
         packages=find_packages(exclude=["tests*"]),
+        package_data={"clickhouse_connect": ["py.typed"]},
         python_requires=">=3.10,<3.15",
-        license="Apache License 2.0",
+        license="Apache-2.0",
         install_requires=[
             "certifi",
             "urllib3>=1.26",
@@ -67,6 +73,7 @@ def run_setup(try_c: bool = True):
         ],
         extras_require={
             "sqlalchemy": ["sqlalchemy>=1.4.40,<3.0"],
+            "alembic": ["sqlalchemy>=1.4.40,<3.0", "alembic>=1.16"],
             "numpy": ["numpy"],
             "pandas": ["pandas>=2,<4"],
             "polars": ["polars>=1.0"],
@@ -74,7 +81,7 @@ def run_setup(try_c: bool = True):
             "orjson": ["orjson"],
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
-            "async": ["aiohttp>=3.8.0"],
+            "async": ["aiohttp>=3.9.0"],
         },
         tests_require=["pytest"],
         entry_points={

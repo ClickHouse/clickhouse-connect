@@ -7,6 +7,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import first_value, must_swap
+from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -32,7 +33,7 @@ class Array(ClickHouseType):
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return self.element_type.read_column_prefix(source, ctx)
 
-    def _data_size(self, sample: Sequence) -> int:
+    def _data_size(self, sample: Collection[Any]) -> int:
         if len(sample) == 0:
             return 8
         total = 0
@@ -138,7 +139,7 @@ class Tuple(ClickHouseType):
             column = e_type.read_column_data(source, num_rows, ctx, read_state[ix])
             columns.append(column)
         if e_names and self.read_format(ctx) != "tuple":
-            dicts = [{} for _ in range(num_rows)]
+            dicts: list[dict[str, Any]] = [{} for _ in range(num_rows)]
             for ix, x in enumerate(dicts):
                 for y, key in enumerate(e_names):
                     x[key] = columns[y][ix]
@@ -162,7 +163,7 @@ class Tuple(ClickHouseType):
 
     def convert_dict_insert(self, column: Sequence) -> Sequence:
         names = self.element_names
-        col = [[] for _ in names]
+        col: list[list[Any]] = [[] for _ in names]
         for x in column:
             for ix, name in enumerate(names):
                 col[ix].append(x.get(name))
@@ -203,13 +204,11 @@ class Map(ClickHouseType):
         total_rows = 0 if len(offsets) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx, read_state[0])
         values = self.value_type.read_column_data(source, total_rows, ctx, read_state[1])
-        all_pairs = tuple(zip(keys, values))
         column = []
-        app = column.append
-        last = 0
+        prev = 0
         for offset in offsets:
-            app(dict(all_pairs[last:offset]))
-            last = offset
+            column.append(dict(zip(keys[prev:offset], values[prev:offset])))
+            prev = offset
         return column
 
     def write_column_prefix(self, dest: bytearray):
@@ -217,18 +216,7 @@ class Map(ClickHouseType):
         self.value_type.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        offsets = array.array("Q")
-        keys = []
-        values = []
-        total = 0
-        for v in column:
-            total += len(v)
-            offsets.append(total)
-            keys.extend(v.keys())
-            values.extend(v.values())
-        if must_swap:
-            offsets.byteswap()
-        dest += offsets.tobytes()
+        keys, values = data_conv.build_map_columns(column, dest)
         self.key_type.write_column_data(keys, dest, ctx)
         self.value_type.write_column_data(values, dest, ctx)
 

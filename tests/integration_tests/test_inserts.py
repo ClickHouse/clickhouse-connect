@@ -87,3 +87,16 @@ def test_numeric_conversion(param_client: Client, call, table_context: Callable)
         assert result[1][1] is None
         assert result[2][1] == 2
         assert result[2][2] == 5.32
+
+
+def test_insert_table_name_with_unescaped_inner_backtick(param_client: Client, call, test_table_engine: str):
+    # A table name wrapped in backticks but containing unescaped inner backticks must be re-escaped.
+    raw_table = "`quote`insert`"
+    quoted_table = "`\\`quote\\`insert\\``"
+    call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
+    try:
+        call(param_client.command, f"CREATE TABLE {quoted_table} (id UInt32) ENGINE {test_table_engine} ORDER BY id")
+        call(param_client.insert, raw_table, [[13]], column_names=["id"])
+        assert call(param_client.command, f"SELECT count() FROM {quoted_table}") == 1
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")

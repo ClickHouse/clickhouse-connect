@@ -1,4 +1,5 @@
 import zoneinfo
+from datetime import timedelta, timezone
 
 import pyarrow as pa
 import pytest
@@ -6,7 +7,7 @@ import pytest
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.query import QueryContext
+from clickhouse_connect.driver.query import QueryContext, returns_empty_string_on_empty_body
 
 
 def test_copy_context():
@@ -32,6 +33,78 @@ def test_copy_context():
     assert context_copy.settings["max_execution_time"] == 120
     assert context_copy.settings["max_bytes_for_external_group_by"] == 25165824
     assert context_copy.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_2'"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES",
+        "SHOW POLICIES",
+        "show row policies",
+        "  SHOW   ROW   POLICIES  ",
+        "-- comment\nSHOW ROW POLICIES",
+    ],
+)
+def test_bare_row_policy_show_is_command(query):
+    assert QueryContext(query).is_command is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES ON db.table",
+        "SHOW ROW POLICIES policy_1",
+        "SHOW DATABASES",
+        "SHOW TABLES",
+        "SHOW USERS",
+        "SELECT 1",
+        "SHOW",
+    ],
+)
+def test_other_show_queries_are_not_commands(query):
+    assert QueryContext(query).is_command is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW ROW POLICIES",
+        "SHOW POLICIES",
+        "  SHOW ROW POLICIES ON db.table",
+        "-- comment\nSHOW POLICIES ON db.table",
+        "SHOW ROW POLICIES policy_1",
+    ],
+)
+def test_row_policy_show_empty_body_returns_empty_string(query):
+    assert returns_empty_string_on_empty_body(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        b"SHOW ROW POLICIES",
+        "INSERT INTO t FORMAT TSV",
+        "CREATE TABLE x (id UInt32) ENGINE Memory",
+        "ALTER TABLE x ADD COLUMN y UInt32",
+        "SELECT 1",
+        "SHOW DATABASES",
+    ],
+)
+def test_non_row_policy_show_empty_body_uses_query_summary(query):
+    assert returns_empty_string_on_empty_body(query) is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "--sql\nCREATE OR REPLACE TABLE x (a String) ENGINE=MergeTree ORDER BY tuple()",
+        "--anything\nDROP TABLE x",
+        "--sql\n  ALTER TABLE x ADD COLUMN y UInt32",
+        "/*sql*/CREATE TABLE x (a String) ENGINE=Memory",
+    ],
+)
+def test_leading_no_space_comment_is_command(query):
+    assert QueryContext(query).is_command is True
 
 
 def test_active_tz_utc_defaults_to_naive():
@@ -177,6 +250,77 @@ def test_tzutil_normalize_utc_equivalents():
         normalized, is_valid = tzutil.normalize_timezone(tz)
         assert tzutil.is_utc_timezone(normalized)
         assert is_valid is True
+
+
+def test_resolve_zone_fixed_offset_positive():
+    """ClickHouse Fixed/UTC+HH:MM:SS strings resolve to a stdlib fixed-offset timezone."""
+    tz = tzutil.resolve_zone("Fixed/UTC+05:30:00")
+    assert tz == timezone(timedelta(hours=5, minutes=30))
+
+
+def test_resolve_zone_fixed_offset_negative():
+    tz = tzutil.resolve_zone("Fixed/UTC-03:00:00")
+    assert tz == timezone(timedelta(hours=-3))
+
+
+def test_resolve_zone_fixed_offset_with_seconds():
+    tz = tzutil.resolve_zone("Fixed/UTC+05:30:30")
+    assert tz == timezone(timedelta(hours=5, minutes=30, seconds=30))
+
+
+def test_resolve_zone_fixed_offset_zero_collapses_to_utc():
+    """A Fixed offset of zero is semantically UTC and should normalize to timezone.utc."""
+    tz = tzutil.resolve_zone("Fixed/UTC+00:00:00")
+    assert tz is timezone.utc
+
+
+def test_resolve_zone_fixed_offset_invalid_falls_through():
+    """Malformed or unrepresentable Fixed strings raise ZoneInfoNotFoundError."""
+    invalid = [
+        "Fixed/UTC+25:00:00",  # hour > 24
+        "Fixed/UTC+24:00:00",  # server accepts, but Python tzinfo cannot represent +/-24h
+        "Fixed/UTC-24:00:00",
+        "Fixed/UTC+24:00:01",  # boundary + nonzero
+        "Fixed/UTC+24:01:00",
+        "Fixed/UTC+05:60:00",  # minute > 59
+        "Fixed/UTC+05:00:60",  # second > 59
+        "Fixed/UTC+05:30",  # missing seconds component
+        "Fixed/UTC+5:30:00",  # single-digit hour, server rejects
+    ]
+    for s in invalid:
+        with pytest.raises(zoneinfo.ZoneInfoNotFoundError):
+            tzutil.resolve_zone(s)
+
+
+def test_tzutil_normalize_fixed_offset_trusted_for_server():
+    """Server-init paths pass trust_fixed_offset=True; the offset is taken at face value."""
+    tz = timezone(timedelta(hours=5, minutes=30))
+    normalized, is_valid = tzutil.normalize_timezone(tz, trust_fixed_offset=True)
+    assert normalized is tz
+    assert is_valid is True
+
+
+def test_tzutil_normalize_fixed_offset_default_falls_through():
+    """Without trust_fixed_offset, a stdlib fixed offset is not auto-trusted."""
+    tz = timezone(timedelta(hours=-7))  # PDT-shaped fixed offset
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    # Either tzlocal upgraded it to an IANA zone (then is_valid=True and normalized is
+    # a ZoneInfo, not the original fixed offset) or it fell through to (tz, False).
+    if is_valid:
+        assert not isinstance(normalized, timezone) or normalized is timezone.utc
+    else:
+        assert normalized is tz
+
+
+def test_extract_tz_from_type_fixed_offset():
+    """_extract_tz_from_type must resolve Fixed/UTC strings used in parameter binding hints."""
+    from clickhouse_connect.driver.binding import _extract_tz_from_type
+
+    tz = _extract_tz_from_type("DateTime('Fixed/UTC+05:30:00')")
+    assert tz == timezone(timedelta(hours=5, minutes=30))
+
+    tz = _extract_tz_from_type("DateTime64(6, 'Fixed/UTC-03:00:00')")
+    assert tz == timezone(timedelta(hours=-3))
 
 
 def test_tzutil_normalize_named_iana_zones_are_dst_safe():

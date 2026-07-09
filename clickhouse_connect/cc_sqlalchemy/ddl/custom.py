@@ -1,7 +1,7 @@
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.sql.ddl import DDL
 
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 
 class CreateDatabase(DDL):
@@ -12,8 +12,8 @@ class CreateDatabase(DDL):
     def __init__(
         self,
         name: str,
-        engine: str = None,
-        zoo_path: str = None,
+        engine: str | None = None,
+        zoo_path: str | None = None,
         shard_name: str = "{shard}",
         replica_name: str = "{replica}",
         exists_ok: bool = False,
@@ -33,7 +33,7 @@ class CreateDatabase(DDL):
             if engine == "Replicated":
                 if not zoo_path:
                     raise ArgumentError("zoo_path is required for Replicated Database Engine")
-                stmt += f" ('{zoo_path}', '{shard_name}', '{replica_name}'"
+                stmt += f" ({format_str(zoo_path)}, {format_str(shard_name)}, {format_str(replica_name)})"
         super().__init__(stmt)
 
 

@@ -30,7 +30,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     UInt64,
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
-from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import ReplacingMergeTree, engine_map
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree, ReplacingMergeTree, engine_map
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -204,6 +204,80 @@ def test_final_modifier_error_cases(test_engine: Engine, test_db: str):
 
         test_table.drop(conn)
         other_table.drop(conn)
+
+
+def test_expression_sorting_key(test_engine: Engine, test_db: str):
+    """Create a MergeTree with a function-expression sorting key and confirm the server reflects it."""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS expr_sorting_key_test"))
+        metadata = MetaData(schema=test_db)
+        genre = db.Column("genre", String)
+        score = db.Column("score", UInt32)
+        book_id = db.Column("book_id", UInt64)
+        author_id = db.Column("author_id", UInt64)
+        table = db.Table(
+            "expr_sorting_key_test",
+            metadata,
+            genre,
+            score,
+            book_id,
+            author_id,
+            MergeTree(order_by=[genre, score, db.func.cityHash64(book_id, author_id)]),
+        )
+        table.create(conn)
+
+        create_sql = conn.execute(text("SHOW CREATE TABLE expr_sorting_key_test")).scalar()
+        assert "cityHash64" in create_sql
+
+        conn.execute(text("DROP TABLE IF EXISTS expr_sorting_key_test"))
+
+
+def test_desc_sorting_key(test_engine: Engine, test_db: str):
+    """DESC sorting keys are stable from ClickHouse 26.6; verify end-to-end where supported."""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        if not conn.connection.driver_connection.client.min_version("26.6"):
+            pytest.skip("DESC sorting keys are experimental before ClickHouse 26.6")
+        conn.execute(text("DROP TABLE IF EXISTS desc_sorting_key_test"))
+        metadata = MetaData(schema=test_db)
+        book_id = db.Column("book_id", UInt64)
+        score = db.Column("score", UInt32)
+        table = db.Table(
+            "desc_sorting_key_test",
+            metadata,
+            book_id,
+            score,
+            MergeTree(order_by=[book_id, score.desc()]),
+        )
+        table.create(conn)
+
+        create_sql = conn.execute(text("SHOW CREATE TABLE desc_sorting_key_test")).scalar()
+        assert "DESC" in create_sql
+
+        conn.execute(text("DROP TABLE IF EXISTS desc_sorting_key_test"))
+
+
+def test_engine_clause_string_literal_roundtrip(test_engine: Engine, test_db: str):
+    """A backslash string literal in an engine clause must use ClickHouse escaping so the server accepts it."""
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS engine_literal_test"))
+        metadata = MetaData(schema=test_db)
+        table = db.Table(
+            "engine_literal_test",
+            metadata,
+            db.Column("book_id", UInt64),
+            db.Column("category", String),
+            # SQLAlchemy's generic escaping would render 'a\' and the server would reject the DDL.
+            MergeTree(order_by="book_id", partition_by=(db.column("category") == "a\\")),
+        )
+        table.create(conn)
+
+        create_sql = conn.execute(text("SHOW CREATE TABLE engine_literal_test")).scalar()
+        assert "a\\\\" in create_sql
+
+        conn.execute(text("DROP TABLE IF EXISTS engine_literal_test"))
 
 
 def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str, test_config: TestConfig):
