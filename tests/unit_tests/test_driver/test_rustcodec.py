@@ -405,22 +405,6 @@ class _FakeBatch:
             raise self._error
         return self._columns
 
-
-class _FakeMerged:
-    def __init__(self, batches):
-        self._batches = batches
-
-    def to_python_columns(self):
-        cols = None
-        for batch in self._batches:
-            batch_cols = batch.to_python_columns()
-            if cols is None:
-                cols = [list(col) for col in batch_cols]
-            else:
-                for acc, col in zip(cols, batch_cols):
-                    acc.extend(col)
-        return cols
-
     def to_python_rows(self):
         return list(zip(*self.to_python_columns()))
 
@@ -440,14 +424,8 @@ def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
         def finish(self):
             return self._finish
 
-    class _FakeColBatch:
-        @staticmethod
-        def from_batches(batches):
-            return _FakeMerged(batches)
-
     class _FakeCore:
         StreamDecoder = _FakeStreamDecoder
-        ColBatch = _FakeColBatch
 
     return _FakeCore
 
@@ -493,15 +471,14 @@ def test_decode_early_abandonment_closes_source(monkeypatch):
     assert src.closed is True
 
 
-def test_decode_buffered_unsupported_raises_on_access(monkeypatch):
+def test_decode_buffered_unsupported_raises(monkeypatch):
     batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
     batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
-    assert src.closed is True
     with pytest.raises(NotSupportedError):
-        _ = result.result_rows
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
 
 
 def test_decode_buffered_result_is_materialized(monkeypatch):
@@ -524,6 +501,7 @@ def test_decode_buffered_column_oriented(monkeypatch):
     src = FakeSource([b"chunk"])
     result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(column_oriented=True))
     assert result.result_columns == [[13, 79], [1, 2]]
+    assert result.result_rows == [(13, 1), (79, 2)]
 
 
 # --- Decode against real _ch_core --------------------------------------------

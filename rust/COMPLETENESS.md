@@ -48,8 +48,7 @@ handoff for Python integration work.
   `LowCardinality(<numeric>)` numpy/pandas output to the dictionary length (`ArrayType._build_lc_column` in
   `datatypes/base.py` passes `count=len(index)` where it should be `count=len(keys)`), so there is no clean
   parity target for those rare suspicious types; the rust object exit returns the full column.
-- **Recommended next:** benchmark A/B with one client on `native_codec="rust_strict"`
-  and one on the default. The Rust codec now covers every scalar type in the
+- **Type coverage: COMPLETE.** The Rust codec now covers every scalar type in the
   supported set plus `Array(T)`, `Tuple(...)`, and `Map(K, V)` over any supported
   element type in BOTH directions. Decode policy: an unnamed tuple materializes as
   a Python `tuple`, a named tuple as a `dict` keyed by the element names, and a map
@@ -85,6 +84,55 @@ handoff for Python integration work.
   columnar values one value at a time. A buffer-protocol or `ArrowArrayStream` import entry
   for `encode_native_block` would let the encoder consume numpy/Arrow buffers without the
   per-value Python round-trip. Track this in `ch-core-py`.
+
+## Path Forward
+
+Where the effort stands and what to do next, in order. Type coverage and
+per-type performance work are done: every supported type is measured in both
+directions on `rust/profile_codecs.py` (5M-row single-column workloads, object
+rows/columns plus df/np exits plus encode and e2e insert), every loser found was
+fixed, and the Rust path now wins or ties everywhere on uncompressed localhost.
+More depth on that micro matrix is low value. The remaining risk is breadth and
+realism, then productionization.
+
+1. **Realistic benchmark pass (next).** Everything measured so far is
+   uncompressed localhost, which hides transport latency and therefore has never
+   actually tested the read-ahead/producer-thread overlap that motivates the
+   Rust architecture (localhost A/B showed read-ahead as a wash; its value
+   thesis is latency hiding). Run the existing workloads against a real network:
+   the Cloud staging instance wired up in `run_cloud_tests.sh` (TLS, compression
+   on) is the target. Prereq: `profile_codecs.py` hardcodes `localhost:8123` in
+   three places and needs host/port/TLS/password taken from the
+   `CLICKHOUSE_CONNECT_TEST_*` env vars. Measure at least: wide mixed reads,
+   nullable df (the big localhost win, does it survive TLS+lz4), streaming vs
+   buffered, insert paths, and 2-4 concurrent clients (GIL contention with
+   producer threads is unmeasured). Also flip `--compress` on locally for one
+   sweep since compression shifts the transport/decode balance.
+2. **CI leg.** Nothing in CI builds `_ch_core` or runs the suite under
+   `rust`/`rust_strict`. Add a job that builds the extension (needs the
+   `ch-core-rs` checkout or a published crate, see next item) and runs
+   `tests/test_bindings.py` plus the integration suite with
+   `CLICKHOUSE_CONNECT_NATIVE_CODEC=rust_strict`. Until this exists every
+   refactor risks silently breaking the opt-in path.
+3. **Distribution decisions.** The build is cp312-specific by design
+   (`_PyDict_NewPresized`, slot-offset reads, and the pyo3-ffi
+   `PyMemberDescrObject` cast all preclude abi3), so shipping means per-version
+   wheels. The core crate is a path dependency on a private working tree and
+   needs a publish-or-vendor decision before any wheel can build outside this
+   machine.
+4. **Hardening before any default flip.** Malformed-block fuzzing against the
+   decoder (the encode side is validated by the core pre-write), a soak test for
+   the producer-thread insert path, and the open maintainer decisions below.
+5. **Open maintainer decisions (queued, not blockers for opt-in):**
+   df/np element scalars inside Array/Tuple/Map cells are python-native under
+   Rust vs numpy scalars under Python (value-equal); `column_block_stream`
+   yields lists under Rust vs `array.array` under Python (exit-format
+   asymmetry, 0.17x on ints but zero-object python exit is the anomaly);
+   `row_block_stream` ints at 0.87x (needs a per-block `to_python_rows` through
+   a QueryResult shape change); `insert_df` bulk encode via a buffer/Arrow
+   import entry; file the Python-codec `Nullable(Tuple)` misdecode upstream
+   (it returns garbage values, server-verified); the Python type registry
+   cannot parse `Tuple()` under either codec.
 
 ## Future Public Opt-In Design
 

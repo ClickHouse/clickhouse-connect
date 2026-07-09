@@ -145,43 +145,25 @@ def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
 
 
 class _BufferedQueryResult(QueryResult):
-    """QueryResult over a fully decoded batch, materialized in one fused pass on first access.
+    """QueryResult over data materialized at parse time in the requested orientation.
 
     The stream is fully consumed and closed at parse time; stream accessors raise StreamClosedError and
-    the second orientation accessed transposes from the first, the same states a fully consumed
-    python-codec result reaches.
+    the other orientation accessed transposes from the first.
     """
 
-    def __init__(self, batch: Any, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
+    def __init__(self, matrix: Any, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
         super().__init__(None, None, names, col_types, column_oriented, source)
         self._block_gen = None
-        self._batch = batch
-
-    def _take_batch(self) -> Any:
-        batch, self._batch = self._batch, None
-        return batch
+        if column_oriented:
+            self._result_columns = matrix
+        else:
+            self._result_rows = matrix
 
     @property
     def result_rows(self) -> Any:
-        if self._result_rows is None and self._batch is not None:
-            try:
-                self._result_rows = self._take_batch().to_python_rows()
-            except NotImplementedError as ex:
-                raise _unsupported_decode_error(ex) from ex
+        if self._result_rows is None and self._result_columns is not None:
+            self._result_rows = list(zip(*self._result_columns))
         return QueryResult.result_rows.fget(self)
-
-    @property
-    def result_columns(self) -> Any:
-        if self._result_columns is None and self._result_rows is None and self._batch is not None:
-            try:
-                self._result_columns = self._take_batch().to_python_columns()
-            except NotImplementedError as ex:
-                raise _unsupported_decode_error(ex) from ex
-        return QueryResult.result_columns.fget(self)
-
-    def close(self) -> None:
-        self._batch = None
-        super().close()
 
 
 class RustNativeTransform:
@@ -265,15 +247,27 @@ class RustNativeTransform:
             raise
 
         if not context.use_numpy and not context.streaming:
-            # Buffered query: hold the decoded chunks (~wire size) and materialize the whole result in one
-            # fused pass on first access, instead of building per-block lists that QueryResult re-copies
-            # into the final structure. raw_blocks closes the source before raising, so consuming it needs
-            # no extra guard.
-            batches = [first]
-            batches.extend(blocks)
+            # Buffered query: materialize each batch as it arrives so object building on the consumer
+            # thread overlaps the producer's transport drain. raw_blocks closes the source before
+            # raising, so consuming it needs no extra guard.
+            try:
+                if context.column_oriented:
+                    matrix: Any = first.to_python_columns()
+                    for batch in blocks:
+                        for base, added in zip(matrix, batch.to_python_columns()):
+                            base.extend(added)
+                else:
+                    matrix = first.to_python_rows()
+                    for batch in blocks:
+                        matrix.extend(batch.to_python_rows())
+            except NotImplementedError as ex:
+                read_source.close()
+                raise _unsupported_decode_error(ex) from ex
+            except Exception:
+                read_source.close()
+                raise
             read_source.close()
-            merged = core.ColBatch.from_batches(batches)
-            return _BufferedQueryResult(merged, names, col_types, context.column_oriented, read_source)
+            return _BufferedQueryResult(matrix, names, col_types, context.column_oriented, read_source)
 
         try:
             if context.use_numpy:
