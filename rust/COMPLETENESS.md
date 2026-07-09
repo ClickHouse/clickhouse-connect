@@ -33,7 +33,8 @@ handoff for Python integration work.
 - **Current type scope:** the first binding encoder targets the upstream
   encodable set: `Bool`, fixed-width numerics, floats, `String`,
   `FixedString(N)`, `Date`, `Date32`, `DateTime`, `DateTime64(P[, tz])`, `UUID`,
-  `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Nullable(T)`, and
+  `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Array(T)`, `Tuple(...)`
+  (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Nullable(T)`, and
   `LowCardinality(T)` where the upstream core permits it.
 - **numpy/pandas:** `query_np`, `query_df`, and their block and row stream variants
   now route through the Rust codec via the zero-copy Arrow exit
@@ -48,31 +49,37 @@ handoff for Python integration work.
   `datatypes/base.py` passes `count=len(index)` where it should be `count=len(keys)`), so there is no clean
   parity target for those rare suspicious types; the rust object exit returns the full column.
 - **Recommended next:** benchmark A/B with one client on `native_codec="rust_strict"`
-  and one on the default while expanding decoder type coverage. The Rust decoder now
-  covers every scalar type in the supported set on the Python-object and column-data
-  exits, including `UUID`, `Decimal`, `IPv4`, and `IPv6`, plus `Array(T)` over any
-  supported element type in both directions. `Tuple(...)` and `Map(K, V)` are now
-  covered on DECODE only (object, column-data, row, and Arrow exits): an unnamed
-  tuple materializes as a Python `tuple`, a named tuple as a `dict` keyed by the
-  element names, and a map as a `dict` (wire order, last duplicate key wins),
-  matching the Python codec's default read format. `Nullable(Tuple(...))` and the
-  zero-element `Tuple()` decode correctly (both are cases the Python codec itself
-  mishandles, so the Rust path is the reference, not a parity target). Tuple/Map
-  ENCODE is still unsupported: the binding's insert type parser has no Tuple/Map
-  branch, so those types are rejected before any encode, and `rust` mode routes
-  such inserts to Python while `rust_strict` raises. Query decode picks Rust or
+  and one on the default. The Rust codec now covers every scalar type in the
+  supported set plus `Array(T)`, `Tuple(...)`, and `Map(K, V)` over any supported
+  element type in BOTH directions. Decode policy: an unnamed tuple materializes as
+  a Python `tuple`, a named tuple as a `dict` keyed by the element names, and a map
+  as a `dict` (wire order, last duplicate key wins), matching the Python codec's
+  default read format. Top-level Tuple and Map columns decode through hoisted
+  column-major fills (`fill_tuple`/`fill_map` in `batch.rs`) with per-chunk
+  LowCardinality slot caching, so LC fields share object identity like top-level LC
+  columns. Encode policy mirrors the Python codec's acceptance: Tuple rows are any
+  positional iterable, or dicts for named tuples (read via element name, missing
+  keys become `None`); Map rows must be dict-like. Intentional divergences from the
+  Python codec, where the Rust path is the reference: a wrong-arity Tuple row raises
+  a clear error where Python silently truncates the block, `Nullable(Tuple(...))`
+  works in both directions where the Python codec misdecodes reads and cannot insert
+  at all, and the zero-element `Tuple()` decodes correctly at the binding level (the
+  driver's Python type registry still cannot parse `Tuple()`, so it does not
+  round-trip through `get_client` under either codec). The rustcodec insert seam
+  passes `col_type.name` (not `insert_name`) to the encoder because
+  `Tuple.insert_name` drops the `Nullable` wrapper. Query decode picks Rust or
   Python before reading the response body, so once a query is eligible there is no
   mid-stream fallback: an unsupported type raises mid-stream in both `rust` and
-  `rust_strict` mode rather than routing to Python. Growing decoder coverage is the
-  main lever for widening the eligible query set.
-- **Deferred (Tuple/Map + LowCardinality object identity):** a `LowCardinality`
-  value nested inside a `Tuple` or `Map` is rebuilt as a fresh Python object per
-  occurrence rather than sharing one object across rows. The Python codec and the
-  top-level `Array(LowCardinality)` path (via `new_array_dict_cache`) share
-  identity, so this is a memory/allocation regression precisely for the LC dedup
-  workload, though values compare equal. Unlike the Array case it is not a
-  one-liner: each LC sub-column under one Tuple/Map needs its own slot cache.
-  Track before flipping the default; acceptable while the codec is opt-in.
+  `rust_strict` mode rather than routing to Python.
+- **Deferred (LowCardinality object identity below Array-nested containers):** a
+  `LowCardinality` value inside a container that is itself nested under `Array`
+  (for example `Array(Tuple(a LowCardinality(String)))`) is rebuilt as a fresh
+  Python object per occurrence. Top-level `Tuple`/`Map` fields and
+  `Array(LowCardinality)` share identity per chunk; the residual gap is only on
+  the per-cell path for deeper nesting, where each LC sub-column would need its
+  own slot cache threaded through the recursion. Values compare equal; this is a
+  memory/allocation gap only. Track before flipping the default; acceptable while
+  the codec is opt-in.
 - **insert_df bulk encode (follow-up, ch-core-py workstream):** `insert_df` is correct
   under the Rust codec but not yet faster than Python. `encode_native_block` takes Python
   columnar values one value at a time. A buffer-protocol or `ArrowArrayStream` import entry

@@ -50,6 +50,15 @@ DECODE_MATRIX = {
     "array_uuid": "arrayMap(x -> toUUID(concat(leftPad(lower(hex(x)), 8, '0'), '-1122-3344-5566-778899aabbcc')), range(number % 4))",
     "array_datetime": "arrayMap(x -> toDateTime(x), range(number % 4))",
     "array_decimal": "arrayMap(x -> toDecimal64(x, 4), range(number % 4))",
+    "tuple_unnamed": "tuple(number, toString(number))",
+    "tuple_named": "CAST((toInt64(number), toString(number)), 'Tuple(a Int64, b String)')",
+    "tuple_low_card": "CAST((toString(number % 3), number), 'Tuple(LowCardinality(String), UInt64)')",
+    "tuple_nullable_element": "tuple(if(number % 2 = 0, NULL, toString(number)))",
+    "map_string_int": "mapFromArrays(arrayMap(x -> concat('k', toString(x)), range(number % 4)), range(number % 4))",
+    "map_array_value": "CAST(map('a', range(number % 4)), 'Map(String, Array(UInt64))')",
+    "map_low_card_key": "CAST(map(toString(number % 3), number), 'Map(LowCardinality(String), UInt64)')",
+    "array_of_tuple": "arrayMap(x -> (x, toString(x)), range(number % 4))",
+    "map_of_tuple_value": "CAST(map('a', (number, toString(number))), 'Map(String, Tuple(UInt64, String))')",
 }
 
 
@@ -110,7 +119,16 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
 def test_rust_codec_unsupported_decode(client_factory, call, native_codec):
     client = client_factory(native_codec=native_codec)
     with pytest.raises(NotSupportedError):
-        call(client.query, "SELECT map('a', 1) AS m")
+        call(client.query, "SELECT (1., 2.)::Point AS p")
+
+
+def test_rust_codec_nullable_tuple_decode(client_factory, call):
+    # The python codec cannot parse Nullable(Tuple), so the rust path is the
+    # reference here rather than a parity target.
+    client = client_factory(native_codec="rust_strict")
+    query = "SELECT if(number % 2 = 0, CAST((number, 'x'), 'Nullable(Tuple(UInt64, String))'), NULL) AS t FROM numbers(4)"
+    result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
+    assert result.result_rows == [((0, "x"),), (None,), ((2, "x"),), (None,)]
 
 
 def test_rust_codec_eligibility_routing(client_factory, call):
@@ -194,6 +212,10 @@ NP_DF_MATRIX = {
     "array_int": "range(number % 4)",
     "array_string": "arrayMap(x -> toString(x), range(number % 4))",
     "array_nullable_int": "arrayMap(x -> if(x % 2 = 0, NULL, toInt64(x)), range(number % 4))",
+    # Tuple/Map cells share the same element-scalar gap as Array.
+    "tuple_unnamed": "tuple(number, toString(number))",
+    "tuple_named": "CAST((toInt64(number), toString(number)), 'Tuple(a Int64, b String)')",
+    "map_string_int": "mapFromArrays(arrayMap(x -> concat('k', toString(x)), range(number % 4)), range(number % 4))",
 }
 
 
@@ -236,9 +258,7 @@ def test_rust_codec_np_df_stream_parity(client_factory, call, consume_stream):
     rust_np, python_np = np_blocks(rust_client), np_blocks(python_client)
     assert len(rust_np) > 1  # max_block_size forced multiple blocks
     for name in ("n", "s", "dt"):
-        np.testing.assert_array_equal(
-            np.concatenate([b[name] for b in rust_np]), np.concatenate([b[name] for b in python_np])
-        )
+        np.testing.assert_array_equal(np.concatenate([b[name] for b in rust_np]), np.concatenate([b[name] for b in python_np]))
 
     rust_df = pd.concat(df_blocks(rust_client), ignore_index=True)
     python_df = pd.concat(df_blocks(python_client), ignore_index=True)
@@ -362,6 +382,55 @@ def test_rust_codec_insert_df_nullable_parity(client_factory, call, client_mode)
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_tuple_map_insert_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = (
+        "id UInt32, tu Tuple(Int64, String), tn Tuple(a Int64, b Nullable(String)), "
+        "ms Map(String, Int64), ma Map(String, Array(Int64)), at Array(Tuple(Int64, String))"
+    )
+    rows = [
+        [0, (1, "x"), {"a": 5, "b": "named"}, {"k1": 1, "k2": 2}, {"m": [1, 2]}, [(1, "a"), (2, "b")]],
+        [1, (2, "y"), {"a": 6}, {}, {"n": []}, []],
+        [2, (3, "z"), {"a": 7, "b": None}, {"k": -1}, {"p": [3]}, [(3, "c")]],
+    ]
+    names = ["id", "tu", "tn", "ms", "ma", "at"]
+    rust_table = f"rc_ins_nested_rust_{client_mode}"
+    py_table = f"rc_ins_nested_py_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=names)
+        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, py_table)
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_nullable_tuple_insert(client_factory, call, client_mode):
+    # The python codec cannot insert Nullable(Tuple) at all, so the rust path is
+    # the reference. Requires the true type name to reach the encoder because
+    # Tuple.insert_name drops the Nullable wrapper.
+    client = client_factory(native_codec="rust_strict")
+    table = f"rc_ins_ntup_{client_mode}"
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            client.command,
+            f"CREATE TABLE {table} (id UInt32, t Nullable(Tuple(a Int64, b String))) ENGINE Memory",
+            settings={"enable_nullable_tuple_type": 1},
+        )
+        call(client.insert, table, [[0, (1, "x")], [1, None], [2, (3, "z")]], column_names=["id", "t"])
+        result = call(client.query, f"SELECT * FROM {table} ORDER BY id")
+        assert result.result_rows == [(0, {"a": 1, "b": "x"}), (1, None), (2, {"a": 3, "b": "z"})]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
 
 
 def test_rust_codec_midstream_error_df_parity(client_factory, call, consume_stream):

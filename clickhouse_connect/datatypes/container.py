@@ -116,17 +116,18 @@ class Tuple(ClickHouseType):
             self._insert_name = f"Tuple({', '.join(v.insert_name for v in self.element_types)})"
 
     def _data_size(self, sample: Collection) -> int:
-        if len(sample) == 0:
+        rows = [x for x in sample if x is not None] if self.nullable else list(sample)
+        if len(rows) == 0:
             return 0
         elem_size = 0
-        is_dict = self.element_names and isinstance(first_value(list(sample), self.nullable), dict)
+        is_dict = self.element_names and isinstance(first_value(rows, self.nullable), dict)
         for ix, e_type in enumerate(self.element_types):
             if e_type.byte_size > 0:
                 elem_size += e_type.byte_size
             elif is_dict:
-                elem_size += e_type.data_size([x.get(self.element_names[ix], None) for x in sample])
+                elem_size += e_type.data_size([x.get(self.element_names[ix], None) for x in rows])
             else:
-                elem_size += e_type.data_size([x[ix] for x in sample])
+                elem_size += e_type.data_size([x[ix] for x in rows])
         return elem_size
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):

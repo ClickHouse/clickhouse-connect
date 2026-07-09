@@ -648,7 +648,7 @@ class TestEncodeNativeBlock:
         with pytest.raises(ValueError, match="FixedString binary value"):
             _ch_core.encode_native_block(["fs"], ["FixedString(4)"], [[b"xy"]], 1)
         with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
-            _ch_core.encode_native_block(["v"], ["Tuple(Int8, Int8)"], [[(13, 79)]], 1)
+            _ch_core.encode_native_block(["v"], ["JSON"], [[{"a": 1}]], 1)
         with pytest.raises(ValueError, match="label"):
             _ch_core.encode_native_block(["e"], ["Enum8('ok' = 1)"], [["missing"]], 1)
 
@@ -2178,7 +2178,7 @@ class TestArray:
 
     def test_unsupported_element_rejected(self):
         with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
-            _ch_core.encode_native_block(["a"], ["Array(Tuple(Int8, Int8))"], [[[(1, 2)]]], 1)
+            _ch_core.encode_native_block(["a"], ["Array(JSON)"], [[[{"a": 1}]]], 1)
 
     def test_deeply_nested_type_rejected_not_crash(self):
         # Past the parser depth cap the type is rejected without a stack overflow.
@@ -2324,6 +2324,307 @@ class TestArrayInsertFastPath:
         rows[1] = [Evil()]
         expected = self._encode("Array(Int64)", [[1], [9], [3]])
         assert self._encode("Array(Int64)", rows, 3) == expected
+
+
+class TestTupleInsert:
+    """Tuple(T1, ...) encode: positional and named-dict rows."""
+
+    def _encode(self, type_name, rows, row_count=None):
+        n = len(rows) if row_count is None else row_count
+        return _ch_core.encode_native_block(["t"], [type_name], [rows], n)
+
+    def _decode(self, encoded):
+        return list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+
+    def test_unnamed_rows_match_golden_and_round_trip(self):
+        rows = [(13, "a"), (-1, ""), (79, "sventon")]
+        encoded = self._encode("Tuple(Int32, String)", rows)
+        assert encoded == build_native_block([("t", "Tuple(Int32, String)", rows)])
+        assert self._decode(encoded) == rows
+
+    def test_row_and_outer_container_kinds_agree(self):
+        rows = [(13, "a"), (79, "b")]
+        expected = self._encode("Tuple(Int32, String)", rows)
+        assert self._encode("Tuple(Int32, String)", [list(r) for r in rows]) == expected
+        assert self._encode("Tuple(Int32, String)", tuple(rows), 2) == expected
+        assert self._encode("Tuple(Int32, String)", _NdarrayLikeColumn(rows), 2) == expected
+
+    def test_generic_iterable_rows(self):
+        expected = self._encode("Tuple(Int64, Int64)", [(0, 1), (5, 6)])
+        assert self._encode("Tuple(Int64, Int64)", [range(2), (5, 6)], 2) == expected
+
+    def test_named_tuple_positional_rows(self):
+        rows = [(13, "x"), (79, "y")]
+        encoded = self._encode("Tuple(a Int32, b String)", rows)
+        assert encoded == build_native_block([("t", "Tuple(a Int32, b String)", rows)])
+        assert self._decode(encoded) == [{"a": 13, "b": "x"}, {"a": 79, "b": "y"}]
+
+    def test_named_tuple_dict_rows(self):
+        dict_rows = [{"a": 13, "b": "x"}, {"a": 79, "b": "y"}]
+        expected = self._encode("Tuple(a Int32, b String)", [(13, "x"), (79, "y")])
+        assert self._encode("Tuple(a Int32, b String)", dict_rows) == expected
+        # Extra keys are ignored.
+        dict_rows = [{"a": 13, "b": "x", "zz": 5}, {"b": "y", "a": 79}]
+        assert self._encode("Tuple(a Int32, b String)", dict_rows) == expected
+
+    def test_backtick_named_tuple_dict_rows(self):
+        type_name = "Tuple(`a b` Int32, c String)"
+        expected = self._encode(type_name, [(13, "x")])
+        assert expected == build_native_block([("t", type_name, [(13, "x")])])
+        assert self._encode(type_name, [{"a b": 13, "c": "x"}]) == expected
+
+    def test_dict_row_missing_key_nullable_becomes_none(self):
+        type_name = "Tuple(a Int32, b Nullable(String))"
+        assert self._encode(type_name, [{"a": 13}]) == self._encode(type_name, [(13, None)])
+
+    def test_dict_row_missing_key_non_nullable_raises(self):
+        with pytest.raises(ValueError, match='column "t" row 0 element "b" is None'):
+            self._encode("Tuple(a Int32, b String)", [{"a": 13}])
+
+    def test_dict_subclass_rows_read_via_get(self):
+        import collections
+
+        rows = [collections.OrderedDict([("a", 13), ("b", "x")])]
+        assert self._encode("Tuple(a Int32, b String)", rows) == self._encode(
+            "Tuple(a Int32, b String)", [(13, "x")]
+        )
+
+    def test_non_dict_row_in_dict_mode_raises(self):
+        rows = [{"a": 13, "b": "x"}, (79, "y")]
+        with pytest.raises(ValueError, match="row 1 cannot be read as a dict"):
+            self._encode("Tuple(a Int32, b String)", rows, 2)
+
+    def test_dict_row_in_positional_mode_raises(self):
+        rows = [(13, "x"), {"a": 79, "b": "y"}]
+        with pytest.raises(ValueError, match="row 1 is a dict but Tuple rows are read"):
+            self._encode("Tuple(a Int32, b String)", rows, 2)
+        with pytest.raises(ValueError, match="row 0 is a dict but Tuple rows are read"):
+            self._encode("Tuple(Int32, String)", [{"a": 1}], 1)
+
+    def test_arity_mismatch_raises(self):
+        with pytest.raises(
+            ValueError, match='column "t" row 1 has 3 elements but the Tuple declares 2'
+        ):
+            self._encode("Tuple(Int32, String)", [(1, "a"), (1, "a", "extra")], 2)
+        with pytest.raises(ValueError, match="row 0 has 1 elements but the Tuple declares 2"):
+            self._encode("Tuple(Int32, String)", [[1]], 1)
+
+    def test_str_row_rejected(self):
+        with pytest.raises(ValueError, match="row 0 is a str, not a Tuple row"):
+            self._encode("Tuple(String, String)", ["ab"], 1)
+
+    def test_none_row_non_nullable_raises(self):
+        with pytest.raises(ValueError, match="row 1 is None but Tuple"):
+            self._encode("Tuple(Int32, String)", [(1, "a"), None], 2)
+
+    def test_element_error_names_column_row_and_element(self):
+        with pytest.raises(ValueError, match='column "t" row 1 element 0 cannot be converted'):
+            self._encode("Tuple(Int64, String)", [(1, "a"), ("x", "b")], 2)
+        with pytest.raises(ValueError, match='column "t" row 0 element "b" cannot be converted'):
+            self._encode("Tuple(a Int32, b Int32)", [{"a": 1, "b": "x"}])
+
+    def test_lc_string_element(self):
+        # The core encoder's LC flags word differs from the test helper's
+        # (both valid), so LC types round-trip instead of golden-comparing.
+        type_name = "Tuple(LowCardinality(String), Int64)"
+        rows = [("red", 1), ("red", 2), ("blue", 3)]
+        encoded = self._encode(type_name, rows)
+        assert self._decode(encoded) == rows
+
+    def test_array_and_nullable_elements(self):
+        type_name = "Tuple(Array(Int64), Nullable(String))"
+        rows = [([13, 79], "a"), ([], None)]
+        encoded = self._encode(type_name, rows)
+        assert self._decode(encoded) == rows
+
+    def test_nested_tuple_and_map_elements(self):
+        rows = [(1, (2, "x")), (3, (4, "y"))]
+        encoded = self._encode("Tuple(UInt8, Tuple(UInt8, String))", rows)
+        assert self._decode(encoded) == rows
+        rows = [({"k1": 1, "k2": 2}, 10), ({}, 20)]
+        encoded = self._encode("Tuple(Map(String, UInt8), Int32)", rows)
+        assert self._decode(encoded) == rows
+
+    def test_nullable_tuple_none_rows_match_golden_and_round_trip(self):
+        type_name = "Nullable(Tuple(Nullable(Int32), String))"
+        rows = [(13, "a"), None, (None, "b"), None]
+        encoded = self._encode(type_name, rows)
+        assert encoded == build_native_block([("t", type_name, rows)])
+        assert self._decode(encoded) == rows
+
+    def test_nullable_tuple_default_placeholders_cover_scalar_types(self):
+        type_name = "Nullable(Tuple(UUID, IPv4, Date, Decimal(9, 2), Bool, Float64))"
+        rows = [None, (uuid.UUID(int=13), ipaddress.IPv4Address("1.2.3.4"), 79, 5, True, 1.5)]
+        encoded = self._encode(type_name, rows, 2)
+        decoded = self._decode(encoded)
+        assert decoded[0] is None
+        assert decoded[1] == (
+            uuid.UUID(int=13),
+            ipaddress.IPv4Address("1.2.3.4"),
+            dt.date(1970, 3, 21),
+            decimal.Decimal("5.00"),
+            True,
+            1.5,
+        )
+
+    def test_nullable_named_tuple_dict_rows_with_none(self):
+        type_name = "Nullable(Tuple(a UInt64, b String))"
+        rows = [{"a": 13, "b": "x"}, None, {"a": 5, "b": "y"}]
+        encoded = self._encode(type_name, rows, 3)
+        assert self._decode(encoded) == [{"a": 13, "b": "x"}, None, {"a": 5, "b": "y"}]
+
+    def test_empty_tuple(self):
+        rows = [(), (), ()]
+        encoded = self._encode("Tuple()", rows)
+        assert encoded == build_native_block([("t", "Tuple()", rows)])
+        assert self._decode(encoded) == rows
+        with pytest.raises(ValueError, match="has 1 elements but the Tuple declares 0"):
+            self._encode("Tuple()", [(1,)], 1)
+
+    def test_array_of_tuple(self):
+        type_name = "Array(Tuple(Int64, String))"
+        rows = [[(1, "a"), (2, "b")], [], [(3, "c")]]
+        encoded = self._encode(type_name, rows)
+        assert self._decode(encoded) == rows
+
+    def test_zero_row_probe(self):
+        encoded = _ch_core.encode_native_block(
+            ["t", "m"], ["Tuple(a Int32, b String)", "Map(String, UInt8)"], [[], []], 0
+        )
+        assert encoded == build_native_block(
+            [("t", "Tuple(a Int32, b String)", []), ("m", "Map(String, UInt8)", [])]
+        )
+
+    def test_lc_tuple_and_nullable_map_still_rejected(self):
+        with pytest.raises(NotImplementedError, match="unsupported"):
+            _ch_core.encode_native_block(
+                ["v"], ["LowCardinality(Tuple(Int32, String))"], [[(1, "a")]], 1
+            )
+        with pytest.raises(NotImplementedError, match="unsupported"):
+            _ch_core.encode_native_block(["v"], ["Nullable(Map(String, UInt8))"], [[{}]], 1)
+
+    def test_flat_refs_refcount_balance(self):
+        shared = 1 << 40
+
+        rows = [(shared, "a"), (shared, "b")]
+        before = sys.getrefcount(shared)
+        self._encode("Tuple(Int64, String)", rows)
+        assert sys.getrefcount(shared) == before
+
+        rows = [(shared, "a"), (shared, 5)]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match="element 1"):
+            self._encode("Tuple(Int64, String)", rows, 2)
+        assert sys.getrefcount(shared) == before
+
+        rows = [(shared, "a"), (shared,)]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match="declares 2"):
+            self._encode("Tuple(Int64, String)", rows, 2)
+        assert sys.getrefcount(shared) == before
+
+        rows = [{"a": shared, "b": "x"}, {"a": shared}]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match='element "b" is None'):
+            self._encode("Tuple(a Int64, b String)", rows, 2)
+        assert sys.getrefcount(shared) == before
+
+
+class TestMapInsert:
+    """Map(K, V) encode: dict rows flattened into key and value runs."""
+
+    def _encode(self, type_name, rows, row_count=None):
+        n = len(rows) if row_count is None else row_count
+        return _ch_core.encode_native_block(["m"], [type_name], [rows], n)
+
+    def _decode(self, encoded):
+        return list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+
+    def test_dict_rows_match_golden_and_round_trip(self):
+        rows = [{"k1": 1, "k2": 2}, {}, {"x": 255}]
+        encoded = self._encode("Map(String, UInt8)", rows)
+        assert encoded == build_native_block([("m", "Map(String, UInt8)", rows)])
+        assert self._decode(encoded) == rows
+
+    def test_outer_container_kinds_agree(self):
+        rows = [{13: "a", 79: "b"}, {}, {5: "c"}]
+        expected = self._encode("Map(UInt64, String)", rows)
+        assert self._encode("Map(UInt64, String)", tuple(rows), 3) == expected
+        assert self._encode("Map(UInt64, String)", _NdarrayLikeColumn(rows), 3) == expected
+
+    def test_all_empty_dict_rows(self):
+        rows = [{}, {}, {}]
+        encoded = self._encode("Map(String, UInt8)", rows)
+        assert encoded == build_native_block([("m", "Map(String, UInt8)", rows)])
+        assert self._decode(encoded) == rows
+
+    def test_dict_subclass_rows_via_items(self):
+        import collections
+
+        rows = [collections.OrderedDict([("a", 13), ("b", 79)]), {}]
+        assert self._encode("Map(String, UInt8)", rows) == self._encode(
+            "Map(String, UInt8)", [{"a": 13, "b": 79}, {}]
+        )
+
+    def test_non_dict_row_rejected(self):
+        with pytest.raises(ValueError, match="row 1 is not a dict for Map"):
+            self._encode("Map(String, UInt8)", [{"a": 1}, [("b", 2)]], 2)
+        with pytest.raises(ValueError, match="row 0 is not a dict for Map"):
+            self._encode("Map(String, UInt8)", ["ab"], 1)
+
+    def test_none_row_rejected(self):
+        with pytest.raises(ValueError, match="row 1 is None but Map"):
+            self._encode("Map(String, UInt8)", [{"a": 1}, None], 2)
+
+    def test_nullable_value_type(self):
+        rows = [{"a": 13, "b": None}, {}, {"c": 79}]
+        encoded = self._encode("Map(String, Nullable(Int32))", rows)
+        assert encoded == build_native_block([("m", "Map(String, Nullable(Int32))", rows)])
+        assert self._decode(encoded) == rows
+
+    def test_array_value_type(self):
+        rows = [{"k": [13, 79], "e": []}, {}, {"s": [5]}]
+        encoded = self._encode("Map(String, Array(Int64))", rows)
+        assert self._decode(encoded) == rows
+
+    def test_low_cardinality_string_key(self):
+        rows = [{"red": 1, "blue": 2}, {}, {"red": 3}]
+        encoded = self._encode("Map(LowCardinality(String), UInt64)", rows)
+        assert self._decode(encoded) == rows
+
+    def test_map_of_map_and_tuple_values(self):
+        rows = [{1: {2: "a"}}, {}, {3: {}}]
+        encoded = self._encode("Map(UInt64, Map(UInt64, String))", rows)
+        assert self._decode(encoded) == rows
+        rows = [{"k": (1, "x")}, {}]
+        encoded = self._encode("Map(String, Tuple(UInt8, String))", rows)
+        assert self._decode(encoded) == rows
+
+    def test_key_and_value_errors_name_row_and_entry(self):
+        with pytest.raises(ValueError, match='column "m" row 1 key 0 cannot be converted'):
+            self._encode("Map(UInt8, UInt8)", [{1: 1}, {"x": 2}], 2)
+        with pytest.raises(ValueError, match='column "m" row 0 value 1 cannot be converted'):
+            self._encode("Map(String, UInt8)", [{"a": 1, "b": "x"}], 1)
+
+    def test_flat_refs_refcount_balance(self):
+        shared = 1 << 40
+
+        rows = [{shared: shared}, {}, {1: shared}]
+        before = sys.getrefcount(shared)
+        self._encode("Map(UInt64, Int64)", rows)
+        assert sys.getrefcount(shared) == before
+
+        rows = [{shared: shared}, {shared: "x"}]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match="value 0 cannot be converted"):
+            self._encode("Map(UInt64, Int64)", rows, 2)
+        assert sys.getrefcount(shared) == before
+
+        rows = [{shared: shared}, "boom"]
+        before = sys.getrefcount(shared)
+        with pytest.raises(ValueError, match="is not a dict for Map"):
+            self._encode("Map(UInt64, Int64)", rows, 2)
+        assert sys.getrefcount(shared) == before
 
 
 # ---------------------------------------------------------------------------
@@ -2536,6 +2837,125 @@ class TestMap:
         block = build_native_block_from_bodies([("m", "Map(UInt8, UInt8)", body)], 2)
         with pytest.raises(ValueError, match="Invalid Array layout"):
             _ch_core.ColBatch.decode_native(block)
+
+
+# ---------------------------------------------------------------------------
+# Tuple/Map column-major fill
+# ---------------------------------------------------------------------------
+
+class TestTupleMapFill:
+    """The buffered exits decode top-level Tuple/Map columns with a hoisted
+    column-major fill; Tuple/Map nested inside Array stay on the per-cell path."""
+
+    @staticmethod
+    def _all_exits(batch):
+        return (
+            list(batch.column_data(0)),
+            list(batch.to_python_columns()[0]),
+            [r[0] for r in batch.to_python_rows()],
+        )
+
+    @pytest.mark.parametrize(
+        "type_name,wire_rows,expected",
+        [
+            ("Tuple(LowCardinality(String), Int64)",
+             [("x", 1), ("y", 2), ("x", 3)], [("x", 1), ("y", 2), ("x", 3)]),
+            ("Tuple(a LowCardinality(String), b Int64)",
+             [("x", 1), ("y", 2)], [{"a": "x", "b": 1}, {"a": "y", "b": 2}]),
+            ("Map(String, Int64)", [{"a": 1, "b": 2}, {}, {"c": 3}], None),
+            ("Map(String, Array(Int64))", [{"k": [1, 2], "e": []}, {}, {"z": [3]}], None),
+            ("Nullable(Tuple(Int64, String))", [(1, "a"), None, (2, "b")], None),
+            ("Tuple()", [(), (), ()], None),
+            ("Map(String, UInt8)", [{}, {}, {}], None),
+        ],
+    )
+    def test_all_exit_paths_agree(self, type_name, wire_rows, expected):
+        if expected is None:
+            expected = wire_rows
+        built = build_native_block([("c", type_name, wire_rows)])
+        batch = _ch_core.ColBatch.decode_native(built)
+        via_column_data, via_columns, via_rows = self._all_exits(batch)
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_tuple_lc_field_identity_within_chunk(self):
+        rows = [("red", 1), ("blue", 2), ("red", 3), ("red", 4)]
+        built = build_native_block([("t", "Tuple(LowCardinality(String), Int64)", rows)])
+        batch = _ch_core.ColBatch.decode_native(built)
+        col = batch.column_data(0)
+        assert list(col) == rows
+        assert col[0][0] is col[2][0]
+        assert col[0][0] is col[3][0]
+        cols = batch.to_python_columns()[0]
+        assert cols[0][0] is cols[2][0]
+        out_rows = batch.to_python_rows()
+        assert out_rows[0][0][0] is out_rows[2][0][0]
+
+    def test_map_lc_value_identity_within_chunk(self):
+        rows = [{"a": "red", "b": "blue"}, {}, {"c": "red"}]
+        built = build_native_block([("m", "Map(String, LowCardinality(String))", rows)])
+        batch = _ch_core.ColBatch.decode_native(built)
+        col = batch.column_data(0)
+        assert list(col) == rows
+        assert col[0]["a"] is col[2]["c"]
+        cols = batch.to_python_columns()[0]
+        assert cols[0]["a"] is cols[2]["c"]
+        out_rows = batch.to_python_rows()
+        assert out_rows[0][0]["a"] is out_rows[2][0]["c"]
+
+    def test_map_lc_key_identity_within_chunk(self):
+        rows = [{"red": 1, "blue": 2}, {}, {"red": 3}]
+        built = build_native_block([("m", "Map(LowCardinality(String), UInt64)", rows)])
+        col = _ch_core.ColBatch.decode_native(built).column_data(0)
+        assert list(col) == rows
+        key0 = next(k for k in col[0] if k == "red")
+        assert key0 is next(iter(col[2]))
+
+    def test_nullable_tuple_lc_field_null_rows_and_identity(self):
+        # Null rows discard their field values; valid rows still share the
+        # dictionary object.
+        rows = [("x", 1), None, ("x", 2), ("y", 3)]
+        enc = _ch_core.encode_native_block(
+            ["c"], ["Nullable(Tuple(LowCardinality(String), Int64))"], [rows], len(rows)
+        )
+        batch = _ch_core.ColBatch.decode_native(enc)
+        via_column_data, via_columns, via_rows = self._all_exits(batch)
+        assert via_column_data == via_columns == via_rows == rows
+        col = batch.column_data(0)
+        assert col[0][0] is col[2][0]
+
+    def test_fill_path_matches_per_cell_array_element_path(self):
+        # The same values decode through the column-major fill at top level and
+        # through the per-cell path one Array level down; they must agree.
+        tup_rows = [(1, "a"), (2, "b"), (3, "c")]
+        map_rows = [{"a": 1, "b": 2}, {}, {"c": 3}]
+        top = _ch_core.ColBatch.decode_native(build_native_block([
+            ("t", "Tuple(Int64, String)", tup_rows),
+            ("m", "Map(String, Int64)", map_rows),
+        ]))
+        wrapped = _ch_core.ColBatch.decode_native(build_native_block([
+            ("t", "Array(Tuple(Int64, String))", [[r] for r in tup_rows]),
+            ("m", "Array(Map(String, Int64))", [[r] for r in map_rows]),
+        ]))
+        assert [[v] for v in top.column_data(0)] == list(wrapped.column_data(0))
+        assert [[v] for v in top.column_data(1)] == list(wrapped.column_data(1))
+
+    def test_multi_chunk_named_tuple_and_map(self):
+        tn = "Tuple(a Int64, b String)"
+        mp = "Map(String, Int64)"
+        block_a = build_native_block([("t", tn, [(1, "x")]), ("m", mp, [{"a": 1}])])
+        block_b = build_native_block(
+            [("t", tn, [(2, "y"), (3, "z")]), ("m", mp, [{}, {"b": 2}])]
+        )
+        batch = _ch_core.ColBatch.decode_native(block_a + block_b)
+        assert list(batch.column_data(0)) == [
+            {"a": 1, "b": "x"}, {"a": 2, "b": "y"}, {"a": 3, "b": "z"}
+        ]
+        assert list(batch.column_data(1)) == [{"a": 1}, {}, {"b": 2}]
+        assert list(batch.to_python_rows()) == [
+            ({"a": 1, "b": "x"}, {"a": 1}),
+            ({"a": 2, "b": "y"}, {}),
+            ({"a": 3, "b": "z"}, {"b": 2}),
+        ]
 
 
 # ---------------------------------------------------------------------------

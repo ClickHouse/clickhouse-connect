@@ -8,16 +8,17 @@ use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAnyMethods, PyByteArray, PyBytes, PyDate, PyDateTime, PyDict, PyFrozenSet, PyList, PySet,
-    PyString, PyStringMethods, PyTuple,
+    PyAnyMethods, PyBool, PyByteArray, PyBytes, PyDate, PyDateTime, PyDict, PyFrozenSet, PyList,
+    PySet, PyString, PyStringMethods, PyTuple,
 };
 
 use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
-    ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn,
-    PrimitiveColumn, Utf8Column,
+    ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn, MapColumn,
+    PrimitiveColumn, TupleColumn, Utf8Column,
 };
+use ch_core_rs::native::decode::parse_ch_type;
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
 use ch_core_rs::schema::{ChType, Field, Schema};
 
@@ -161,6 +162,8 @@ fn build_column(
             build_low_cardinality_column(py, name, inner, values, row_count)
         }
         ChType::Array(inner) => build_array_column(py, name, inner, values, row_count),
+        ChType::Tuple(elements) => build_tuple_column(py, name, elements, values, row_count, false),
+        ChType::Map(key, value) => build_map_column(py, name, key, value, values, row_count),
         _ => build_plain_column(py, name, ch_type, values, row_count),
     }
 }
@@ -195,7 +198,7 @@ fn build_array_column(
     for row in 0..row_count {
         let value = column_values.get_item(row)?;
         flatten_array_row(py, name, inner, &value, row, &mut flat)?;
-        offsets.push(flat.end_offset(name)?);
+        offsets.push(flat.end_offset(name, "Array element")?);
     }
     let element_column = build_element_column(py, name, inner, &flat.ptrs)
         .map_err(|err| remap_element_err(py, name, &offsets, err))?;
@@ -223,7 +226,7 @@ fn array_column_from_seq<S: FastSeq>(
         let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
         flatten_array_row(py, name, inner, &value, row, &mut flat)?;
         check_not_resized(seq, name, row_count)?;
-        offsets.push(flat.end_offset(name)?);
+        offsets.push(flat.end_offset(name, "Array element")?);
     }
     let element_column = build_element_column(py, name, inner, &flat.ptrs)
         .map_err(|err| remap_element_err(py, name, &offsets, err))?;
@@ -236,6 +239,12 @@ fn array_column_from_seq<S: FastSeq>(
 /// that is not a ValueError or whose text does not carry the `column "name"
 /// row N` prefix passes through unchanged.
 fn remap_element_err(py: Python<'_>, name: &str, offsets: &[i64], err: PyErr) -> PyErr {
+    remap_flat_err(py, name, offsets, "element", err)
+}
+
+/// Shared flat-run error rewrite: `unit` names what the flat index counts
+/// ("element" for Array, "key"/"value" for Map).
+fn remap_flat_err(py: Python<'_>, name: &str, offsets: &[i64], unit: &str, err: PyErr) -> PyErr {
     if !err.is_instance_of::<PyValueError>(py) {
         return err;
     }
@@ -259,7 +268,31 @@ fn remap_element_err(py: Python<'_>, name: &str, offsets: &[i64], err: PyErr) ->
     }
     let element = flat - offsets[row];
     let tail = &rest[digits..];
-    PyValueError::new_err(format!("{prefix}{row} element {element}{tail}"))
+    PyValueError::new_err(format!("{prefix}{row} {unit} {element}{tail}"))
+}
+
+/// Rewrite a tuple field-run error: the flat index equals the outer row, so
+/// only the element label (index, or name for a named tuple) is inserted.
+fn remap_tuple_element_err(py: Python<'_>, name: &str, label: &str, err: PyErr) -> PyErr {
+    if !err.is_instance_of::<PyValueError>(py) {
+        return err;
+    }
+    let Ok(text) = err.value(py).str() else {
+        return err;
+    };
+    let Ok(text) = text.to_str() else {
+        return err;
+    };
+    let prefix = format!("column {name:?} row ");
+    let Some(rest) = text.strip_prefix(&prefix) else {
+        return err;
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return err;
+    }
+    let (row, tail) = rest.split_at(digits);
+    PyValueError::new_err(format!("{prefix}{row} element {label}{tail}"))
 }
 
 /// Append one Array row's elements to the flat run. Exact list/tuple rows
@@ -365,10 +398,29 @@ impl FlatRefs {
         Ok(())
     }
 
-    fn end_offset(&self, name: &str) -> PyResult<i64> {
+    /// Append a strong reference to `obj`.
+    fn push_ref(&mut self, obj: &Bound<'_, PyAny>) {
+        // SAFETY: GIL held (the Bound proves it); Drop releases the reference.
+        unsafe { ffi::Py_INCREF(obj.as_ptr()) };
+        self.ptrs.push(obj.as_ptr());
+    }
+
+    /// Append a strong reference to None.
+    fn push_none(&mut self, _py: Python<'_>) {
+        // SAFETY: GIL held; Py_None is a valid object pointer.
+        unsafe {
+            let none = ffi::Py_None();
+            ffi::Py_INCREF(none);
+            self.ptrs.push(none);
+        }
+    }
+
+    /// Current run length as an i64 offset. `unit` names what the run counts
+    /// ("Array element", "Map entry").
+    fn end_offset(&self, name: &str, unit: &str) -> PyResult<i64> {
         i64::try_from(self.ptrs.len()).map_err(|_| {
             PyValueError::new_err(format!(
-                "column {name:?} Array element count exceeds i64 offset capacity"
+                "column {name:?} {unit} count exceeds i64 offset capacity"
             ))
         })
     }
@@ -397,10 +449,20 @@ fn build_element_column(
     let seq = PtrSeq(ptrs);
     match ch_type {
         ChType::Array(inner) => array_column_from_seq(py, name, inner, &seq, row_count),
+        ChType::Tuple(elements) => {
+            tuple_column_from_seq(py, name, elements, &seq, row_count, false)
+        }
+        ChType::Map(key, value) => map_column_from_seq(py, name, key, value, &seq, row_count),
         ChType::Nullable(inner) => {
+            if let ChType::Tuple(elements) = inner.as_ref() {
+                return tuple_column_from_seq(py, name, elements, &seq, row_count, true);
+            }
             if matches!(
                 inner.as_ref(),
-                ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_)
+                ChType::Nullable(_)
+                    | ChType::LowCardinality(_)
+                    | ChType::Array(_)
+                    | ChType::Map(..)
             ) {
                 return Err(PyNotImplementedError::new_err(format!(
                     "unsupported Nullable inner type {inner} for column {name:?}"
@@ -440,6 +502,454 @@ fn build_element_column(
             plain_scalar_column(py, name, ch_type, &PtrRows { py, ptrs }, row_count)
         }
     }
+}
+
+/// Build a `Tuple(T1, ...)` column: each row fans out into one strong-ref run
+/// per element, then each element column is built once over its run, hitting
+/// the same per-type fast paths as a plain column. `nullable` builds the
+/// tuple-level validity of a `Nullable(Tuple)`; a None row keeps the children
+/// full length with per-type default placeholders.
+fn build_tuple_column(
+    py: Python<'_>,
+    name: &str,
+    elements: &[(Option<String>, ChType)],
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let column_values = ColumnValues::new(values, name)?;
+    check_row_count(name, &column_values, row_count)?;
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return tuple_column_from_seq(py, name, elements, &ListSeq(list), row_count, nullable);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return tuple_column_from_seq(py, name, elements, &TupleSeq(tuple), row_count, nullable);
+    }
+    let mut builder = TupleBuilder::new(py, name, elements, row_count, nullable);
+    for row in 0..row_count {
+        let value = column_values.get_item(row)?;
+        builder.push_row(&value, row)?;
+    }
+    builder.finish()
+}
+
+/// Tuple rows over an exact list or tuple of rows, or a flattened element run.
+fn tuple_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    elements: &[(Option<String>, ChType)],
+    seq: &S,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let mut builder = TupleBuilder::new(py, name, elements, row_count, nullable);
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every fallback revalidates; the strong reference keeps the row
+        // alive across any Python code the row read runs.
+        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        builder.push_row(&value, row)?;
+        check_not_resized(seq, name, row_count)?;
+    }
+    builder.finish()
+}
+
+/// Streaming Tuple row builder: one strong-ref run per element, an optional
+/// tuple-level null map, and a row-read mode decided by the first non-None
+/// row (element-name dict reads for a fully named tuple whose first non-None
+/// row is a dict, positional reads otherwise).
+struct TupleBuilder<'a, 'py> {
+    py: Python<'py>,
+    name: &'a str,
+    elements: &'a [(Option<String>, ChType)],
+    flats: Vec<FlatRefs>,
+    null_map: Option<Vec<u8>>,
+    defaults: Option<Vec<Py<PyAny>>>,
+    names: Option<Vec<Bound<'py, PyString>>>,
+    dict_mode: Option<bool>,
+    row_count: usize,
+}
+
+impl<'a, 'py> TupleBuilder<'a, 'py> {
+    fn new(
+        py: Python<'py>,
+        name: &'a str,
+        elements: &'a [(Option<String>, ChType)],
+        row_count: usize,
+        nullable: bool,
+    ) -> Self {
+        let names: Option<Vec<Bound<'py, PyString>>> =
+            (!elements.is_empty() && elements.iter().all(|(n, _)| n.is_some())).then(|| {
+                elements
+                    .iter()
+                    .map(|(n, _)| PyString::new(py, n.as_deref().unwrap_or_default()))
+                    .collect()
+            });
+        Self {
+            py,
+            name,
+            elements,
+            flats: elements
+                .iter()
+                .map(|_| FlatRefs {
+                    ptrs: Vec::with_capacity(row_count),
+                })
+                .collect(),
+            null_map: nullable.then(|| Vec::with_capacity(row_count)),
+            defaults: None,
+            names,
+            dict_mode: None,
+            row_count,
+        }
+    }
+
+    fn tuple_type(&self) -> ChType {
+        ChType::Tuple(self.elements.to_vec())
+    }
+
+    fn push_row(&mut self, value: &Bound<'_, PyAny>, row: usize) -> PyResult<()> {
+        if value.is_none() {
+            if self.null_map.is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "column {:?} row {row} is None but {} is not Nullable",
+                    self.name,
+                    self.tuple_type()
+                )));
+            }
+            if self.defaults.is_none() {
+                self.defaults = Some(
+                    self.elements
+                        .iter()
+                        .map(|(_, element_type)| default_pyobject(self.py, element_type))
+                        .collect::<PyResult<_>>()?,
+                );
+            }
+            if let Some(null_map) = &mut self.null_map {
+                null_map.push(1);
+            }
+            if let Some(defaults) = &self.defaults {
+                for (flat, default) in self.flats.iter_mut().zip(defaults) {
+                    flat.push_ref(default.bind(self.py));
+                }
+            }
+            return Ok(());
+        }
+        if let Some(null_map) = &mut self.null_map {
+            null_map.push(0);
+        }
+        let dict_mode = match self.dict_mode {
+            Some(mode) => mode,
+            None => {
+                let mode = self.names.is_some() && value.is_instance_of::<PyDict>();
+                self.dict_mode = Some(mode);
+                mode
+            }
+        };
+        if dict_mode {
+            self.push_dict_row(value, row)
+        } else {
+            self.push_positional_row(value, row)
+        }
+    }
+
+    /// Read one row by element name: missing keys become None, extra keys are
+    /// ignored. Non-dict rows fall back to a `.get` method read.
+    fn push_dict_row(&mut self, value: &Bound<'_, PyAny>, row: usize) -> PyResult<()> {
+        let Some(names) = &self.names else {
+            return Err(PyValueError::new_err("internal tuple row mode mismatch"));
+        };
+        if let Ok(dict) = value.downcast_exact::<PyDict>() {
+            for (flat, key) in self.flats.iter_mut().zip(names) {
+                match dict.get_item(key)? {
+                    Some(item) => flat.push_ref(&item),
+                    None => flat.push_none(self.py),
+                }
+            }
+            return Ok(());
+        }
+        let get = value.getattr(intern!(self.py, "get")).map_err(|err| {
+            let wrapped = PyValueError::new_err(format!(
+                "column {:?} row {row} cannot be read as a dict for the named Tuple",
+                self.name
+            ));
+            wrapped.set_cause(self.py, Some(err));
+            wrapped
+        })?;
+        for (flat, key) in self.flats.iter_mut().zip(names) {
+            let item = get.call1((key,)).map_err(|err| {
+                let wrapped = PyValueError::new_err(format!(
+                    "column {:?} row {row} element {key:?} cannot be read from the dict-like row",
+                    self.name
+                ));
+                wrapped.set_cause(self.py, Some(err));
+                wrapped
+            })?;
+            flat.push_ref(&item);
+        }
+        Ok(())
+    }
+
+    /// Read one row positionally. Exact list/tuple rows copy borrowed
+    /// pointers; other iterables flatten through `list.extend`.
+    fn push_positional_row(&mut self, value: &Bound<'_, PyAny>, row: usize) -> PyResult<()> {
+        if let Ok(list) = value.downcast_exact::<PyList>() {
+            // SAFETY: copying exact-list items runs no Python code.
+            return unsafe { self.push_positional_seq(&ListSeq(list), row) };
+        }
+        if let Ok(tuple) = value.downcast_exact::<PyTuple>() {
+            // SAFETY: copying exact-tuple items runs no Python code.
+            return unsafe { self.push_positional_seq(&TupleSeq(tuple), row) };
+        }
+        if value.downcast::<PyString>().is_ok() {
+            return Err(PyValueError::new_err(format!(
+                "column {:?} row {row} is a str, not a Tuple row",
+                self.name
+            )));
+        }
+        if value.is_instance_of::<PyDict>() {
+            return Err(PyValueError::new_err(format!(
+                "column {:?} row {row} is a dict but Tuple rows are read positionally",
+                self.name
+            )));
+        }
+        if value.downcast::<PySet>().is_ok() || value.downcast::<PyFrozenSet>().is_ok() {
+            return Err(PyValueError::new_err(format!(
+                "column {:?} row {row} is an unordered set, which has no defined Tuple element order",
+                self.name
+            )));
+        }
+        let items = PyList::empty(self.py);
+        items
+            .call_method1(intern!(self.py, "extend"), (value,))
+            .map_err(|err| {
+                let wrapped = PyValueError::new_err(format!(
+                    "column {:?} row {row} is not a valid Tuple row",
+                    self.name
+                ));
+                wrapped.set_cause(self.py, Some(err));
+                wrapped
+            })?;
+        // SAFETY: items is an owned exact list; copying runs no Python code.
+        unsafe { self.push_positional_seq(&ListSeq(&items), row) }
+    }
+
+    /// Copy one arity-checked row into the element runs.
+    ///
+    /// # Safety
+    ///
+    /// Requires the GIL; `seq` must allow borrowed reads with no Python code
+    /// running during the copy (an exact list or tuple).
+    unsafe fn push_positional_seq<S: FastSeq>(&mut self, seq: &S, row: usize) -> PyResult<()> {
+        let got = seq.size();
+        if got != self.elements.len() {
+            return Err(PyValueError::new_err(format!(
+                "column {:?} row {row} has {got} elements but the Tuple declares {}",
+                self.name,
+                self.elements.len()
+            )));
+        }
+        for (index, flat) in self.flats.iter_mut().enumerate() {
+            let item = seq.get(index);
+            ffi::Py_INCREF(item);
+            flat.ptrs.push(item);
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> PyResult<Column> {
+        let mut fields = Vec::with_capacity(self.elements.len());
+        for (index, ((element_name, element_type), flat)) in
+            self.elements.iter().zip(&self.flats).enumerate()
+        {
+            let label = match element_name {
+                Some(n) => format!("{n:?}"),
+                None => index.to_string(),
+            };
+            let column = build_element_column(self.py, self.name, element_type, &flat.ptrs)
+                .map_err(|err| remap_tuple_element_err(self.py, self.name, &label, err))?;
+            fields.push(column);
+        }
+        Ok(Column::Tuple(match self.null_map {
+            Some(nulls) => {
+                TupleColumn::new_nullable(fields, self.row_count, Bitmap::from_ch_null_map(&nulls))
+            }
+            None => TupleColumn::new(fields, self.row_count),
+        }))
+    }
+}
+
+/// Build a `Map(K, V)` column: dict rows flatten into a key run and a value
+/// run with an Arrow list offsets run; the two entry columns are built once
+/// over their flat runs. Maps are never nullable at the map level, so a None
+/// row is an error.
+fn build_map_column(
+    py: Python<'_>,
+    name: &str,
+    key_type: &ChType,
+    value_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Column> {
+    let column_values = ColumnValues::new(values, name)?;
+    check_row_count(name, &column_values, row_count)?;
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return map_column_from_seq(py, name, key_type, value_type, &ListSeq(list), row_count);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return map_column_from_seq(py, name, key_type, value_type, &TupleSeq(tuple), row_count);
+    }
+    let mut builder = MapBuilder::new(py, name, key_type, value_type, row_count);
+    for row in 0..row_count {
+        let value = column_values.get_item(row)?;
+        builder.push_row(&value, row)?;
+    }
+    builder.finish()
+}
+
+/// Map rows over an exact list or tuple of rows, or a flattened element run.
+fn map_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    key_type: &ChType,
+    value_type: &ChType,
+    seq: &S,
+    row_count: usize,
+) -> PyResult<Column> {
+    let mut builder = MapBuilder::new(py, name, key_type, value_type, row_count);
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every fallback revalidates; the strong reference keeps the row
+        // alive across any Python code the row read runs.
+        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        builder.push_row(&value, row)?;
+        check_not_resized(seq, name, row_count)?;
+    }
+    builder.finish()
+}
+
+/// Streaming Map row builder: an offsets run plus parallel key and value
+/// strong-ref runs. Exact dict rows copy entries without running Python;
+/// dict-like rows read through `.items()`.
+struct MapBuilder<'a, 'py> {
+    py: Python<'py>,
+    name: &'a str,
+    key_type: &'a ChType,
+    value_type: &'a ChType,
+    offsets: Vec<i64>,
+    keys: FlatRefs,
+    values: FlatRefs,
+}
+
+impl<'a, 'py> MapBuilder<'a, 'py> {
+    fn new(
+        py: Python<'py>,
+        name: &'a str,
+        key_type: &'a ChType,
+        value_type: &'a ChType,
+        row_count: usize,
+    ) -> Self {
+        let mut offsets = Vec::with_capacity(row_count + 1);
+        offsets.push(0i64);
+        Self {
+            py,
+            name,
+            key_type,
+            value_type,
+            offsets,
+            keys: FlatRefs::default(),
+            values: FlatRefs::default(),
+        }
+    }
+
+    fn push_row(&mut self, value: &Bound<'_, PyAny>, row: usize) -> PyResult<()> {
+        if value.is_none() {
+            return Err(PyValueError::new_err(format!(
+                "column {:?} row {row} is None but Map({}, {}) is not Nullable",
+                self.name, self.key_type, self.value_type
+            )));
+        }
+        if let Ok(dict) = value.downcast_exact::<PyDict>() {
+            for (key, val) in dict.iter() {
+                self.keys.push_ref(&key);
+                self.values.push_ref(&val);
+            }
+        } else {
+            self.push_mapping_row(value, row)?;
+        }
+        self.offsets
+            .push(self.keys.end_offset(self.name, "Map entry")?);
+        Ok(())
+    }
+
+    /// Dict-like fallback: rows must expose `.items()`; anything else is not
+    /// a Map row. Pair iterables are deliberately not accepted.
+    fn push_mapping_row(&mut self, value: &Bound<'_, PyAny>, row: usize) -> PyResult<()> {
+        let not_a_dict = |err: PyErr| {
+            let wrapped = PyValueError::new_err(format!(
+                "column {:?} row {row} is not a dict for Map({}, {})",
+                self.name, self.key_type, self.value_type
+            ));
+            wrapped.set_cause(self.py, Some(err));
+            wrapped
+        };
+        let items = value
+            .call_method0(intern!(self.py, "items"))
+            .map_err(not_a_dict)?;
+        let entries = PyList::empty(self.py);
+        entries
+            .call_method1(intern!(self.py, "extend"), (items,))
+            .map_err(not_a_dict)?;
+        for index in 0..entries.len() {
+            let entry = entries.get_item(index)?;
+            let (key, val) = entry
+                .extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()
+                .map_err(|err| {
+                    let wrapped = PyValueError::new_err(format!(
+                        "column {:?} row {row} Map entry is not a key/value pair",
+                        self.name
+                    ));
+                    wrapped.set_cause(self.py, Some(err));
+                    wrapped
+                })?;
+            self.keys.push_ref(&key);
+            self.values.push_ref(&val);
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> PyResult<Column> {
+        let total = self.keys.ptrs.len();
+        let keys_column = build_element_column(self.py, self.name, self.key_type, &self.keys.ptrs)
+            .map_err(|err| remap_flat_err(self.py, self.name, &self.offsets, "key", err))?;
+        let values_column =
+            build_element_column(self.py, self.name, self.value_type, &self.values.ptrs)
+                .map_err(|err| remap_flat_err(self.py, self.name, &self.offsets, "value", err))?;
+        let entries = Column::Tuple(TupleColumn::new(vec![keys_column, values_column], total));
+        Ok(Column::Map(MapColumn::new(self.offsets, entries)))
+    }
+}
+
+/// Default placeholder Python object for a null `Nullable(Tuple)` row's
+/// element, matching the wire defaults the server writes for null rows.
+fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<PyAny>> {
+    Ok(match ch_type {
+        ChType::Nullable(_) => py.None(),
+        ChType::LowCardinality(inner) => default_pyobject(py, inner)?,
+        ChType::Bool => PyBool::new(py, false).to_owned().into_any().unbind(),
+        ChType::String | ChType::FixedString(_) => PyString::new(py, "").into_any().unbind(),
+        ChType::Array(_) => PyList::empty(py).into_any().unbind(),
+        ChType::Map(..) => PyDict::new(py).into_any().unbind(),
+        ChType::Tuple(elements) => {
+            let defaults = elements
+                .iter()
+                .map(|(_, element_type)| default_pyobject(py, element_type))
+                .collect::<PyResult<Vec<_>>>()?;
+            PyTuple::new(py, defaults)?.into_any().unbind()
+        }
+        // Every remaining scalar accepts a raw 0 (epoch units, enum code,
+        // integer UUID/IP forms, Decimal("0")).
+        _ => 0i64.into_pyobject(py)?.into_any().unbind(),
+    })
 }
 
 fn build_plain_column(
@@ -484,9 +994,12 @@ fn build_nullable_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
+    if let ChType::Tuple(elements) = inner {
+        return build_tuple_column(py, name, elements, values, row_count, true);
+    }
     if matches!(
         inner,
-        ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_)
+        ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_) | ChType::Map(..)
     ) {
         return Err(PyNotImplementedError::new_err(format!(
             "unsupported Nullable inner type {inner} for column {name:?}"
@@ -1905,7 +2418,7 @@ fn column_from_scalars(
             "Array columns are built by build_array_column, not the scalar path",
         )),
         ChType::Tuple(_) | ChType::Map(..) => Err(PyNotImplementedError::new_err(
-            "Tuple and Map columns are not supported for insert",
+            "Tuple and Map columns are built by their container paths, not the scalar path",
         )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
@@ -2084,7 +2597,7 @@ fn convert_scalar(
             "Array columns are built by build_array_column, not the scalar path",
         )),
         ChType::Tuple(_) | ChType::Map(..) => Err(PyNotImplementedError::new_err(
-            "Tuple and Map columns are not supported for insert",
+            "Tuple and Map columns are built by their container paths, not the scalar path",
         )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
@@ -2125,7 +2638,7 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
             "Array columns are built by build_array_column, not the scalar path",
         )),
         ChType::Tuple(_) | ChType::Map(..) => Err(PyNotImplementedError::new_err(
-            "Tuple and Map columns are not supported for insert",
+            "Tuple and Map columns are built by their container paths, not the scalar path",
         )),
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
@@ -2749,262 +3262,6 @@ fn twos_complement_in_place(bytes: &mut [u8]) {
         if carry == 0 {
             break;
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Binding-local parser for the supported canonical ClickHouse type names.
-// ---------------------------------------------------------------------------
-
-/// Wrapper/container nesting cap, mirroring the core decoder's parser. A crafted
-/// deep type string would otherwise overflow the stack (an uncatchable crash)
-/// before producing a ChType; bounding the parse also bounds every recursive
-/// walk over the result, including `build_array_column`.
-const MAX_TYPE_DEPTH: usize = 100;
-
-fn parse_ch_type(type_name: &str) -> Option<ChType> {
-    parse_ch_type_depth(type_name, 0)
-}
-
-fn parse_ch_type_depth(type_name: &str, depth: usize) -> Option<ChType> {
-    if depth > MAX_TYPE_DEPTH {
-        return None;
-    }
-
-    if let Some(inner) = type_name.strip_prefix("Nullable(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            let inner_type = parse_ch_type_depth(inner, depth + 1)?;
-            if matches!(
-                inner_type,
-                ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_)
-            ) {
-                return None;
-            }
-            return Some(ChType::Nullable(Box::new(inner_type)));
-        }
-    }
-
-    if let Some(inner) = type_name.strip_prefix("LowCardinality(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            return parse_ch_type_depth(inner, depth + 1)
-                .map(|t| ChType::LowCardinality(Box::new(t)));
-        }
-    }
-
-    if let Some(inner) = type_name.strip_prefix("Array(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            return parse_ch_type_depth(inner, depth + 1).map(|t| ChType::Array(Box::new(t)));
-        }
-    }
-
-    if let Some(n_str) = type_name.strip_prefix("FixedString(") {
-        if let Some(n_str) = n_str.strip_suffix(')') {
-            if let Ok(n) = n_str.trim().parse::<usize>() {
-                if n > 0 {
-                    return Some(ChType::FixedString(n));
-                }
-            }
-        }
-    }
-
-    if let Some(inner) = type_name.strip_prefix("DateTime64(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            let (precision_str, timezone) = match inner.split_once(',') {
-                Some((precision, timezone)) => (
-                    precision.trim(),
-                    Some(strip_quotes(timezone.trim()).to_string()),
-                ),
-                None => (inner.trim(), None),
-            };
-            return match precision_str.parse::<u8>() {
-                Ok(precision) if precision <= 9 => Some(ChType::DateTime64 {
-                    precision,
-                    timezone,
-                }),
-                _ => None,
-            };
-        }
-    }
-
-    if let Some(inner) = type_name.strip_prefix("Enum8(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            return parse_enum_variants::<i8>(inner).map(|variants| ChType::Enum8 { variants });
-        }
-    }
-    if let Some(inner) = type_name.strip_prefix("Enum16(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            return parse_enum_variants::<i16>(inner).map(|variants| ChType::Enum16 { variants });
-        }
-    }
-
-    if let Some(inner) = type_name.strip_prefix("Decimal(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            let (precision, scale) = inner.split_once(',')?;
-            let precision = precision.trim().parse::<u8>().ok()?;
-            let scale = scale.trim().parse::<u8>().ok()?;
-            if scale > precision {
-                return None;
-            }
-            let bits = match precision {
-                1..=9 => 32,
-                10..=18 => 64,
-                19..=38 => 128,
-                39..=76 => 256,
-                _ => return None,
-            };
-            return Some(ChType::Decimal {
-                precision,
-                scale,
-                bits,
-            });
-        }
-    }
-
-    if let Some(inner) = type_name.strip_prefix("DateTime(") {
-        if let Some(inner) = inner.strip_suffix(')') {
-            return Some(ChType::DateTime {
-                timezone: Some(strip_quotes(inner.trim()).to_string()),
-            });
-        }
-    }
-
-    match type_name {
-        "Bool" | "Boolean" => Some(ChType::Bool),
-        "Int8" => Some(ChType::Int8),
-        "Int16" => Some(ChType::Int16),
-        "Int32" => Some(ChType::Int32),
-        "Int64" => Some(ChType::Int64),
-        "UInt8" => Some(ChType::UInt8),
-        "UInt16" => Some(ChType::UInt16),
-        "UInt32" => Some(ChType::UInt32),
-        "UInt64" => Some(ChType::UInt64),
-        "Float32" => Some(ChType::Float32),
-        "Float64" => Some(ChType::Float64),
-        "String" => Some(ChType::String),
-        "Date" => Some(ChType::Date),
-        "Date32" => Some(ChType::Date32),
-        "DateTime" => Some(ChType::DateTime { timezone: None }),
-        "UUID" => Some(ChType::Uuid),
-        "IPv4" => Some(ChType::Ipv4),
-        "IPv6" => Some(ChType::Ipv6),
-        _ => None,
-    }
-}
-
-fn strip_quotes(value: &str) -> &str {
-    value
-        .strip_prefix('\'')
-        .and_then(|v| v.strip_suffix('\''))
-        .unwrap_or(value)
-}
-
-fn parse_enum_variants<V>(inner: &str) -> Option<Vec<(String, V)>>
-where
-    V: std::str::FromStr,
-{
-    let mut parser = EnumParser::new(inner);
-    let mut variants = Vec::new();
-    parser.skip_ws();
-    if parser.is_eof() {
-        return Some(variants);
-    }
-
-    loop {
-        parser.skip_ws();
-        let name = parser.parse_quoted()?;
-        parser.skip_ws();
-        parser.expect('=')?;
-        parser.skip_ws();
-        let value = parser.parse_value::<V>()?;
-        variants.push((name, value));
-        parser.skip_ws();
-        if parser.is_eof() {
-            return Some(variants);
-        }
-        parser.expect(',')?;
-    }
-}
-
-struct EnumParser<'a> {
-    s: &'a str,
-    pos: usize,
-}
-
-impl<'a> EnumParser<'a> {
-    fn new(s: &'a str) -> Self {
-        Self { s, pos: 0 }
-    }
-
-    fn is_eof(&self) -> bool {
-        self.pos >= self.s.len()
-    }
-
-    fn skip_ws(&mut self) {
-        while let Some(ch) = self.peek() {
-            if !ch.is_whitespace() {
-                break;
-            }
-            self.pos += ch.len_utf8();
-        }
-    }
-
-    fn peek(&self) -> Option<char> {
-        self.s[self.pos..].chars().next()
-    }
-
-    fn next(&mut self) -> Option<char> {
-        let ch = self.peek()?;
-        self.pos += ch.len_utf8();
-        Some(ch)
-    }
-
-    fn expect(&mut self, expected: char) -> Option<()> {
-        (self.next()? == expected).then_some(())
-    }
-
-    fn parse_quoted(&mut self) -> Option<String> {
-        self.expect('\'')?;
-        let mut out = String::new();
-        loop {
-            let ch = self.next()?;
-            match ch {
-                '\'' => return Some(out),
-                '\\' => {
-                    let escaped = self.next()?;
-                    out.push(match escaped {
-                        '\\' => '\\',
-                        '\'' => '\'',
-                        'b' => '\u{08}',
-                        'f' => '\u{0c}',
-                        'n' => '\n',
-                        'r' => '\r',
-                        't' => '\t',
-                        '0' => '\0',
-                        _ => return None,
-                    });
-                }
-                other => out.push(other),
-            }
-        }
-    }
-
-    fn parse_value<V>(&mut self) -> Option<V>
-    where
-        V: std::str::FromStr,
-    {
-        let start = self.pos;
-        if matches!(self.peek(), Some('-' | '+')) {
-            self.next();
-        }
-        let mut saw_digit = false;
-        while matches!(self.peek(), Some('0'..='9')) {
-            saw_digit = true;
-            self.next();
-        }
-        if !saw_digit {
-            return None;
-        }
-        self.s[start..self.pos].parse::<V>().ok()
     }
 }
 

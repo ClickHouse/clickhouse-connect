@@ -348,7 +348,7 @@ class RustNativeTransform:
             return NativeTransform.build_insert(context)
 
         column_names = list(context.column_names)
-        type_names = [col_type.insert_name for col_type in context.column_types]
+        type_names = [col_type.name for col_type in context.column_types]
         try:
             core.encode_native_block(column_names, type_names, [[] for _ in column_names], 0, None)
         except NotImplementedError as ex:
@@ -366,7 +366,7 @@ class RustNativeTransform:
                 try:
                     output = core.encode_native_block(
                         list(block.column_names),
-                        [col_type.insert_name for col_type in block.column_types],
+                        [col_type.name for col_type in block.column_types],
                         list(block.column_data),
                         block.row_count,
                         block.prefix,

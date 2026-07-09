@@ -18,7 +18,7 @@ unsafe impl Send for SendableStream {}
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::bitmap::Bitmap;
-use ch_core_rs::column::{Column, DecimalColumn, DictionaryColumn};
+use ch_core_rs::column::{Column, DecimalColumn, DictionaryColumn, MapColumn, TupleColumn};
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::decode::decode_all_bytes;
 use ch_core_rs::schema::ChType;
@@ -252,19 +252,7 @@ impl ColBatch {
                             ffi::PyList_GET_ITEM(list.as_ptr(), (base + i) as ffi::Py_ssize_t);
                         ffi::PyTuple_SET_ITEM(tuple, col_idx as ffi::Py_ssize_t, item);
                     };
-                    if fill_fixed_width(py, col, ctx, rows, &mut sink)? {
-                        continue;
-                    }
-                    if let Column::Dictionary(dict) = col {
-                        fill_dictionary(py, dict, ctx, rows, &mut sink)?;
-                        continue;
-                    }
-                    let mut dict_cache = new_array_dict_cache(col);
-                    for row_idx in 0..rows {
-                        let item =
-                            column_value_to_owned_ptr(py, col, ctx, row_idx, dict_cache.as_mut())?;
-                        sink(row_idx, item);
-                    }
+                    fill_column(py, col, ctx, rows, &mut sink)?;
                 }
                 base += rows;
             }
@@ -702,43 +690,8 @@ fn column_to_pylist<'py>(
                 // was allocated with, and the list takes over the owned item.
                 ffi::PyList_SET_ITEM(list.as_ptr(), (base + i) as ffi::Py_ssize_t, item);
             };
-            if fill_fixed_width(py, col, ctx, chunk.num_rows, &mut sink)? {
-                out_row += chunk.num_rows;
-                continue;
-            }
-            if let Column::Dictionary(dict) = col {
-                fill_dictionary(py, dict, ctx, chunk.num_rows, &mut sink)?;
-                out_row += chunk.num_rows;
-                continue;
-            }
-            // Fallback per-cell path. Hoist the validity branch out of the
-            // per-cell loop; most columns are non-nullable.
-            let mut dict_cache = new_array_dict_cache(col);
-            match column_validity(col) {
-                None => {
-                    for row_idx in 0..chunk.num_rows {
-                        let item =
-                            column_value_nonnull_ptr(py, col, ctx, row_idx, dict_cache.as_mut())?;
-                        // Safety: out_row < total_rows, the same chunk-row sum
-                        // the list was allocated with, and the list takes over
-                        // the owned item.
-                        ffi::PyList_SET_ITEM(list.as_ptr(), out_row as ffi::Py_ssize_t, item);
-                        out_row += 1;
-                    }
-                }
-                Some(bm) => {
-                    for row_idx in 0..chunk.num_rows {
-                        let item = if bm.is_valid(row_idx) {
-                            column_value_nonnull_ptr(py, col, ctx, row_idx, dict_cache.as_mut())?
-                        } else {
-                            none_owned_ptr()
-                        };
-                        // Safety: as above.
-                        ffi::PyList_SET_ITEM(list.as_ptr(), out_row as ffi::Py_ssize_t, item);
-                        out_row += 1;
-                    }
-                }
-            }
+            fill_column(py, col, ctx, chunk.num_rows, &mut sink)?;
+            out_row += chunk.num_rows;
         }
 
         Ok(list)
@@ -1169,6 +1122,246 @@ fn lc_index_err() -> PyErr {
     PyValueError::new_err("Malformed payload: LowCardinality index out of dictionary range")
 }
 
+/// Type-erased sink. The Tuple/Map fills recurse through `fill_column` with
+/// fresh closure types per nesting level; erasing at the container boundary
+/// keeps monomorphization finite while top-level fills stay static.
+type DynSink<'a> = &'a mut dyn FnMut(usize, *mut ffi::PyObject);
+
+/// Materialize `rows` cells of `col` into `sink`: bulk fixed-width and
+/// dictionary fills first, hoisted Tuple/Map fills next, per-cell fallback
+/// last with the validity branch hoisted.
+///
+/// # Safety
+///
+/// Requires the GIL. `sink` is called exactly once per row in ascending row
+/// order with an owned reference it must take over, and it must keep every
+/// item alive until this call returns (the Tuple fill writes into containers
+/// after sinking them).
+unsafe fn fill_column<S>(
+    py: Python<'_>,
+    col: &Column,
+    ctx: &ColumnCtx<'_>,
+    rows: usize,
+    sink: &mut S,
+) -> PyResult<()>
+where
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    if fill_fixed_width(py, col, ctx, rows, sink)? {
+        return Ok(());
+    }
+    match col {
+        Column::Dictionary(dict) => fill_dictionary(py, dict, ctx, rows, sink),
+        Column::Tuple(c) => fill_tuple(py, c, ctx, rows, sink),
+        Column::Map(c) => fill_map(py, c, ctx, rows, sink),
+        _ => {
+            let mut dict_cache = new_array_dict_cache(col);
+            match column_validity(col) {
+                None => {
+                    for i in 0..rows {
+                        let item = column_value_nonnull_ptr(py, col, ctx, i, dict_cache.as_mut())?;
+                        sink(i, item);
+                    }
+                }
+                Some(bm) => {
+                    for i in 0..rows {
+                        let item = if bm.is_valid(i) {
+                            column_value_nonnull_ptr(py, col, ctx, i, dict_cache.as_mut())?
+                        } else {
+                            none_owned_ptr()
+                        };
+                        sink(i, item);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Column-major fill for a Tuple column: allocate every row container up
+/// front (tuple, presized dict, or None for a null row), hand each to `sink`,
+/// then fill field by field through `fill_column`, one dispatch per field.
+///
+/// # Safety
+///
+/// Requires the GIL; `fill_column`'s sink contract applies. Containers are
+/// filled after they reach the sink, so the sink keeping items alive until
+/// this call returns is load-bearing.
+unsafe fn fill_tuple(
+    py: Python<'_>,
+    c: &TupleColumn,
+    ctx: &ColumnCtx<'_>,
+    rows: usize,
+    sink: DynSink<'_>,
+) -> PyResult<()> {
+    let fctx = ctx.fields.as_deref().ok_or_else(|| ctx_missing("Tuple"))?;
+    if fctx.len() != c.fields.len() {
+        return Err(ctx_count_mismatch("Tuple"));
+    }
+    if c.fields.iter().any(|f| f.len() < rows) {
+        return Err(tuple_shape_err());
+    }
+    let validity = c.validity.as_ref();
+    let num_fields = c.fields.len() as ffi::Py_ssize_t;
+    let names = ctx.tuple_names.as_deref();
+
+    // Borrowed container pointers; the sink owns them and keeps them alive.
+    let mut containers: Vec<*mut ffi::PyObject> = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let ptr = if validity.is_some_and(|bm| !bm.is_valid(i)) {
+            none_owned_ptr()
+        } else if names.is_some() {
+            ptr_to_result(py, ffi::_PyDict_NewPresized(num_fields))?
+        } else {
+            ptr_to_result(py, ffi::PyTuple_New(num_fields))?
+        };
+        containers.push(ptr);
+        sink(i, ptr);
+    }
+
+    // Items produced for null rows collect here and drop only after the field
+    // fill returns, keeping the sink's items-stay-alive contract.
+    let mut discarded: Vec<Py<PyAny>> = Vec::new();
+    for (field_idx, (field_col, field_ctx)) in c.fields.iter().zip(fctx).enumerate() {
+        match names {
+            None => {
+                let mut field_sink = |i: usize, item: *mut ffi::PyObject| {
+                    if validity.is_some_and(|bm| !bm.is_valid(i)) {
+                        // Safety: item is an owned reference the sink takes over.
+                        discarded.push(unsafe { Py::from_owned_ptr(py, item) });
+                        return;
+                    }
+                    // Safety: containers[i] is a live tuple with num_fields
+                    // slots; the tuple takes over the owned item.
+                    unsafe {
+                        ffi::PyTuple_SET_ITEM(containers[i], field_idx as ffi::Py_ssize_t, item);
+                    }
+                };
+                let mut erased: DynSink<'_> = &mut field_sink;
+                fill_column(py, field_col, field_ctx, rows, &mut erased)?;
+            }
+            Some(names) => {
+                let name_ptr = names[field_idx].as_ptr();
+                let mut err: Option<PyErr> = None;
+                let mut field_sink = |i: usize, item: *mut ffi::PyObject| {
+                    // Safety: item is an owned reference the sink takes over.
+                    let item = unsafe { Py::<PyAny>::from_owned_ptr(py, item) };
+                    if err.is_some() || validity.is_some_and(|bm| !bm.is_valid(i)) {
+                        discarded.push(item);
+                        return;
+                    }
+                    // Safety: containers[i] is a live dict and name_ptr a live
+                    // str key; SetItem increfs both, our `item` ref drops after.
+                    if unsafe { ffi::PyDict_SetItem(containers[i], name_ptr, item.as_ptr()) } < 0 {
+                        err = Some(PyErr::fetch(py));
+                        discarded.push(item);
+                    }
+                };
+                let mut erased: DynSink<'_> = &mut field_sink;
+                fill_column(py, field_col, field_ctx, rows, &mut erased)?;
+                if let Some(e) = err {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Column-major fill for a Map column: validate the offsets run once,
+/// materialize the flat key and value runs through `fill_column`, then zip
+/// each row into a presized dict in wire order (last duplicate key wins).
+///
+/// # Safety
+///
+/// Requires the GIL; `fill_column`'s sink contract applies.
+unsafe fn fill_map(
+    py: Python<'_>,
+    c: &MapColumn,
+    ctx: &ColumnCtx<'_>,
+    rows: usize,
+    sink: DynSink<'_>,
+) -> PyResult<()> {
+    if rows == 0 {
+        return Ok(());
+    }
+    let fctx = ctx.fields.as_deref().ok_or_else(|| ctx_missing("Map"))?;
+    if fctx.len() != 2 {
+        return Err(ctx_missing("Map"));
+    }
+    let entries = match c.entries.as_ref() {
+        Column::Tuple(t) if t.fields.len() == 2 => t,
+        _ => return Err(map_entries_err()),
+    };
+    let keys_col = &entries.fields[0];
+    let values_col = &entries.fields[1];
+    if c.offsets.len() <= rows {
+        return Err(map_bounds_err());
+    }
+    // One monotonicity pass over the offsets; the per-row casts below are
+    // then in range.
+    let offsets = &c.offsets[..=rows];
+    let mut prev: i64 = 0;
+    for &o in offsets {
+        if o < prev {
+            return Err(map_bounds_err());
+        }
+        prev = o;
+    }
+    let total = offsets[rows] as usize;
+    if total > keys_col.len().min(values_col.len()) {
+        return Err(map_bounds_err());
+    }
+
+    let keys = materialize_run(py, keys_col, &fctx[0], total)?;
+    let values = materialize_run(py, values_col, &fctx[1], total)?;
+
+    for (i, pair) in offsets.windows(2).enumerate() {
+        let (start, end) = (pair[0] as usize, pair[1] as usize);
+        let dict_ptr = ffi::_PyDict_NewPresized((end - start) as ffi::Py_ssize_t);
+        if dict_ptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        // Safety: dict_ptr came from _PyDict_NewPresized; binding it drops the
+        // partially-filled dict on the error path.
+        let dict = Bound::from_owned_ptr(py, dict_ptr);
+        for slot in start..end {
+            // SetItem increfs key and value; the run vectors keep our refs.
+            if ffi::PyDict_SetItem(dict.as_ptr(), keys[slot].as_ptr(), values[slot].as_ptr()) < 0 {
+                return Err(PyErr::fetch(py));
+            }
+        }
+        sink(i, dict.into_ptr());
+    }
+    Ok(())
+}
+
+/// Materialize the first `rows` cells of `col` into owned objects through the
+/// bulk fill machinery. Error paths drop whatever was already produced.
+unsafe fn materialize_run(
+    py: Python<'_>,
+    col: &Column,
+    ctx: &ColumnCtx<'_>,
+    rows: usize,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let mut out: Vec<Py<PyAny>> = Vec::with_capacity(rows);
+    {
+        let mut sink = |_i: usize, item: *mut ffi::PyObject| {
+            // Safety: item is an owned reference the sink takes over.
+            out.push(unsafe { Py::from_owned_ptr(py, item) });
+        };
+        let mut erased: DynSink<'_> = &mut sink;
+        fill_column(py, col, ctx, rows, &mut erased)?;
+    }
+    if out.len() != rows {
+        return Err(PyValueError::new_err(
+            "internal error: column fill produced the wrong row count",
+        ));
+    }
+    Ok(out)
+}
+
 /// Lazy cache of materialized dictionary slot objects, one entry per slot.
 type DictSlotCache = Vec<Option<Py<PyAny>>>;
 
@@ -1354,7 +1547,7 @@ unsafe fn column_value_nonnull_ptr(
         Column::Tuple(c) => {
             let fctx = ctx.fields.as_deref().ok_or_else(|| ctx_missing("Tuple"))?;
             if fctx.len() != c.fields.len() {
-                return Err(ctx_missing("Tuple"));
+                return Err(ctx_count_mismatch("Tuple"));
             }
             match &ctx.tuple_names {
                 Some(names) => {
@@ -1367,8 +1560,13 @@ unsafe fn column_value_nonnull_ptr(
                     let dict =
                         Bound::from_owned_ptr(py, dict_ptr).downcast_into_unchecked::<PyDict>();
                     for (field_idx, field_col) in c.fields.iter().enumerate() {
-                        let item =
-                            column_value_to_owned_ptr(py, field_col, &fctx[field_idx], index, None)?;
+                        let item = column_value_to_owned_ptr(
+                            py,
+                            field_col,
+                            &fctx[field_idx],
+                            index,
+                            None,
+                        )?;
                         // Take ownership so an error before/at insertion drops it;
                         // PyDict_SetItem does not steal, it increfs the value.
                         let value = Bound::from_owned_ptr(py, item);
@@ -1394,8 +1592,13 @@ unsafe fn column_value_nonnull_ptr(
                     let tuple =
                         Bound::from_owned_ptr(py, tuple_ptr).downcast_into_unchecked::<PyTuple>();
                     for (field_idx, field_col) in c.fields.iter().enumerate() {
-                        let item =
-                            column_value_to_owned_ptr(py, field_col, &fctx[field_idx], index, None)?;
+                        let item = column_value_to_owned_ptr(
+                            py,
+                            field_col,
+                            &fctx[field_idx],
+                            index,
+                            None,
+                        )?;
                         // Safety: field_idx < tuple len, and the tuple takes over
                         // the owned item.
                         ffi::PyTuple_SET_ITEM(tuple.as_ptr(), field_idx as ffi::Py_ssize_t, item);
@@ -1466,6 +1669,14 @@ fn ctx_missing(what: &str) -> PyErr {
     PyValueError::new_err(format!("internal error: missing {what} column context"))
 }
 
+/// Error for a container column whose ColumnCtx carries a different number of
+/// field contexts than the column has fields; an internal invariant violation.
+fn ctx_count_mismatch(what: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "internal error: {what} field context count mismatch"
+    ))
+}
+
 /// Error for an Array column whose offsets are out of range for the element
 /// buffer (out of order, negative, or an end past the element count).
 fn array_bounds_err() -> PyErr {
@@ -1476,6 +1687,11 @@ fn array_bounds_err() -> PyErr {
 /// buffer (out of order, negative, or an end past the entry count).
 fn map_bounds_err() -> PyErr {
     PyValueError::new_err("Malformed payload: Map offsets are out of range")
+}
+
+/// Error for a Tuple column whose field columns are shorter than the row count.
+fn tuple_shape_err() -> PyErr {
+    PyValueError::new_err("Malformed payload: Tuple field length mismatch")
 }
 
 /// Error for a Map column whose entries are not a two-field key/value tuple;
