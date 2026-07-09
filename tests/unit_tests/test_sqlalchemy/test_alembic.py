@@ -1,21 +1,44 @@
 from io import StringIO
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from alembic.autogenerate import render
-from alembic.autogenerate.api import AutogenContext
+from alembic.autogenerate.api import AutogenContext, render_python_code
 from alembic.ddl.impl import DefaultImpl
 from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import Column, Integer, MetaData, String, Table, literal_column, text
+from alembic.util import CommandError
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, literal_column, text
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
 from clickhouse_connect.cc_sqlalchemy.alembic import (
     ClickHouseImpl,
+    ClickHouseIndex,
+    ClickHouseProjection,
     clickhouse_writer,
     include_object,
     patch_alembic_version,
+)
+from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
+    _AddClickHouseIndexesOp,
+    _AddClickHouseIndexOp,
+    _AddClickHouseProjectionOp,
+    _AddClickHouseProjectionsOp,
+    _CreateClickHouseDictionaryOp,
+    _CreateClickHouseMaterializedViewOp,
+    _DropClickHouseDictionaryOp,
+    _DropClickHouseIndexesOp,
+    _DropClickHouseIndexOp,
+    _DropClickHouseMaterializedViewOp,
+    _DropClickHouseProjectionOp,
+    _DropClickHouseProjectionsOp,
+    _MaterializeClickHouseIndexOp,
+    _MaterializeClickHouseProjectionOp,
+    _ModifyClickHouseTableSettingsOp,
+    _ReloadClickHouseDictionaryOp,
+    _ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.alembic.utils import make_include_object
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
@@ -28,6 +51,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     build_engine,
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+from clickhouse_connect.cc_sqlalchemy.sql import full_table
 
 
 def test_ddl_compiler():
@@ -533,6 +557,23 @@ def test_public_compat_exports():
     assert hasattr(types, "String")
 
 
+def test_alembic_public_exports():
+    from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
+
+    assert set(ch_alembic.__all__) == {
+        "patch_alembic_version",
+        "clickhouse_writer",
+        "include_object",
+        "ClickHouseImpl",
+        "make_include_name",
+        "make_include_object",
+        "prevent_empty_migrations",
+        "ClickHouseIndex",
+        "ClickHouseProjection",
+    }
+    assert not any(name.endswith("Op") for name in ch_alembic.__all__)
+
+
 def test_positional_engine_autogenerate_render():
     metadata = MetaData()
     table = Table("events", metadata, Column("id", Integer), MergeTree(order_by="id"))
@@ -625,6 +666,21 @@ def test_include_object():
     t_inner = Table(".inner.some_mv", MetaData(), schema="default")
     assert include_object(t_inner, ".inner.some_mv", "table", False, None) is False
 
+    indexed = Table("indexed_table", MetaData(), Column("id", Integer), schema="default")
+    index = Index("idx_some_table", indexed.c.id)
+    assert include_object(index, "idx_some_table", "index", True, None) is False
+    with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+        include_object(index, "idx_some_table", "index", False, None)
+
+
+def test_full_table_honors_schema_for_dotted_table_names():
+    assert full_table("events.latest", None) == "`events.latest`"
+    assert full_table("events.latest", "olap") == "`olap`.`events.latest`"
+
+    op, buffer = _offline_op()
+    op.rename_table("events.old", "events.new", schema="olap")
+    assert "RENAME TABLE `olap`.`events.old` TO `olap`.`events.new`;" in buffer.getvalue()
+
 
 def test_patch_alembic_version_is_noop():
     context = object()
@@ -666,3 +722,639 @@ def test_clickhouse_settings_string_value_quoted():
     rendered = ClickHouseDDLHelper.render_settings({"mutations_sync": "2", "alter_sync": 2})
     assert "mutations_sync = '2'" in rendered
     assert "alter_sync = 2" in rendered
+
+
+def _non_clickhouse_autogen_context():
+    """AutogenContext for a non-ClickHouse dialect, with the cc_sqlalchemy.alembic import side-effect active."""
+    context = MigrationContext.configure(dialect_name="sqlite", opts={"target_metadata": MetaData()})
+    return AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+
+
+def test_non_clickhouse_add_column_render_keeps_nullable():
+    """Importing the ClickHouse Alembic adapter must not corrupt autogenerate for other dialects (#832)."""
+    autogen_context = _non_clickhouse_autogen_context()
+    rendered = render.render_op_text(autogen_context, ops.AddColumnOp("widgets", Column("name", String(32))))
+    assert rendered == "op.add_column('widgets', sa.Column('name', sa.String(length=32), nullable=True))"
+    assert "cc_sqlalchemy" not in rendered
+
+
+def test_non_clickhouse_create_table_render_keeps_nullable():
+    autogen_context = _non_clickhouse_autogen_context()
+    table = Table("widgets", MetaData(), Column("id", Integer, primary_key=True), Column("name", String(32)))
+    rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
+    assert "sa.Column('id', sa.Integer(), nullable=False)" in rendered
+    assert "sa.Column('name', sa.String(length=32), nullable=True)" in rendered
+    assert "clickhouse_engine" not in rendered
+
+
+def test_non_clickhouse_drop_table_render_is_unmodified():
+    autogen_context = _non_clickhouse_autogen_context()
+    table = Table("widgets", MetaData(), Column("id", Integer, primary_key=True))
+    rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table).reverse())
+    assert rendered == "op.drop_table('widgets')"
+
+
+def test_captured_default_renderers_are_alembic_builtins():
+    from clickhouse_connect.cc_sqlalchemy.alembic import adapter
+
+    for op_type, ours in (
+        (ops.CreateTableOp, adapter._render_create_table),
+        (ops.AddColumnOp, adapter._render_add_column),
+        (ops.DropTableOp, adapter._render_drop_table),
+    ):
+        default = adapter._DEFAULT_RENDERERS[op_type]
+        assert default is not ours
+        assert default.__module__.startswith("alembic.")
+
+
+def _offline_op():
+    buffer = StringIO()
+    context = MigrationContext.configure(
+        dialect=ClickHouseDialect(),
+        opts={"as_sql": True, "output_buffer": buffer},
+    )
+    return Operations(context), buffer
+
+
+def _statements(buffer: StringIO) -> list[str]:
+    # Offline statements are terminated with ';' and separated by a blank line.
+    return [s for s in buffer.getvalue().split("\n\n") if s.strip()]
+
+
+@pytest.mark.parametrize(
+    "call, expected",
+    [
+        pytest.param(
+            lambda op: op.add_clickhouse_index(
+                "events",
+                "idx_1",
+                "user_id",
+                "bloom_filter(0.01)",
+                granularity=13,
+                if_not_exists=True,
+                after_index="idx_prev",
+                schema="olap",
+                clickhouse_settings={"alter_sync": 2},
+            ),
+            "ALTER TABLE `olap`.`events` ADD INDEX IF NOT EXISTS `idx_1` user_id TYPE bloom_filter(0.01) "
+            "GRANULARITY 13 AFTER `idx_prev` SETTINGS alter_sync = 2;",
+            id="add_index_full",
+        ),
+        pytest.param(
+            lambda op: op.add_clickhouse_index("events", "idx_1", "user_id", "minmax", first=True),
+            "ALTER TABLE `events` ADD INDEX `idx_1` user_id TYPE minmax FIRST;",
+            id="add_index_first",
+        ),
+        pytest.param(
+            lambda op: op.add_clickhouse_index("events", "idx_1", "lower(name)", "minmax"),
+            "ALTER TABLE `events` ADD INDEX `idx_1` lower(name) TYPE minmax;",
+            id="add_index_minimal",
+        ),
+        pytest.param(
+            lambda op: op.drop_clickhouse_index("events", "idx_1", if_exists=True, schema="olap"),
+            "ALTER TABLE `olap`.`events` DROP INDEX IF EXISTS `idx_1`;",
+            id="drop_index",
+        ),
+        pytest.param(
+            lambda op: op.drop_clickhouse_index("events", "idx_1", clickhouse_settings={"alter_sync": 1}),
+            "ALTER TABLE `events` DROP INDEX `idx_1` SETTINGS alter_sync = 1;",
+            id="drop_index_settings",
+        ),
+        pytest.param(
+            lambda op: op.materialize_clickhouse_index(
+                "events",
+                "idx_1",
+                if_exists=True,
+                partition="202401",
+                clickhouse_settings={"mutations_sync": 1},
+            ),
+            "ALTER TABLE `events` MATERIALIZE INDEX IF EXISTS `idx_1` IN PARTITION 202401 SETTINGS mutations_sync = 1;",
+            id="materialize_index",
+        ),
+        pytest.param(
+            lambda op: op.materialize_clickhouse_index("events", "idx_1", schema="olap"),
+            "ALTER TABLE `olap`.`events` MATERIALIZE INDEX `idx_1`;",
+            id="materialize_index_no_partition",
+        ),
+        pytest.param(
+            lambda op: op.add_clickhouse_projection(
+                "events",
+                "proj_1",
+                "SELECT user_1, count() GROUP BY user_1",
+                if_not_exists=True,
+                after_projection="proj_prev",
+                schema="olap",
+            ),
+            "ALTER TABLE `olap`.`events` ADD PROJECTION IF NOT EXISTS `proj_1` (SELECT user_1, count() GROUP BY user_1) AFTER `proj_prev`;",
+            id="add_projection",
+        ),
+        pytest.param(
+            lambda op: op.drop_clickhouse_projection("events", "proj_1", if_exists=True),
+            "ALTER TABLE `events` DROP PROJECTION IF EXISTS `proj_1`;",
+            id="drop_projection",
+        ),
+        pytest.param(
+            lambda op: op.materialize_clickhouse_projection("events", "proj_1", if_exists=True, partition="202401"),
+            "ALTER TABLE `events` MATERIALIZE PROJECTION IF EXISTS `proj_1` IN PARTITION 202401;",
+            id="materialize_projection",
+        ),
+        pytest.param(
+            lambda op: op.modify_clickhouse_table_settings(
+                "events", {"merge_with_ttl_timeout": 79}, schema="olap", clickhouse_settings={"alter_sync": 2}
+            ),
+            "ALTER TABLE `olap`.`events` MODIFY SETTING merge_with_ttl_timeout = 79 SETTINGS alter_sync = 2;",
+            id="modify_settings",
+        ),
+        pytest.param(
+            lambda op: op.reset_clickhouse_table_settings("events", ["merge_with_ttl_timeout", "ttl_only_drop_parts"], schema="olap"),
+            "ALTER TABLE `olap`.`events` RESET SETTING merge_with_ttl_timeout, ttl_only_drop_parts;",
+            id="reset_settings",
+        ),
+        pytest.param(
+            lambda op: op.reload_clickhouse_dictionary("dim_lookup", schema="olap"),
+            "SYSTEM RELOAD DICTIONARY `olap`.`dim_lookup`;",
+            id="reload_dictionary",
+        ),
+        pytest.param(
+            lambda op: op.create_clickhouse_materialized_view(
+                "events_mv",
+                "events_sink",
+                "SELECT id, name FROM events",
+                if_not_exists=True,
+                schema="olap",
+                to_schema="olap",
+            ),
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS `olap`.`events_mv` TO `olap`.`events_sink` AS SELECT id, name FROM events;",
+            id="create_materialized_view",
+        ),
+        pytest.param(
+            lambda op: op.drop_clickhouse_materialized_view("events_mv", if_exists=True, schema="olap"),
+            "DROP VIEW IF EXISTS `olap`.`events_mv`;",
+            id="drop_materialized_view",
+        ),
+        pytest.param(
+            lambda op: op.create_clickhouse_dictionary(
+                "dim_lookup",
+                [Column("id", types.UInt32()), Column("value", types.String())],
+                primary_key="id",
+                source="CLICKHOUSE(TABLE 'dim_source')",
+                layout="FLAT",
+                lifetime="MIN 0 MAX 10",
+                if_not_exists=True,
+                schema="olap",
+                comment="Lookup values",
+            ),
+            "CREATE DICTIONARY IF NOT EXISTS `olap`.`dim_lookup` (`id` UInt32, `value` String) "
+            "PRIMARY KEY id SOURCE(CLICKHOUSE(TABLE 'dim_source')) LAYOUT(FLAT()) "
+            "LIFETIME(MIN 0 MAX 10) COMMENT 'Lookup values';",
+            id="create_dictionary",
+        ),
+        pytest.param(
+            lambda op: op.drop_clickhouse_dictionary("dim_lookup", if_exists=True, schema="olap"),
+            "DROP DICTIONARY IF EXISTS `olap`.`dim_lookup`;",
+            id="drop_dictionary",
+        ),
+    ],
+)
+def test_clickhouse_ddl_ops_render_offline(call, expected):
+    op, buffer = _offline_op()
+    call(op)
+    statements = _statements(buffer)
+    assert len(statements) == 1
+    assert statements[0] == expected
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda op: op.add_clickhouse_index("events", "idx_token", ":tenant", "minmax"),
+        lambda op: op.add_clickhouse_projection("events", "proj_token", "SELECT :tenant AS tenant_id"),
+        lambda op: op.materialize_clickhouse_index("events", "idx_token", partition=":tenant"),
+        lambda op: op.create_clickhouse_materialized_view("events_mv", "events_sink", "SELECT ':tenant' AS tenant_id"),
+        lambda op: op.create_clickhouse_dictionary(
+            "dim_lookup",
+            [Column("id", types.UInt32())],
+            primary_key="id",
+            source="CLICKHOUSE(QUERY 'SELECT :tenant AS id')",
+            layout="FLAT",
+            lifetime="MIN 0 MAX 10",
+        ),
+    ],
+)
+def test_raw_sql_passthrough_preserves_colon_tokens(call):
+    op, buffer = _offline_op()
+    call(op)
+    sql = buffer.getvalue()
+    assert ":tenant" in sql
+    assert "NULL" not in sql
+
+
+def test_dictionary_comment_escapes_backslashes_and_quotes():
+    op, buffer = _offline_op()
+    op.create_clickhouse_dictionary(
+        "dim_lookup",
+        [Column("id", types.UInt32())],
+        primary_key="id",
+        source="CLICKHOUSE(TABLE 'dim_source')",
+        layout="FLAT",
+        lifetime="MIN 0 MAX 10",
+        comment="path\\:name it's",
+    )
+    assert "COMMENT 'path\\\\:name it\\'s';" in buffer.getvalue()
+
+
+def test_dictionary_settings_without_comment_renders_valid_comment_slot():
+    op, buffer = _offline_op()
+    op.create_clickhouse_dictionary(
+        "dim_lookup",
+        [Column("id", types.UInt32())],
+        primary_key="id",
+        source="CLICKHOUSE(TABLE 'dim_source')",
+        layout="FLAT",
+        lifetime="MIN 0 MAX 10",
+        clickhouse_settings={"log_queries": 0},
+    )
+    assert (
+        "CREATE DICTIONARY `dim_lookup` (`id` UInt32) PRIMARY KEY id "
+        "SOURCE(CLICKHOUSE(TABLE 'dim_source')) LAYOUT(FLAT()) LIFETIME(MIN 0 MAX 10) "
+        "COMMENT '' SETTINGS log_queries = 0;"
+    ) in buffer.getvalue()
+
+
+def test_add_clickhouse_indexes_single_statement():
+    op, buffer = _offline_op()
+    op.add_clickhouse_indexes(
+        "events",
+        [
+            ClickHouseIndex("idx_1", "user_id", "minmax"),
+            ClickHouseIndex("idx_2", "lower(name)", "bloom_filter(0.01)", granularity=13),
+        ],
+        schema="olap",
+        clickhouse_settings={"alter_sync": 1},
+    )
+    statements = _statements(buffer)
+    assert len(statements) == 1
+    assert statements[0] == (
+        "ALTER TABLE `olap`.`events` ADD INDEX `idx_1` user_id TYPE minmax, "
+        "ADD INDEX `idx_2` lower(name) TYPE bloom_filter(0.01) GRANULARITY 13 SETTINGS alter_sync = 1;"
+    )
+
+
+def test_drop_clickhouse_indexes_single_statement():
+    op, buffer = _offline_op()
+    op.drop_clickhouse_indexes(
+        "events",
+        ["idx_1", "idx_2"],
+        if_exists=True,
+        schema="olap",
+        clickhouse_settings={"alter_sync": 2},
+    )
+    statements = _statements(buffer)
+    assert len(statements) == 1
+    assert statements[0] == (
+        "ALTER TABLE `olap`.`events` DROP INDEX IF EXISTS `idx_1`, DROP INDEX IF EXISTS `idx_2` SETTINGS alter_sync = 2;"
+    )
+
+
+def test_add_clickhouse_projections_single_statement():
+    op, buffer = _offline_op()
+    op.add_clickhouse_projections(
+        "events",
+        [
+            ClickHouseProjection("proj_1", "SELECT user_1"),
+            ClickHouseProjection("proj_2", "SELECT user_2", if_not_exists=True),
+        ],
+    )
+    statements = _statements(buffer)
+    assert len(statements) == 1
+    assert statements[0] == (
+        "ALTER TABLE `events` ADD PROJECTION `proj_1` (SELECT user_1), ADD PROJECTION IF NOT EXISTS `proj_2` (SELECT user_2);"
+    )
+
+
+def test_drop_clickhouse_projections_single_statement():
+    op, buffer = _offline_op()
+    op.drop_clickhouse_projections(
+        "events",
+        ["proj_1", "proj_2"],
+        if_exists=True,
+        clickhouse_settings={"alter_sync": 2},
+    )
+    statements = _statements(buffer)
+    assert len(statements) == 1
+    assert statements[0] == (
+        "ALTER TABLE `events` DROP PROJECTION IF EXISTS `proj_1`, DROP PROJECTION IF EXISTS `proj_2` SETTINGS alter_sync = 2;"
+    )
+
+
+@pytest.mark.parametrize("schema", [None, "olap"])
+def test_rename_table_renders_rename_table(schema):
+    op, buffer = _offline_op()
+    op.rename_table("old_events", "new_events", schema=schema)
+    sql = buffer.getvalue()
+    if schema:
+        assert "RENAME TABLE `olap`.`old_events` TO `olap`.`new_events`;" in sql
+    else:
+        assert "RENAME TABLE `old_events` TO `new_events`;" in sql
+    # Unpatched DefaultImpl emits the ClickHouse-rejected ALTER TABLE ... RENAME TO form.
+    assert "ALTER TABLE" not in sql
+    assert "RENAME TO" not in sql
+
+
+def test_create_index_raises_pointing_at_helper():
+    op, _ = _offline_op()
+    with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+        op.create_index("idx_1", "events", ["user_id"])
+
+
+def test_drop_index_raises_pointing_at_helper():
+    op, _ = _offline_op()
+    with pytest.raises(CommandError, match="op.drop_clickhouse_index"):
+        op.drop_index("idx_1", table_name="events")
+
+
+def test_standard_index_paths_raise_before_sql():
+    buffer = StringIO()
+    impl = ClickHouseImpl(ClickHouseDialect(), None, True, False, buffer, {})
+    metadata = MetaData()
+
+    with pytest.raises(CommandError, match="Column\\(index=True\\)"):
+        impl.add_column("events", Column("name", String, index=True))
+    assert buffer.getvalue() == ""
+
+    indexed_table = Table("events", metadata, Column("id", Integer), Column("name", String, index=True), MergeTree(order_by="id"))
+    with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+        impl.create_table(indexed_table)
+    assert buffer.getvalue() == ""
+
+    batch_table = Table("batch_events", MetaData(), Column("id", Integer), MergeTree(order_by="id"))
+    batch_impl = SimpleNamespace(new_indexes={"idx_name": object()}, indexes={})
+    with pytest.raises(CommandError, match="op.add_clickhouse_index"):
+        impl.prep_table_for_batch(batch_impl, batch_table)
+    assert buffer.getvalue() == ""
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda op: op.modify_clickhouse_table_settings("events", {}),
+        lambda op: op.reset_clickhouse_table_settings("events", []),
+        lambda op: op.add_clickhouse_indexes("events", []),
+        lambda op: op.drop_clickhouse_indexes("events", []),
+        lambda op: op.add_clickhouse_projections("events", []),
+        lambda op: op.drop_clickhouse_projections("events", []),
+        lambda op: op.create_clickhouse_dictionary(
+            "dim_lookup",
+            [],
+            primary_key="id",
+            source="CLICKHOUSE(TABLE 'dim_source')",
+            layout="FLAT",
+            lifetime="MIN 0 MAX 10",
+        ),
+    ],
+)
+def test_list_ops_require_non_empty(call):
+    op, _ = _offline_op()
+    with pytest.raises(ValueError):
+        call(op)
+
+
+def test_add_index_reverse_round_trips():
+    settings = {"alter_sync": 2}
+    add_op = _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", schema="olap", clickhouse_settings=settings)
+    reversed_op = add_op.reverse()
+    assert isinstance(reversed_op, _DropClickHouseIndexOp)
+    assert reversed_op.table_name == "events"
+    assert reversed_op.name == "idx_1"
+    assert reversed_op.if_exists is True
+    assert reversed_op.schema == "olap"
+    assert reversed_op.clickhouse_settings == settings
+
+
+def test_add_indexes_reverse_round_trips():
+    settings = {"alter_sync": 2}
+    add_op = _AddClickHouseIndexesOp(
+        "events",
+        [ClickHouseIndex("idx_1", "user_id", "minmax"), ClickHouseIndex("idx_2", "event_name", "set(100)")],
+        schema="olap",
+        clickhouse_settings=settings,
+    )
+    reversed_op = add_op.reverse()
+    assert isinstance(reversed_op, _DropClickHouseIndexesOp)
+    assert reversed_op.table_name == "events"
+    assert reversed_op.names == ("idx_1", "idx_2")
+    assert reversed_op.if_exists is True
+    assert reversed_op.schema == "olap"
+    assert reversed_op.clickhouse_settings == settings
+
+
+def test_add_projection_reverse_round_trips():
+    settings = {"alter_sync": 2}
+    add_op = _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1", schema="olap", clickhouse_settings=settings)
+    reversed_op = add_op.reverse()
+    assert isinstance(reversed_op, _DropClickHouseProjectionOp)
+    assert reversed_op.table_name == "events"
+    assert reversed_op.name == "proj_1"
+    assert reversed_op.if_exists is True
+    assert reversed_op.schema == "olap"
+    assert reversed_op.clickhouse_settings == settings
+
+
+def test_add_projections_reverse_round_trips():
+    settings = {"alter_sync": 2}
+    add_op = _AddClickHouseProjectionsOp(
+        "events",
+        [ClickHouseProjection("proj_1", "SELECT user_1"), ClickHouseProjection("proj_2", "SELECT user_2")],
+        schema="olap",
+        clickhouse_settings=settings,
+    )
+    reversed_op = add_op.reverse()
+    assert isinstance(reversed_op, _DropClickHouseProjectionsOp)
+    assert reversed_op.table_name == "events"
+    assert reversed_op.names == ("proj_1", "proj_2")
+    assert reversed_op.if_exists is True
+    assert reversed_op.schema == "olap"
+    assert reversed_op.clickhouse_settings == settings
+
+
+def test_create_materialized_view_reverse_round_trips():
+    create_op = _CreateClickHouseMaterializedViewOp(
+        "events_mv",
+        "events_sink",
+        "SELECT id FROM events",
+        schema="olap",
+    )
+    reversed_op = create_op.reverse()
+    assert isinstance(reversed_op, _DropClickHouseMaterializedViewOp)
+    assert reversed_op.name == "events_mv"
+    assert reversed_op.if_exists is True
+    assert reversed_op.schema == "olap"
+    assert reversed_op.clickhouse_settings is None
+
+
+def test_create_dictionary_reverse_round_trips():
+    settings = {"distributed_ddl_task_timeout": 120}
+    create_op = _CreateClickHouseDictionaryOp(
+        "dim_lookup",
+        [Column("id", types.UInt32())],
+        primary_key="id",
+        source="CLICKHOUSE(TABLE 'dim_source')",
+        layout="FLAT",
+        lifetime="MIN 0 MAX 10",
+        schema="olap",
+        clickhouse_settings=settings,
+    )
+    reversed_op = create_op.reverse()
+    assert isinstance(reversed_op, _DropClickHouseDictionaryOp)
+    assert reversed_op.name == "dim_lookup"
+    assert reversed_op.if_exists is True
+    assert reversed_op.schema == "olap"
+    assert reversed_op.clickhouse_settings == settings
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ClickHouseIndex("idx_1", "user_id", "minmax", first=True, after_index="idx_0"),
+        lambda: ClickHouseProjection("proj_1", "SELECT user_1", first=True, after_projection="proj_0"),
+        lambda: _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", first=True, after_index="idx_0"),
+        lambda: _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1", first=True, after_projection="proj_0"),
+    ],
+)
+def test_first_and_after_are_mutually_exclusive(factory):
+    with pytest.raises(ValueError):
+        factory()
+
+
+def test_clickhouse_ddl_ops_registered_on_operations():
+    op, _ = _offline_op()
+    for name in (
+        "add_clickhouse_index",
+        "add_clickhouse_indexes",
+        "drop_clickhouse_index",
+        "drop_clickhouse_indexes",
+        "materialize_clickhouse_index",
+        "add_clickhouse_projection",
+        "add_clickhouse_projections",
+        "drop_clickhouse_projection",
+        "drop_clickhouse_projections",
+        "materialize_clickhouse_projection",
+        "modify_clickhouse_table_settings",
+        "reset_clickhouse_table_settings",
+        "create_clickhouse_materialized_view",
+        "drop_clickhouse_materialized_view",
+        "create_clickhouse_dictionary",
+        "drop_clickhouse_dictionary",
+        "reload_clickhouse_dictionary",
+    ):
+        assert callable(getattr(op, name))
+
+
+def test_clickhouse_custom_ops_autogenerate_render():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    generated = render_python_code(
+        ops.UpgradeOps(
+            ops=[
+                _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax", schema="olap"),
+                _AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]),
+                _DropClickHouseIndexOp("events", "idx_1", if_exists=True),
+                _DropClickHouseIndexesOp("events", ["idx_1", "idx_2"]),
+                _MaterializeClickHouseIndexOp("events", "idx_1", partition="202401"),
+                _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_1"),
+                _AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_1")]),
+                _DropClickHouseProjectionOp("events", "proj_1"),
+                _DropClickHouseProjectionsOp("events", ["proj_1", "proj_2"]),
+                _MaterializeClickHouseProjectionOp("events", "proj_1"),
+                _ModifyClickHouseTableSettingsOp("events", {"merge_with_ttl_timeout": 79}),
+                _ResetClickHouseTableSettingsOp("events", ["merge_with_ttl_timeout"]),
+                _CreateClickHouseMaterializedViewOp("events_mv", "events_sink", "SELECT id FROM events"),
+                _DropClickHouseMaterializedViewOp("events_mv"),
+                _CreateClickHouseDictionaryOp(
+                    "dim_lookup",
+                    [Column("id", types.UInt32())],
+                    primary_key="id",
+                    source="CLICKHOUSE(TABLE 'dim_source')",
+                    layout="FLAT",
+                    lifetime="MIN 0 MAX 10",
+                ),
+                _DropClickHouseDictionaryOp("dim_lookup"),
+                _ReloadClickHouseDictionaryOp("dim_lookup"),
+            ]
+        ),
+        migration_context=context,
+    )
+
+    for expected in (
+        "op.add_clickhouse_index(",
+        "op.add_clickhouse_indexes(",
+        "op.drop_clickhouse_index(",
+        "op.drop_clickhouse_indexes(",
+        "op.materialize_clickhouse_index(",
+        "op.add_clickhouse_projection(",
+        "op.add_clickhouse_projections(",
+        "op.drop_clickhouse_projection(",
+        "op.drop_clickhouse_projections(",
+        "op.materialize_clickhouse_projection(",
+        "op.modify_clickhouse_table_settings(",
+        "op.reset_clickhouse_table_settings(",
+        "op.create_clickhouse_materialized_view(",
+        "op.drop_clickhouse_materialized_view(",
+        "op.create_clickhouse_dictionary(",
+        "op.drop_clickhouse_dictionary(",
+        "op.reload_clickhouse_dictionary(",
+    ):
+        assert expected in generated
+
+
+def test_clickhouse_custom_op_renderers_add_value_object_imports():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+
+    render.render_op_text(autogen_context, _AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]))
+    render.render_op_text(
+        autogen_context,
+        _AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_1")]),
+    )
+
+    assert "from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseIndex" in autogen_context.imports
+    assert "from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseProjection" in autogen_context.imports
+
+
+def test_clickhouse_custom_op_renderers_normalize_mapping_subclasses():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    generated = render_python_code(
+        ops.UpgradeOps(
+            ops=[
+                _AddClickHouseIndexOp(
+                    "events",
+                    "idx_1",
+                    "user_id",
+                    "minmax",
+                    clickhouse_settings=MappingProxyType({"alter_sync": 2}),
+                ),
+                _ModifyClickHouseTableSettingsOp("events", MappingProxyType({"merge_with_ttl_timeout": 79})),
+            ]
+        ),
+        migration_context=context,
+    )
+
+    assert "mappingproxy" not in generated
+    assert "clickhouse_settings={'alter_sync': 2}" in generated
+    assert "op.modify_clickhouse_table_settings('events', {'merge_with_ttl_timeout': 79})" in generated
+
+
+def test_render_settings_module_level_matches_helper():
+    from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper, render_settings
+
+    settings = {"flag": True, "off": False, "count": 13, "ratio": 0.5, "label": "high"}
+    rendered = render_settings(settings)
+    assert rendered == "flag = 1, off = 0, count = 13, ratio = 0.5, label = 'high'"
+    assert ClickHouseDDLHelper.render_settings(settings) == rendered
+    assert render_settings(None) == ""
+    assert render_settings({}) == ""
