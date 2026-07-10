@@ -6,12 +6,18 @@ from clickhouse_connect.driver.backend.models import Capabilities
 from clickhouse_connect.driver.backend.operations import Operation
 
 
-class SyncBackend(Protocol):
+class SyncExecutor(Protocol):
+    def execute(self, operation: Operation) -> object: ...
+
+
+class AsyncExecutor(Protocol):
+    async def execute(self, operation: Operation) -> object: ...
+
+
+class SyncBackend(SyncExecutor, Protocol):
     capabilities: Capabilities
 
     def open(self) -> None: ...
-
-    def execute(self, operation: Operation) -> object: ...
 
     def ping(self) -> bool: ...
 
@@ -20,12 +26,10 @@ class SyncBackend(Protocol):
     def close_connections(self) -> None: ...
 
 
-class AsyncBackend(Protocol):
+class AsyncBackend(AsyncExecutor, Protocol):
     capabilities: Capabilities
 
     async def open(self) -> None: ...
-
-    async def execute(self, operation: Operation) -> object: ...
 
     async def ping(self) -> bool: ...
 

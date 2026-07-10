@@ -19,17 +19,20 @@ from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import options, tzutil
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.backend.adapters import SyncClientExecutor
+from clickhouse_connect.driver.backend.models import ClientConfig
+from clickhouse_connect.driver.backend.orchestration import (
+    InitializationResult,
+    init_sequence,
+    insert_context_sequence,
+    run_sync,
+)
 from clickhouse_connect.driver.common import (
     StreamContext,
     coerce_bool,
     coerce_int,
     dict_copy,
     version_at_least,
-)
-from clickhouse_connect.driver.constants import (
-    CH_VERSION_WITH_PROTOCOL,
-    PROTOCOL_VERSION_WITH_LOW_CARD,
 )
 from clickhouse_connect.driver.exceptions import (
     DataError,
@@ -38,7 +41,7 @@ from clickhouse_connect.driver.exceptions import (
 )
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus, setting_status
+from clickhouse_connect.driver.models import SettingDef, SettingStatus, setting_status
 from clickhouse_connect.driver.options import (
     check_arrow,
     check_numpy,
@@ -120,6 +123,9 @@ class Client(ABC):
     compression: str | None = None
     write_compression: str | None = None
     protocol_version = 0
+    # User-supplied initial ClickHouse settings, set by subclasses before
+    # initialization so generated setting defaults never overwrite them
+    _initial_settings: dict[str, Any] | None = None
     valid_transport_settings: set[str] = set()
     optional_transport_settings: set[str] = set()
     database = None
@@ -198,54 +204,23 @@ class Client(ABC):
             self._deferred_tz_source = resolved_tz_source
 
     def _init_common_settings(self, tz_source: TzSource):
-        self.server_tz, self._dst_safe = timezone.utc, True
-        version_result = self.command("SELECT version(), timezone()", use_database=False)
-        if not isinstance(version_result, Sequence) or isinstance(version_result, str):
-            raise OperationalError(f"Unexpected response to server version query: {version_result!r}")
-        self.server_version, server_tz = version_result[0], version_result[1]
-        try:
-            server_tz_info = tzutil.resolve_zone(server_tz)
-            server_tz_info, self._dst_safe = tzutil.normalize_timezone(server_tz_info, trust_fixed_offset=True)
-            self.server_tz = server_tz_info
-        except ZoneInfoNotFoundError:
-            logger.warning(
-                "Server timezone %s could not be resolved, falling back to UTC; %s",
-                server_tz,
-                tzutil.TZDATA_HINT,
-            )
-        if tz_source == "auto":
-            self._apply_server_tz = self._dst_safe
-        else:
-            self._apply_server_tz = tz_source == "server"
+        config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=tz_source)
+        result = run_sync(init_sequence(config), SyncClientExecutor(self))
+        self._apply_init_result(result)
 
-        if not self._apply_server_tz and not tzutil.local_tz_dst_safe:
-            logger.warning(
-                "local timezone %s may return unexpected times due to Daylight Savings Time/" + "Summer Time differences",
-                tzutil.local_tz.tzname(None),
-            )
-        readonly = "readonly"
-        if not self.min_version("19.17"):
-            readonly = common.get_setting("readonly")
-        server_settings = self.query(f"SELECT name, value, {readonly} as readonly FROM system.settings LIMIT 10000")
-        self.server_settings = {row["name"]: SettingDef(**row) for row in server_settings.named_results()}
-
-        if self.min_version(CH_VERSION_WITH_PROTOCOL) and common.get_setting("use_protocol_version"):
-            #  Unfortunately we have to validate that the client protocol version is actually used by ClickHouse
-            #  since the query parameter could be stripped off (in particular, by CHProxy)
-            test_data = self.raw_query(
-                "SELECT 1 AS check", fmt="Native", settings={"client_protocol_version": PROTOCOL_VERSION_WITH_LOW_CARD}
-            )
-            if test_data[8:16] == b"\x01\x01\x05check":
-                self.protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
-        if self._setting_status("date_time_input_format").is_writable:
-            self.set_client_setting("date_time_input_format", "best_effort")
-        if (
-            self._setting_status("allow_experimental_json_type").is_set
-            and self._setting_status("cast_string_to_dynamic_use_inference").is_writable
-        ):
-            self.set_client_setting("cast_string_to_dynamic_use_inference", "1")
-        if self.min_version("24.8") and not self.min_version("24.10"):
-            dynamic_module.json_serialization_format = 0
+    def _apply_init_result(self, result: InitializationResult) -> None:
+        server_info = result.server_info
+        self.server_version = server_info.version
+        self.server_tz = server_info.timezone
+        self._dst_safe = result.timezone_dst_safe
+        self._apply_server_tz = result.apply_server_timezone
+        self.server_settings = dict(server_info.settings)
+        if result.protocol_version:
+            self.protocol_version = result.protocol_version
+        if result.json_serialization_format is not None:
+            dynamic_module.json_serialization_format = result.json_serialization_format
+        for key, value in result.client_setting_writes:
+            self.set_client_setting(key, value)
 
     def _validate_settings(self, settings: dict[str, Any] | None) -> dict[str, str]:
         """
@@ -1153,44 +1128,19 @@ class Client(ABC):
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable insert context
         """
-        full_table = table
-        if "." not in table:
-            if database:
-                full_table = f"{quote_identifier(database)}.{quote_identifier(table)}"
-            else:
-                full_table = quote_identifier(table)
-        column_defs: list[ColumnDef] = []
-        if column_types is None and column_type_names is None:
-            describe_result = self.query(f"DESCRIBE TABLE {full_table}", settings=settings)
-            column_defs = [
-                ColumnDef(**row) for row in describe_result.named_results() if row["default_type"] not in ("ALIAS", "MATERIALIZED")
-            ]
-        if column_names is None or isinstance(column_names, str) and column_names == "*":
-            column_names = [cd.name for cd in column_defs]
-            column_types = [cd.ch_type for cd in column_defs]
-        elif isinstance(column_names, str):
-            column_names = [column_names]
-        if len(column_names) == 0:
-            raise ValueError("Column names must be specified for insert")
-        if not column_types:
-            if column_type_names:
-                column_types = [get_from_name(name) for name in column_type_names]
-            else:
-                column_map = {d.name: d for d in column_defs}
-                try:
-                    column_types = [column_map[name].ch_type for name in column_names]
-                except KeyError as ex:
-                    raise ProgrammingError(f"Unrecognized column {ex} in table {table}") from None
-        if len(column_names) != len(column_types):
-            raise ProgrammingError("Column names do not match column types") from None
-        return InsertContext(
-            full_table,
-            column_names,
-            column_types,
-            column_oriented=column_oriented,
-            settings=settings,
-            transport_settings=transport_settings,
-            data=data,
+        return run_sync(
+            insert_context_sequence(
+                table,
+                column_names,
+                database,
+                column_types,
+                column_type_names,
+                column_oriented,
+                settings,
+                data,
+                transport_settings,
+            ),
+            SyncClientExecutor(self),
         )
 
     def min_version(self, version_str: str) -> bool:

@@ -213,6 +213,7 @@ class HttpClient(Client):
         else:
             compression = None
 
+        self._initial_settings = settings
         super().__init__(
             database=database,
             uri=self.url,

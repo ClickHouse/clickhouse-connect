@@ -6,6 +6,7 @@ from time import sleep
 import pytest
 
 from clickhouse_connect import create_client, datatypes
+from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
@@ -71,6 +72,14 @@ def test_initial_settings_override_generated_defaults(client_factory):
 
     default_client = client_factory()
     assert default_client.get_client_setting("date_time_input_format") == "best_effort"
+
+
+def test_client_init_unaffected_by_global_read_formats(client_factory, call):
+    set_default_formats("String", "bytes")
+    client = client_factory()
+    assert isinstance(client.server_version, str)
+    assert client.get_client_setting("date_time_input_format") == "best_effort"
+    assert call(client.command, "SELECT 79") == 79
 
 
 def test_client_headers(client_factory, call):

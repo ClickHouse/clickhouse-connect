@@ -9,9 +9,15 @@ import pytest
 
 from clickhouse_connect.driver.backend.models import Capabilities, ClientConfig, ServerInfo
 from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
-from clickhouse_connect.driver.backend.orchestration import InitializationResult, init_sequence, run_async, run_sync
+from clickhouse_connect.driver.backend.orchestration import (
+    InitializationResult,
+    init_sequence,
+    insert_context_sequence,
+    run_async,
+    run_sync,
+)
 from clickhouse_connect.driver.constants import PROTOCOL_VERSION_WITH_LOW_CARD
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.models import SettingDef
 
 CAPABILITIES = Capabilities(native_async=True, sessions=True)
@@ -88,8 +94,8 @@ def _run_both(
     sync_backend = FakeSyncBackend(script)
     async_backend = FakeAsyncBackend(script)
 
-    sync_result = run_sync(init_sequence(config, capabilities=sync_backend.capabilities), sync_backend)
-    async_result = asyncio.run(run_async(init_sequence(config, capabilities=async_backend.capabilities), async_backend))
+    sync_result = run_sync(init_sequence(config), sync_backend)
+    async_result = asyncio.run(run_async(init_sequence(config), async_backend))
 
     assert sync_backend.operations == async_backend.operations
     assert sync_result == async_result
@@ -112,12 +118,10 @@ def test_sync_and_async_init_sequences_have_identical_operations_and_results():
     ]
     assert sync_backend.operations == expected_operations
     assert async_backend.operations == expected_operations
-    assert result.server_info.capabilities == CAPABILITIES
     assert result.protocol_version == PROTOCOL_VERSION_WITH_LOW_CARD
     assert result.client_setting_writes == (
         ("date_time_input_format", "best_effort"),
         ("cast_string_to_dynamic_use_inference", "1"),
-        ("max_threads", 13),
     )
 
 
@@ -164,25 +168,103 @@ def test_fatal_errors_propagate_identically_through_both_drivers():
     config = ClientConfig()
 
     with pytest.raises(OperationalError, match="connection refused"):
-        run_sync(init_sequence(config, capabilities=CAPABILITIES), FakeSyncBackend(responses))
+        run_sync(init_sequence(config), FakeSyncBackend(responses))
     with pytest.raises(OperationalError, match="connection refused"):
-        asyncio.run(run_async(init_sequence(config, capabilities=CAPABILITIES), FakeAsyncBackend(responses)))
+        asyncio.run(run_async(init_sequence(config), FakeAsyncBackend(responses)))
 
 
-def test_user_settings_override_generated_defaults():
-    config = ClientConfig(
-        settings={
-            "date_time_input_format": "basic",
-            "cast_string_to_dynamic_use_inference": "0",
-        }
-    )
+@pytest.mark.parametrize(
+    "user_settings,expected_writes",
+    [
+        (
+            {"date_time_input_format": "basic", "cast_string_to_dynamic_use_inference": "0"},
+            (),
+        ),
+        (
+            {"date_time_input_format": "basic"},
+            (("cast_string_to_dynamic_use_inference", "1"),),
+        ),
+        (
+            {"cast_string_to_dynamic_use_inference": "0"},
+            (("date_time_input_format", "best_effort"),),
+        ),
+    ],
+)
+def test_user_settings_suppress_generated_defaults(user_settings, expected_writes):
+    config = ClientConfig(settings=user_settings)
 
     result, _, _ = _run_both([("25.6.3.116", "UTC"), _server_settings(), PROTOCOL_RESPONSE], config)
 
-    assert result.client_setting_writes == (
-        ("date_time_input_format", "basic"),
-        ("cast_string_to_dynamic_use_inference", "0"),
+    assert result.client_setting_writes == expected_writes
+
+
+def _describe_rows() -> list[dict[str, object]]:
+    def row(name: str, type_name: str, default_type: str = "") -> dict[str, object]:
+        return {
+            "name": name,
+            "type": type_name,
+            "default_type": default_type,
+            "default_expression": "",
+            "comment": "",
+            "codec_expression": "",
+            "ttl_expression": "",
+        }
+
+    return [
+        row("user_id", "UInt32"),
+        row("label", "String"),
+        row("computed", "UInt32", default_type="ALIAS"),
+        row("derived", "String", default_type="MATERIALIZED"),
+    ]
+
+
+@pytest.mark.parametrize("column_names", [None, "*"])
+def test_insert_context_sequence_describes_table_identically(column_names):
+    sync_backend = FakeSyncBackend([_describe_rows()])
+    async_backend = FakeAsyncBackend([_describe_rows()])
+
+    sync_context = run_sync(insert_context_sequence("target_table", column_names=column_names), sync_backend)
+    async_context = asyncio.run(run_async(insert_context_sequence("target_table", column_names=column_names), async_backend))
+
+    assert sync_backend.operations == async_backend.operations == [QueryOp("DESCRIBE TABLE `target_table`")]
+    for context in (sync_context, async_context):
+        assert context.table == "`target_table`"
+        assert context.column_names == ["user_id", "label"]
+        assert [t.name for t in context.column_types] == ["UInt32", "String"]
+
+
+def test_insert_context_sequence_rejects_empty_column_list():
+    with pytest.raises(ValueError, match="Column names must be specified"):
+        run_sync(insert_context_sequence("target_table"), FakeSyncBackend([[]]))
+
+
+def test_insert_context_sequence_describe_errors_propagate_through_both_drivers():
+    responses = [OperationalError("table does not exist")]
+
+    with pytest.raises(OperationalError, match="table does not exist"):
+        run_sync(insert_context_sequence("target_table"), FakeSyncBackend(responses))
+    with pytest.raises(OperationalError, match="table does not exist"):
+        asyncio.run(run_async(insert_context_sequence("target_table"), FakeAsyncBackend(responses)))
+
+
+def test_insert_context_sequence_skips_describe_with_explicit_types():
+    backend = FakeSyncBackend([])
+    context = run_sync(
+        insert_context_sequence("db2.target_table", column_names=["user_id"], column_type_names=["UInt32"]),
+        backend,
     )
+
+    assert backend.operations == []
+    assert context.table == "db2.target_table"
+    assert [t.name for t in context.column_types] == ["UInt32"]
+
+
+def test_insert_context_sequence_rejects_unknown_column():
+    with pytest.raises(ProgrammingError, match="Unrecognized column"):
+        run_sync(
+            insert_context_sequence("target_table", column_names=["missing_col"]),
+            FakeSyncBackend([_describe_rows()]),
+        )
 
 
 def test_backend_values_copy_and_protect_settings_mappings():

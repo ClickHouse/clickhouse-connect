@@ -11,6 +11,8 @@ from clickhouse_connect.driver.query import TzSource
 
 
 def _freeze_mapping(values: Mapping[str, Any]) -> Mapping[str, Any]:
+    # MappingProxyType fields make the frozen dataclasses that hold them
+    # unhashable. They are value objects compared by equality only.
     return MappingProxyType(dict(values))
 
 
