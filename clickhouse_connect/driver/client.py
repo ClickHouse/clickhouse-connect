@@ -25,6 +25,7 @@ from clickhouse_connect.driver.common import (
     coerce_bool,
     coerce_int,
     dict_copy,
+    version_at_least,
 )
 from clickhouse_connect.driver.constants import (
     CH_VERSION_WITH_PROTOCOL,
@@ -37,7 +38,7 @@ from clickhouse_connect.driver.exceptions import (
 )
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus
+from clickhouse_connect.driver.models import ColumnDef, SettingDef, SettingStatus, setting_status
 from clickhouse_connect.driver.options import (
     check_arrow,
     check_numpy,
@@ -289,10 +290,7 @@ class Client(ABC):
         return str_value
 
     def _setting_status(self, key: str) -> SettingStatus:
-        comp_setting = self.server_settings.get(key)
-        if not comp_setting:
-            return SettingStatus(False, False)
-        return SettingStatus(comp_setting.value != "0", comp_setting.readonly != 1)
+        return setting_status(self.server_settings, key)
 
     def _prep_query(self, context: QueryContext):
         if context.is_select and not context.has_limit and self.query_limit:
@@ -1198,27 +1196,10 @@ class Client(ABC):
     def min_version(self, version_str: str) -> bool:
         """
         Determine whether the connected server is at least the submitted version
-        For Altinity Stable versions like 22.8.15.25.altinitystable
-        the last condition in the first list comprehension expression is added
         :param version_str: A version string consisting of up to 4 integers delimited by dots
         :return: True if version_str is greater than the server_version, False if less than
         """
-        try:
-            server_parts = [int(x) for x in (self.server_version or "").split(".") if x.isnumeric()]
-            server_parts.extend([0] * (4 - len(server_parts)))
-            version_parts = [int(x) for x in version_str.split(".")]
-            version_parts.extend([0] * (4 - len(version_parts)))
-        except ValueError:
-            logger.warning(
-                "Server %s or requested version %s does not match format of numbers separated by dots", self.server_version, version_str
-            )
-            return False
-        for x, y in zip(server_parts, version_parts):
-            if x > y:
-                return True
-            if x < y:
-                return False
-        return True
+        return version_at_least(self.server_version, version_str)
 
     def _add_integration_tag(self, name: str) -> None:
         """Transport hook to surface 3rd party lib integration info (default: no-op)."""
