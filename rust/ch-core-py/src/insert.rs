@@ -9,8 +9,8 @@ use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAnyMethods, PyBool, PyByteArray, PyBytes, PyDate, PyDateTime, PyDict, PyFrozenSet, PyList,
-    PySet, PyString, PyStringMethods, PyTuple,
+    PyAnyMethods, PyBool, PyByteArray, PyBytes, PyDate, PyDateTime, PyDelta, PyDeltaAccess, PyDict,
+    PyFloat, PyFrozenSet, PyList, PySet, PyString, PyStringMethods, PyTime, PyTimeAccess, PyTuple,
 };
 
 use ch_core_rs::batch::ColBatch as RustColBatch;
@@ -27,6 +27,7 @@ use crate::decoder::buffer_to_vec;
 
 const EPOCH_DATE_ORDINAL: i64 = 719_163;
 const IPV4_V6_PREFIX: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
+const MAX_TIME_SECONDS: i64 = 999 * 3_600 + 59 * 60 + 59;
 
 #[pyfunction]
 #[pyo3(signature = (column_names, column_type_names, column_data, row_count, prefix=None))]
@@ -1083,15 +1084,31 @@ fn nullable_scalar_column<'py, R: RowAccess<'py>>(
 ) -> PyResult<Column> {
     let mut null_map = Vec::with_capacity(row_count);
     let mut scalars = Vec::with_capacity(row_count);
+    let mut time_probe = TimeScalarProbe::new(inner);
     for row in 0..row_count {
         let value = rows.value(row)?;
         if value.is_none() {
             null_map.push(1);
             scalars.push(default_scalar(inner)?);
-        } else {
-            null_map.push(0);
-            scalars.push(convert_scalar(py, inner, &value, name, row)?);
+            continue;
         }
+        if let Some(probe) = time_probe.as_mut() {
+            match probe.probe(&value, name, row)? {
+                Some(TimeProbe::Nat) => {
+                    null_map.push(1);
+                    scalars.push(default_scalar(inner)?);
+                    continue;
+                }
+                Some(TimeProbe::Ticks(ticks)) => {
+                    null_map.push(0);
+                    scalars.push(time_ticks_scalar(inner, ticks, name, row)?);
+                    continue;
+                }
+                None => {}
+            }
+        }
+        null_map.push(0);
+        scalars.push(convert_scalar(py, inner, &value, name, row)?);
     }
     column_from_scalars(inner, scalars, Some(Bitmap::from_ch_null_map(&null_map)))
 }
@@ -1141,6 +1158,11 @@ fn lc_scalar_column<'py, R: RowAccess<'py>>(
     let mut dict_values = Vec::new();
     let mut slots = HashMap::<ScalarKey, i32>::new();
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    // Time64 is rejected by is_low_cardinality_inner, so only Time probes.
+    let mut time_probe = match value_type {
+        ChType::Time => TimeScalarProbe::new(value_type),
+        _ => None,
+    };
 
     if nullable && row_count > 0 {
         dict_values.push(default_scalar(value_type)?);
@@ -1161,10 +1183,30 @@ fn lc_scalar_column<'py, R: RowAccess<'py>>(
             continue;
         }
 
+        let time_hit = match time_probe.as_mut() {
+            Some(probe) => probe.probe(&value, name, row)?,
+            None => None,
+        };
+        if let Some(TimeProbe::Nat) = time_hit {
+            if !nullable {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is NaT but LowCardinality({value_type}) is not nullable"
+                )));
+            }
+            indices.push(0);
+            if let Some(nulls) = &mut null_map {
+                nulls.push(1);
+            }
+            continue;
+        }
+
         if let Some(nulls) = &mut null_map {
             nulls.push(0);
         }
-        let scalar = convert_scalar(py, value_type, &value, name, row)?;
+        let scalar = match time_hit {
+            Some(TimeProbe::Ticks(ticks)) => time_ticks_scalar(value_type, ticks, name, row)?,
+            _ => convert_scalar(py, value_type, &value, name, row)?,
+        };
         let key = scalar.key();
         let slot = if let Some(slot) = slots.get(&key) {
             *slot
@@ -1379,7 +1421,11 @@ trait FastValue: Copy {
     /// # Safety
     ///
     /// Requires the GIL; `ptr` must be a valid, non-null object pointer.
-    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()>;
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        ch_type: &ChType,
+        fast_limit: i64,
+    ) -> Result<Self, ()>;
 
     /// Unwrap the `Scalar` produced by the `convert_scalar` fallback.
     fn from_scalar(scalar: Scalar) -> PyResult<Self>;
@@ -1450,7 +1496,11 @@ macro_rules! impl_fast_narrow_int {
             const DEFAULT: Self = 0;
 
             #[inline]
-            unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+            unsafe fn from_exact(
+                ptr: *mut ffi::PyObject,
+                _ch_type: &ChType,
+                _fast_limit: i64,
+            ) -> Result<Self, ()> {
                 <$ty>::try_from(exact_long_as_i64(ptr)?).map_err(|_| ())
             }
 
@@ -1470,7 +1520,11 @@ impl FastValue for i64 {
     const DEFAULT: Self = 0;
 
     #[inline]
-    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        _ch_type: &ChType,
+        _fast_limit: i64,
+    ) -> Result<Self, ()> {
         exact_long_as_i64(ptr)
     }
 
@@ -1481,7 +1535,11 @@ impl FastValue for u64 {
     const DEFAULT: Self = 0;
 
     #[inline]
-    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        _ch_type: &ChType,
+        _fast_limit: i64,
+    ) -> Result<Self, ()> {
         if ffi::PyLong_CheckExact(ptr) == 0 {
             return Err(());
         }
@@ -1500,7 +1558,11 @@ impl FastValue for f64 {
     const DEFAULT: Self = 0.0;
 
     #[inline]
-    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        _ch_type: &ChType,
+        _fast_limit: i64,
+    ) -> Result<Self, ()> {
         if ffi::PyFloat_CheckExact(ptr) != 0 {
             return Ok(ffi::PyFloat_AS_DOUBLE(ptr));
         }
@@ -1524,9 +1586,13 @@ impl FastValue for f32 {
     const DEFAULT: Self = 0.0;
 
     #[inline]
-    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        ch_type: &ChType,
+        fast_limit: i64,
+    ) -> Result<Self, ()> {
         // Matches extract::<f32>: extract as f64, then `as` cast.
-        f64::from_exact(ptr).map(|value| value as f32)
+        f64::from_exact(ptr, ch_type, fast_limit).map(|value| value as f32)
     }
 
     impl_fast_prim_common!(f32, Float32);
@@ -1541,7 +1607,11 @@ impl FastValue for WireBool {
     const DEFAULT: Self = WireBool(0);
 
     #[inline]
-    unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        _ch_type: &ChType,
+        _fast_limit: i64,
+    ) -> Result<Self, ()> {
         if ptr == ffi::Py_True() {
             Ok(WireBool(1))
         } else if ptr == ffi::Py_False() {
@@ -1688,6 +1758,12 @@ fn seq_values<T: FastValue, S: FastSeq>(
 ) -> PyResult<(Vec<T>, Option<Bitmap>)> {
     let mut values = Vec::with_capacity(row_count);
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    let mut time_probe = TimeScalarProbe::new(ch_type);
+    let fast_limit = match ch_type {
+        ChType::Time => MAX_TIME_SECONDS,
+        ChType::Time64 { precision } => max_time64_ticks(*precision),
+        _ => 0,
+    };
     for row in 0..row_count {
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the borrowed pointer is consumed before
@@ -1707,19 +1783,38 @@ fn seq_values<T: FastValue, S: FastSeq>(
             null_map.push(0);
         }
         // SAFETY: GIL held; ptr is a valid borrowed item pointer.
-        match unsafe { T::from_exact(ptr) } {
+        match unsafe { T::from_exact(ptr, ch_type, fast_limit) } {
             Ok(value) => values.push(value),
             Err(()) => {
                 // SAFETY: ptr is valid here; taking a strong reference keeps
                 // the item alive across any Python code the fallback runs.
                 let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+                if let Some(probe) = time_probe.as_mut() {
+                    if let Some(hit) = probe.probe(&obj, name, row)? {
+                        match hit {
+                            TimeProbe::Nat => {
+                                let Some(null_map) = &mut null_map else {
+                                    return Err(PyValueError::new_err(format!(
+                                        "column {name:?} row {row} is NaT but {ch_type} is not Nullable"
+                                    )));
+                                };
+                                if let Some(entry) = null_map.last_mut() {
+                                    *entry = 1;
+                                }
+                                values.push(T::DEFAULT);
+                            }
+                            TimeProbe::Ticks(ticks) => {
+                                let scalar = time_ticks_scalar(ch_type, ticks, name, row)?;
+                                values.push(T::from_scalar(scalar)?);
+                            }
+                        }
+                        check_not_resized(seq, name, row_count)?;
+                        continue;
+                    }
+                }
                 let scalar = convert_scalar(py, ch_type, &obj, name, row)?;
                 values.push(T::from_scalar(scalar)?);
-                if S::MUTABLE && seq.size() != row_count {
-                    return Err(PyValueError::new_err(format!(
-                        "column {name:?} was resized during encoding"
-                    )));
-                }
+                check_not_resized(seq, name, row_count)?;
             }
         }
     }
@@ -1811,6 +1906,11 @@ fn try_fast_column(
     if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
         return try_fast_column_seq(py, name, ch_type, &TupleSeq(tuple), row_count, nullable);
     }
+    if let Some(column) =
+        try_numpy_timedelta_column(py, name, ch_type, values, row_count, nullable)?
+    {
+        return Ok(Some(column));
+    }
     try_buffer_column(py, ch_type, values, row_count, nullable)
 }
 
@@ -1858,6 +1958,8 @@ fn try_fast_column_seq<S: FastSeq>(
         ChType::DateTime64 { .. } => {
             prim::<DateTime64Val, S>(py, name, ch_type, seq, row_count, nullable)
         }
+        ChType::Time => prim::<TimeVal, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Time64 { .. } => prim::<Time64Val, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Uuid => uuid_seq(py, seq, ch_type, name, row_count, nullable).map(Some),
         ChType::Ipv4 => ipv4_seq(py, seq, ch_type, name, row_count, nullable).map(Some),
         ChType::Enum8 { variants } => {
@@ -1868,6 +1970,495 @@ fn try_fast_column_seq<S: FastSeq>(
         }
         _ => Ok(None),
     }
+}
+
+#[derive(Clone, Copy)]
+enum NumpyByteOrder {
+    Little,
+    Big,
+}
+
+#[derive(Clone, Copy)]
+struct NumpyTimedeltaMeta {
+    order: NumpyByteOrder,
+    /// Duration of one stored unit as numerator/denominator seconds.
+    numerator: i128,
+    denominator: i128,
+}
+
+/// Parse a NumPy dtype object's `str` form without importing NumPy. Examples
+/// are `<m8[ns]`, `>m8[ms]`, and `<m8[10us]`; the unitless `<m8` parses with
+/// the generic flag set. Calendar-relative Y/M units are not accepted because
+/// they do not have a fixed duration in seconds.
+fn parse_timedelta_dtype(dtype: &Bound<'_, PyAny>) -> Option<(NumpyTimedeltaMeta, bool)> {
+    let dtype_str = dtype.getattr(intern!(dtype.py(), "str")).ok()?;
+    let dtype_str = dtype_str.downcast::<PyString>().ok()?.to_str().ok()?;
+    let (order, rest) = match dtype_str.as_bytes().split_first()? {
+        (b'<', rest) => (NumpyByteOrder::Little, rest),
+        (b'>', rest) => (NumpyByteOrder::Big, rest),
+        (b'=', rest) | (b'|', rest) => (
+            if cfg!(target_endian = "little") {
+                NumpyByteOrder::Little
+            } else {
+                NumpyByteOrder::Big
+            },
+            rest,
+        ),
+        _ => return None,
+    };
+    let rest = std::str::from_utf8(rest).ok()?;
+    if rest == "m8" {
+        let meta = NumpyTimedeltaMeta {
+            order,
+            numerator: 1,
+            denominator: 1,
+        };
+        return Some((meta, true));
+    }
+    let unit = rest.strip_prefix("m8[")?.strip_suffix(']')?;
+    let digit_count = unit.bytes().take_while(u8::is_ascii_digit).count();
+    let multiplier = if digit_count == 0 {
+        1i128
+    } else {
+        unit[..digit_count].parse::<i128>().ok()?
+    };
+    let base = &unit[digit_count..];
+    let (unit_numerator, denominator) = match base {
+        "W" => (604_800, 1),
+        "D" => (86_400, 1),
+        "h" => (3_600, 1),
+        "m" => (60, 1),
+        "s" => (1, 1),
+        "ms" => (1, 1_000),
+        "us" => (1, 1_000_000),
+        "ns" => (1, 1_000_000_000),
+        "ps" => (1, 1_000_000_000_000),
+        "fs" => (1, 1_000_000_000_000_000),
+        "as" => (1, 1_000_000_000_000_000_000),
+        _ => return None,
+    };
+    Some((
+        NumpyTimedeltaMeta {
+            order,
+            numerator: multiplier.checked_mul(unit_numerator)?,
+            denominator,
+        },
+        false,
+    ))
+}
+
+/// Non-generic timedelta meta read from a value's `dtype` attribute.
+fn numpy_timedelta_meta(value: &Bound<'_, PyAny>) -> Option<NumpyTimedeltaMeta> {
+    let dtype = value.getattr(intern!(value.py(), "dtype")).ok()?;
+    match parse_timedelta_dtype(&dtype) {
+        Some((meta, false)) => Some(meta),
+        _ => None,
+    }
+}
+
+fn numpy_i64(bytes: &[u8], order: NumpyByteOrder) -> Option<i64> {
+    let raw: [u8; 8] = bytes.try_into().ok()?;
+    Some(match order {
+        NumpyByteOrder::Little => i64::from_le_bytes(raw),
+        NumpyByteOrder::Big => i64::from_be_bytes(raw),
+    })
+}
+
+fn numpy_timedelta_scalar_raw(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<(i64, NumpyTimedeltaMeta)>> {
+    let Ok(dtype) = value.getattr(intern!(value.py(), "dtype")) else {
+        return Ok(None);
+    };
+    let Some((meta, generic)) = parse_timedelta_dtype(&dtype) else {
+        return Ok(None);
+    };
+    let bytes = value.call_method0(intern!(value.py(), "tobytes"))?;
+    let bytes = bytes
+        .downcast::<PyBytes>()
+        .map_err(|_| PyValueError::new_err("NumPy timedelta tobytes() did not return bytes"))?;
+    let raw = numpy_i64(bytes.as_bytes(), meta.order)
+        .ok_or_else(|| PyValueError::new_err("NumPy timedelta scalar is not 8 bytes"))?;
+    if generic && raw != i64::MIN {
+        return Ok(None);
+    }
+    Ok(Some((raw, meta)))
+}
+
+/// NumPy scalar probing requires Python `dtype`/`tobytes` lookups. Keep those
+/// off the established Time input paths, especially the per-row timedelta hot
+/// path. Exact timedelta/time objects are excluded; their subclasses
+/// (pd.Timedelta, pandas NaT) go through the probe. These checks use only
+/// CPython/PyO3 type predicates and run no Python.
+#[inline]
+fn should_probe_numpy_timedelta(value: &Bound<'_, PyAny>) -> bool {
+    // SAFETY: value is a valid object pointer; PyLong_Check and
+    // PyUnicode_Check are C-level type predicates that run no Python.
+    if unsafe {
+        ffi::PyLong_Check(value.as_ptr()) != 0 || ffi::PyUnicode_Check(value.as_ptr()) != 0
+    } {
+        return false;
+    }
+    if value.downcast::<PyFloat>().is_ok() {
+        return false;
+    }
+    if value.downcast::<PyDelta>().is_ok() {
+        // SAFETY: the successful downcast imported the datetime C-API.
+        return unsafe { ffi::PyDelta_CheckExact(value.as_ptr()) } == 0;
+    }
+    if value.downcast::<PyTime>().is_ok() {
+        // SAFETY: the successful downcast imported the datetime C-API.
+        return unsafe { ffi::PyTime_CheckExact(value.as_ptr()) } == 0;
+    }
+    true
+}
+
+/// pandas NaT detection by C-level type name; runs no Python.
+fn is_pandas_nat(value: &Bound<'_, PyAny>) -> bool {
+    // SAFETY: Py_TYPE of a valid object; tp_name is a NUL-terminated string
+    // owned by the type.
+    let name = unsafe { std::ffi::CStr::from_ptr((*ffi::Py_TYPE(value.as_ptr())).tp_name) };
+    let name = name.to_bytes();
+    name == b"NaTType" || name.ends_with(b".NaTType")
+}
+
+/// Non-null outcome of probing one Time/Time64 cell.
+enum TimeProbe {
+    Nat,
+    Ticks(i64),
+}
+
+/// Per-column state for probing Time/Time64 cells that are not one of the
+/// exact fast types. The parsed dtype and unit ratio are cached and reused
+/// while subsequent cells carry an identical or equal dtype object.
+struct TimeScalarProbe {
+    precision: u8,
+    fractional: bool,
+    type_name: &'static str,
+    cache: Option<TimeDtypeCache>,
+}
+
+struct TimeDtypeCache {
+    dtype: Py<PyAny>,
+    order: NumpyByteOrder,
+    generic: bool,
+    ratio: NumpyTimeRatio,
+}
+
+impl TimeScalarProbe {
+    fn new(ch_type: &ChType) -> Option<Self> {
+        match ch_type {
+            ChType::Time => Some(Self {
+                precision: 0,
+                fractional: false,
+                type_name: "Time",
+                cache: None,
+            }),
+            ChType::Time64 { precision } => Some(Self {
+                precision: *precision,
+                fractional: true,
+                type_name: "Time64",
+                cache: None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Probe one cell. `Ok(None)` means the value is neither a NumPy
+    /// timedelta scalar nor pandas NaT; the caller converts it normally.
+    fn probe(
+        &mut self,
+        value: &Bound<'_, PyAny>,
+        column: &str,
+        row: usize,
+    ) -> PyResult<Option<TimeProbe>> {
+        if !should_probe_numpy_timedelta(value) {
+            return Ok(None);
+        }
+        let py = value.py();
+        let Ok(dtype) = value.getattr(intern!(py, "dtype")) else {
+            return Ok(is_pandas_nat(value).then_some(TimeProbe::Nat));
+        };
+        let cached = self.cache.as_ref().and_then(|cached| {
+            (cached.dtype.as_ptr() == dtype.as_ptr()
+                || cached.dtype.bind(py).eq(&dtype).unwrap_or(false))
+            .then_some((cached.order, cached.generic, cached.ratio))
+        });
+        let (order, generic, ratio) = match cached {
+            Some(hit) => hit,
+            None => {
+                let Some((meta, generic)) = parse_timedelta_dtype(&dtype) else {
+                    return Ok(None);
+                };
+                let ratio = numpy_time_ratio(meta, self.precision, column)?;
+                self.cache = Some(TimeDtypeCache {
+                    dtype: dtype.unbind(),
+                    order: meta.order,
+                    generic,
+                    ratio,
+                });
+                (meta.order, generic, ratio)
+            }
+        };
+        let bytes = value.call_method0(intern!(py, "tobytes"))?;
+        let bytes = bytes.downcast::<PyBytes>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {column:?} row {row} NumPy timedelta tobytes() did not return bytes"
+            ))
+        })?;
+        let raw = numpy_i64(bytes.as_bytes(), order).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "column {column:?} row {row} NumPy timedelta scalar is not 8 bytes"
+            ))
+        })?;
+        if raw == i64::MIN {
+            return Ok(Some(TimeProbe::Nat));
+        }
+        if generic {
+            return Ok(None);
+        }
+        let ticks = rescale_numpy_timedelta(
+            raw,
+            ratio,
+            self.fractional,
+            self.precision,
+            column,
+            row,
+            self.type_name,
+        )?;
+        Ok(Some(TimeProbe::Ticks(ticks)))
+    }
+}
+
+/// Build the Time/Time64 scalar for probed ticks.
+fn time_ticks_scalar(ch_type: &ChType, ticks: i64, column: &str, row: usize) -> PyResult<Scalar> {
+    match ch_type {
+        ChType::Time => {
+            Ok(Scalar::Time(i32::try_from(ticks).map_err(|_| {
+                time_range_error(column, row, "Time", ticks)
+            })?))
+        }
+        ChType::Time64 { .. } => Ok(Scalar::Time64(ticks)),
+        _ => Err(PyValueError::new_err("internal Time scalar type mismatch")),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NumpyTimeRatio {
+    Identity,
+    Multiply(i64),
+    Divide(i64),
+    General { numerator: i128, denominator: i128 },
+}
+
+fn gcd_i128(mut left: i128, mut right: i128) -> i128 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+/// Resolve source units -> target ticks once per column. Common NumPy units
+/// become identity, checked i64 multiply, or signed i64 division; only unusual
+/// dtype multipliers retain the general i128 path.
+fn numpy_time_ratio(
+    meta: NumpyTimedeltaMeta,
+    precision: u8,
+    column: &str,
+) -> PyResult<NumpyTimeRatio> {
+    let numerator = meta
+        .numerator
+        .checked_mul(i128::from(time64_scale(precision)))
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "column {column:?} NumPy timedelta unit scale overflows"
+            ))
+        })?;
+    let common = gcd_i128(numerator, meta.denominator);
+    let numerator = numerator / common;
+    let denominator = meta.denominator / common;
+    if numerator == 1 && denominator == 1 {
+        Ok(NumpyTimeRatio::Identity)
+    } else if denominator == 1 {
+        Ok(match i64::try_from(numerator) {
+            Ok(multiplier) => NumpyTimeRatio::Multiply(multiplier),
+            Err(_) => NumpyTimeRatio::General {
+                numerator,
+                denominator,
+            },
+        })
+    } else if numerator == 1 {
+        Ok(match i64::try_from(denominator) {
+            Ok(divisor) => NumpyTimeRatio::Divide(divisor),
+            Err(_) => NumpyTimeRatio::General {
+                numerator,
+                denominator,
+            },
+        })
+    } else {
+        Ok(NumpyTimeRatio::General {
+            numerator,
+            denominator,
+        })
+    }
+}
+
+/// Convert one raw NumPy timedelta count using a precomputed unit ratio. Signed
+/// division deliberately truncates toward zero for sub-tick negatives.
+fn rescale_numpy_timedelta(
+    raw: i64,
+    ratio: NumpyTimeRatio,
+    fractional: bool,
+    precision: u8,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<i64> {
+    let ticks = match ratio {
+        NumpyTimeRatio::Identity => raw,
+        NumpyTimeRatio::Multiply(multiplier) => raw
+            .checked_mul(multiplier)
+            .ok_or_else(|| time_range_error(column, row, type_name, raw))?,
+        NumpyTimeRatio::Divide(divisor) => raw / divisor,
+        NumpyTimeRatio::General {
+            numerator,
+            denominator,
+        } => {
+            let ticks = i128::from(raw)
+                .checked_mul(numerator)
+                .ok_or_else(|| time_range_error(column, row, type_name, raw))?
+                / denominator;
+            i64::try_from(ticks).map_err(|_| time_range_error(column, row, type_name, ticks))?
+        }
+    };
+    let max = if fractional {
+        max_time64_ticks(precision)
+    } else {
+        MAX_TIME_SECONDS
+    };
+    if ticks < -max || ticks > max {
+        return Err(time_range_error(column, row, type_name, ticks));
+    }
+    Ok(ticks)
+}
+
+fn numpy_timedelta_source<'py>(
+    py: Python<'py>,
+    values: &Bound<'py, PyAny>,
+) -> PyResult<Option<(Bound<'py, PyAny>, NumpyTimedeltaMeta)>> {
+    let Some(meta) = numpy_timedelta_meta(values) else {
+        return Ok(None);
+    };
+    if values.getattr("tobytes").is_ok() {
+        return Ok(Some((values.clone(), meta)));
+    }
+    let Ok(to_numpy) = values.getattr("to_numpy") else {
+        return Ok(None);
+    };
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("copy", false)?;
+    let array = to_numpy.call((), Some(&kwargs))?;
+    let Some(array_meta) = numpy_timedelta_meta(&array) else {
+        return Ok(None);
+    };
+    Ok(Some((array, array_meta)))
+}
+
+/// Dependency-free ndarray/pandas fast path. `tobytes` performs one safe bulk
+/// copy for arbitrary strides; conversion then walks the contiguous bytes in
+/// Rust with no per-cell Python calls or temporary objects.
+fn try_numpy_timedelta_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Option<Column>> {
+    let (precision, fractional, type_name) = match ch_type {
+        ChType::Time => (0, false, "Time"),
+        ChType::Time64 { precision } => (*precision, true, "Time64"),
+        _ => return Ok(None),
+    };
+    let Some((source, meta)) = numpy_timedelta_source(py, values)? else {
+        return Ok(None);
+    };
+    let ndim = source
+        .getattr("ndim")
+        .and_then(|value| value.extract::<usize>())
+        .map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {name:?} NumPy timedelta source has no valid ndim"
+            ))
+        })?;
+    if ndim != 1 {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} NumPy timedelta source must be one-dimensional, got {ndim} dimensions"
+        )));
+    }
+    let bytes = source.call_method0("tobytes")?;
+    let bytes = bytes.downcast::<PyBytes>().map_err(|_| {
+        PyValueError::new_err(format!(
+            "column {name:?} NumPy timedelta tobytes() did not return bytes"
+        ))
+    })?;
+    let expected_len = row_count
+        .checked_mul(8)
+        .ok_or_else(|| PyValueError::new_err(format!("column {name:?} byte size overflow")))?;
+    let actual_len = bytes.as_bytes().len();
+    if actual_len != expected_len {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} NumPy timedelta data is {} bytes, expected {expected_len}",
+            actual_len
+        )));
+    }
+
+    let ratio = numpy_time_ratio(meta, precision, name)?;
+    let mut nulls = nullable.then(|| Vec::with_capacity(row_count));
+    macro_rules! build_numpy_time_column {
+        ($rust_type:ty, $column_variant:ident) => {{
+            let mut out = Vec::<$rust_type>::with_capacity(row_count);
+            for (row, raw_bytes) in bytes.as_bytes().chunks_exact(8).enumerate() {
+                let raw = numpy_i64(raw_bytes, meta.order).ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "column {name:?} row {row} has invalid NumPy timedelta bytes"
+                    ))
+                })?;
+                if raw == i64::MIN {
+                    let Some(nulls) = &mut nulls else {
+                        return Err(PyValueError::new_err(format!(
+                            "column {name:?} row {row} is NaT but {ch_type} is not Nullable"
+                        )));
+                    };
+                    nulls.push(1);
+                    out.push(0);
+                    continue;
+                }
+                if let Some(nulls) = &mut nulls {
+                    nulls.push(0);
+                }
+                let ticks = rescale_numpy_timedelta(
+                    raw, ratio, fractional, precision, name, row, type_name,
+                )?;
+                out.push(
+                    <$rust_type>::try_from(ticks)
+                        .map_err(|_| time_range_error(name, row, type_name, ticks))?,
+                );
+            }
+            let validity = nulls.map(|map| Bitmap::from_ch_null_map(&map));
+            Some(Column::$column_variant(match validity {
+                Some(validity) => PrimitiveColumn::new_nullable(out, validity),
+                None => PrimitiveColumn::new(out),
+            }))
+        }};
+    }
+    Ok(match ch_type {
+        ChType::Time => build_numpy_time_column!(i32, Time),
+        ChType::Time64 { .. } => build_numpy_time_column!(i64, Time64),
+        _ => None,
+    })
 }
 
 /// Copy from a buffer-protocol container whose element type matches exactly.
@@ -1914,12 +2505,41 @@ fn narrow_i64<T: TryFrom<i64>>(value: i64) -> Result<T, ()> {
     T::try_from(value).map_err(|_| ())
 }
 
+#[inline]
+fn time64_scale(precision: u8) -> i64 {
+    // parse_ch_type rejects precisions above 9.
+    debug_assert!(precision <= 9);
+    match precision {
+        0 => 1,
+        1 => 10,
+        2 => 100,
+        3 => 1_000,
+        4 => 10_000,
+        5 => 100_000,
+        6 => 1_000_000,
+        7 => 10_000_000,
+        8 => 100_000_000,
+        9 => 1_000_000_000,
+        // parse_ch_type rejects this before the binding builds a column.
+        _ => 0,
+    }
+}
+
+#[inline]
+fn max_time64_ticks(precision: u8) -> i64 {
+    let scale = time64_scale(precision);
+    MAX_TIME_SECONDS * scale + (scale - 1)
+}
+
 /// Temporal wire values: the fast path accepts exact raw ints only (the same
 /// values `convert_scalar` accepts without touching the object protocol);
 /// date/datetime/str objects and out-of-range ints go through the fallback,
 /// which carries each type's specific conversion and range errors.
 macro_rules! impl_fast_temporal {
     ($name:ident, $prim:ty, $variant:ident) => {
+        impl_fast_temporal!($name, $prim, $variant, |_value, _ch_type, _fast_limit| true);
+    };
+    ($name:ident, $prim:ty, $variant:ident, $validate:expr) => {
         #[derive(Clone, Copy)]
         #[repr(transparent)]
         struct $name($prim);
@@ -1928,8 +2548,17 @@ macro_rules! impl_fast_temporal {
             const DEFAULT: Self = $name(0);
 
             #[inline]
-            unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()> {
-                narrow_i64::<$prim>(exact_long_as_i64(ptr)?).map(Self)
+            unsafe fn from_exact(
+                ptr: *mut ffi::PyObject,
+                ch_type: &ChType,
+                fast_limit: i64,
+            ) -> Result<Self, ()> {
+                let value = narrow_i64::<$prim>(exact_long_as_i64(ptr)?)?;
+                if ($validate)(value, ch_type, fast_limit) {
+                    Ok(Self(value))
+                } else {
+                    Err(())
+                }
             }
 
             fn from_scalar(scalar: Scalar) -> PyResult<Self> {
@@ -1963,6 +2592,20 @@ impl_fast_temporal!(DateVal, u16, Date);
 impl_fast_temporal!(Date32Val, i32, Date32);
 impl_fast_temporal!(DateTimeVal, u32, DateTime);
 impl_fast_temporal!(DateTime64Val, i64, DateTime64);
+impl_fast_temporal!(
+    TimeVal,
+    i32,
+    Time,
+    |value: i32, _ch_type: &ChType, fast_limit: i64| {
+        i64::from(value).unsigned_abs() <= fast_limit as u64
+    }
+);
+impl_fast_temporal!(
+    Time64Val,
+    i64,
+    Time64,
+    |value: i64, _ch_type: &ChType, fast_limit: i64| { value.unsigned_abs() <= fast_limit as u64 }
+);
 
 /// Multiplicative hasher for pointer-identity keys; object addresses are not
 /// attacker-controlled hash-DoS inputs, so a fast mix beats SipHash here.
@@ -2269,7 +2912,7 @@ fn ipv4_seq<S: FastSeq>(
                 let slot = unsafe { *ptr.cast::<u8>().offset(offset).cast::<*mut ffi::PyObject>() };
                 if !slot.is_null() {
                     // SAFETY: GIL held; slot is a valid object pointer.
-                    if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(slot) } {
+                    if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(slot, ch_type, 0) } {
                         values.push(v);
                         continue;
                     }
@@ -2287,7 +2930,7 @@ fn ipv4_seq<S: FastSeq>(
             continue;
         }
         // SAFETY: GIL held; ptr is a valid borrowed item pointer.
-        if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(ptr) } {
+        if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(ptr, ch_type, 0) } {
             values.push(v);
             continue;
         }
@@ -2502,6 +3145,8 @@ enum Scalar {
     Date32(i32),
     DateTime(u32),
     DateTime64(i64),
+    Time(i32),
+    Time64(i64),
     Bytes(Vec<u8>),
     Ipv4(u32),
     Enum8(i8),
@@ -2526,6 +3171,8 @@ enum ScalarKey {
     Date32(i32),
     DateTime(u32),
     DateTime64(i64),
+    Time(i32),
+    Time64(i64),
     Bytes(Vec<u8>),
     Ipv4(u32),
     Enum8(i8),
@@ -2551,6 +3198,8 @@ impl Scalar {
             Scalar::Date32(v) => ScalarKey::Date32(*v),
             Scalar::DateTime(v) => ScalarKey::DateTime(*v),
             Scalar::DateTime64(v) => ScalarKey::DateTime64(*v),
+            Scalar::Time(v) => ScalarKey::Time(*v),
+            Scalar::Time64(v) => ScalarKey::Time64(*v),
             Scalar::Bytes(v) => ScalarKey::Bytes(v.clone()),
             Scalar::Ipv4(v) => ScalarKey::Ipv4(*v),
             Scalar::Enum8(v) => ScalarKey::Enum8(*v),
@@ -2615,6 +3264,8 @@ fn column_from_scalars(
         ChType::DateTime64 { .. } => {
             primitive_column!(scalars, validity, DateTime64, DateTime64, i64)
         }
+        ChType::Time => primitive_column!(scalars, validity, Time, Time, i32),
+        ChType::Time64 { .. } => primitive_column!(scalars, validity, Time64, Time64, i64),
         ChType::String => build_utf8_column(scalars, validity),
         ChType::FixedString(width) => build_fixed_binary_column(scalars, *width, validity),
         ChType::Uuid => build_uuid_column(scalars, validity),
@@ -2874,6 +3525,10 @@ fn convert_scalar(
         ChType::DateTime64 { precision, .. } => Ok(Scalar::DateTime64(datetime64_ticks(
             py, value, *precision, column, row,
         )?)),
+        ChType::Time => Ok(Scalar::Time(time_ticks(value, column, row)?)),
+        ChType::Time64 { precision } => Ok(Scalar::Time64(time64_ticks(
+            value, *precision, column, row,
+        )?)),
         ChType::Uuid => Ok(Scalar::Bytes(uuid_bytes(value, column, row)?)),
         ChType::Ipv4 => Ok(Scalar::Ipv4(ipv4_value(value, column, row)?)),
         ChType::Ipv6 => Ok(Scalar::Bytes(ipv6_bytes(value, column, row)?)),
@@ -2923,6 +3578,8 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Date32 => Ok(Scalar::Date32(0)),
         ChType::DateTime { .. } => Ok(Scalar::DateTime(0)),
         ChType::DateTime64 { .. } => Ok(Scalar::DateTime64(0)),
+        ChType::Time => Ok(Scalar::Time(0)),
+        ChType::Time64 { .. } => Ok(Scalar::Time64(0)),
         ChType::Uuid => Ok(Scalar::Bytes(vec![0; 16])),
         ChType::Ipv4 => Ok(Scalar::Ipv4(0)),
         ChType::Ipv6 => Ok(Scalar::Bytes(vec![0; 16])),
@@ -3318,6 +3975,235 @@ fn dt64_ticks_math(
             "column {column:?} row {row} DateTime64 value {ticks} is outside Int64 range"
         ))
     })
+}
+
+fn time_ticks(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<i32> {
+    let ticks = time_like_ticks(value, 0, false, column, row, "Time")?;
+    i32::try_from(ticks).map_err(|_| time_range_error(column, row, "Time", ticks))
+}
+
+fn time64_ticks(
+    value: &Bound<'_, PyAny>,
+    precision: u8,
+    column: &str,
+    row: usize,
+) -> PyResult<i64> {
+    time_like_ticks(value, precision, true, column, row, "Time64")
+}
+
+/// Convert the accepted Time/Time64 Python values to raw signed ticks. Exact
+/// timedelta/time objects use PyO3's C-API accessors, so the common object path
+/// performs no Python calls or attribute lookups. Integers are raw ticks;
+/// floats follow TimeBase's `int(value)` truncation policy.
+fn time_like_ticks(
+    value: &Bound<'_, PyAny>,
+    precision: u8,
+    fractional: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<i64> {
+    let scale = time64_scale(precision);
+    // SAFETY: value is a valid object pointer; PyLong_Check and PyFloat_Check
+    // are C-level type predicates that run no Python.
+    let (is_long, is_float) = unsafe {
+        (
+            ffi::PyLong_Check(value.as_ptr()) != 0,
+            ffi::PyFloat_Check(value.as_ptr()) != 0,
+        )
+    };
+    let ticks = if is_long {
+        value
+            .extract::<i64>()
+            .map_err(|_| conversion_error(column, row, type_name))?
+    } else if let Ok(delta) = value.downcast::<PyDelta>() {
+        timedelta_ticks(delta, scale, precision, fractional, column, row, type_name)?
+    } else if let Ok(time) = value.downcast::<PyTime>() {
+        let total_micros = ((i128::from(time.get_hour()) * 3_600
+            + i128::from(time.get_minute()) * 60
+            + i128::from(time.get_second()))
+            * 1_000_000)
+            + i128::from(time.get_microsecond());
+        let ticks = total_micros * i128::from(scale) / 1_000_000;
+        i64::try_from(ticks).map_err(|_| time_range_error(column, row, type_name, ticks))?
+    } else if let Ok(s) = value.downcast::<PyString>() {
+        parse_time_literal(s.to_str()?, precision, fractional, column, row, type_name)?
+    } else if is_float {
+        // SAFETY: value is a float, so PyFloat_AsDouble cannot fail.
+        let number = unsafe { ffi::PyFloat_AsDouble(value.as_ptr()) };
+        finite_trunc_to_i64(number, column, row, type_name)?
+    } else if let Some((raw, meta)) = numpy_timedelta_scalar_raw(value)? {
+        if raw == i64::MIN {
+            return Err(PyValueError::new_err(format!(
+                "column {column:?} row {row} is NaT and cannot be converted to {type_name}"
+            )));
+        }
+        let ratio = numpy_time_ratio(meta, precision, column)?;
+        rescale_numpy_timedelta(raw, ratio, fractional, precision, column, row, type_name)?
+    } else if is_pandas_nat(value) {
+        return Err(PyValueError::new_err(format!(
+            "column {column:?} row {row} is NaT and cannot be converted to {type_name}"
+        )));
+    } else {
+        value
+            .extract::<i64>()
+            .map_err(|_| conversion_error(column, row, type_name))?
+    };
+
+    let max = if fractional {
+        max_time64_ticks(precision)
+    } else {
+        MAX_TIME_SECONDS
+    };
+    if ticks < -max || ticks > max {
+        return Err(time_range_error(column, row, type_name, ticks));
+    }
+    Ok(ticks)
+}
+
+/// Ticks from a datetime.timedelta. Exact objects read the C-struct fields;
+/// subclasses (pd.Timedelta) first try the ns-resolution `asm8` scalar so
+/// sub-microsecond values are not truncated.
+fn timedelta_ticks(
+    delta: &Bound<'_, PyDelta>,
+    scale: i64,
+    precision: u8,
+    fractional: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<i64> {
+    // SAFETY: a successful PyDelta downcast produced `delta`, so the datetime
+    // C-API is imported; the exact check runs no Python.
+    if unsafe { ffi::PyDelta_CheckExact(delta.as_ptr()) } == 0 {
+        if let Some(ticks) =
+            timedelta_subclass_ticks(delta, precision, fractional, column, row, type_name)?
+        {
+            return Ok(ticks);
+        }
+    }
+    const MICROS_PER_SECOND: i128 = 1_000_000;
+    const MICROS_PER_DAY: i128 = 86_400 * MICROS_PER_SECOND;
+    let total_micros = i128::from(delta.get_days()) * MICROS_PER_DAY
+        + i128::from(delta.get_seconds()) * MICROS_PER_SECOND
+        + i128::from(delta.get_microseconds());
+    let scaled = total_micros * i128::from(scale);
+    // Signed division truncates sub-tick values toward zero, consistent
+    // with Time strings and the Python object decode policy.
+    let ticks = scaled / MICROS_PER_SECOND;
+    i64::try_from(ticks).map_err(|_| time_range_error(column, row, type_name, ticks))
+}
+
+/// ns-resolution ticks for timedelta subclasses exposing `asm8`
+/// (pd.Timedelta). `Ok(None)` means the attribute or its dtype probe does not
+/// apply and the caller falls back to the struct fields.
+fn timedelta_subclass_ticks(
+    value: &Bound<'_, PyAny>,
+    precision: u8,
+    fractional: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<Option<i64>> {
+    let Ok(asm8) = value.getattr(intern!(value.py(), "asm8")) else {
+        return Ok(None);
+    };
+    let Some((raw, meta)) = numpy_timedelta_scalar_raw(&asm8)? else {
+        return Ok(None);
+    };
+    if raw == i64::MIN {
+        return Err(PyValueError::new_err(format!(
+            "column {column:?} row {row} is NaT and cannot be converted to {type_name}"
+        )));
+    }
+    let ratio = numpy_time_ratio(meta, precision, column)?;
+    rescale_numpy_timedelta(raw, ratio, fractional, precision, column, row, type_name).map(Some)
+}
+
+fn parse_time_literal(
+    value: &str,
+    precision: u8,
+    fractional: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<i64> {
+    let value = value.trim();
+    let (negative, unsigned) = match value.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, value),
+    };
+    let (hms, fraction) = match unsigned.split_once('.') {
+        Some((hms, fraction))
+            if !fraction.is_empty()
+                && !fraction.contains('.')
+                && fraction.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            (hms, Some(fraction))
+        }
+        Some(_) => return Err(time_literal_error(column, row, type_name, value)),
+        None => (unsigned, None),
+    };
+    let mut parts = hms.split(':');
+    let hours = parse_time_part(parts.next(), column, row, type_name, value)?;
+    let minutes = parse_time_part(parts.next(), column, row, type_name, value)?;
+    let seconds = parse_time_part(parts.next(), column, row, type_name, value)?;
+    if parts.next().is_some() || hours > 999 || minutes > 59 || seconds > 59 {
+        return Err(time_literal_error(column, row, type_name, value));
+    }
+
+    let scale = time64_scale(precision);
+    let mut fraction_ticks = 0i64;
+    if fractional {
+        let mut digits = 0u8;
+        for byte in fraction
+            .unwrap_or_default()
+            .bytes()
+            .take(usize::from(precision))
+        {
+            fraction_ticks = fraction_ticks * 10 + i64::from(byte - b'0');
+            digits += 1;
+        }
+        for _ in digits..precision {
+            fraction_ticks *= 10;
+        }
+    }
+    let ticks = (hours * 3_600 + minutes * 60 + seconds) * scale + fraction_ticks;
+    Ok(if negative { -ticks } else { ticks })
+}
+
+fn parse_time_part(
+    part: Option<&str>,
+    column: &str,
+    row: usize,
+    type_name: &str,
+    literal: &str,
+) -> PyResult<i64> {
+    let part = part
+        .filter(|part| !part.is_empty())
+        .ok_or_else(|| time_literal_error(column, row, type_name, literal))?;
+    if !part.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(time_literal_error(column, row, type_name, literal));
+    }
+    part.parse::<i64>()
+        .map_err(|_| time_literal_error(column, row, type_name, literal))
+}
+
+fn time_range_error<T: std::fmt::Display>(
+    column: &str,
+    row: usize,
+    type_name: &str,
+    value: T,
+) -> PyErr {
+    PyValueError::new_err(format!(
+        "column {column:?} row {row} {type_name} value {value} is outside logical range"
+    ))
+}
+
+fn time_literal_error(column: &str, row: usize, type_name: &str, value: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "column {column:?} row {row} invalid {type_name} literal {value:?}"
+    ))
 }
 
 fn finite_trunc_to_i64(value: f64, column: &str, row: usize, type_name: &str) -> PyResult<i64> {
@@ -3758,6 +4644,7 @@ fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
             | ChType::Date
             | ChType::Date32
             | ChType::DateTime { .. }
+            | ChType::Time
             | ChType::Uuid
             | ChType::Ipv4
             | ChType::Ipv6

@@ -8,7 +8,7 @@ use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyCapsule, PyDate, PyDateTime, PyDelta, PyDict, PyList, PyString, PyTuple};
 
 /// Wrapper to make ArrowArrayStream Send-safe for PyCapsule.
 #[repr(transparent)]
@@ -187,7 +187,13 @@ impl ColBatch {
     }
 
     /// Get column `index` as a single Python list, concatenated across chunks.
-    fn column_data<'py>(&self, py: Python<'py>, index: usize) -> PyResult<Bound<'py, PyList>> {
+    #[pyo3(signature = (index, raw_time_ticks = false))]
+    fn column_data<'py>(
+        &self,
+        py: Python<'py>,
+        index: usize,
+        raw_time_ticks: bool,
+    ) -> PyResult<Bound<'py, PyList>> {
         if index >= self.inner.num_columns() {
             return Err(PyValueError::new_err(format!(
                 "Column index {index} out of range (0..{})",
@@ -195,7 +201,7 @@ impl ColBatch {
             )));
         }
 
-        let ctx = prepare_column_ctx(py, &self.inner.schema.fields[index].ch_type)?;
+        let ctx = prepare_column_ctx(py, &self.inner.schema.fields[index].ch_type, raw_time_ticks)?;
         column_to_pylist(py, &self.inner.chunks, index, &ctx)
     }
 
@@ -210,7 +216,7 @@ impl ColBatch {
             .schema
             .fields
             .iter()
-            .map(|f| prepare_column_ctx(py, &f.ch_type))
+            .map(|f| prepare_column_ctx(py, &f.ch_type, false))
             .collect::<PyResult<_>>()?;
         for chunk in &self.inner.chunks {
             check_chunk_shape(chunk, num_cols)?;
@@ -267,7 +273,7 @@ impl ColBatch {
     fn to_python_columns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let cols: Vec<Bound<'py, PyList>> = (0..self.inner.num_columns())
             .map(|ci| {
-                let ctx = prepare_column_ctx(py, &self.inner.schema.fields[ci].ch_type)?;
+                let ctx = prepare_column_ctx(py, &self.inner.schema.fields[ci].ch_type, false)?;
                 column_to_pylist(py, &self.inner.chunks, ci, &ctx)
             })
             .collect::<PyResult<_>>()?;
@@ -327,8 +333,12 @@ const UTC_EQUIVALENTS: &[&str] = &[
 struct ColumnCtx<'py> {
     tz: Option<Bound<'py, PyAny>>,
     fromtimestamp: Option<Bound<'py, PyAny>>,
-    /// DateTime64 fractional precision (decimal digits). 0 for Date/DateTime.
+    /// DateTime64/Time64 fractional precision (decimal digits). 0 otherwise.
     precision: u8,
+    /// Time64 ticks per second, precomputed once per column. 1 otherwise.
+    time_scale: u64,
+    /// Materialize Time/Time64 leaves as raw signed ticks instead of timedelta.
+    raw_time_ticks: bool,
     /// Enum value -> pre-built label string, for an Enum8/Enum16 column; `None`
     /// for any other type. A value missing from the map materializes as None,
     /// matching clickhouse-connect's `int_map.get(value, None)`.
@@ -389,7 +399,11 @@ fn enum_name_map<'py, V: Copy + Into<i64>>(
 /// (no Python calls); imports zoneinfo only for a named non-UTC zone and builds
 /// the enum map only for an enum. Safe to call for any column type; types that
 /// need neither yield the naive, non-enum default.
-fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<ColumnCtx<'py>> {
+fn prepare_column_ctx<'py>(
+    py: Python<'py>,
+    ch_type: &ChType,
+    raw_time_ticks: bool,
+) -> PyResult<ColumnCtx<'py>> {
     // Unwrap LowCardinality to reach the value type before inner() strips any
     // Nullable, so LowCardinality(DateTime(tz)) still applies timezone policy.
     let resolved = match ch_type {
@@ -403,13 +417,14 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         _ => None,
     };
 
-    let (timezone, precision) = match resolved {
-        ChType::DateTime { timezone } => (timezone.as_deref(), 0u8),
+    let (timezone, precision, time_scale) = match resolved {
+        ChType::DateTime { timezone } => (timezone.as_deref(), 0u8, 1),
         ChType::DateTime64 {
             precision,
             timezone,
-        } => (timezone.as_deref(), *precision),
-        _ => (None, 0u8),
+        } => (timezone.as_deref(), *precision, 1),
+        ChType::Time64 { precision } => (None, *precision, 10u64.pow(u32::from(*precision))),
+        _ => (None, 0u8, 1),
     };
 
     let (tz, fromtimestamp) = match timezone {
@@ -483,7 +498,7 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
     // which transparently covers every element shape (Nullable, LowCardinality,
     // nested Array, temporal-with-tz, enum, uuid, ip, decimal).
     let element = match resolved {
-        ChType::Array(elem) => Some(Box::new(prepare_column_ctx(py, elem)?)),
+        ChType::Array(elem) => Some(Box::new(prepare_column_ctx(py, elem, raw_time_ticks)?)),
         _ => None,
     };
 
@@ -496,7 +511,7 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         ChType::Tuple(elements) => {
             let fields = elements
                 .iter()
-                .map(|(_, t)| prepare_column_ctx(py, t))
+                .map(|(_, t)| prepare_column_ctx(py, t, raw_time_ticks))
                 .collect::<PyResult<Vec<_>>>()?;
             let named = !elements.is_empty() && elements.iter().all(|(name, _)| name.is_some());
             // `named` guarantees every element has a name; the empty-string
@@ -515,7 +530,10 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
             (Some(fields), names)
         }
         ChType::Map(key, value) => {
-            let fields = vec![prepare_column_ctx(py, key)?, prepare_column_ctx(py, value)?];
+            let fields = vec![
+                prepare_column_ctx(py, key, raw_time_ticks)?,
+                prepare_column_ctx(py, value, raw_time_ticks)?,
+            ];
             (Some(fields), None)
         }
         _ => (None, None),
@@ -525,6 +543,8 @@ fn prepare_column_ctx<'py>(py: Python<'py>, ch_type: &ChType) -> PyResult<Column
         tz,
         fromtimestamp,
         precision,
+        time_scale,
+        raw_time_ticks,
         enum_names,
         uuid,
         ip,
@@ -622,6 +642,55 @@ fn make_datetime<'py>(
             )
         }
     }
+}
+
+/// Build a Python timedelta from a signed second and microsecond total. The
+/// components may be negative; normalize them into Python's canonical
+/// day/second/microsecond representation without a Python arithmetic call.
+fn make_timedelta<'py>(
+    py: Python<'py>,
+    seconds: i128,
+    microseconds: i128,
+) -> PyResult<Bound<'py, PyDelta>> {
+    const MICROS_PER_SECOND: i128 = 1_000_000;
+    const MICROS_PER_DAY: i128 = 86_400 * MICROS_PER_SECOND;
+
+    let total_micros = seconds
+        .checked_mul(MICROS_PER_SECOND)
+        .and_then(|v| v.checked_add(microseconds))
+        .ok_or_else(|| PyValueError::new_err("Time value overflows datetime.timedelta"))?;
+    let days = total_micros.div_euclid(MICROS_PER_DAY);
+    let day_micros = total_micros.rem_euclid(MICROS_PER_DAY);
+    let day_seconds = day_micros / MICROS_PER_SECOND;
+    let micros = day_micros % MICROS_PER_SECOND;
+    let days = i32::try_from(days)
+        .map_err(|_| PyValueError::new_err("Time value is outside datetime.timedelta range"))?;
+    // day_seconds and micros are normalized to Python's documented ranges.
+    PyDelta::new(py, days, day_seconds as i32, micros as i32, false)
+}
+
+/// Materialize Time64 ticks as timedelta with microsecond precision. Fractional
+/// ticks below one microsecond are truncated toward zero, including negatives,
+/// matching clickhouse_connect.datatypes.temporal.Time64._ticks_to_timedelta.
+fn make_time64<'py>(py: Python<'py>, ticks: i64, scale: u64) -> PyResult<Bound<'py, PyDelta>> {
+    let negative = ticks < 0;
+    let magnitude = ticks.unsigned_abs();
+    let seconds = magnitude / scale;
+    let frac = magnitude % scale;
+    // scale <= 1e9, so the numerator fits u64 and avoids software u128 division
+    // in this per-cell materialization path.
+    let micros = frac * 1_000_000 / scale;
+    let sign = if negative { -1i128 } else { 1i128 };
+    if seconds <= i32::MAX as u64 {
+        return PyDelta::new(
+            py,
+            0,
+            (sign * i128::from(seconds)) as i32,
+            (sign * i128::from(micros)) as i32,
+            true,
+        );
+    }
+    make_timedelta(py, sign * i128::from(seconds), sign * i128::from(micros))
 }
 
 /// Reject a chunk whose column count differs from the schema or whose column
@@ -791,6 +860,8 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::Date32(c) => c.validity.as_ref(),
         Column::DateTime(c) => c.validity.as_ref(),
         Column::DateTime64(c) => c.validity.as_ref(),
+        Column::Time(c) => c.validity.as_ref(),
+        Column::Time64(c) => c.validity.as_ref(),
         Column::Utf8(c) => c.validity.as_ref(),
         Column::FixedBinary(c) => c.validity.as_ref(),
         Column::Ipv4(c) => c.validity.as_ref(),
@@ -1011,6 +1082,43 @@ where
             |v| unsafe { ffi::PyFloat_FromDouble(v) },
             sink,
         )?,
+        Column::Time(c) => {
+            if ctx.raw_time_ticks {
+                fill_prim(
+                    py,
+                    &c.values[..rows],
+                    c.validity.as_ref(),
+                    |v| unsafe { ffi::PyLong_FromLong(c_long::from(v)) },
+                    sink,
+                )?
+            } else {
+                fill_indexed(
+                    rows,
+                    c.validity.as_ref(),
+                    |i| Ok(PyDelta::new(py, 0, c.values[i], 0, true)?.into_ptr()),
+                    sink,
+                )?
+            }
+        }
+        Column::Time64(c) => {
+            if ctx.raw_time_ticks {
+                fill_prim(
+                    py,
+                    &c.values[..rows],
+                    c.validity.as_ref(),
+                    |v| unsafe { ffi::PyLong_FromLongLong(v) },
+                    sink,
+                )?
+            } else {
+                let scale = ctx.time_scale;
+                fill_indexed(
+                    rows,
+                    c.validity.as_ref(),
+                    |i| Ok(make_time64(py, c.values[i], scale)?.into_ptr()),
+                    sink,
+                )?
+            }
+        }
         Column::Bool(c) => match &c.validity {
             None => {
                 for i in 0..rows {
@@ -1444,6 +1552,20 @@ unsafe fn column_value_nonnull_ptr(
         Column::DateTime64(c) => {
             let (secs, micros) = dt64_secs_micros(c.values[index], ctx.precision);
             Ok(make_datetime(py, secs, micros, ctx)?.into_ptr())
+        }
+        Column::Time(c) => {
+            if ctx.raw_time_ticks {
+                ptr_to_result(py, ffi::PyLong_FromLong(c_long::from(c.values[index])))
+            } else {
+                Ok(PyDelta::new(py, 0, c.values[index], 0, true)?.into_ptr())
+            }
+        }
+        Column::Time64(c) => {
+            if ctx.raw_time_ticks {
+                ptr_to_result(py, ffi::PyLong_FromLongLong(c.values[index]))
+            } else {
+                Ok(make_time64(py, c.values[index], ctx.time_scale)?.into_ptr())
+            }
         }
         Column::Utf8(c) => utf8_or_hex_owned_ptr(py, c.value(index)),
         Column::FixedBinary(c) => {

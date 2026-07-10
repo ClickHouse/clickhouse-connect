@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import timedelta
 
 import pytest
 
@@ -24,10 +25,7 @@ DECODE_MATRIX = {
     "nullable_wide_int": "CAST(if(number % 3 = 0, NULL, toInt256(number) - 2) AS Nullable(Int256))",
     "array_wide_int": "arrayMap(x -> toUInt128(x) + toUInt128('18446744073709551616'), range(number % 4))",
     "tuple_wide_int": "tuple(toInt128(number) - 2, toUInt256(number) + toUInt256('340282366920938463463374607431768211456'))",
-    "array_tuple_wide_int": (
-        "arrayMap(x -> tuple(toInt256(x) - 2, toUInt128(x) + toUInt128('18446744073709551616')), "
-        "range(number % 4))"
-    ),
+    "array_tuple_wide_int": ("arrayMap(x -> tuple(toInt256(x) - 2, toUInt128(x) + toUInt128('18446744073709551616')), range(number % 4))"),
     "nullable_int": "CAST(if(number % 3 = 0, NULL, toInt32(number)) AS Nullable(Int32))",
     "low_card_string": "CAST(toString(number % 3) AS LowCardinality(String))",
     "low_card_nullable_string": "CAST(if(number % 2 = 0, NULL, toString(number)) AS LowCardinality(Nullable(String)))",
@@ -83,6 +81,103 @@ def test_rust_codec_ab_parity(client_factory, call):
     assert rust_result.result_rows == python_result.result_rows
     assert rust_result.column_names == python_result.column_names
     assert [t.name for t in rust_result.column_types] == [t.name for t in python_result.column_types]
+
+
+def test_rust_codec_time_parity(client_factory, call, test_config):
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+
+    version_client = client_factory(native_codec="python")
+    if not version_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+
+    settings = {"allow_suspicious_low_cardinality_types": 1, "enable_time_time64_type": 1}
+    rust_client = client_factory(native_codec="rust_strict", settings=settings)
+    python_client = client_factory(native_codec="python", settings=settings)
+
+    cases = [
+        (
+            "CAST(v AS Time)",
+            ["-000:00:05", "000:00:00", "030:00:00"],
+            [timedelta(seconds=-5), timedelta(0), timedelta(hours=30)],
+        ),
+        (
+            "CAST(v AS Time64(9))",
+            ["-000:00:05.500000000", "000:00:00.000000001", "001:02:03.123456789"],
+            [timedelta(seconds=-5, microseconds=-500_000), timedelta(0), timedelta(seconds=3_723, microseconds=123_456)],
+        ),
+    ]
+    for expression, values, expected in cases:
+        rows = ", ".join(f"('{value}')" for value in values)
+        query = f"SELECT {expression} AS c FROM values('v String', {rows})"
+
+        rust_result = call(rust_client.query, query)
+        python_result = call(python_client.query, query)
+        assert rust_result.result_rows == python_result.result_rows == [(value,) for value in expected]
+
+        np = pytest.importorskip("numpy")
+        rust_np = call(rust_client.query_np, query)
+        python_np = call(python_client.query_np, query)
+        assert rust_np.dtype == python_np.dtype
+        np.testing.assert_array_equal(rust_np, python_np)
+
+    pd = pytest.importorskip("pandas")
+    nullable_cases = [
+        ("Time", ["000:00:13", None, "-000:00:05"]),
+        ("Time64(6)", ["000:00:13.000079", None, "-000:00:05.500000"]),
+        ("Time64(9)", ["-000:00:00.000000001", None, "000:00:00.000000001"]),
+    ]
+    for type_name, values in nullable_cases:
+        rows = ", ".join("(NULL)" if value is None else f"('{value}')" for value in values)
+        query = f"SELECT CAST(v AS Nullable({type_name})) AS c FROM values('v Nullable(String)', {rows})"
+
+        rust_np = call(rust_client.query_np, query)
+        python_np = call(python_client.query_np, query)
+        assert rust_np.dtype == python_np.dtype
+        np.testing.assert_array_equal(rust_np, python_np)
+
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            assert rust_df["c"].dtype == python_df["c"].dtype
+            pd.testing.assert_frame_equal(rust_df, python_df)
+
+    low_card_queries = [
+        ("SELECT CAST(v AS LowCardinality(Time)) AS c FROM values('v String', ('000:00:13'), ('-000:00:05'), ('000:00:13'))"),
+        ("SELECT CAST(v AS LowCardinality(Nullable(Time))) AS c FROM values('v Nullable(String)', ('000:00:13'), (NULL), ('-000:00:05'))"),
+    ]
+    for query in low_card_queries:
+        rust_np = call(rust_client.query_np, query)
+        python_np = call(python_client.query_np, query)
+        assert rust_np.dtype == python_np.dtype
+        np.testing.assert_array_equal(rust_np, python_np)
+        rust_df = call(rust_client.query_df, query)
+        python_df = call(python_client.query_df, query)
+        assert rust_df["c"].dtype == python_df["c"].dtype
+        pd.testing.assert_frame_equal(rust_df, python_df)
+
+    nested_queries = [
+        ("SELECT [CAST('-000:00:00.000000001' AS Time64(9)), CAST('000:00:00.000000001' AS Time64(9))] AS c"),
+        ("SELECT tuple(CAST('-000:00:05' AS Time), CAST('000:00:00.000000001' AS Time64(9))) AS c"),
+        (
+            "SELECT [tuple(CAST('-000:00:05' AS Time), "
+            "CAST('-000:00:00.000000001' AS Time64(9))), "
+            "tuple(CAST('000:00:13' AS Time), "
+            "CAST('000:00:00.000000001' AS Time64(9)))] AS c"
+        ),
+        ("SELECT map('key', CAST('000:00:00.000000001' AS Time64(9)), 'key', CAST('000:00:00.000000002' AS Time64(9))) AS c"),
+        ("SELECT [CAST(NULL AS Nullable(Time64(9))), CAST('000:00:00.000000001' AS Nullable(Time64(9)))] AS c"),
+    ]
+    for query in nested_queries:
+        rust_np = call(rust_client.query_np, query)
+        python_np = call(python_client.query_np, query)
+        assert rust_np.dtype == python_np.dtype
+        np.testing.assert_array_equal(rust_np, python_np)
+
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            pd.testing.assert_frame_equal(rust_df, python_df)
 
 
 @pytest.mark.parametrize("expr", DECODE_MATRIX.values(), ids=list(DECODE_MATRIX))

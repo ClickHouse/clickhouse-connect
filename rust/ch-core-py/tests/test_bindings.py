@@ -89,8 +89,8 @@ def _temporal_struct_fmt(inner_type: str):
     """Wire struct format for a temporal type, or None if not temporal.
 
     Temporal columns are plain bulk integers on the wire; timezone and precision
-    are type-name metadata only. Values are passed as raw epoch units (Date/Date32
-    days, DateTime seconds, DateTime64 ticks).
+    are type-name metadata only. Values are passed as raw units (Date/Date32 days,
+    DateTime seconds, DateTime64 ticks, Time seconds, and Time64 ticks).
     """
     if inner_type == "Date":
         return "<H"  # u16 days
@@ -99,6 +99,10 @@ def _temporal_struct_fmt(inner_type: str):
     if inner_type == "DateTime" or inner_type.startswith("DateTime("):
         return "<I"  # u32 seconds
     if inner_type.startswith("DateTime64("):
+        return "<q"  # i64 ticks
+    if inner_type == "Time":
+        return "<i"  # i32 seconds
+    if inner_type.startswith("Time64("):
         return "<q"  # i64 ticks
     return None
 
@@ -997,6 +1001,382 @@ class TestTemporalInsertFastPath:
         assert decoded == [dt.date(1969, 9, 23), dt.date(1970, 1, 1), dt.date(1970, 4, 11)]
 
 
+class TestTimeInsert:
+    def _encode(self, type_name, vals, n=None):
+        n = len(vals) if n is None else n
+        return _ch_core.encode_native_block(["t"], [type_name], [vals], n)
+
+    def _decode(self, encoded):
+        return list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+
+    def test_time_accepted_values_and_fast_raw_ints(self):
+        values = [
+            13,
+            dt.timedelta(seconds=-1, microseconds=-500_000),
+            dt.time(1, 2, 3, 999_999),
+            "002:03:04.999",
+            79.9,
+        ]
+        ticks = [13, -1, 3_723, 7_384, 79]
+        encoded = self._encode("Time", values)
+        assert encoded == build_native_block([("t", "Time", ticks)])
+        assert encoded == self._encode("Time", tuple(values), len(values))
+        assert encoded == self._encode(
+            "Time", _NdarrayLikeColumn(values), len(values)
+        )
+        assert self._decode(encoded) == [dt.timedelta(seconds=v) for v in ticks]
+
+    def test_established_inputs_skip_numpy_scalar_probe(self):
+        probes = {"count": 0}
+
+        def dtype_probe():
+            probes["count"] += 1
+            return "not-a-numpy-dtype"
+
+        class StringValue(str):
+            @property
+            def dtype(self):
+                return dtype_probe()
+
+        class FloatValue(float):
+            @property
+            def dtype(self):
+                return dtype_probe()
+
+        class IntValue(int):
+            @property
+            def dtype(self):
+                return dtype_probe()
+
+        values = [
+            dt.timedelta(seconds=1, microseconds=234_567),
+            dt.time(0, 0, 1, 234_567),
+            StringValue("000:00:01.234567"),
+            FloatValue(79),
+            IntValue(-13),
+        ]
+        expected_ticks = [1_234_567, 1_234_567, 1_234_567, 79, -13]
+        direct = self._encode("Nullable(Time64(6))", [*values, None])
+        generic = self._encode(
+            "Nullable(Time64(6))", _NdarrayLikeColumn([*values, None]), 6
+        )
+        assert direct == generic == build_native_block(
+            [
+                (
+                    "t",
+                    "Nullable(Time64(6))",
+                    [*expected_ticks, None],
+                )
+            ]
+        )
+        self._encode("Array(Time64(6))", [values])
+        self._encode(
+            "LowCardinality(Time)",
+            [values[0], values[1], values[2], values[3], values[4]],
+        )
+        assert probes["count"] == 0
+
+    def test_delta_and_time_subclasses_probe_then_fall_back(self):
+        # Subclasses go through the numpy scalar probe (pd.Timedelta needs it);
+        # a non-dtype attribute falls back to the struct-field conversion.
+        class DeltaValue(dt.timedelta):
+            @property
+            def dtype(self):
+                return "not-a-numpy-dtype"
+
+        class TimeValue(dt.time):
+            @property
+            def dtype(self):
+                return "not-a-numpy-dtype"
+
+        values = [
+            DeltaValue(seconds=1, microseconds=234_567),
+            TimeValue(0, 0, 1, 234_567),
+        ]
+        encoded = self._encode("Nullable(Time64(6))", values)
+        assert encoded == build_native_block(
+            [("t", "Nullable(Time64(6))", [1_234_567, 1_234_567])]
+        )
+
+    @pytest.mark.parametrize(
+        "precision,values,ticks",
+        [
+            (
+                0,
+                [
+                    dt.timedelta(seconds=13, microseconds=999_999),
+                    dt.time(1, 2, 3, 999_999),
+                    "-002:03:04.9",
+                ],
+                [13, 3_723, -7_384],
+            ),
+            (
+                3,
+                [
+                    dt.timedelta(seconds=1, microseconds=234_567),
+                    dt.time(1, 2, 3, 456_789),
+                    "-002:03:04.56789",
+                ],
+                [1_234, 3_723_456, -7_384_567],
+            ),
+            (
+                6,
+                [
+                    dt.timedelta(microseconds=79),
+                    dt.time(0, 0, 1, 234_567),
+                    "000:00:01.2",
+                ],
+                [79, 1_234_567, 1_200_000],
+            ),
+            (
+                9,
+                [
+                    dt.timedelta(microseconds=79),
+                    dt.time(0, 0, 1, 234_567),
+                    "000:00:01.000000079",
+                ],
+                [79_000, 1_234_567_000, 1_000_000_079],
+            ),
+        ],
+    )
+    def test_time64_precisions(self, precision, values, ticks):
+        type_name = f"Time64({precision})"
+        encoded = self._encode(type_name, values)
+        assert encoded == build_native_block([("t", type_name, ticks)])
+        assert self._decode(encoded) == [
+            dt.timedelta(
+                microseconds=(abs(v) * 1_000_000 // (10**precision))
+                * (-1 if v < 0 else 1)
+            )
+            for v in ticks
+        ]
+
+    @pytest.mark.parametrize(
+        "type_name,value",
+        [
+            ("Time64(0)", dt.timedelta(milliseconds=-999)),
+            ("Time64(3)", dt.timedelta(microseconds=-999)),
+        ],
+    )
+    def test_negative_timedelta_sub_tick_truncates_toward_zero(
+        self, type_name, value
+    ):
+        encoded = self._encode(type_name, [value])
+        assert encoded == build_native_block([("t", type_name, [0])])
+
+    @pytest.mark.parametrize(
+        "type_name,value",
+        [
+            ("Time64(0)", ("timedelta64[ms]", -999)),
+            ("Time64(3)", ("timedelta64[us]", -999)),
+            ("Time64(6)", ("timedelta64[ns]", -999)),
+            ("Time64(9)", ("timedelta64[ps]", -999)),
+        ],
+    )
+    def test_numpy_scalar_negative_sub_tick_truncates_toward_zero(
+        self, type_name, value
+    ):
+        np = pytest.importorskip("numpy")
+        dtype, raw = value
+        scalar = np.array(raw, dtype=dtype)[()]
+        encoded = self._encode(type_name, [scalar])
+        assert encoded == build_native_block([("t", type_name, [0])])
+
+    @pytest.mark.parametrize(
+        "type_name,expected_ticks",
+        [
+            ("Time", [1, -1, 0]),
+            ("Time64(3)", [1_234, -1_234, 0]),
+            ("Time64(6)", [1_234_567, -1_234_567, 0]),
+            ("Time64(9)", [1_234_567_890, -1_234_567_890, 0]),
+        ],
+    )
+    def test_numpy_timedelta64_ndarray_bulk_path(self, type_name, expected_ticks):
+        np = pytest.importorskip("numpy")
+        values = np.array(
+            [1_234_567_890, -1_234_567_890, 0], dtype="timedelta64[ns]"
+        )
+        encoded = self._encode(type_name, values)
+        assert encoded == build_native_block([("t", type_name, expected_ticks)])
+
+    def test_numpy_timedelta64_two_dimensional_array_rejected(self):
+        np = pytest.importorskip("numpy")
+        values = np.array([13, 79], dtype="timedelta64[ns]").reshape(2, 1)
+        with pytest.raises(ValueError, match="must be one-dimensional"):
+            self._encode("Time64(9)", values)
+
+    def test_numpy_timedelta64_byte_order_multiplier_and_general_ratios(self):
+        np = pytest.importorskip("numpy")
+
+        big_endian = np.array([1_234, -1_234], dtype=">m8[ms]")
+        assert self._encode("Time64(3)", big_endian) == build_native_block(
+            [("t", "Time64(3)", [1_234, -1_234])]
+        )
+
+        multiplied = np.array([13, -13], dtype="timedelta64[10us]")
+        assert self._encode("Time64(9)", multiplied) == build_native_block(
+            [("t", "Time64(9)", [130_000, -130_000])]
+        )
+
+        general = np.array([334, -334], dtype="timedelta64[3ps]")
+        assert self._encode("Time64(9)", general) == build_native_block(
+            [("t", "Time64(9)", [1, -1])]
+        )
+
+    def test_numpy_timedelta64_nullable_nat_array_and_scalars(self):
+        np = pytest.importorskip("numpy")
+        values = np.array([1_234_567, "NaT", -1_234_567], dtype="timedelta64[us]")
+        encoded = self._encode("Nullable(Time64(6))", values)
+        assert encoded == build_native_block(
+            [("t", "Nullable(Time64(6))", [1_234_567, None, -1_234_567])]
+        )
+        assert self._decode(encoded) == [
+            dt.timedelta(microseconds=1_234_567),
+            None,
+            dt.timedelta(microseconds=-1_234_567),
+        ]
+
+        scalar_values = [np.timedelta64(13, "ms"), np.timedelta64("NaT")]
+        scalar_encoded = self._encode("Nullable(Time64(3))", scalar_values)
+        assert scalar_encoded == build_native_block(
+            [("t", "Nullable(Time64(3))", [13, None])]
+        )
+
+    def test_pandas_timedelta_series_bulk_path(self):
+        pd = pytest.importorskip("pandas")
+        values = pd.Series(
+            pd.to_timedelta(["1.234567890s", None, "-1.234567890s"])
+        )
+        encoded = self._encode("Nullable(Time64(9))", values)
+        assert encoded == build_native_block(
+            [
+                (
+                    "t",
+                    "Nullable(Time64(9))",
+                    [1_234_567_890, None, -1_234_567_890],
+                )
+            ]
+        )
+
+    def test_pandas_timedelta_scalar_ns_precision_in_list(self):
+        pd = pytest.importorskip("pandas")
+        values = [pd.Timedelta("1s 123456789ns"), pd.Timedelta("-1s")]
+        encoded = self._encode("Time64(9)", values)
+        assert encoded == build_native_block(
+            [("t", "Time64(9)", [1_123_456_789, -1_000_000_000])]
+        )
+        sub_tick = self._encode("Time64(0)", [pd.Timedelta("-999ms")])
+        assert sub_tick == build_native_block([("t", "Time64(0)", [0])])
+
+    def test_pandas_nat_nullable_and_non_nullable(self):
+        pd = pytest.importorskip("pandas")
+        encoded = self._encode("Nullable(Time64(9))", [pd.Timedelta("1us"), pd.NaT])
+        assert encoded == build_native_block(
+            [("t", "Nullable(Time64(9))", [1_000, None])]
+        )
+        with pytest.raises(ValueError, match="row 0 is NaT but Time is not Nullable"):
+            self._encode("Time", [pd.NaT])
+        with pytest.raises(ValueError, match="row 1 is NaT"):
+            self._encode("Time64(3)", _NdarrayLikeColumn([13, pd.NaT]), 2)
+
+    def test_numpy_nat_non_nullable_and_range_errors(self):
+        np = pytest.importorskip("numpy")
+        with pytest.raises(ValueError, match="row 0 is NaT.*not Nullable"):
+            self._encode("Time", np.array(["NaT"], dtype="timedelta64[ns]"))
+        with pytest.raises(ValueError, match="outside logical range"):
+            self._encode("Time", np.array([1_000], dtype="timedelta64[h]"))
+
+    def test_late_day_time64_nested_value_avoids_i64_overflow(self):
+        value = dt.time(23, 59, 59, 999_999)
+        type_name = "Array(Tuple(Time64(9)))"
+        encoded = self._encode(type_name, [[(value,)]])
+        expected_ticks = 86_399_999_999_000
+        assert encoded == build_native_block(
+            [("t", type_name, [[(expected_ticks,)]])]
+        )
+        assert self._decode(encoded) == [
+            [(dt.timedelta(seconds=86_399, microseconds=999_999),)]
+        ]
+
+    def test_nullable_and_recursive_shapes(self):
+        nullable = [
+            dt.timedelta(seconds=1, microseconds=250_000),
+            None,
+            "-000:00:00.001",
+        ]
+        encoded = self._encode("Nullable(Time64(3))", nullable)
+        assert self._decode(encoded) == [
+            dt.timedelta(milliseconds=1_250),
+            None,
+            dt.timedelta(milliseconds=-1),
+        ]
+
+        array_rows = [[dt.timedelta(milliseconds=13), "000:00:00.079"], [], [-1]]
+        encoded = self._encode("Array(Time64(3))", array_rows)
+        assert self._decode(encoded) == [
+            [dt.timedelta(milliseconds=13), dt.timedelta(milliseconds=79)],
+            [],
+            [dt.timedelta(milliseconds=-1)],
+        ]
+
+        tuple_rows = [
+            (dt.time(0, 0, 13), dt.timedelta(microseconds=79)),
+            (-13, None),
+        ]
+        encoded = self._encode("Tuple(Time, Nullable(Time64(6)))", tuple_rows)
+        assert self._decode(encoded) == [
+            (dt.timedelta(seconds=13), dt.timedelta(microseconds=79)),
+            (dt.timedelta(seconds=-13), None),
+        ]
+
+        array_tuple_rows = [
+            [("000:00:13", 79_000)],
+            [],
+            [(dt.time(0, 1, 19), -1_000)],
+        ]
+        encoded = self._encode(
+            "Array(Tuple(Time, Time64(6)))", array_tuple_rows
+        )
+        assert self._decode(encoded) == [
+            [(dt.timedelta(seconds=13), dt.timedelta(microseconds=79_000))],
+            [],
+            [(dt.timedelta(seconds=79), dt.timedelta(microseconds=-1_000))],
+        ]
+
+    def test_low_cardinality_time_and_time64_rejection(self):
+        encoded = self._encode("LowCardinality(Time)", [13, 79, 13, -1])
+        assert self._decode(encoded) == [
+            dt.timedelta(seconds=13),
+            dt.timedelta(seconds=79),
+            dt.timedelta(seconds=13),
+            dt.timedelta(seconds=-1),
+        ]
+        with pytest.raises(
+            NotImplementedError, match="unsupported LowCardinality inner type"
+        ):
+            self._encode("LowCardinality(Time64(3))", [13])
+
+    @pytest.mark.parametrize(
+        "type_name,value",
+        [
+            ("Time", 3_600_000),
+            ("Time", -3_600_000),
+            ("Time64(3)", 3_600_000_000),
+            ("Time64(3)", -3_600_000_000),
+            ("Time", "1000:00:00"),
+            ("Time64(6)", "001:60:00"),
+            ("Time64(6)", float("inf")),
+        ],
+    )
+    def test_invalid_values(self, type_name, value):
+        with pytest.raises(ValueError, match="column.*row 0.*Time"):
+            self._encode(type_name, [value])
+
+    def test_none_requires_nullable(self):
+        with pytest.raises(ValueError, match="row 0 is None but Time is not Nullable"):
+            self._encode("Time", [None])
+
+
 class TestScalarObjectInsertFastPath:
     """UUID, IPv4, and Enum8/16 fast paths over exact lists and tuples."""
 
@@ -1765,6 +2145,156 @@ class TestDecodeDateTime64:
         )
         cols = list(batch.to_python_columns())
         assert list(cols[0])[0] == _EPOCH_DATE
+
+
+class TestDecodeTime:
+    @pytest.mark.parametrize(
+        "type_name,ticks,expected",
+        [
+            (
+                "Time",
+                [-3_599_999, -13, 0, 3_599_999],
+                [
+                    dt.timedelta(seconds=v)
+                    for v in [-3_599_999, -13, 0, 3_599_999]
+                ],
+            ),
+            (
+                "Time64(0)",
+                [-13, 0, 79],
+                [dt.timedelta(seconds=v) for v in [-13, 0, 79]],
+            ),
+            (
+                "Time64(3)",
+                [-1_500, -1, 0, 79_999],
+                [
+                    dt.timedelta(milliseconds=-1_500),
+                    dt.timedelta(milliseconds=-1),
+                    dt.timedelta(0),
+                    dt.timedelta(milliseconds=79_999),
+                ],
+            ),
+            (
+                "Time64(6)",
+                [-1_500_001, -1, 0, 79_999_999],
+                [
+                    dt.timedelta(microseconds=-1_500_001),
+                    dt.timedelta(microseconds=-1),
+                    dt.timedelta(0),
+                    dt.timedelta(microseconds=79_999_999),
+                ],
+            ),
+            (
+                "Time64(9)",
+                [-1_999, -1_001, -999, 1_999],
+                [
+                    dt.timedelta(microseconds=-1),
+                    dt.timedelta(microseconds=-1),
+                    dt.timedelta(0),
+                    dt.timedelta(microseconds=1),
+                ],
+            ),
+        ],
+    )
+    def test_plain_precisions_and_truncation(self, type_name, ticks, expected):
+        batch = _ch_core.ColBatch.decode_native(
+            build_native_block([("t", type_name, ticks)])
+        )
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == expected
+
+    def test_nullable_and_all_object_exits(self):
+        ticks = [-1_001, None, 1_999]
+        expected = [
+            dt.timedelta(microseconds=-1),
+            None,
+            dt.timedelta(microseconds=1),
+        ]
+        batch = _ch_core.ColBatch.decode_native(
+            build_native_block([("t", "Nullable(Time64(9))", ticks)])
+        )
+        assert batch.column_type_names == ["Nullable(Time64(9))"]
+        assert list(batch.column_data(0)) == expected
+        assert list(batch.to_python_columns()[0]) == expected
+        assert [row[0] for row in batch.to_python_rows()] == expected
+
+    def test_raw_time_ticks_scalar_nullable_and_low_cardinality(self):
+        data = build_native_block(
+            [
+                ("t", "Time", [-13, 0, 79]),
+                ("t64", "Nullable(Time64(9))", [-1_001, None, 1_999]),
+                ("lc", "LowCardinality(Time)", [13, 79, 13]),
+            ]
+        )
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0, raw_time_ticks=True)) == [-13, 0, 79]
+        assert list(batch.column_data(1, raw_time_ticks=True)) == [
+            -1_001,
+            None,
+            1_999,
+        ]
+        assert list(batch.column_data(2, raw_time_ticks=True)) == [13, 79, 13]
+        assert list(batch.column_data(0)) == [
+            dt.timedelta(seconds=-13),
+            dt.timedelta(0),
+            dt.timedelta(seconds=79),
+        ]
+
+    def test_raw_time_ticks_recursive_array_tuple_and_low_cardinality(self):
+        type_name = (
+            "Array(Tuple(Time, Nullable(Time64(9)), "
+            "Array(LowCardinality(Time))))"
+        )
+        rows = [
+            [(13, -1_001, [13, 13, 79]), (-79, None, [])],
+            [],
+            [(0, 1_999, [-1])],
+        ]
+        batch = _ch_core.ColBatch.decode_native(
+            build_native_block([("v", type_name, rows)])
+        )
+        assert list(batch.column_data(0, True)) == rows
+        assert list(batch.column_data(0)) == [
+            [
+                (
+                    dt.timedelta(seconds=13),
+                    dt.timedelta(microseconds=-1),
+                    [dt.timedelta(seconds=13)] * 2 + [dt.timedelta(seconds=79)],
+                ),
+                (dt.timedelta(seconds=-79), None, []),
+            ],
+            [],
+            [
+                (
+                    dt.timedelta(0),
+                    dt.timedelta(microseconds=1),
+                    [dt.timedelta(seconds=-1)],
+                )
+            ],
+        ]
+
+    def test_raw_time_ticks_map_duplicate_key_last_value_wins(self):
+        type_name = "Map(Time, String)"
+        body = bytearray(struct.pack("<Q", 3))
+        body.extend(struct.pack("<iii", 13, 13, 79))
+        body.extend(_encode_plain_body("String", ["first", "second", "third"]))
+        data = build_native_block_from_bodies([("m", type_name, bytes(body))], 1)
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0, raw_time_ticks=True)) == [
+            {13: "second", 79: "third"}
+        ]
+        assert list(batch.column_data(0)) == [
+            {
+                dt.timedelta(seconds=13): "second",
+                dt.timedelta(seconds=79): "third",
+            }
+        ]
+
+    @pytest.mark.parametrize("type_name", ["time", "time64(3)", "Time64"])
+    def test_noncanonical_direct_headers_rejected(self, type_name):
+        payload = build_native_block([("t", type_name, [])])
+        with pytest.raises(ValueError, match="Unsupported ClickHouse type"):
+            _ch_core.ColBatch.decode_native(payload)
 
 
 class TestArrowTemporal:

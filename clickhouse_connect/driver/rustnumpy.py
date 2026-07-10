@@ -3,9 +3,10 @@
 The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds with the timezone dropped,
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
-the Python codec by construction. Non-nullable numeric and temporal columns take the zero-copy Arrow exit;
-strings, enums, low-cardinality, and nullable columns take the rust python-object exit and are finalized
-through the driver's own _finalize_column.
+the Python codec by construction. Non-nullable numeric and temporal columns take the Arrow exit. Time and
+Time64 keep their declared duration units through nullable and nested NumPy/pandas output. Strings, enums,
+and remaining nullable columns take the rust python-object exit and are finalized through the driver's own
+_finalize_column.
 """
 
 import logging
@@ -13,7 +14,8 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64
+from clickhouse_connect.datatypes.container import Array, Map, Tuple
+from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, Time, Time64
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.query import QueryContext
@@ -21,6 +23,8 @@ from clickhouse_connect.driver.query import QueryContext
 logger = logging.getLogger(__name__)
 
 BlockConverter = Callable[[Any, Any, int], Any]
+
+_TIME64_UNITS = {3: "ms", 6: "us", 9: "ns"}
 
 
 class _Converter:
@@ -73,6 +77,163 @@ def _make_datetime64_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
     return convert
 
 
+def _make_time_convert(ch_type: Time | Time64, as_pandas: bool = False) -> BlockConverter:
+    unit = "s" if isinstance(ch_type, Time) else _TIME64_UNITS[ch_type.scale]
+
+    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+        column = _arrow_column(arrow_table, index)
+        if ch_type.nullable:
+            null_count = column.null_count
+            if isinstance(ch_type, Time):
+                column = column.cast(options.arrow.int64())
+            values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
+            if as_pandas:
+                return values
+            # The Python codec's query_np contract for nullable temporal columns
+            # is an object array of numpy.timedelta64 scalars and None. Assign a
+            # list here because direct ndarray assignment coerces the scalars to
+            # datetime.timedelta at microsecond precision.
+            result = list(values)
+            if null_count:
+                for null_index in options.np.flatnonzero(options.np.isnat(values)):
+                    result[null_index] = None
+            return result
+        values = column.to_numpy(zero_copy_only=False)
+        if isinstance(ch_type, Time64):
+            # The core exports Time64 as its raw signed Int64 tick buffer because
+            # Arrow time types cannot represent negative or >=24-hour values.
+            # NumPy timedelta64 has the same 64-bit layout, so only reinterpret
+            # the dtype here. No values or validity data are copied.
+            return values.view(ch_type.np_type)
+        # Time is Int32 on the wire while NumPy timedelta64 uses Int64. Widening
+        # requires one allocation, but still avoids one Python timedelta object
+        # per cell and lets NumPy perform the conversion in bulk.
+        return values.astype(ch_type.np_type, copy=False)
+
+    return convert
+
+
+def _contains_nested_time(ch_type: ClickHouseType) -> bool:
+    if isinstance(ch_type, Array):
+        return isinstance(ch_type.element_type, (Time, Time64)) or _contains_nested_time(ch_type.element_type)
+    if isinstance(ch_type, Tuple):
+        return any(isinstance(elem, (Time, Time64)) or _contains_nested_time(elem) for elem in ch_type.element_types)
+    if isinstance(ch_type, Map):
+        return any(isinstance(elem, (Time, Time64)) or _contains_nested_time(elem) for elem in (ch_type.key_type, ch_type.value_type))
+    return False
+
+
+def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null: bool = False) -> Any:
+    """Replace raw Time ticks in an otherwise materialized Python object tree."""
+    if raw is None:
+        if extended_time_null and isinstance(ch_type, Time):
+            return options.np.timedelta64("NaT", "s")
+        if extended_time_null and isinstance(ch_type, Time64):
+            return options.np.timedelta64("NaT", _TIME64_UNITS[ch_type.scale])
+        return None
+    if isinstance(ch_type, Time):
+        return options.np.timedelta64(raw, "s")
+    if isinstance(ch_type, Time64):
+        return options.np.timedelta64(raw, _TIME64_UNITS[ch_type.scale])
+    if isinstance(ch_type, Array):
+        for index, value in enumerate(raw):
+            raw[index] = _materialize_raw_times(ch_type.element_type, value, extended_time_null)
+        return raw
+    if isinstance(ch_type, Tuple):
+        if isinstance(raw, dict):
+            return {
+                name: _materialize_raw_times(elem_type, raw[name], extended_time_null)
+                for name, elem_type in zip(ch_type.element_names, ch_type.element_types)
+            }
+        return tuple(_materialize_raw_times(elem_type, value, extended_time_null) for elem_type, value in zip(ch_type.element_types, raw))
+    if isinstance(ch_type, Map):
+        raw_items = raw.items() if isinstance(raw, dict) else ((entry["key"], entry["value"]) for entry in raw)
+        return {
+            _materialize_raw_times(ch_type.key_type, key, extended_time_null): _materialize_raw_times(
+                ch_type.value_type, value, extended_time_null
+            )
+            for key, value in raw_items
+        }
+    return raw
+
+
+def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        try:
+            column = col_batch.column_data(index, raw_time_ticks=True)
+        except NotImplementedError as ex:
+            raise NotSupportedError(
+                f"The rust native codec cannot decode this column for numpy/pandas output: {ex}. "
+                'Use native_codec="python" to fall back to the Python codec'
+            ) from ex
+        extended_time_null = context.as_pandas and context.use_extended_dtypes
+        for row, value in enumerate(column):
+            column[row] = _materialize_raw_times(ch_type, value, extended_time_null)
+        return column
+
+    return convert
+
+
+def _array_time_leaf(ch_type: ClickHouseType) -> tuple[int, Time | Time64] | None:
+    """Return (nesting depth, leaf type) for pure Array(...(Time/Time64)) columns, else None."""
+    depth = 0
+    while isinstance(ch_type, Array):
+        depth += 1
+        ch_type = ch_type.element_type
+    if depth and isinstance(ch_type, (Time, Time64)) and not ch_type.low_card:
+        return depth, ch_type
+    return None
+
+
+def _make_array_time_convert(leaf: Time | Time64, depth: int, context: QueryContext) -> BlockConverter:
+    unit = "s" if isinstance(leaf, Time) else _TIME64_UNITS[leaf.scale]
+    extended_time_null = context.as_pandas and context.use_extended_dtypes
+
+    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+        column = _arrow_column(arrow_table, index)
+        offset_levels = []
+        for _ in range(depth):
+            offset_levels.append(column.offsets.to_numpy().tolist())
+            column = column.values
+        if leaf.nullable:
+            null_count = column.null_count
+            if isinstance(leaf, Time):
+                column = column.cast(options.arrow.int64())
+            values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
+            # list() of a timedelta64 array yields numpy scalars, NaT included,
+            # which is the extended-dtypes null representation already.
+            cells = list(values)
+            if null_count and not extended_time_null:
+                for null_index in options.np.flatnonzero(options.np.isnat(values)):
+                    cells[null_index] = None
+        else:
+            values = column.to_numpy(zero_copy_only=False)
+            values = values.view(leaf.np_type) if isinstance(leaf, Time64) else values.astype(leaf.np_type, copy=False)
+            cells = list(values)
+        for offsets in reversed(offset_levels):
+            cells = [cells[start:stop] for start, stop in zip(offsets, offsets[1:])]
+        return cells
+
+    return convert
+
+
+def _make_low_card_time_convert(ch_type: Time, as_pandas: bool) -> BlockConverter:
+    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+        # The core exports LowCardinality(Time) as dictionary<int32, int32> with
+        # nulls in the indices. Decoding then casting stays fully vectorized.
+        column = _arrow_column(arrow_table, index).dictionary_decode()
+        values = column.cast(options.arrow.int64()).cast(options.arrow.duration("s")).to_numpy(zero_copy_only=False)
+        if as_pandas or not ch_type.nullable:
+            return values
+        result = list(values)
+        if column.null_count:
+            for null_index in options.np.flatnonzero(options.np.isnat(values)):
+                result[null_index] = None
+        return result
+
+    return convert
+
+
 def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         try:
@@ -110,6 +271,16 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     # LowCardinality(T) routes through the object exit regardless of inner type. Its values are correct there,
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.
+    if isinstance(ch_type, (Time, Time64)) and not ch_type.low_card:
+        return _Converter(True, _make_time_convert(ch_type, context.as_pandas))
+    if isinstance(ch_type, Time) and ch_type.low_card:
+        return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
+    array_time = _array_time_leaf(ch_type)
+    if array_time is not None:
+        depth, leaf = array_time
+        return _Converter(True, _make_array_time_convert(leaf, depth, context))
+    if _contains_nested_time(ch_type):
+        return _Converter(False, _make_nested_time_convert(ch_type, context))
     if not ch_type.nullable and not ch_type.low_card:
         if isinstance(ch_type, DateTime64):
             _ = ch_type.np_type  # ProgrammingError for precisions outside {0,3,6,9}, matching the Python codec

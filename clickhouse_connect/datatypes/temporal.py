@@ -330,6 +330,19 @@ class TimeBase(ClickHouseType, registered=False):
     _MICROS_PER_SECOND = 1_000_000
     _NANOS_PER_SECOND = 1_000_000_000
     _SECONDS_PER_DAY = 86_400
+    _NUMPY_TIME_UNITS = {
+        "W": (604_800, 1),
+        "D": (86_400, 1),
+        "h": (3_600, 1),
+        "m": (60, 1),
+        "s": (1, 1),
+        "ms": (1, 1_000),
+        "us": (1, 1_000_000),
+        "ns": (1, 1_000_000_000),
+        "ps": (1, 1_000_000_000_000),
+        "fs": (1, 1_000_000_000_000_000),
+        "as": (1, 1_000_000_000_000_000_000),
+    }
 
     _array_type: str
     byte_size: int
@@ -445,6 +458,45 @@ class TimeBase(ClickHouseType, registered=False):
         value = int(value)
         self._validate_standard_range(value, value)
         return value
+
+    @classmethod
+    def _numpy_timedelta_to_ticks(cls, td: numpy.timedelta64, precision: int) -> int:
+        """Rescale a NumPy duration with exact integer math and no intermediate overflow."""
+        unit, multiplier = options.np.datetime_data(td.dtype)
+        try:
+            numerator, denominator = cls._NUMPY_TIME_UNITS[unit]
+        except KeyError as ex:
+            raise ValueError(f"Unsupported NumPy timedelta64 unit {unit!r}; only fixed-duration time units are supported") from ex
+        raw = int(td.astype("int64"))
+        scaled = raw * int(multiplier) * numerator * precision
+        ticks = abs(scaled) // denominator
+        return -ticks if scaled < 0 else ticks
+
+    @staticmethod
+    def _normalize_timedelta_value(value: Any) -> Any:
+        if options.np is not None and isinstance(value, options.np.timedelta64):
+            return None if options.np.isnat(value) else value
+        if options.pd is not None:
+            if value is options.pd.NaT:
+                return None
+            if isinstance(value, options.pd.Timedelta):
+                return value.to_timedelta64()
+        return value
+
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if self.nullable:
+            # Treat NumPy/pandas NaT like None before the base implementation
+            # writes the Native null map. This also composes inside Array and
+            # LowCardinality because their writers delegate back here. A python
+            # timedelta sample can still precede NaT values, so it triggers the
+            # same pass.
+            sample = first_value(column, True)
+            is_timedelta = isinstance(sample, timedelta)
+            is_numpy_time = options.np is not None and isinstance(sample, options.np.timedelta64)
+            is_pandas_nat = options.pd is not None and sample is options.pd.NaT
+            if is_timedelta or is_numpy_time or is_pandas_nat:
+                column = [self._normalize_timedelta_value(value) for value in column]
+        super().write_column_data(column, dest, ctx)
 
     def _active_null(self, ctx: QueryContext):
         """Return appropriate null value based on context."""
@@ -586,11 +638,11 @@ class Time(TimeBase):
         return f"{sign}{h:03d}:{m:02d}:{s:02d}"
 
     def _timedelta_to_ticks(self, td: timedelta | numpy.timedelta64) -> int:
-        """Convert timedelta to ticks (seconds), flooring fractional seconds."""
+        """Convert timedelta to ticks (seconds), truncating fractional seconds toward zero."""
         if isinstance(td, timedelta):
             total = int(td.total_seconds())
         else:
-            total = td.astype("timedelta64[s]").astype(int)
+            total = self._numpy_timedelta_to_ticks(td, 1)
         self._validate_standard_range(total, td)
 
         return total
@@ -678,10 +730,13 @@ class Time64(TimeBase):
     def _timedelta_to_ticks(self, td: timedelta | numpy.timedelta64) -> int:
         """Convert timedelta to ticks with sub-second precision."""
         if isinstance(td, timedelta):
-            total_us = int(td.total_seconds()) * self._MICROS_PER_SECOND + td.microseconds
-            ticks = (total_us * self.precision) // self._MICROS_PER_SECOND
+            total_us = (td.days * self._SECONDS_PER_DAY + td.seconds) * self._MICROS_PER_SECOND + td.microseconds
+            scaled = total_us * self.precision
+            ticks = abs(scaled) // self._MICROS_PER_SECOND
+            if scaled < 0:
+                ticks = -ticks
         else:
-            ticks = td.astype("timedelta64[s]").astype(int)
+            ticks = self._numpy_timedelta_to_ticks(td, self.precision)
         self._validate_standard_range(ticks, td)
 
         return ticks
