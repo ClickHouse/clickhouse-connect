@@ -65,6 +65,14 @@ def test_transport_settings(param_client, call):
     assert len(result.result_set) > 0
 
 
+def test_initial_settings_override_generated_defaults(client_factory):
+    client = client_factory(settings={"date_time_input_format": "basic"})
+    assert client.get_client_setting("date_time_input_format") == "basic"
+
+    default_client = client_factory()
+    assert default_client.get_client_setting("date_time_input_format") == "best_effort"
+
+
 def test_client_headers(client_factory, call):
     client = client_factory(
         headers={

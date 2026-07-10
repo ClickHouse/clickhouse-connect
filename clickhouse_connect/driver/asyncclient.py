@@ -490,11 +490,13 @@ class AsyncClient(Client):
             if (send_setting.is_set or send_setting.is_writable) and self._setting_status("http_headers_progress_interval_ms").is_writable:
                 self._progress_interval = str(min(120000, max(10000, (self._send_receive_timeout - 5) * 1000)))
 
-            if self._setting_status("date_time_input_format").is_writable:
+            initial_settings = self._initial_settings or {}
+            if self._setting_status("date_time_input_format").is_writable and "date_time_input_format" not in initial_settings:
                 self.set_client_setting("date_time_input_format", "best_effort")
             if (
                 self._setting_status("allow_experimental_json_type").is_set
                 and self._setting_status("cast_string_to_dynamic_use_inference").is_writable
+                and "cast_string_to_dynamic_use_inference" not in initial_settings
             ):
                 self.set_client_setting("cast_string_to_dynamic_use_inference", "1")
             if self.min_version("24.8") and not self.min_version("24.10"):
