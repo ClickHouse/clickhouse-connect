@@ -410,7 +410,7 @@ class TestHttpClientErrorHandler:
         assert isinstance(excinfo.value, OperationalError)
         response.close.assert_called_once()
 
-    @patch("clickhouse_connect.driver.httpclient.get_response_data")
+    @patch("clickhouse_connect.driver.backend.http_sync.get_response_data")
     def test_error_handler_with_body_reading_exception(self, mock_get_response_data, caplog):
         """Test error handling when reading the response body throws an exception"""
         # Set up the mock to raise an exception when reading the response body

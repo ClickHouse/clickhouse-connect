@@ -1,9 +1,3 @@
-"""Executors that run backend operations through the existing clients.
-
-These bridge the core orchestration generators onto today's client methods.
-They are replaced by real backend implementations in migration Phase 3.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

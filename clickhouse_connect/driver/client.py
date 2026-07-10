@@ -122,6 +122,7 @@ class Client(ABC):
 
     compression: str | None = None
     write_compression: str | None = None
+    _send_comp_setting = False
     protocol_version = 0
     # User-supplied initial ClickHouse settings, set by subclasses before
     # initialization so generated setting defaults never overwrite them

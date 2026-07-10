@@ -5,7 +5,6 @@ is exercised with a recording stand-in for the client, and the auth-refresh
 retry loop is driven against a fake transport on a client built via __new__.
 """
 
-import asyncio
 from inspect import signature
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +14,8 @@ import clickhouse_connect.driver as drv
 from clickhouse_connect import dbapi
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.backend.http_async import HttpAsyncBackend
+from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient, auth_failed_ex_code
 
@@ -161,18 +162,19 @@ def _fake_response(status, ex_code=None):
 
 def _build_sync_client(provider):
     client = HttpClient.__new__(HttpClient)
-    client._token_provider = provider
-    client.headers = {"Authorization": f"Bearer {provider()}"}  # initial token, mirrors __init__
+    client._backend = HttpSyncBackend(
+        url="http://localhost:8123",
+        pool_manager=MagicMock(),
+        owns_pool_manager=False,
+        headers={"Authorization": f"Bearer {provider()}"},  # initial token, mirrors __init__
+        params={},
+        timeout=None,
+        server_host_name=None,
+        token_provider=provider,
+        autogenerate_query_id=False,
+    )
     client.url = "http://localhost:8123"
-    client.params = {}
-    client.timeout = None
-    client.http_retries = 1
-    client.server_host_name = None
-    client._autogenerate_query_id = False
-    client._send_progress = None
-    client._progress_interval = None
-    client._active_session = None
-    client.show_clickhouse_errors = True
+    client.params = client._backend.params
     return client
 
 
@@ -228,7 +230,7 @@ class TestSyncAuthRetry:
 
     def test_no_provider_surfaces_immediately(self):
         client = _build_sync_client(_TokenSequence("init"))
-        client._token_provider = None
+        client._backend.token_provider = None
         _wire_sync(client, [_fake_response(500, auth_failed_ex_code)])
         with pytest.raises(DatabaseError):
             client._raw_request(b"SELECT 1", {})
@@ -273,20 +275,20 @@ class _FakeSession:
 
 def _build_async_client(provider, responses):
     client = AsyncClient.__new__(AsyncClient)
-    client._token_provider = provider
-    client.headers = {"Authorization": f"Bearer {provider()}"}
-    client.url = "http://localhost:8123"
-    client.server_host_name = None
-    client._client_settings = {}
-    client._send_progress = None
-    client._progress_interval = None
-    client._autogenerate_query_id = False
-    client._active_session = None
-    client._last_pool_reset = None
-    client.show_clickhouse_errors = True
-    client._session_lock = asyncio.Lock()
+    client._backend = HttpAsyncBackend(
+        url="http://localhost:8123",
+        headers={"Authorization": f"Bearer {provider()}"},  # initial token, mirrors __init__
+        client_settings={},
+        timeout=None,
+        connector_kwargs={},
+        ssl_context=None,
+        proxy_url=None,
+        server_host_name=None,
+        token_provider=provider,
+        autogenerate_query_id=False,
+    )
     session = _FakeSession(responses)
-    client._session_lease = _FakeLease(session)
+    client._backend.session_lease = _FakeLease(session)
     return client, session
 
 
@@ -299,9 +301,9 @@ class TestAsyncAuthRetry:
         assert resp.status == 200
         assert provider.calls == 2
         assert session.sent_auth == ["Bearer init", "Bearer refreshed"]
-        assert client._session_lease.inflight == 1  # held for the caller until the body is consumed
+        assert client._backend.session_lease.inflight == 1  # held for the caller until the body is consumed
         resp._lease_release()
-        assert client._session_lease.inflight == 0  # released after the retry, no leak
+        assert client._backend.session_lease.inflight == 0  # released after the retry, no leak
 
     @pytest.mark.asyncio
     async def test_non_replayable_body_not_retried(self):
@@ -312,4 +314,4 @@ class TestAsyncAuthRetry:
             await client._raw_request(gen, {})
         assert provider.calls == 1
         assert next(gen) == b"row"
-        assert client._session_lease.inflight == 0  # lease released even on the surfaced error
+        assert client._backend.session_lease.inflight == 0  # lease released even on the surfaced error

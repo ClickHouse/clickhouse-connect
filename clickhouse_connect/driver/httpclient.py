@@ -1,46 +1,43 @@
 import io
 import json
 import logging
-import re
-import time
 import uuid
 from base64 import b64encode
 from collections.abc import Callable, Generator, Sequence
-from importlib import import_module
-from importlib.metadata import version as dist_version
 from typing import Any, BinaryIO, cast
-from urllib.parse import urlencode
 
 from urllib3 import Timeout
-from urllib3.exceptions import HTTPError
 from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.driver.binding import bind_query, quote_identifier, use_form_encoding
+from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver.backend.httpcommon import (
+    add_integration_tag,
+    apply_http_server_settings,
+    auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
+    columns_only_re,
+    embed_insert_query,
+    ex_header,  # noqa: F401  (compatibility re-export)
+    ex_tag_header,
+    negotiate_compression,
+    parse_command_body,
+    summary_from_headers,
+)
+from clickhouse_connect.driver.binding import bind_query, use_form_encoding
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
-from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.ctypes import RespBuffCls
-from clickhouse_connect.driver.exceptions import (
-    DatabaseError,
-    OperationalError,
-    ProgrammingError,
-    error_code_from_header,
-    error_name_from_body,
-)
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import (
     ResponseSource,
-    all_managers,
-    check_conn_expiration,
     check_env_proxy,
     default_pool_manager,
     get_pool_manager,
     get_proxy_manager,
-    get_response_data,
 )
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult, TzMode, TzSource, returns_empty_string_on_empty_body
@@ -48,12 +45,6 @@ from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform
 
 logger = logging.getLogger(__name__)
-columns_only_re = re.compile(r"LIMIT 0\s*$", re.IGNORECASE)
-ex_header = "X-ClickHouse-Exception-Code"
-auth_failed_ex_code = "516"  # ClickHouse AUTHENTICATION_FAILED
-ex_tag_header = "X-ClickHouse-Exception-Tag"
-
-_REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
 
 
 class HttpClient(Client):
@@ -122,11 +113,11 @@ class HttpClient(Client):
         if proxy_path:
             proxy_path = "/" + proxy_path
         self.url = f"{interface}://{host}:{port}{proxy_path}"
-        self.headers = {}
+        client_headers: dict[str, str] = {}
         self.form_encode_query_params = form_encode_query_params
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)
-        self.http = pool_mgr
+        pool = pool_mgr
         if interface == "https":
             if isinstance(verify, str) and verify.lower() == "proxy":
                 verify = True
@@ -137,10 +128,10 @@ class HttpClient(Client):
             if client_cert and (tls_mode is None or tls_mode == "mutual"):
                 if not username:
                     raise ProgrammingError("username parameter is required for Mutual TLS authentication")
-                self.headers["X-ClickHouse-User"] = username
-                self.headers["X-ClickHouse-SSL-Certificate-Auth"] = "on"
+                client_headers["X-ClickHouse-User"] = username
+                client_headers["X-ClickHouse-SSL-Certificate-Auth"] = "on"
 
-            if not self.http and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
+            if not pool and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
                 options: dict[str, Any] = {"verify": verify}
                 dict_add(options, "ca_cert", ca_cert)
                 dict_add(options, "client_cert", client_cert)
@@ -149,28 +140,27 @@ class HttpClient(Client):
                     if options["verify"]:
                         options["assert_hostname"] = server_host_name
                     options["server_hostname"] = server_host_name
-                self.http = get_pool_manager(https_proxy=https_proxy, **options)
+                pool = get_pool_manager(https_proxy=https_proxy, **options)
                 self._owns_pool_manager = True
-        if not self.http:
+        if not pool:
             if not http_proxy:
                 http_proxy = check_env_proxy("http", host, port)
             if http_proxy:
-                self.http = get_proxy_manager(host, http_proxy)
+                pool = get_proxy_manager(host, http_proxy)
             else:
-                self.http = default_pool_manager()
+                pool = default_pool_manager()
 
-        self._token_provider = token_provider
         if token_provider:
             access_token = token_provider()
         if access_token:
-            self.headers["Authorization"] = f"Bearer {access_token}"
+            client_headers["Authorization"] = f"Bearer {access_token}"
         elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
-            self.headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
+            client_headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
 
         self._reported_libs: set[str] = set()
-        self.headers["User-Agent"] = common.build_client_name(client_name)
+        client_headers["User-Agent"] = common.build_client_name(client_name)
         if headers:
-            self.headers.update(headers)
+            client_headers.update(headers)
         self._read_format = self._write_format = "Native"
         self._transform = NativeTransform()
 
@@ -179,12 +169,7 @@ class HttpClient(Client):
             connect_timeout = coerce_int(connect_timeout)
         if send_receive_timeout is not None:
             send_receive_timeout = coerce_int(send_receive_timeout)
-        self.timeout = Timeout(connect=connect_timeout, read=send_receive_timeout)
-        self.http_retries = 1
-        self._send_progress = None
         self._send_comp_setting = False
-        self._progress_interval = None
-        self._active_session: str | None = None
         self._rename_response_column = rename_response_column
 
         # allow to override the global autogenerate_session_id setting via the constructor params
@@ -197,23 +182,30 @@ class HttpClient(Client):
         elif "session_id" not in ch_settings and _autogenerate_session_id:
             ch_settings["session_id"] = str(uuid.uuid4())
 
-        # allow to override the global autogenerate_query_id setting via the constructor params
-        self._autogenerate_query_id = (
-            common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id
+        compression, write_compression = negotiate_compression(compress)
+        if write_compression:
+            self.write_compression = write_compression
+
+        # The backend owns transport state. The params dict is shared by
+        # reference with this facade, so it is mutated in place, never rebound.
+        self._backend = HttpSyncBackend(
+            url=self.url,
+            pool_manager=pool,
+            owns_pool_manager=self._owns_pool_manager,
+            headers=client_headers,
+            params=self.params,
+            timeout=Timeout(connect=connect_timeout, read=send_receive_timeout),
+            server_host_name=server_host_name,
+            token_provider=token_provider,
+            # allow to override the global autogenerate_query_id setting via the constructor params
+            autogenerate_query_id=(common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id),
         )
-
-        if coerce_bool(compress):
-            compression = ",".join(available_compression)
-            self.write_compression = available_compression[0]
-        elif compress and compress not in ("False", "false", "0"):
-            if compress not in available_compression:
-                raise ProgrammingError(f"Unsupported compression method {compress}")
-            compression = compress
-            self.write_compression = compress
-        else:
-            compression = None
-
         self._initial_settings = settings
+        # Stashed for _init_common_settings, which needs the discovered server
+        # settings and so runs as part of the connect step inside super().__init__
+        self._ch_settings = ch_settings
+        self._negotiated_compression = compression
+        self._send_receive_timeout = send_receive_timeout
         super().__init__(
             database=database,
             uri=self.url,
@@ -225,22 +217,63 @@ class HttpClient(Client):
             show_clickhouse_errors=show_clickhouse_errors,
             autoconnect=True,
         )
-        self.params = dict_copy(self.params, self._validate_settings(ch_settings))
-        cancel_setting = self._setting_status("cancel_http_readonly_queries_on_client_close")
-        if (
-            cancel_setting.is_writable
-            and not cancel_setting.is_set
-            and "cancel_http_readonly_queries_on_client_close" not in (settings or {})
-        ):
-            self.params["cancel_http_readonly_queries_on_client_close"] = "1"
-        comp_setting = self._setting_status("enable_http_compression")
-        self._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
-        if comp_setting.is_set or comp_setting.is_writable:
-            self.compression = compression
-        send_setting = self._setting_status("send_progress_in_http_headers")
-        self._send_progress = not send_setting.is_set and send_setting.is_writable
-        if (send_setting.is_set or send_setting.is_writable) and self._setting_status("http_headers_progress_interval_ms").is_writable:
-            self._progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
+
+    def _init_common_settings(self, tz_source: TzSource) -> None:
+        super()._init_common_settings(tz_source)
+        self.params.update(self._validate_settings(self._ch_settings))
+        apply_http_server_settings(self, self._backend, self._negotiated_compression, self._send_receive_timeout)
+
+    @property
+    def http(self) -> PoolManager:
+        return cast(PoolManager, self._backend.http)
+
+    @http.setter
+    def http(self, pool_manager: PoolManager) -> None:
+        self._backend.http = pool_manager
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return self._backend.headers
+
+    @headers.setter
+    def headers(self, value: dict[str, str]) -> None:
+        self._backend.headers = value
+
+    @property
+    def timeout(self) -> Timeout:
+        return self._backend.timeout
+
+    @timeout.setter
+    def timeout(self, value: Timeout) -> None:
+        self._backend.timeout = value
+
+    @property
+    def http_retries(self) -> int:
+        return self._backend.http_retries
+
+    @http_retries.setter
+    def http_retries(self, value: int) -> None:
+        self._backend.http_retries = value
+
+    @property
+    def show_clickhouse_errors(self) -> bool:  # type: ignore[override]
+        return self._backend.show_clickhouse_errors
+
+    @show_clickhouse_errors.setter
+    def show_clickhouse_errors(self, value: bool) -> None:
+        self._backend.show_clickhouse_errors = value
+
+    @property
+    def _autogenerate_query_id(self) -> bool:
+        return self._backend.autogenerate_query_id
+
+    @_autogenerate_query_id.setter
+    def _autogenerate_query_id(self, value: bool) -> None:
+        self._backend.autogenerate_query_id = value
+
+    @property
+    def _token_provider(self) -> Callable[[], str] | None:
+        return self._backend.token_provider
 
     def set_client_setting(self, key: str, value: Any) -> None:
         str_value = self._validate_setting(key, value, common.get_setting("invalid_setting_action"))
@@ -251,10 +284,7 @@ class HttpClient(Client):
         return self.params.get(key)
 
     def set_access_token(self, access_token: str) -> None:
-        auth_header = self.headers.get("Authorization")
-        if auth_header and not auth_header.startswith("Bearer"):
-            raise ProgrammingError("Cannot set access token when a different auth type is used")
-        self.headers["Authorization"] = f"Bearer {access_token}"
+        self._backend.set_access_token(access_token)
 
     def _prep_query(self, context: QueryContext):
         final_query = super()._prep_query(context)
@@ -421,16 +451,11 @@ class HttpClient(Client):
         if compression:
             headers["Content-Encoding"] = compression
         if table:
-            cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ""
-            query = f"INSERT INTO {table}{cols} FORMAT {fmt if fmt else self._write_format}"
-            if not compression and isinstance(insert_block, str):
-                insert_block = query + "\n" + insert_block
-            elif not compression and isinstance(insert_block, (bytes, bytearray)):
-                insert_block = (query + "\n").encode() + insert_block
-            else:
-                # Generators, file-like objects, and compressed data: send the
-                # INSERT query as a URL param and stream the body as-is.
-                params["query"] = query
+            insert_block, query_param = embed_insert_query(
+                table, column_names, fmt if fmt else self._write_format, compression, insert_block
+            )
+            if query_param:
+                params["query"] = query_param
         if self.database:
             params["database"] = self.database
         params.update(self._validate_settings(settings or {}))
@@ -441,14 +466,7 @@ class HttpClient(Client):
 
     @staticmethod
     def _summary(response: HTTPResponse):
-        summary = {}
-        if "X-ClickHouse-Summary" in response.headers:
-            try:
-                summary = json.loads(response.headers["X-ClickHouse-Summary"])
-            except json.JSONDecodeError:
-                pass
-        summary["query_id"] = response.headers.get("X-ClickHouse-Query-Id", "")
-        return summary
+        return summary_from_headers(response.headers)
 
     def command(
         self,
@@ -493,56 +511,13 @@ class HttpClient(Client):
         method = "POST" if payload or fields else "GET"
         response = self._raw_request(payload, params, headers, method, fields=fields, server_wait=False)
         if response.data:
-            try:
-                result = response.data.decode()[:-1].split("\t")
-                if len(result) == 1:
-                    try:
-                        return int(result[0])
-                    except ValueError:
-                        return result[0]
-                return result
-            except UnicodeDecodeError:
-                return str(response.data)
+            return parse_command_body(response.data)
         if returns_empty_string_on_empty_body(bound_cmd):
             return ""
         return QuerySummary(self._summary(response))
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
-        """
-        Handles HTTP errors. Tries to be robust and provide maximum context.
-        """
-        try:
-            body = ""
-            full_body = ""
-            try:
-                raw_body = get_response_data(response)
-                full_body = raw_body.decode(errors="backslashreplace")
-                body = common.format_error(full_body).strip()
-            except Exception:
-                logger.warning("Failed to read error response body", exc_info=True)
-
-            err_code = response.headers.get(ex_header)
-            code = error_code_from_header(err_code)
-            name = error_name_from_body(full_body) if self.show_clickhouse_errors else None
-
-            if self.show_clickhouse_errors:
-                if err_code:
-                    err_str = f"Received ClickHouse exception, code: {err_code}"
-                else:
-                    err_str = f"HTTP driver received HTTP status {response.status}"
-
-                if body:
-                    err_str = f"{err_str}, server response: {body}"
-            else:
-                err_str = "The ClickHouse server returned an error"
-
-            err_str = f"{err_str} (for url {self.url})"
-
-        finally:
-            response.close()
-
-        err_type = OperationalError if retried else DatabaseError
-        raise err_type(err_str, code=code, name=name) from None
+        self._backend.error_handler(response, retried)
 
     def _raw_request(
         self,
@@ -557,100 +532,18 @@ class HttpClient(Client):
         error_handler: Callable | None = None,
         retry_body: Callable[[], Any] | None = None,
     ) -> HTTPResponse:
-        if isinstance(data, str):
-            data = data.encode()
-        headers = dict_copy(self.headers, headers)
-        attempts = 0
-        auth_retried = False
-        final_params = {}
-        if server_wait:
-            final_params["wait_end_of_query"] = "1"
-        # We can't actually read the progress headers, but we enable them so ClickHouse sends something
-        # to keep the connection alive when waiting for long-running queries and (2) to get summary information
-        # if not streaming
-        if self._send_progress:
-            final_params["send_progress_in_http_headers"] = "1"
-        if self._progress_interval:
-            final_params["http_headers_progress_interval_ms"] = self._progress_interval
-        final_params = dict_copy(self.params, final_params)
-        final_params = dict_copy(final_params, params)
-
-        if self._autogenerate_query_id and "query_id" not in final_params:
-            final_params["query_id"] = str(uuid.uuid4())
-
-        url = f"{self.url}?{urlencode(final_params)}"
-        kwargs: dict[str, Any] = {"headers": headers, "timeout": self.timeout, "retries": self.http_retries, "preload_content": not stream}
-        if self.server_host_name:
-            kwargs["assert_same_host"] = False
-            kwargs["headers"].update({"Host": self.server_host_name})
-        if fields:
-            kwargs["fields"] = fields
-        else:
-            kwargs["body"] = data
-        check_conn_expiration(cast(PoolManager, self.http))
-        query_session = final_params.get("session_id")
-        while True:
-            attempts += 1
-            if query_session:
-                if query_session == self._active_session:
-                    raise ProgrammingError(
-                        "Attempt to execute concurrent queries within the same session. "
-                        + "Please use a separate client instance per thread/process."
-                    )
-                # There is a race condition here when using multiprocessing -- in that case the server will
-                # throw an error instead, but in most cases this more helpful error will be thrown first
-                self._active_session = query_session
-            try:
-                response: HTTPResponse = cast(HTTPResponse, cast(PoolManager, self.http).request(method, url, **kwargs))
-            except HTTPError as ex:
-                # Always allow at least one retry on a clean connection error so a single stale
-                # keep-alive socket doesn't surface to the caller, and additionally honor the
-                # retries budget when it is larger (e.g. query_retries for reads), so that
-                # bursts of stale pooled connections can be drained before giving up.
-                max_attempts = max(2, retries + 1)
-                remote_close = isinstance(ex.__context__, _REMOTE_CLOSE_ERRORS) or isinstance(ex.__cause__, _REMOTE_CLOSE_ERRORS)
-                if remote_close and attempts < max_attempts:
-                    # The server closed the connection, probably because the Keep Alive has expired.
-                    # We should be safe to retry, as ClickHouse should not have processed anything on
-                    # a connection that it killed.
-                    body = kwargs.get("body")
-                    if retry_body is not None:
-                        kwargs["body"] = retry_body()
-                        logger.debug("Retrying remotely closed connection with rebuilt body (attempt %s/%s)", attempts, max_attempts)
-                        time.sleep(0.1 * attempts)
-                        continue
-                    if body is None or isinstance(body, (bytes, bytearray, str)):
-                        logger.debug("Retrying remotely closed connection (attempt %s/%s)", attempts, max_attempts)
-                        time.sleep(0.1 * attempts)
-                        continue
-                logger.debug("Non-retryable HTTP transport error type=%s", type(ex).__name__)
-                logger.warning("Unexpected Http Driver Exception")
-                err_url = f" ({self.url})" if self.show_clickhouse_errors else ""
-                raise OperationalError(f"Error {ex} executing HTTP request attempt {attempts}{err_url}") from ex
-            finally:
-                if query_session:
-                    self._active_session = None  # Make sure we always clear this
-            if 200 <= response.status < 300 and not response.headers.get(ex_header):
-                return response
-            if response.status in (429, 503, 504):
-                if attempts > retries:
-                    self._error_handler(response, True)
-                logger.debug("Retrying requests with status code %d", response.status)
-            elif self._token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
-                body = kwargs.get("body")
-                if retry_body is None and not (body is None or isinstance(body, (bytes, bytearray, str))):
-                    self._error_handler(response)  # non-replayable body, surface the auth error instead of retrying
-                auth_retried = True
-                self.set_access_token(self._token_provider())
-                headers["Authorization"] = self.headers["Authorization"]
-                if retry_body is not None:
-                    kwargs["body"] = retry_body()
-                response.close()
-                logger.debug("Refreshing access token after authentication failure")
-            elif error_handler is not None:
-                error_handler(response)
-            else:
-                self._error_handler(response)
+        return self._backend.request(
+            data,
+            params,
+            headers=headers,
+            method=method,
+            retries=retries,
+            stream=stream,
+            server_wait=server_wait,
+            fields=fields,
+            error_handler=error_handler,
+            retry_body=retry_body,
+        )
 
     def raw_query(
         self,
@@ -738,66 +631,16 @@ class HttpClient(Client):
         """
         Dynamically adds a product (like pandas or sqlalchemy) to the User-Agent string details section.
         """
-        if not common.get_setting("send_integration_tags") or name in self._reported_libs:
-            return
-
-        try:
-            ver = "unknown"
-            try:
-                ver = dist_version(name)
-            except Exception:
-                try:
-                    mod = import_module(name)
-                    ver = getattr(mod, "__version__", "unknown")
-                except Exception:
-                    pass
-
-            product_info = f"{name}/{ver}"
-
-            ua = self.headers.get("User-Agent", "")
-            start = ua.find("(")
-            if start == -1:
-                return
-            end = ua.find(")", start + 1)
-            if end == -1:
-                return
-
-            details = ua[start + 1 : end].strip()
-
-            if product_info in details:
-                self._reported_libs.add(name)
-                return
-
-            new_details = f"{product_info}; {details}" if details else product_info
-            new_ua = f"{ua[: start + 1]}{new_details}{ua[end:]}"
-            self.headers["User-Agent"] = new_ua.strip()
-
-            self._reported_libs.add(name)
-            logger.debug("Added '%s' to User-Agent", product_info)
-
-        except Exception as e:
-            logger.debug("Problem adding '%s' to User-Agent: %s", name, e)
+        add_integration_tag(self.headers, self._reported_libs, name)
 
     def ping(self) -> bool:
         """
         See BaseClient doc_string for this method
         """
-        try:
-            headers = dict_copy(self.headers)
-            kwargs: dict[str, Any] = {"headers": headers, "timeout": 3, "preload_content": True}
-            if self.server_host_name:
-                kwargs["assert_same_host"] = False
-                headers["Host"] = self.server_host_name
-            response = cast(PoolManager, self.http).request("GET", f"{self.url}/ping", **kwargs)
-            return 200 <= response.status < 300
-        except HTTPError:
-            logger.debug("ping failed", exc_info=True)
-            return False
+        return self._backend.ping()
 
     def close_connections(self) -> None:
-        cast(PoolManager, self.http).clear()
+        self._backend.close_connections()
 
     def close(self) -> None:
-        if self._owns_pool_manager:
-            cast(PoolManager, self.http).clear()
-            all_managers.pop(cast(PoolManager, self.http), None)
+        self._backend.close()
