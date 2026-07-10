@@ -1,5 +1,6 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::ffi::c_long;
+use std::ffi::{c_int, c_long};
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::buffer::{Element, PyBuffer};
@@ -486,6 +487,16 @@ fn build_element_column(
             if matches!(value_type, ChType::String) {
                 return lc_string_seq(py, name, value_type, &seq, row_count, nullable);
             }
+            if wide_int_layout(value_type).is_some() {
+                return lc_wide_column(
+                    py,
+                    name,
+                    value_type,
+                    &PtrRows { py, ptrs },
+                    row_count,
+                    nullable,
+                );
+            }
             lc_scalar_column(
                 py,
                 name,
@@ -964,6 +975,9 @@ fn build_plain_column(
     if let Some(column) = try_fast_column(py, name, ch_type, values, row_count, false)? {
         return Ok(column);
     }
+    if wide_int_layout(ch_type).is_some() {
+        return wide_column_from_rows(py, name, ch_type, &column_values, row_count, false);
+    }
     plain_scalar_column(py, name, ch_type, &column_values, row_count)
 }
 
@@ -1011,7 +1025,53 @@ fn build_nullable_column(
     if let Some(column) = try_fast_column(py, name, inner, values, row_count, true)? {
         return Ok(column);
     }
+    if wide_int_layout(inner).is_some() {
+        return wide_column_from_rows(py, name, inner, &column_values, row_count, true);
+    }
     nullable_scalar_column(py, name, inner, &column_values, row_count)
+}
+
+/// Build a wide-integer column over generic row access with one checked data
+/// allocation. Each Python value writes directly into its final row slice.
+fn wide_column_from_rows<'py, R: RowAccess<'py>>(
+    py: Python<'py>,
+    name: &str,
+    ch_type: &ChType,
+    rows: &R,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let (width, signed, type_name) = wide_int_layout(ch_type)
+        .ok_or_else(|| PyValueError::new_err("internal wide integer type mismatch"))?;
+    let mut data = wide_data_buffer(name, width, row_count)?;
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        if value.is_none() {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        let start = row * width;
+        wide_int_into(
+            py,
+            &value,
+            &mut data[start..start + width],
+            signed,
+            name,
+            row,
+            type_name,
+        )?;
+    }
+    let validity = null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls));
+    finish_wide_int_column(ch_type, data, validity)
 }
 
 fn nullable_scalar_column<'py, R: RowAccess<'py>>(
@@ -1056,6 +1116,9 @@ fn build_low_cardinality_column(
 
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
+    if wide_int_layout(value_type).is_some() {
+        return lc_wide_column(py, name, value_type, &column_values, row_count, nullable);
+    }
     if matches!(value_type, ChType::String) {
         if let Some(column) =
             lc_string_fast_column(py, name, value_type, values, row_count, nullable)?
@@ -1119,6 +1182,95 @@ fn lc_scalar_column<'py, R: RowAccess<'py>>(
     }
 
     let dict_column = column_from_scalars(value_type, dict_values, None)?;
+    match null_map {
+        Some(nulls) => Ok(Column::Dictionary(DictionaryColumn::new_nullable(
+            indices,
+            dict_column,
+            Bitmap::from_ch_null_map(&nulls),
+        ))),
+        None => Ok(Column::Dictionary(DictionaryColumn::new(
+            indices,
+            dict_column,
+        ))),
+    }
+}
+
+/// Build LowCardinality over a wide integer without a heap allocation per
+/// input cell. Conversion writes into a fixed stack buffer; only distinct
+/// dictionary entries are retained, and the final dictionary data is copied
+/// once into the core's contiguous fixed-binary representation.
+fn lc_wide_column<'py, R: RowAccess<'py>>(
+    py: Python<'py>,
+    name: &str,
+    value_type: &ChType,
+    rows: &R,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let (width, signed, type_name) = wide_int_layout(value_type)
+        .ok_or_else(|| PyValueError::new_err("internal wide integer type mismatch"))?;
+    let mut indices = Vec::with_capacity(row_count);
+    let mut dict_values = Vec::<[u8; 32]>::new();
+    let mut slots = HashMap::<[u8; 32], i32>::with_capacity(row_count.min(1024));
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+
+    if nullable && row_count > 0 {
+        dict_values.push([0u8; 32]);
+    }
+
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        if value.is_none() {
+            if !nullable {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but LowCardinality({value_type}) is not nullable"
+                )));
+            }
+            indices.push(0);
+            if let Some(nulls) = &mut null_map {
+                nulls.push(1);
+            }
+            continue;
+        }
+        if let Some(nulls) = &mut null_map {
+            nulls.push(0);
+        }
+
+        let mut bytes = [0u8; 32];
+        wide_int_into(
+            py,
+            &value,
+            &mut bytes[..width],
+            signed,
+            name,
+            row,
+            type_name,
+        )?;
+        let slot = match slots.entry(bytes) {
+            Entry::Occupied(slot) => *slot.get(),
+            Entry::Vacant(vacant) => {
+                let slot = i32::try_from(dict_values.len()).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "column {name:?} LowCardinality dictionary exceeds i32 index capacity"
+                    ))
+                })?;
+                dict_values.push(bytes);
+                *vacant.insert(slot)
+            }
+        };
+        indices.push(slot);
+    }
+
+    let byte_len = width.checked_mul(dict_values.len()).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {name:?} wide integer dictionary byte size exceeds usize capacity"
+        ))
+    })?;
+    let mut data = Vec::with_capacity(byte_len);
+    for value in dict_values {
+        data.extend_from_slice(&value[..width]);
+    }
+    let dict_column = finish_wide_int_column(value_type, data, None)?;
     match null_map {
         Some(nulls) => Ok(Column::Dictionary(DictionaryColumn::new_nullable(
             indices,
@@ -1577,6 +1729,71 @@ fn seq_values<T: FastValue, S: FastSeq>(
     ))
 }
 
+/// Wide-integer equivalent of `seq_values`: allocate the final byte buffer
+/// once, then convert each borrowed list/tuple/container item directly into
+/// its row slice. Exact ints within i64 convert in place without running
+/// Python; any other conversion may execute Python (`__index__`, or `int()`
+/// for a string), so the current item is held strongly and mutable sequence
+/// length is revalidated before the next borrowed access.
+fn wide_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    seq: &S,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let (width, signed, type_name) = wide_int_layout(ch_type)
+        .ok_or_else(|| PyValueError::new_err("internal wide integer type mismatch"))?;
+    let mut data = wide_data_buffer(name, width, row_count)?;
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the caller-validated size. A conversion
+        // that executes Python is followed by the resize check below.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        let start = row * width;
+        let slice = &mut data[start..start + width];
+        // SAFETY: the borrowed ptr stays valid without a strong ref only
+        // because the GIL is held across this whole loop (the module keeps
+        // pyo3's default gil_used = true) and the fast try never executes
+        // Python, so nothing can mutate the container or drop the item under
+        // it. A future free-threading (gil_used = false) opt-in invalidates
+        // this and requires a strong ref before the fast try.
+        let outcome = unsafe { wide_int_fast_into(ptr, slice, signed, name, row, type_name)? };
+        if outcome == WideFast::Done {
+            continue;
+        }
+        // SAFETY: taking a strong reference keeps the current item alive if
+        // its conversion mutates the source list.
+        let value = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        wide_int_slow_into(
+            py,
+            &value,
+            outcome == WideFast::WideInt,
+            slice,
+            signed,
+            name,
+            row,
+            type_name,
+        )?;
+        check_not_resized(seq, name, row_count)?;
+    }
+    let validity = null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls));
+    finish_wide_int_column(ch_type, data, validity)
+}
+
 /// Fast column build for types with a per-value fast path. Returns `Ok(None)`
 /// when the type or container has no fast path; the caller falls through to
 /// the generic scalar loop.
@@ -1628,6 +1845,9 @@ fn try_fast_column_seq<S: FastSeq>(
         ChType::UInt16 => prim::<u16, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::UInt32 => prim::<u32, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::UInt64 => prim::<u64, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Int128 | ChType::UInt128 | ChType::Int256 | ChType::UInt256 => {
+            wide_column_from_seq(py, name, ch_type, seq, row_count, nullable).map(Some)
+        }
         ChType::Float32 => prim::<f32, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Float64 => prim::<f64, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Date => prim::<DateVal, S>(py, name, ch_type, seq, row_count, nullable),
@@ -2275,6 +2495,7 @@ enum Scalar {
     UInt16(u16),
     UInt32(u32),
     UInt64(u64),
+    WideInt(Vec<u8>),
     Float32(f32),
     Float64(f64),
     Date(u16),
@@ -2298,6 +2519,7 @@ enum ScalarKey {
     UInt16(u16),
     UInt32(u32),
     UInt64(u64),
+    WideInt(Vec<u8>),
     Float32(u32),
     Float64(u64),
     Date(u16),
@@ -2322,6 +2544,7 @@ impl Scalar {
             Scalar::UInt16(v) => ScalarKey::UInt16(*v),
             Scalar::UInt32(v) => ScalarKey::UInt32(*v),
             Scalar::UInt64(v) => ScalarKey::UInt64(*v),
+            Scalar::WideInt(v) => ScalarKey::WideInt(v.clone()),
             Scalar::Float32(v) => ScalarKey::Float32(v.to_bits()),
             Scalar::Float64(v) => ScalarKey::Float64(v.to_bits()),
             Scalar::Date(v) => ScalarKey::Date(*v),
@@ -2379,6 +2602,9 @@ fn column_from_scalars(
         ChType::UInt16 => primitive_column!(scalars, validity, UInt16, UInt16, u16),
         ChType::UInt32 => primitive_column!(scalars, validity, UInt32, UInt32, u32),
         ChType::UInt64 => primitive_column!(scalars, validity, UInt64, UInt64, u64),
+        ChType::Int128 | ChType::UInt128 | ChType::Int256 | ChType::UInt256 => {
+            build_wide_int_column(ch_type, scalars, validity)
+        }
         ChType::Float32 => primitive_column!(scalars, validity, Float32, Float32, f32),
         ChType::Float64 => primitive_column!(scalars, validity, Float64, Float64, f64),
         ChType::Date => primitive_column!(scalars, validity, Date, Date, u16),
@@ -2424,6 +2650,65 @@ fn column_from_scalars(
             "nested wrapper conversion is not supported",
         )),
     }
+}
+
+fn build_wide_int_column(
+    ch_type: &ChType,
+    scalars: Vec<Scalar>,
+    validity: Option<Bitmap>,
+) -> PyResult<Column> {
+    let (width, _, _) = wide_int_layout(ch_type)
+        .ok_or_else(|| PyValueError::new_err("internal wide integer type mismatch"))?;
+    let byte_len = width
+        .checked_mul(scalars.len())
+        .ok_or_else(|| PyValueError::new_err("wide integer column byte size overflow"))?;
+    let mut data = Vec::with_capacity(byte_len);
+    for scalar in scalars {
+        match scalar {
+            Scalar::WideInt(value) if value.len() == width => data.extend_from_slice(&value),
+            _ => return Err(PyValueError::new_err("internal scalar type mismatch")),
+        }
+    }
+    finish_wide_int_column(ch_type, data, validity)
+}
+
+fn wide_int_layout(ch_type: &ChType) -> Option<(usize, bool, &'static str)> {
+    match ch_type {
+        ChType::Int128 => Some((16, true, "Int128")),
+        ChType::UInt128 => Some((16, false, "UInt128")),
+        ChType::Int256 => Some((32, true, "Int256")),
+        ChType::UInt256 => Some((32, false, "UInt256")),
+        _ => None,
+    }
+}
+
+fn wide_data_buffer(name: &str, width: usize, row_count: usize) -> PyResult<Vec<u8>> {
+    let byte_len = width.checked_mul(row_count).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {name:?} wide integer byte size exceeds usize capacity"
+        ))
+    })?;
+    Ok(vec![0u8; byte_len])
+}
+
+fn finish_wide_int_column(
+    ch_type: &ChType,
+    data: Vec<u8>,
+    validity: Option<Bitmap>,
+) -> PyResult<Column> {
+    let (width, _, _) = wide_int_layout(ch_type)
+        .ok_or_else(|| PyValueError::new_err("internal wide integer type mismatch"))?;
+    let column = match validity {
+        Some(validity) => FixedBinaryColumn::new_nullable(data, width, validity),
+        None => FixedBinaryColumn::new(data, width),
+    };
+    Ok(match ch_type {
+        ChType::Int128 => Column::Int128(column),
+        ChType::UInt128 => Column::UInt128(column),
+        ChType::Int256 => Column::Int256(column),
+        ChType::UInt256 => Column::UInt256(column),
+        _ => return Err(PyValueError::new_err("internal wide integer type mismatch")),
+    })
 }
 
 fn build_utf8_column(scalars: Vec<Scalar>, validity: Option<Bitmap>) -> PyResult<Column> {
@@ -2536,6 +2821,18 @@ fn convert_scalar(
             .extract::<u64>()
             .map(Scalar::UInt64)
             .map_err(|_| conversion_error(column, row, "UInt64")),
+        ChType::Int128 => {
+            wide_int_bytes(py, value, 16, true, column, row, "Int128").map(Scalar::WideInt)
+        }
+        ChType::UInt128 => {
+            wide_int_bytes(py, value, 16, false, column, row, "UInt128").map(Scalar::WideInt)
+        }
+        ChType::Int256 => {
+            wide_int_bytes(py, value, 32, true, column, row, "Int256").map(Scalar::WideInt)
+        }
+        ChType::UInt256 => {
+            wide_int_bytes(py, value, 32, false, column, row, "UInt256").map(Scalar::WideInt)
+        }
         ChType::Float32 => value
             .extract::<f32>()
             .map(Scalar::Float32)
@@ -2616,6 +2913,8 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::UInt16 => Ok(Scalar::UInt16(0)),
         ChType::UInt32 => Ok(Scalar::UInt32(0)),
         ChType::UInt64 => Ok(Scalar::UInt64(0)),
+        ChType::Int128 | ChType::UInt128 => Ok(Scalar::WideInt(vec![0; 16])),
+        ChType::Int256 | ChType::UInt256 => Ok(Scalar::WideInt(vec![0; 32])),
         ChType::Float32 => Ok(Scalar::Float32(0.0)),
         ChType::Float64 => Ok(Scalar::Float64(0.0)),
         ChType::String => Ok(Scalar::Bytes(Vec::new())),
@@ -2650,6 +2949,177 @@ fn conversion_error(column: &str, row: usize, type_name: &str) -> PyErr {
     PyValueError::new_err(format!(
         "column {column:?} row {row} cannot be converted to {type_name}"
     ))
+}
+
+/// Convert a Python integer/index object or numeric string to an owned
+/// fixed-width Native representation. LowCardinality retains these bytes per
+/// distinct dictionary value; ordinary columns use `wide_int_into` directly.
+fn wide_int_bytes(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    width: usize,
+    signed: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<Vec<u8>> {
+    let mut bytes = vec![0u8; width];
+    wide_int_into(py, value, &mut bytes, signed, column, row, type_name)?;
+    Ok(bytes)
+}
+
+/// Outcome of the exact-int i64 probe.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WideFast {
+    /// Bytes written; conversion complete.
+    Done,
+    /// Exact int beyond i64; the slow path converts it directly.
+    WideInt,
+    /// Not an exact int; the slow path routes through index/`int()`.
+    NotInt,
+}
+
+/// Try the exact-int fast path: an exact `int` within i64 writes its
+/// sign-extended little-endian bytes directly (the target width is always 16
+/// or 32, so any i64 fits). A miss touches nothing and reports which slow
+/// path applies; a negative value for an unsigned target is the standard
+/// conversion error, matching the full conversion.
+///
+/// # Safety
+///
+/// Requires the GIL; `ptr` must be a valid, non-null object pointer. Never
+/// executes Python code.
+#[inline]
+unsafe fn wide_int_fast_into(
+    ptr: *mut ffi::PyObject,
+    bytes: &mut [u8],
+    signed: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<WideFast> {
+    debug_assert!(bytes.len() >= 8);
+    if ffi::PyLong_CheckExact(ptr) == 0 {
+        return Ok(WideFast::NotInt);
+    }
+    let mut overflow: c_int = 0;
+    let value = ffi::PyLong_AsLongLongAndOverflow(ptr, &mut overflow);
+    if overflow != 0 {
+        return Ok(WideFast::WideInt);
+    }
+    // An exact int should never error here; the no-error contract is
+    // implementation behavior, so clear defensively and fall back.
+    if value == -1 && !ffi::PyErr_Occurred().is_null() {
+        ffi::PyErr_Clear();
+        return Ok(WideFast::WideInt);
+    }
+    if !signed && value < 0 {
+        return Err(conversion_error(column, row, type_name));
+    }
+    bytes[..8].copy_from_slice(&value.to_le_bytes());
+    bytes[8..].fill(if value < 0 { 0xff } else { 0 });
+    Ok(WideFast::Done)
+}
+
+/// Write one Python integer/index object or numeric string into its final
+/// fixed-width little-endian slice. Non-string values use the index protocol,
+/// so floats remain errors rather than being truncated; strings use Python's
+/// `int` conversion to preserve the binding's existing BigInt behavior.
+fn wide_int_into(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    bytes: &mut [u8],
+    signed: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<()> {
+    // SAFETY: GIL held via `py`; `value` is a valid object.
+    match unsafe { wide_int_fast_into(value.as_ptr(), bytes, signed, column, row, type_name)? } {
+        WideFast::Done => Ok(()),
+        outcome => wide_int_slow_into(
+            py,
+            value,
+            outcome == WideFast::WideInt,
+            bytes,
+            signed,
+            column,
+            row,
+            type_name,
+        ),
+    }
+}
+
+/// Slow-path completion after a fast-probe miss; `is_exact_int` carries the
+/// probe's type check so it is not repeated. An exact int beyond i64 is
+/// already its own index result; anything else routes through the index
+/// protocol or `int()`.
+#[allow(clippy::too_many_arguments)]
+fn wide_int_slow_into(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    is_exact_int: bool,
+    bytes: &mut [u8],
+    signed: bool,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<()> {
+    let owned;
+    let integer_ptr = if is_exact_int {
+        value.as_ptr()
+    } else {
+        let converted = unsafe {
+            if value.downcast::<PyString>().is_ok() {
+                ffi::PyNumber_Long(value.as_ptr())
+            } else {
+                ffi::PyNumber_Index(value.as_ptr())
+            }
+        };
+        owned = unsafe { Bound::from_owned_ptr_or_err(py, converted) }
+            .map_err(|_| conversion_error(column, row, type_name))?;
+        owned.as_ptr()
+    };
+    #[cfg(not(Py_3_13))]
+    let result = unsafe {
+        ffi::_PyLong_AsByteArray(
+            integer_ptr.cast(),
+            bytes.as_mut_ptr(),
+            bytes.len(),
+            1,
+            i32::from(signed),
+        )
+    };
+    #[cfg(not(Py_3_13))]
+    if result < 0 {
+        // SAFETY: GIL held; discards the pending OverflowError.
+        unsafe { ffi::PyErr_Clear() };
+        return Err(conversion_error(column, row, type_name));
+    }
+    #[cfg(Py_3_13)]
+    {
+        let mut flags = ffi::Py_ASNATIVEBYTES_LITTLE_ENDIAN;
+        if !signed {
+            flags |= ffi::Py_ASNATIVEBYTES_UNSIGNED_BUFFER | ffi::Py_ASNATIVEBYTES_REJECT_NEGATIVE;
+        }
+        let required = unsafe {
+            ffi::PyLong_AsNativeBytes(
+                integer_ptr,
+                bytes.as_mut_ptr().cast(),
+                bytes.len() as ffi::Py_ssize_t,
+                flags,
+            )
+        };
+        if required < 0 {
+            // SAFETY: GIL held; discards the pending ValueError.
+            unsafe { ffi::PyErr_Clear() };
+            return Err(conversion_error(column, row, type_name));
+        }
+        if required as usize > bytes.len() {
+            return Err(conversion_error(column, row, type_name));
+        }
+    }
+    Ok(())
 }
 
 fn bytes_value(
@@ -3277,6 +3747,10 @@ fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
             | ChType::UInt16
             | ChType::UInt32
             | ChType::UInt64
+            | ChType::Int128
+            | ChType::UInt128
+            | ChType::Int256
+            | ChType::UInt256
             | ChType::Float32
             | ChType::Float64
             | ChType::String

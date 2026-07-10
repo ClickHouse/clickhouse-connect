@@ -264,7 +264,8 @@ Value policy, the binding's reason to exist, lives here:
   The resulting values match clickhouse-connect v1 cell for cell, which the
   parity gate asserts over a million rows per table.
 - **Everything else** is a direct `PyLong`, `PyFloat`, `PyBool`, or
-  `PyBytes` constructor call.
+  `PyBytes` constructor call. Wide integers become exact `PyLong` values
+  directly from their 16-byte or 32-byte little-endian buffers.
 
 All three object paths, rows, columns, and single column, share one cell
 constructor, so the policy cannot drift between them.

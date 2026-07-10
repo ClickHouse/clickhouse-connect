@@ -20,6 +20,7 @@ version = "0.1.0"
 dependencies = [
  "ch-core-rs",
  "pyo3",
+ "pyo3-build-config",
 ]
 
 [[package]]

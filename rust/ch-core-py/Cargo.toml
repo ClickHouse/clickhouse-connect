@@ -10,3 +10,6 @@ crate-type = ["cdylib"]
 [dependencies]
 ch-core-rs = { path = "../../../ch-core-rs" }
 pyo3 = { version = "0.23", features = ["extension-module"] }
+
+[build-dependencies]
+pyo3-build-config = { version = "0.23", features = ["resolve-config"] }

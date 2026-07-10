@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(not(Py_3_13))]
+use std::ffi::c_int;
 use std::ffi::{c_char, c_long, CString};
 use std::sync::Arc;
 
@@ -796,6 +798,10 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::Uuid(c) => c.validity.as_ref(),
         Column::Enum8(c) => c.validity.as_ref(),
         Column::Enum16(c) => c.validity.as_ref(),
+        Column::Int128(c) => c.validity.as_ref(),
+        Column::UInt128(c) => c.validity.as_ref(),
+        Column::Int256(c) => c.validity.as_ref(),
+        Column::UInt256(c) => c.validity.as_ref(),
         // A LowCardinality column's nulls live in the index validity, the Arrow
         // dictionary convention, not as a dictionary entry.
         Column::Dictionary(c) => c.validity.as_ref(),
@@ -977,6 +983,18 @@ where
             &c.values[..rows],
             c.validity.as_ref(),
             |v| unsafe { ffi::PyLong_FromUnsignedLongLong(v) },
+            sink,
+        )?,
+        Column::Int128(c) | Column::Int256(c) => fill_indexed(
+            rows,
+            c.validity.as_ref(),
+            |i| unsafe { wide_int_value_ptr(py, c.value(i), true) },
+            sink,
+        )?,
+        Column::UInt128(c) | Column::UInt256(c) => fill_indexed(
+            rows,
+            c.validity.as_ref(),
+            |i| unsafe { wide_int_value_ptr(py, c.value(i), false) },
             sink,
         )?,
         Column::Float32(c) => fill_prim(
@@ -1416,6 +1434,8 @@ unsafe fn column_value_nonnull_ptr(
             ptr_to_result(py, ffi::PyLong_FromUnsignedLongLong(c.values[index].into()))
         }
         Column::UInt64(c) => ptr_to_result(py, ffi::PyLong_FromUnsignedLongLong(c.values[index])),
+        Column::Int128(c) | Column::Int256(c) => wide_int_value_ptr(py, c.value(index), true),
+        Column::UInt128(c) | Column::UInt256(c) => wide_int_value_ptr(py, c.value(index), false),
         Column::Float32(c) => ptr_to_result(py, ffi::PyFloat_FromDouble(c.values[index].into())),
         Column::Float64(c) => ptr_to_result(py, ffi::PyFloat_FromDouble(c.values[index])),
         Column::Date(c) => Ok(make_date(py, c.values[index] as i64)?.into_ptr()),
@@ -1660,6 +1680,67 @@ unsafe fn column_value_nonnull_ptr(
             }
             Ok(dict.into_ptr())
         }
+    }
+}
+
+/// Convert one little-endian fixed-width integer into an exact Python int.
+/// The core intentionally keeps wide integers in their Native/Arrow byte
+/// representation, so signedness is supplied by the distinct Column variant.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference; the caller must take over
+/// the reference count.
+unsafe fn wide_int_value_ptr(
+    py: Python<'_>,
+    bytes: &[u8],
+    signed: bool,
+) -> PyResult<*mut ffi::PyObject> {
+    // Word-scan fast path: high words all zero (or all ones for a negative
+    // signed value) means the value fits one C long long constructor.
+    if bytes.len().is_multiple_of(8) {
+        if let Some((lo_bytes, high)) = bytes.split_first_chunk::<8>() {
+            let lo = u64::from_le_bytes(*lo_bytes);
+            let mut hi_or = 0u64;
+            let mut hi_and = u64::MAX;
+            for word in high.chunks_exact(8) {
+                let word = u64::from_le_bytes(word.try_into().expect("chunks_exact(8)"));
+                hi_or |= word;
+                hi_and &= word;
+            }
+            if signed {
+                let lo = lo as i64;
+                if (hi_or == 0 && lo >= 0) || (hi_and == u64::MAX && lo < 0) {
+                    return ptr_to_result(py, ffi::PyLong_FromLongLong(lo));
+                }
+            } else if hi_or == 0 {
+                return ptr_to_result(py, ffi::PyLong_FromUnsignedLongLong(lo));
+            }
+        }
+    }
+    #[cfg(not(Py_3_13))]
+    {
+        ptr_to_result(
+            py,
+            ffi::_PyLong_FromByteArray(bytes.as_ptr(), bytes.len(), 1, c_int::from(signed)),
+        )
+    }
+    #[cfg(Py_3_13)]
+    {
+        let ptr = if signed {
+            ffi::PyLong_FromNativeBytes(
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                ffi::Py_ASNATIVEBYTES_LITTLE_ENDIAN,
+            )
+        } else {
+            ffi::PyLong_FromUnsignedNativeBytes(
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                ffi::Py_ASNATIVEBYTES_LITTLE_ENDIAN,
+            )
+        };
+        ptr_to_result(py, ptr)
     }
 }
 

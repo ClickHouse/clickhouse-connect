@@ -17,6 +17,17 @@ SCALAR_QUERY = (
 
 # Decoder-supported type shapes, including the higher-risk timezone-materialization paths.
 DECODE_MATRIX = {
+    "int128": "toInt128(number) - toInt128('170141183460469231731687303715884105000')",
+    "uint128": "toUInt128('340282366920938463463374607431768211000') + number",
+    "int256": "toInt256(number) - toInt256('57896044618658097711785492504343953926634992332820282019728792003956564819000')",
+    "uint256": "toUInt256('115792089237316195423570985008687907853269984665640564039457584007913129639000') + number",
+    "nullable_wide_int": "CAST(if(number % 3 = 0, NULL, toInt256(number) - 2) AS Nullable(Int256))",
+    "array_wide_int": "arrayMap(x -> toUInt128(x) + toUInt128('18446744073709551616'), range(number % 4))",
+    "tuple_wide_int": "tuple(toInt128(number) - 2, toUInt256(number) + toUInt256('340282366920938463463374607431768211456'))",
+    "array_tuple_wide_int": (
+        "arrayMap(x -> tuple(toInt256(x) - 2, toUInt128(x) + toUInt128('18446744073709551616')), "
+        "range(number % 4))"
+    ),
     "nullable_int": "CAST(if(number % 3 = 0, NULL, toInt32(number)) AS Nullable(Int32))",
     "low_card_string": "CAST(toString(number % 3) AS LowCardinality(String))",
     "low_card_nullable_string": "CAST(if(number % 2 = 0, NULL, toString(number)) AS LowCardinality(Nullable(String)))",
@@ -173,6 +184,8 @@ def test_rust_codec_columns_only_limit_zero(client_factory, call):
 
 # numpy/pandas dtype parity matrix. Values chosen to exercise nulls, tz materialization, and dtype width.
 NP_DF_MATRIX = {
+    "int128": "toInt128(number) - toInt128('170141183460469231731687303715884105000')",
+    "uint256": "toUInt256('115792089237316195423570985008687907853269984665640564039457584007913129639000') + number",
     "int32": "toInt32(number) - 5",
     "uint64": "number",
     "float64": "toFloat64(number) / 2",
@@ -379,6 +392,101 @@ def test_rust_codec_insert_df_nullable_parity(client_factory, call, client_mode)
         rust_back = _insert_df_roundtrip(rust_client, python_client, call, rust_table, schema, df)
         python_back = _insert_df_roundtrip(python_client, python_client, call, py_table, schema, df)
         pd.testing.assert_frame_equal(rust_back, python_back)
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_wide_integer_insert_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = (
+        "id UInt8, i128 Int128, u128 UInt128, i256 Int256, u256 UInt256, "
+        "ni Nullable(Int256), a Array(UInt128), t Tuple(Int128, UInt256), "
+        "at Array(Tuple(Int256, UInt128)), m Map(UInt8, Int256)"
+    )
+    i128_min, i128_max = -(2**127), 2**127 - 1
+    u128_max = 2**128 - 1
+    i256_min, i256_max = -(2**255), 2**255 - 1
+    u256_max = 2**256 - 1
+    rows = [
+        [0, i128_min, 0, i256_min, 0, None, [], (i128_min, u256_max), [], {}],
+        [
+            1,
+            -1,
+            2**127,
+            -1,
+            2**255,
+            i256_max,
+            [0, u128_max],
+            (-1, 2**255),
+            [(i256_min, 0), (-1, u128_max)],
+            {1: i256_min, 2: -1},
+        ],
+        [
+            2,
+            i128_max,
+            u128_max,
+            i256_max,
+            u256_max,
+            i256_min,
+            [79],
+            (i128_max, 79),
+            [(i256_max, 79)],
+            {13: i256_max},
+        ],
+    ]
+    names = ["id", "i128", "u128", "i256", "u256", "ni", "a", "t", "at", "m"]
+    rust_table = f"rc_ins_wide_rust_{client_mode}"
+    py_table = f"rc_ins_wide_py_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=names)
+        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, py_table)
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_wide_integer_string_insert_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = (
+        "id UInt8, i128 Int128, u128 UInt128, i256 Int256, u256 UInt256, "
+        "ni Nullable(Int256), a Array(UInt128), t Tuple(Int128, UInt256), "
+        "m Map(UInt128, Int256)"
+    )
+    rows = [
+        [
+            0,
+            str(-13),
+            str(2**128 - 1),
+            str(-(2**255)),
+            str(2**256 - 1),
+            str(-79),
+            [str(0), str(2**128 - 1)],
+            (str(-1), str(2**256 - 1)),
+            {str(2**127): str(-(2**255))},
+        ],
+        [1, str(13), str(0), str(79), str(0), None, [], (str(13), str(79)), {}],
+    ]
+    names = ["id", "i128", "u128", "i256", "u256", "ni", "a", "t", "m"]
+    rust_table = f"rc_ins_wide_str_rust_{client_mode}"
+    py_table = f"rc_ins_wide_str_py_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=names)
+        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, py_table)
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
