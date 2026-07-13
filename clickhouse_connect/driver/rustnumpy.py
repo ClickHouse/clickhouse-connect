@@ -15,8 +15,9 @@ from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Map, Tuple
-from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, Time, Time64
+from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
+from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.query import QueryContext
 
@@ -113,14 +114,19 @@ def _make_time_convert(ch_type: Time | Time64, as_pandas: bool = False) -> Block
     return convert
 
 
-def _contains_nested_time(ch_type: ClickHouseType) -> bool:
+def _any_leaf(ch_type: ClickHouseType, predicate: Callable[[ClickHouseType], bool]) -> bool:
     if isinstance(ch_type, Array):
-        return isinstance(ch_type.element_type, (Time, Time64)) or _contains_nested_time(ch_type.element_type)
+        return _any_leaf(ch_type.element_type, predicate)
     if isinstance(ch_type, Tuple):
-        return any(isinstance(elem, (Time, Time64)) or _contains_nested_time(elem) for elem in ch_type.element_types)
+        return any(_any_leaf(elem, predicate) for elem in ch_type.element_types)
     if isinstance(ch_type, Map):
-        return any(isinstance(elem, (Time, Time64)) or _contains_nested_time(elem) for elem in (ch_type.key_type, ch_type.value_type))
-    return False
+        return _any_leaf(ch_type.key_type, predicate) or _any_leaf(ch_type.value_type, predicate)
+    return predicate(ch_type)
+
+
+def _contains_nested_time(ch_type: ClickHouseType) -> bool:
+    # Container-only: bare Time/Time64 variants keep their dedicated or object-exit converters.
+    return isinstance(ch_type, (Array, Tuple, Map)) and _any_leaf(ch_type, lambda leaf: isinstance(leaf, (Time, Time64)))
 
 
 def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null: bool = False) -> Any:
@@ -147,17 +153,19 @@ def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null
             }
         return tuple(_materialize_raw_times(elem_type, value, extended_time_null) for elem_type, value in zip(ch_type.element_types, raw))
     if isinstance(ch_type, Map):
-        raw_items = raw.items() if isinstance(raw, dict) else ((entry["key"], entry["value"]) for entry in raw)
         return {
             _materialize_raw_times(ch_type.key_type, key, extended_time_null): _materialize_raw_times(
                 ch_type.value_type, value, extended_time_null
             )
-            for key, value in raw_items
+            for key, value in raw.items()
         }
     return raw
 
 
 def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+    extended_time_null = context.as_pandas and context.use_extended_dtypes
+    refinalize = extended_time_null and _needs_refinalize(ch_type)
+
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         try:
             column = col_batch.column_data(index, raw_time_ticks=True)
@@ -166,9 +174,10 @@ def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) ->
                 f"The rust native codec cannot decode this column for numpy/pandas output: {ex}. "
                 'Use native_codec="python" to fall back to the Python codec'
             ) from ex
-        extended_time_null = context.as_pandas and context.use_extended_dtypes
         for row, value in enumerate(column):
             column[row] = _materialize_raw_times(ch_type, value, extended_time_null)
+        if refinalize:
+            column = _refinalize_leaves(ch_type, column, context)
         return column
 
     return convert
@@ -234,7 +243,107 @@ def _make_low_card_time_convert(ch_type: Time, as_pandas: bool) -> BlockConverte
     return convert
 
 
+def _needs_refinalize(ch_type: ClickHouseType) -> bool:
+    # Only leaves need rewriting. Nullable leaves gain pd.NA/NaN/NaT, and Date leaves are converted from
+    # rust's datetime.date objects to the numpy datetime64 values produced by the Python codec. Time leaves
+    # are excluded: _materialize_raw_times fully renders them before refinalize runs.
+    return _any_leaf(
+        ch_type,
+        lambda leaf: (leaf.nullable and not isinstance(leaf, (Time, Time64))) or isinstance(leaf, Date),
+    )
+
+
+def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryContext) -> list:
+    """Rebuild a rust-decoded object column so nested leaves match the Python codec.
+
+    The rust object exit materializes nulls as python None. The Python codec finalizes each flat leaf
+    column, so pandas/numpy leaves render nulls as pd.NA/NaT and values as numpy scalars. Each affected
+    leaf is flattened, run through its own _finalize_column, and resliced. Unaffected sibling leaves keep
+    their value-equal rust-native scalars.
+    """
+    if isinstance(ch_type, Array):
+        lengths = [None if cell is None else len(cell) for cell in column]
+        flat = _refinalize_leaves(
+            ch_type.element_type,
+            [item for cell in column if cell is not None for item in cell],
+            context,
+        )
+        out: list = []
+        pos = 0
+        for length in lengths:
+            if length is None:
+                out.append(None)
+                continue
+            out.append(flat[pos : pos + length])
+            pos += length
+        return out
+    if isinstance(ch_type, Tuple):
+        refinalize_indexes = [index for index, elem in enumerate(ch_type.element_types) if _needs_refinalize(elem)]
+        if not refinalize_indexes:
+            return column
+        keyed = bool(ch_type.element_names) and isinstance(first_value(column), dict)
+        keys: list = [ch_type.element_names[index] if keyed else index for index in refinalize_indexes]
+        columns: list[list] = [[] for _ in refinalize_indexes]
+        for row in column:
+            if row is None:
+                continue
+            for slot, key in zip(columns, keys):
+                slot.append(row[key])
+        columns = [_refinalize_leaves(ch_type.element_types[index], slot, context) for index, slot in zip(refinalize_indexes, columns)]
+        rows_iter = iter(zip(*columns))
+        out = []
+        for row in column:
+            if row is None:
+                out.append(None)
+                continue
+            replaced = next(rows_iter)
+            if keyed:
+                updated = dict(row)
+                updated.update(zip(keys, replaced))
+                out.append(updated)
+            else:
+                values = list(row)
+                for index, value in zip(refinalize_indexes, replaced):
+                    values[index] = value
+                out.append(tuple(values))
+        return out
+    if isinstance(ch_type, Map):
+        refinalize_keys = _needs_refinalize(ch_type.key_type)
+        refinalize_values = _needs_refinalize(ch_type.value_type)
+        if not refinalize_keys and not refinalize_values:
+            return column
+        key_iter = None
+        if refinalize_keys:
+            key_iter = iter(_refinalize_leaves(ch_type.key_type, [key for row in column if row for key in row], context))
+        value_iter = None
+        if refinalize_values:
+            value_iter = iter(_refinalize_leaves(ch_type.value_type, [value for row in column if row for value in row.values()], context))
+        out = []
+        for row in column:
+            if row is None:
+                out.append(None)
+                continue
+            mapped = {}
+            for key, value in row.items():
+                mapped[next(key_iter) if key_iter is not None else key] = next(value_iter) if value_iter is not None else value
+            out.append(mapped)
+        return out
+    # Float leaf nulls become numpy NaN via the Python codec's numpy read rather than _finalize_column.
+    if _np_kind(ch_type) == "f":
+        return list(options.np.array(column, dtype=ch_type.np_type))
+    # Aware stdlib datetimes from the rust exit become Timestamps so _finalize_column takes its tz-aware path.
+    if isinstance(ch_type, DateTimeBase) and getattr(first_value(column), "tzinfo", None) is not None:
+        column = [None if value is None else options.pd.Timestamp(value) for value in column]
+    # _finalize_column returns a pandas/numpy container for the types that diverge.
+    finalized = ch_type._finalize_column(column, context)
+    return finalized if isinstance(finalized, list) else list(finalized)
+
+
 def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+    refinalize = (
+        context.as_pandas and context.use_extended_dtypes and isinstance(ch_type, (Array, Tuple, Map)) and _needs_refinalize(ch_type)
+    )
+
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         try:
             column = col_batch.column_data(index)
@@ -243,6 +352,8 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
                 f"The rust native codec cannot decode this column for numpy/pandas output: {ex}. "
                 'Use native_codec="python" to fall back to the Python codec'
             ) from ex
+        if refinalize:
+            column = _refinalize_leaves(ch_type, column, context)
         return ch_type._finalize_column(column, context)
 
     return convert

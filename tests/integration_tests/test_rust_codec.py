@@ -190,6 +190,35 @@ def test_rust_codec_time_parity(client_factory, call, test_config):
             pd.testing.assert_frame_equal(rust_df, python_df)
 
 
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "CAST((CAST('000:00:13' AS Time), if(number = 0, NULL, toInt64(13))), 'Tuple(t Time, v Nullable(Int64))')",
+        "CAST((CAST('000:00:13' AS Time), toDate(13)), 'Tuple(t Time, d Date)')",
+    ],
+    ids=["nullable_int", "date"],
+)
+def test_rust_codec_nested_time_sibling_df_parity(client_factory, call, test_config, expr):
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+
+    version_client = client_factory(native_codec="python")
+    if not version_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+
+    pd = pytest.importorskip("pandas")
+    settings = {"enable_time_time64_type": 1}
+    rust_client = client_factory(native_codec="rust_strict", settings=settings)
+    python_client = client_factory(native_codec="python", settings=settings)
+    query = f"SELECT {expr} AS c FROM numbers(2)"
+
+    rust_df = call(rust_client.query_df, query, use_extended_dtypes=True)
+    python_df = call(python_client.query_df, query, use_extended_dtypes=True)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    if "Nullable(Int64)" in expr:
+        assert rust_df.iloc[0, 0]["v"] is pd.NA
+
+
 @pytest.mark.parametrize("expr", DECODE_MATRIX.values(), ids=list(DECODE_MATRIX))
 def test_rust_codec_decode_matrix_parity(client_factory, call, expr):
     rust_client = client_factory(native_codec="rust_strict")
@@ -327,15 +356,24 @@ NP_DF_MATRIX = {
     "decimal128": "toDecimal128(number / 3 - 2, 10)",
     "ipv4": "toIPv4(toUInt32(number * 16909060))",
     "ipv6": "toIPv6(concat('2001:db8::', lower(hex(toUInt16(number + 1)))))",
-    # Array cells compare by value; element scalars are python-native under rust vs
-    # numpy scalars under python (documented df-parity gap pending a decision).
+    # Non-null nested scalars stay python-native under rust (value-equal to python's numpy scalars).
     "array_int": "range(number % 4)",
     "array_string": "arrayMap(x -> toString(x), range(number % 4))",
+    # Nested nulls are refinalized to match the python codec per leaf type (pd.NA, NaN, NaT, numpy scalars).
     "array_nullable_int": "arrayMap(x -> if(x % 2 = 0, NULL, toInt64(x)), range(number % 4))",
-    # Tuple/Map cells share the same element-scalar gap as Array.
+    "array_nullable_string": "arrayMap(x -> if(x % 2 = 0, NULL, toString(x)), range(number % 4))",
+    "array_nullable_float": "arrayMap(x -> if(x % 2 = 0, NULL, toFloat64(x) / 2), range(number % 4))",
+    "array_nullable_date": "arrayMap(x -> if(x % 2 = 0, NULL, toDate(x)), range(number % 4))",
+    "array_nullable_datetime": "arrayMap(x -> if(x % 2 = 0, NULL, toDateTime(x, 'UTC')), range(number % 4))",
     "tuple_unnamed": "tuple(number, toString(number))",
     "tuple_named": "CAST((toInt64(number), toString(number)), 'Tuple(a Int64, b String)')",
+    "tuple_nullable_int": "tuple(if(number % 2 = 0, NULL, toInt64(number)), toString(number))",
     "map_string_int": "mapFromArrays(arrayMap(x -> concat('k', toString(x)), range(number % 4)), range(number % 4))",
+    "map_nullable_int": "CAST(map('k', if(number % 2 = 0, NULL, toInt64(number))), 'Map(String, Nullable(Int64))')",
+    "array_tuple_nullable": "arrayMap(x -> tuple(if(x % 2 = 0, NULL, toInt64(x)), toString(x)), range(number % 4))",
+    # Non-nullable and null-free temporal leaves are still rewrapped to numpy datetime64 to match python.
+    "array_date_nonnull": "arrayMap(x -> toDate(x), range(number % 4))",
+    "tuple_nullable_int_date": "CAST((if(number % 2 = 0, NULL, toInt64(number)), toDate(number)), 'Tuple(a Nullable(Int64), b Date)')",
 }
 
 
@@ -355,6 +393,25 @@ def test_rust_codec_np_df_parity(client_factory, call, expr):
     rust_df = call(rust_client.query_df, query)
     python_df = call(python_client.query_df, query)
     assert rust_df["c"].dtype == python_df["c"].dtype
+    pd.testing.assert_frame_equal(rust_df, python_df)
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "arrayMap(x -> if(x % 2 = 0, NULL, toDateTime(x, 'America/Denver')), range(number % 4))",
+        "tuple(if(number % 2 = 0, NULL, toDateTime64(number, 3, 'America/Denver')), toString(number))",
+    ],
+    ids=["array_nullable_datetime_named_tz", "tuple_nullable_datetime64_named_tz"],
+)
+def test_rust_codec_nested_named_tz_df_parity(client_factory, call, expr):
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = f"SELECT {expr} AS c FROM numbers(13)"
+
+    rust_df = call(rust_client.query_df, query, use_extended_dtypes=True)
+    python_df = call(python_client.query_df, query, use_extended_dtypes=True)
     pd.testing.assert_frame_equal(rust_df, python_df)
 
 

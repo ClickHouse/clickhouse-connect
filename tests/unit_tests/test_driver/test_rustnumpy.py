@@ -1,7 +1,12 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver import rustnumpy
+from clickhouse_connect.driver.query import QueryContext
 
 
 class _ArrowColumn:
@@ -164,3 +169,54 @@ def test_nested_time64_converter_preserves_nanoseconds():
             (np.timedelta64(79, "s"), np.timedelta64(1, "ns")),
         ]
     ]
+
+
+@pytest.mark.parametrize(
+    ("type_name", "expected"),
+    [
+        ("Array(Date)", True),
+        ("Array(DateTime('UTC'))", False),
+        ("Array(DateTime64(3, 'UTC'))", False),
+        ("Array(Nullable(DateTime64(3, 'UTC')))", True),
+        ("Tuple(Time, Nullable(Int64))", True),
+        ("Tuple(String, Nullable(Time))", False),
+    ],
+)
+def test_needs_refinalize_only_gates_transforming_leaves(type_name, expected):
+    assert rustnumpy._needs_refinalize(get_from_name(type_name)) is expected
+
+
+@pytest.mark.parametrize(
+    ("type_name", "column"),
+    [
+        ("Tuple(Nullable(Int64), String)", [(None, "untouched"), (13, "also untouched")]),
+        ("Map(String, Nullable(Int64))", [{"untouched": None}, {"also untouched": 13}]),
+    ],
+)
+def test_refinalize_skips_unaffected_sibling_leaves(monkeypatch, type_name, column):
+    pd = pytest.importorskip("pandas")
+
+    def fail_finalize(*_args):
+        raise AssertionError("unaffected String leaf was finalized")
+
+    monkeypatch.setattr(String, "_finalize_column", fail_finalize)
+    context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+
+    result = rustnumpy._refinalize_leaves(get_from_name(type_name), column, context)
+
+    leaf = result[0][0] if isinstance(result[0], tuple) else result[0]["untouched"]
+    assert leaf is pd.NA
+
+
+@pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
+def test_refinalize_nullable_named_timezone_datetimes(type_name):
+    pd = pytest.importorskip("pandas")
+    timezone = ZoneInfo("America/Denver")
+    value = datetime.fromtimestamp(1, timezone)
+    ch_type = get_from_name(f"Array(Nullable({type_name}))")
+    context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+
+    result = rustnumpy._refinalize_leaves(ch_type, [[None, value]], context)
+
+    assert result[0][0] is pd.NaT
+    assert result[0][1] == pd.Timestamp(value)
