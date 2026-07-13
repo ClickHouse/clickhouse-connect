@@ -374,6 +374,13 @@ NP_DF_MATRIX = {
     # Non-nullable and null-free temporal leaves are still rewrapped to numpy datetime64 to match python.
     "array_date_nonnull": "arrayMap(x -> toDate(x), range(number % 4))",
     "tuple_nullable_int_date": "CAST((if(number % 2 = 0, NULL, toInt64(number)), toDate(number)), 'Tuple(a Nullable(Int64), b Date)')",
+    # SimpleAggregateFunction converts as its element type. Geo aliases take the object exit on both codecs.
+    "simple_agg_uint64": "CAST(number AS SimpleAggregateFunction(sum, UInt64))",
+    "simple_agg_string": "CAST(toString(number) AS SimpleAggregateFunction(anyLast, String))",
+    "simple_agg_date": "CAST(toDate(number + 13) AS SimpleAggregateFunction(anyLast, Date))",
+    "simple_agg_datetime": "CAST(toDateTime(number, 'UTC') AS SimpleAggregateFunction(anyLast, DateTime('UTC')))",
+    "point": "(toFloat64(number), toFloat64(number) / 2)::Point",
+    "ring": "[(toFloat64(number), toFloat64(number) / 2), (toFloat64(number) + 1, toFloat64(number))]::Ring",
 }
 
 

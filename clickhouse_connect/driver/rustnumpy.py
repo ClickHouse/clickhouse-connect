@@ -15,6 +15,7 @@ from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Map, Tuple
+from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import first_value
@@ -379,6 +380,10 @@ def _np_kind(ch_type: ClickHouseType) -> str | None:
 
 
 def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Converter:
+    # SimpleAggregateFunction is a name-decoration alias: convert as the element type, matching both the
+    # rust core's physical_delegate expansion and the Python codec's delegated read.
+    if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
+        ch_type = ch_type.element_type
     # LowCardinality(T) routes through the object exit regardless of inner type. Its values are correct there,
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.
