@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Generator, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timezone, tzinfo
 from typing import Any, Protocol, TypeVar, cast, runtime_checkable
@@ -11,7 +11,6 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.backend.contracts import AsyncExecutor, SyncExecutor
 from clickhouse_connect.driver.backend.models import ClientConfig, ServerInfo
 from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver.binding import quote_identifier
@@ -39,6 +38,11 @@ class InitializationResult:
 InitializationSequence = Generator[Operation, object, InitializationResult]
 SequenceResult = TypeVar("SequenceResult")
 OperationSequence = Generator[Operation, object, SequenceResult]
+
+# Sequences yield semantic operations, so their executor is a client method
+# (Client._execute_operation), not a transport backend.
+ExecuteOperation = Callable[[Operation], object]
+AsyncExecuteOperation = Callable[[Operation], Awaitable[object]]
 
 
 @runtime_checkable
@@ -210,7 +214,7 @@ def insert_context_sequence(
     )
 
 
-def run_sync(sequence: OperationSequence[SequenceResult], backend: SyncExecutor) -> SequenceResult:
+def run_sync(sequence: OperationSequence[SequenceResult], execute: ExecuteOperation) -> SequenceResult:
     response: object = None
     execution_error: Exception | None = None
     try:
@@ -223,7 +227,7 @@ def run_sync(sequence: OperationSequence[SequenceResult], backend: SyncExecutor)
             except StopIteration as stop:
                 return stop.value
             try:
-                response = backend.execute(operation)
+                response = execute(operation)
                 execution_error = None
             except Exception as ex:
                 execution_error = ex
@@ -231,7 +235,7 @@ def run_sync(sequence: OperationSequence[SequenceResult], backend: SyncExecutor)
         sequence.close()
 
 
-async def run_async(sequence: OperationSequence[SequenceResult], backend: AsyncExecutor) -> SequenceResult:
+async def run_async(sequence: OperationSequence[SequenceResult], execute: AsyncExecuteOperation) -> SequenceResult:
     response: object = None
     execution_error: Exception | None = None
     try:
@@ -244,7 +248,7 @@ async def run_async(sequence: OperationSequence[SequenceResult], backend: AsyncE
             except StopIteration as stop:
                 return stop.value
             try:
-                response = await backend.execute(operation)
+                response = await execute(operation)
                 execution_error = None
             except Exception as ex:
                 execution_error = ex

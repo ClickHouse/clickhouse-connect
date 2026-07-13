@@ -34,12 +34,13 @@ from clickhouse_connect.driver.backend.httpcommon import (
     retryable_http_statuses,
     summary_from_headers,
 )
-from clickhouse_connect.driver.backend.models import CommandExecution, QueryExecution, QueryRuntime
+from clickhouse_connect.driver.backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.httputil import ResponseSource, all_managers, check_conn_expiration, get_response_data
 
 if TYPE_CHECKING:
+    from clickhouse_connect.driver.backend.contracts import SyncBackend
     from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
     from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.insert import InsertContext
@@ -63,6 +64,8 @@ def _plan_fields(plan: QueryRequestPlan) -> dict[str, Any] | None:
 
 
 class HttpSyncBackend:
+    capabilities = Capabilities(native_async=False, sessions=True)
+
     def __init__(
         self,
         *,
@@ -165,8 +168,8 @@ class HttpSyncBackend:
         self,
         context: InsertContext,
         runtime: QueryRuntime,
-        block_gen: Any,
-        rebuild_block_gen: Callable[[], Any],
+        body: Any,
+        retry_body: Callable[[], Any],
     ) -> dict[str, Any]:
         """Send a built insert payload, returning the response summary."""
         plan = plan_data_insert_request(context, runtime)
@@ -180,12 +183,12 @@ class HttpSyncBackend:
             self.error_handler(response)
 
         response = self.request(
-            block_gen,
+            body,
             plan.params,
             plan.headers,
             error_handler=error_handler,
             server_wait=False,
-            retry_body=rebuild_block_gen,
+            retry_body=retry_body,
         )
         logger.debug("Context insert response code: %d, content: %s", response.status, response.data)
         return summary_from_headers(response.headers)
@@ -387,3 +390,9 @@ class HttpSyncBackend:
         if self.owns_pool_manager:
             cast(PoolManager, self.http).clear()
             all_managers.pop(cast(PoolManager, self.http), None)
+
+
+if TYPE_CHECKING:
+
+    def _contract_conformance(backend: HttpSyncBackend) -> SyncBackend:
+        return backend

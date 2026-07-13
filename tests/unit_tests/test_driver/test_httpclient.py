@@ -174,6 +174,56 @@ class TestAsyncClientHeaders:
         assert client.headers["X-Gateway"] == "cloudflare"
 
 
+class TestConstructorAuthHeaders:
+    """Mutual TLS headers and a bearer token coexist (the sync convention,
+    converged): cert headers are set independently, the token wins over basic."""
+
+    def test_sync_mutual_tls_with_access_token_sends_both(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="https",
+                host="localhost",
+                port=8443,
+                username="cert_user",
+                password="",
+                database="default",
+                access_token="tok",
+                client_cert="client.pem",
+                pool_mgr=Mock(),
+            )
+        assert client.headers["X-ClickHouse-User"] == "cert_user"
+        assert client.headers["X-ClickHouse-SSL-Certificate-Auth"] == "on"
+        assert client.headers["Authorization"] == "Bearer tok"
+
+    def test_async_mutual_tls_with_access_token_sends_both(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="cert_user",
+            password="",
+            database="default",
+            access_token="tok",
+            client_cert="client.pem",
+        )
+        assert client.headers["X-ClickHouse-User"] == "cert_user"
+        assert client.headers["X-ClickHouse-SSL-Certificate-Auth"] == "on"
+        assert client.headers["Authorization"] == "Bearer tok"
+
+    def test_async_mutual_tls_without_token_sends_no_authorization(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="cert_user",
+            password="secret",
+            database="default",
+            client_cert="client.pem",
+        )
+        assert client.headers["X-ClickHouse-SSL-Certificate-Auth"] == "on"
+        assert "Authorization" not in client.headers
+
+
 class TestAsyncClientErrorHandler:
     """Test the error handling functionality of AsyncClient"""
 

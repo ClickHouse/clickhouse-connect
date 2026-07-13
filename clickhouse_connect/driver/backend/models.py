@@ -18,6 +18,16 @@ def _freeze_mapping(values: Mapping[str, Any]) -> Mapping[str, Any]:
 
 @dataclass(frozen=True)
 class Capabilities:
+    """Feature flags a backend reports about its transport and engine.
+
+    native_async: the transport is genuinely asynchronous rather than sync
+        calls offloaded to threads.
+    sessions: the backend supports server-side sessions (session_id).
+
+    New backend-varying features get a field here rather than loose
+    supports_* attributes (PR #811's flags map to fields when reconciled).
+    """
+
     native_async: bool = False
     sessions: bool = False
 
@@ -39,7 +49,6 @@ class ServerInfo:
     version: str
     timezone: tzinfo
     settings: Mapping[str, SettingDef]
-    capabilities: Capabilities = field(default_factory=Capabilities)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "settings", _freeze_mapping(self.settings))

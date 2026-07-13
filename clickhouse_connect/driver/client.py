@@ -19,8 +19,8 @@ from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import options, tzutil
-from clickhouse_connect.driver.backend.adapters import SyncClientExecutor
 from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
+from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver.backend.orchestration import (
     InitializationResult,
     init_sequence,
@@ -72,6 +72,10 @@ if TYPE_CHECKING:
 io.DEFAULT_BUFFER_SIZE = 1024 * 256  # type: ignore[misc]  # override module default buffer size
 logger = logging.getLogger(__name__)
 arrow_str_setting = "output_format_arrow_string_as_string"
+
+# Orchestration queries are internal, so their decode must not be affected by
+# user-configured global read formats such as set_default_formats("String", "bytes").
+_INTERNAL_QUERY_FORMATS = {"String": "string"}
 
 
 def _strip_utc_timezone_from_arrow(table: pyarrow.Table) -> pyarrow.Table:
@@ -206,8 +210,23 @@ class Client(ABC):
 
     def _init_common_settings(self, tz_source: TzSource):
         config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=tz_source)
-        result = run_sync(init_sequence(config), SyncClientExecutor(self))
+        result = run_sync(init_sequence(config), self._execute_operation)
         self._apply_init_result(result)
+
+    def _execute_operation(self, operation: Operation) -> object:
+        """Execute an orchestration operation through this client's semantic methods.
+
+        AsyncClient overrides this with a coroutine variant, so sync base-class
+        helpers that dispatch through it must themselves be overridden there.
+        """
+        settings = dict(operation.settings) or None
+        if isinstance(operation, CommandOp):
+            return self.command(operation.text, settings=settings, use_database=operation.use_database)
+        if isinstance(operation, QueryOp):
+            return self.query(operation.text, settings=settings, query_formats=dict(_INTERNAL_QUERY_FORMATS))
+        if isinstance(operation, RawQueryOp):
+            return self.raw_query(operation.text, settings=settings, fmt=operation.fmt)
+        raise TypeError(f"Unsupported operation type: {type(operation).__name__}")
 
     def _apply_init_result(self, result: InitializationResult) -> None:
         server_info = result.server_info
@@ -1176,7 +1195,7 @@ class Client(ABC):
                 data,
                 transport_settings,
             ),
-            SyncClientExecutor(self),
+            self._execute_operation,
         )
 
     def min_version(self, version_str: str) -> bool:

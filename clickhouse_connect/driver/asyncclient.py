@@ -22,7 +22,6 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, options
-from clickhouse_connect.driver.backend.adapters import AsyncClientExecutor
 from clickhouse_connect.driver.backend.http_async import HttpAsyncBackend, release_lease
 from clickhouse_connect.driver.backend.httpcommon import (
     add_integration_tag,
@@ -36,12 +35,13 @@ from clickhouse_connect.driver.backend.httpcommon import (
     parse_command_body,
 )
 from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
+from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver.backend.orchestration import init_sequence, insert_context_sequence, run_async
 from clickhouse_connect.driver.binding import (
     bind_query,
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
-from clickhouse_connect.driver.client import Client, _apply_arrow_tz_policy
+from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS, Client, _apply_arrow_tz_policy
 from clickhouse_connect.driver.common import (
     StreamContext,
     coerce_bool,
@@ -167,15 +167,16 @@ class AsyncClient(Client):
 
         # The initial token from token_provider is resolved in _initialize()
 
-        # Priority: access_token > mutual TLS > basic auth
+        # Auth headers follow the sync client: mutual TLS headers are set
+        # independently, and a bearer token wins over basic auth.
         if client_cert and (tls_mode is None or tls_mode == "mutual"):
             if not username:
                 raise ProgrammingError("username parameter is required for Mutual TLS authentication")
             self.headers["X-ClickHouse-User"] = username
             self.headers["X-ClickHouse-SSL-Certificate-Auth"] = "on"
-        elif access_token:
+        if access_token:
             self.headers["Authorization"] = f"Bearer {access_token}"
-        elif username and (not client_cert or tls_mode in ("strict", "proxy")):
+        elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
             credentials = b64encode(f"{username}:{password}".encode()).decode()
             self.headers["Authorization"] = f"Basic {credentials}"
 
@@ -357,7 +358,7 @@ class AsyncClient(Client):
 
         try:
             config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=self._deferred_tz_source)
-            init_result = await run_async(init_sequence(config), AsyncClientExecutor(self))
+            init_result = await run_async(init_sequence(config), self._execute_operation)
             self._apply_init_result(init_result)
 
             if self._initial_settings:
@@ -389,6 +390,17 @@ class AsyncClient(Client):
                 await self._session.close()
                 self._session = None
             raise
+
+    async def _execute_operation(self, operation: Operation) -> object:
+        """Execute an orchestration operation through this client's semantic methods."""
+        settings = dict(operation.settings) or None
+        if isinstance(operation, CommandOp):
+            return await self.command(operation.text, settings=settings, use_database=operation.use_database)
+        if isinstance(operation, QueryOp):
+            return await self.query(operation.text, settings=settings, query_formats=dict(_INTERNAL_QUERY_FORMATS))
+        if isinstance(operation, RawQueryOp):
+            return await self.raw_query(operation.text, settings=settings, fmt=operation.fmt)
+        raise TypeError(f"Unsupported operation type: {type(operation).__name__}")
 
     async def __aenter__(self) -> AsyncClient:
         """Async context manager entry."""
@@ -1143,7 +1155,7 @@ class AsyncClient(Client):
                 data,
                 transport_settings,
             ),
-            AsyncClientExecutor(self),
+            self._execute_operation,
         )
 
     async def data_insert(self, context: InsertContext) -> QuerySummary:  # type: ignore[override]

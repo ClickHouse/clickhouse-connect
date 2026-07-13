@@ -35,12 +35,13 @@ from clickhouse_connect.driver.backend.httpcommon import (
     retryable_http_statuses,
     summary_from_headers,
 )
-from clickhouse_connect.driver.backend.models import CommandExecution, QueryExecution, QueryRuntime
+from clickhouse_connect.driver.backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
+    from clickhouse_connect.driver.backend.contracts import AsyncBackend
     from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
     from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.insert import InsertContext
@@ -143,6 +144,8 @@ def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -
 
 
 class HttpAsyncBackend:
+    capabilities = Capabilities(native_async=True, sessions=True)
+
     def __init__(
         self,
         *,
@@ -600,3 +603,9 @@ class HttpAsyncBackend:
         if old_lease is not None:
             await old_lease.wait_drained()
             await old_lease.session.close()
+
+
+if TYPE_CHECKING:
+
+    def _contract_conformance(backend: HttpAsyncBackend) -> AsyncBackend:
+        return backend
