@@ -16,12 +16,10 @@ from clickhouse_connect.driver.backend.httpcommon import (
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
     columns_only_re,  # noqa: F401  (compatibility re-export)
-    embed_insert_query,
     ex_header,  # noqa: F401  (compatibility re-export)
     ex_tag_header,  # noqa: F401  (compatibility re-export)
     negotiate_compression,
     parse_command_body,
-    summary_from_headers,
 )
 from clickhouse_connect.driver.backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import bind_query, use_form_encoding
@@ -337,19 +335,8 @@ class HttpClient(Client):
             logger.debug("No data included in insert, skipping")
             return QuerySummary()
 
-        def error_handler(resp: HTTPResponse):
-            # If we actually had a local exception when building the insert, throw that instead
-            if context.insert_exception:
-                ex = context.insert_exception
-                context.insert_exception = None
-                raise ex
-            self._error_handler(resp)
-
-        headers = {"Content-Type": "application/octet-stream"}
         if context.compression is None:
             context.compression = self.write_compression
-        if isinstance(context.compression, str):
-            headers["Content-Encoding"] = context.compression
         block_gen = self._transform.build_insert(context)
 
         def rebuild_block_gen():
@@ -357,22 +344,9 @@ class HttpClient(Client):
             context.current_block = 0
             return self._transform.build_insert(context)
 
-        params = {}
-        if self.database:
-            params["database"] = self.database
-        params.update(self._validate_settings(context.settings))
-        headers = dict_copy(headers, context.transport_settings)
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
         try:
-            response = self._raw_request(
-                block_gen,
-                params,
-                headers,
-                error_handler=error_handler,
-                server_wait=False,
-                retry_body=rebuild_block_gen,
-            )
-            logger.debug("Context insert response code: %d, content: %s", response.status, response.data)
-            return QuerySummary(self._summary(response))
+            return QuerySummary(self._backend.execute_data_insert(context, runtime, block_gen, rebuild_block_gen))
         finally:
             context.data = None
 
@@ -389,27 +363,11 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        params = {}
-        headers = {"Content-Type": "application/octet-stream"}
-        if compression:
-            headers["Content-Encoding"] = compression
-        if table:
-            insert_block, query_param = embed_insert_query(
-                table, column_names, fmt if fmt else self._write_format, compression, insert_block
-            )
-            if query_param:
-                params["query"] = query_param
-        if self.database:
-            params["database"] = self.database
-        params.update(self._validate_settings(settings or {}))
-        headers = dict_copy(headers, transport_settings)
-        response = self._raw_request(insert_block, params, headers, server_wait=False)
-        logger.debug("Raw insert response code: %d, content: %s", response.status, response.data)
-        return QuerySummary(self._summary(response))
-
-    @staticmethod
-    def _summary(response: HTTPResponse):
-        return summary_from_headers(response.headers)
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}))
+        summary = self._backend.execute_raw_insert(
+            table, column_names, insert_block, fmt if fmt else self._write_format, compression, runtime, transport_settings
+        )
+        return QuerySummary(summary)
 
     def command(
         self,

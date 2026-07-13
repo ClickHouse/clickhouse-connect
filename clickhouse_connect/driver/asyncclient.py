@@ -30,12 +30,10 @@ from clickhouse_connect.driver.backend.httpcommon import (
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
     columns_only_re,  # noqa: F401  (compatibility re-export)
     decompress_response,
-    embed_insert_query,
     ex_header,  # noqa: F401  (compatibility re-export)
     ex_tag_header,
     negotiate_compression,
     parse_command_body,
-    summary_from_headers,
 )
 from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
 from clickhouse_connect.driver.backend.orchestration import init_sequence, insert_context_sequence, run_async
@@ -1269,27 +1267,9 @@ class AsyncClient(Client):
             active_source.start_producer()
             return active_source.async_generator()
 
-        headers: dict[str, Any] = {"Content-Type": "application/octet-stream"}
-        if isinstance(context.compression, str):
-            headers["Content-Encoding"] = context.compression
-
-        params = {}
-        if self.database:
-            params["database"] = self.database
-        params.update(self._validate_settings(context.settings))
-        headers = dict_copy(headers, context.transport_settings)
-
-        response = None
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
         try:
-            response = await self._raw_request(
-                active_source.async_generator(),
-                params,
-                headers=headers,
-                server_wait=False,
-                retry_body=rebuild_body,
-            )
-            logger.debug("Context insert response code: %d", response.status)
-            summary = self._summary(response)
+            summary = await self._backend.execute_data_insert(context, runtime, active_source.async_generator(), rebuild_body)
         except Exception:
             await active_source.close()
 
@@ -1301,9 +1281,6 @@ class AsyncClient(Client):
         finally:
             await active_source.close()
             context.data = None
-            if response is not None:
-                response.close()
-                release_lease(response)
 
         return QuerySummary(summary)
 
@@ -1368,30 +1345,11 @@ class AsyncClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        params = {}
-        headers = {"Content-Type": "application/octet-stream"}
-        if compression:
-            headers["Content-Encoding"] = compression
-
-        if table:
-            insert_block, query_param = embed_insert_query(
-                table, column_names, fmt if fmt else self._write_format, compression, insert_block
-            )
-            if query_param:
-                params["query"] = query_param
-
-        if self.database:
-            params["database"] = self.database
-        params.update(self._validate_settings(settings or {}))
-        headers = dict_copy(headers, transport_settings)
-
-        response = await self._raw_request(insert_block, params, headers, server_wait=False)
-        try:
-            logger.debug("Raw insert response code: %d", response.status)
-            return QuerySummary(self._summary(response))
-        finally:
-            response.close()
-            release_lease(response)
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}))
+        summary = await self._backend.execute_raw_insert(
+            table, column_names, insert_block, fmt if fmt else self._write_format, compression, runtime, transport_settings
+        )
+        return QuerySummary(summary)
 
     def _add_integration_tag(self, name: str):
         """
@@ -1427,7 +1385,3 @@ class AsyncClient(Client):
             retries=retries,
             retry_body=retry_body,
         )
-
-    @staticmethod
-    def _summary(response: aiohttp.ClientResponse):
-        return summary_from_headers(response.headers)

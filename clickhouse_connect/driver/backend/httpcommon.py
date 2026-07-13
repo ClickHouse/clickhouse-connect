@@ -25,6 +25,7 @@ import zstandard
 if TYPE_CHECKING:
     from clickhouse_connect.driver.client import Client
     from clickhouse_connect.driver.external import ExternalData
+    from clickhouse_connect.driver.insert import InsertContext
     from clickhouse_connect.driver.query import QueryContext
 
 from clickhouse_connect import common
@@ -281,6 +282,57 @@ def plan_query_request(
     params.update(context.bind_params)
     headers["Content-Type"] = "text/plain; charset=utf-8"
     return QueryRequestPlan(False, params, headers, body=final_query)
+
+
+@dataclass
+class InsertRequestPlan:
+    """A shaped HTTP insert request. body is set only by the raw-insert
+    planner; context inserts stream a transport-built body instead."""
+
+    params: dict[str, str]
+    headers: dict[str, Any]
+    body: Any = None
+
+
+def plan_data_insert_request(context: InsertContext, runtime: QueryRuntime) -> InsertRequestPlan:
+    """Shape an InsertContext into an HTTP request plan. The insert payload
+    itself is built and streamed by the transport."""
+    headers: dict[str, Any] = {"Content-Type": "application/octet-stream"}
+    if isinstance(context.compression, str):
+        headers["Content-Encoding"] = context.compression
+    params: dict[str, str] = {}
+    if runtime.database:
+        params["database"] = runtime.database
+    params.update(runtime.settings)
+    headers = dict_copy(headers, context.transport_settings)
+    return InsertRequestPlan(params, headers)
+
+
+def plan_raw_insert_request(
+    table: str | None,
+    column_names: Sequence[str] | None,
+    insert_block: Any,
+    fmt: str,
+    compression: str | None,
+    runtime: QueryRuntime,
+    transport_settings: dict[str, str] | None,
+) -> InsertRequestPlan:
+    """Shape a raw insert into an HTTP request plan, embedding the INSERT
+    statement into the body or the query URL parameter per block type."""
+    params: dict[str, str] = {}
+    headers: dict[str, Any] = {"Content-Type": "application/octet-stream"}
+    if compression:
+        headers["Content-Encoding"] = compression
+    body = insert_block
+    if table:
+        body, query_param = embed_insert_query(table, column_names, fmt, compression, insert_block)
+        if query_param:
+            params["query"] = query_param
+    if runtime.database:
+        params["database"] = runtime.database
+    params.update(runtime.settings)
+    headers = dict_copy(headers, transport_settings)
+    return InsertRequestPlan(params, headers, body)
 
 
 @dataclass

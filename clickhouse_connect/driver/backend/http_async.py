@@ -15,7 +15,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -28,7 +28,9 @@ from clickhouse_connect.driver.backend.httpcommon import (
     ex_header,
     ex_tag_header,
     plan_command_request,
+    plan_data_insert_request,
     plan_query_request,
+    plan_raw_insert_request,
     retryable_http_statuses,
     summary_from_headers,
 )
@@ -40,6 +42,7 @@ from clickhouse_connect.driver.streaming import start_streaming_response
 if TYPE_CHECKING:
     from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
     from clickhouse_connect.driver.external import ExternalData
+    from clickhouse_connect.driver.insert import InsertContext
     from clickhouse_connect.driver.query import QueryContext
 
 logger = logging.getLogger(__name__)
@@ -277,6 +280,43 @@ class HttpAsyncBackend:
             summary=summary_from_headers(response.headers),
             response_tz_name=response.headers.get("X-ClickHouse-Timezone"),
         )
+
+    async def execute_data_insert(
+        self,
+        context: InsertContext,
+        runtime: QueryRuntime,
+        body: Any,
+        retry_body: Callable[[], Awaitable[Any]],
+    ) -> dict[str, Any]:
+        """Send a built insert payload, returning the response summary."""
+        plan = plan_data_insert_request(context, runtime)
+        response = await self.request(body, plan.params, headers=plan.headers, server_wait=False, retry_body=retry_body)
+        try:
+            logger.debug("Context insert response code: %d", response.status)
+            return summary_from_headers(response.headers)
+        finally:
+            response.close()
+            release_lease(response)
+
+    async def execute_raw_insert(
+        self,
+        table: str | None,
+        column_names: Sequence[str] | None,
+        insert_block: Any,
+        fmt: str,
+        compression: str | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> dict[str, Any]:
+        """Send a raw insert payload, returning the response summary."""
+        plan = plan_raw_insert_request(table, column_names, insert_block, fmt, compression, runtime, transport_settings)
+        response = await self.request(plan.body, plan.params, plan.headers, server_wait=False)
+        try:
+            logger.debug("Raw insert response code: %d", response.status)
+            return summary_from_headers(response.headers)
+        finally:
+            response.close()
+            release_lease(response)
 
     async def execute_command(
         self,
