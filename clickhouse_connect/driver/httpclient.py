@@ -22,7 +22,10 @@ from clickhouse_connect.driver.backend.httpcommon import (
     parse_command_body,
 )
 from clickhouse_connect.driver.backend.models import QueryRuntime
-from clickhouse_connect.driver.binding import bind_query, use_form_encoding
+from clickhouse_connect.driver.binding import (
+    bind_query,
+    use_form_encoding,  # noqa: F401  (compatibility re-export)
+)
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
 from clickhouse_connect.driver.ctypes import RespBuffCls
@@ -436,8 +439,8 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        body, params, fields = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        return self._raw_request(body, params, fields=fields, headers=transport_settings, retries=self.query_retries).data
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
+        return self._backend.execute_raw_query(final_query, bind_params, external_data, runtime, transport_settings)
 
     def raw_stream(
         self,
@@ -452,58 +455,8 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        body, params, fields = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        return self._raw_request(
-            body,
-            params,
-            fields=fields,
-            stream=True,
-            server_wait=False,
-            headers=transport_settings,
-            retries=self.query_retries,
-        )
-
-    def _prep_raw_query(
-        self,
-        query: str,
-        parameters: Sequence | dict[str, Any] | None,
-        settings: dict[str, Any] | None,
-        fmt: str | None,
-        use_database: bool,
-        external_data: ExternalData | None,
-    ):
-        if fmt:
-            query += f"\n FORMAT {fmt}"
-        final_query, bind_params = bind_query(query, parameters, self.server_tz)
-        params = self._validate_settings(settings or {})
-        if use_database and self.database:
-            params["database"] = self.database
-        form_fields: dict[str, Any] = {}
-        fields: dict[str, Any] | None = form_fields
-        use_form = use_form_encoding(final_query, bind_params, self.form_encode_query_params)
-        # Setup query body
-        if external_data and not use_form and isinstance(final_query, bytes):
-            raise ProgrammingError("Binary query cannot be placed in URL when using External Data; enable form encoding.")
-        # Setup additional query parameters and body
-        body: str | bytes = b""
-        if use_form:
-            form_fields["query"] = final_query
-            form_fields.update(bind_params)
-            if external_data:
-                params.update(external_data.query_params)
-                form_fields.update(external_data.form_data)
-        elif external_data:
-            params.update(bind_params)
-            # Guaranteed str: the check above raises if external_data and not use_form and bytes
-            assert isinstance(final_query, str)
-            params["query"] = final_query
-            params.update(external_data.query_params)
-            fields = external_data.form_data
-        else:
-            params.update(bind_params)
-            body = final_query
-            fields = None
-        return body, params, fields
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
+        return self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
 
     def _add_integration_tag(self, name: str):
         """

@@ -30,6 +30,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     plan_data_insert_request,
     plan_query_request,
     plan_raw_insert_request,
+    plan_raw_query_request,
     retryable_http_statuses,
     summary_from_headers,
 )
@@ -204,6 +205,45 @@ class HttpSyncBackend:
         response = self.request(plan.body, plan.params, plan.headers, server_wait=False)
         logger.debug("Raw insert response code: %d, content: %s", response.status, response.data)
         return summary_from_headers(response.headers)
+
+    def execute_raw_query(
+        self,
+        final_query: str | bytes,
+        bind_params: dict[str, str],
+        external_data: ExternalData | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> bytes:
+        """Execute an already-bound raw query, returning the response body."""
+        plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        response = self.request(
+            plan.body if plan.body is not None else b"",
+            plan.params,
+            plan.headers,
+            fields=_plan_fields(plan),
+            retries=runtime.retries,
+        )
+        return response.data
+
+    def execute_raw_stream(
+        self,
+        final_query: str | bytes,
+        bind_params: dict[str, str],
+        external_data: ExternalData | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> HTTPResponse:
+        """Execute an already-bound raw query, returning the streaming response."""
+        plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        return self.request(
+            plan.body if plan.body is not None else b"",
+            plan.params,
+            plan.headers,
+            fields=_plan_fields(plan),
+            stream=True,
+            server_wait=False,
+            retries=runtime.retries,
+        )
 
     def execute_command(
         self,

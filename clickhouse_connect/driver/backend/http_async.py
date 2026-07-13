@@ -31,6 +31,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     plan_data_insert_request,
     plan_query_request,
     plan_raw_insert_request,
+    plan_raw_query_request,
     retryable_http_statuses,
     summary_from_headers,
 )
@@ -62,6 +63,23 @@ def _plan_files(plan: QueryRequestPlan) -> dict[str, Any] | None:
         files.update(plan.form_files)
     for key, value in plan.form_values.items():
         files[key] = (None, str(value))
+    return files
+
+
+def _plan_raw_files(plan: QueryRequestPlan) -> dict[str, Any] | None:
+    """Merge a raw-query plan's form parts into aiohttp files. Unlike
+    _plan_files, the wrapped text parts come first (a bytes query is decoded,
+    not str()-coerced), followed by external file parts."""
+    if plan.form_values is None:
+        return plan.form_files
+    files: dict[str, Any] = {}
+    for key, value in plan.form_values.items():
+        if key == "query":
+            files[key] = (None, value if isinstance(value, str) else value.decode())
+        else:
+            files[key] = (None, str(value))
+    if plan.form_files:
+        files.update(plan.form_files)
     return files
 
 
@@ -317,6 +335,47 @@ class HttpAsyncBackend:
         finally:
             response.close()
             release_lease(response)
+
+    async def execute_raw_query(
+        self,
+        final_query: str | bytes,
+        bind_params: dict[str, str],
+        external_data: ExternalData | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> bytes:
+        """Execute an already-bound raw query, returning the decompressed response body."""
+        plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        response = await self.request(plan.body, plan.params, headers=plan.headers, files=_plan_raw_files(plan), retries=runtime.retries)
+        try:
+            response_data = await response.read()
+            encoding = response.headers.get("Content-Encoding")
+        finally:
+            release_lease(response)
+        if encoding:
+            loop = asyncio.get_running_loop()
+            response_data = await loop.run_in_executor(None, decompress_response, response_data, encoding)
+        return response_data
+
+    async def execute_raw_stream(
+        self,
+        final_query: str | bytes,
+        bind_params: dict[str, str],
+        external_data: ExternalData | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> aiohttp.ClientResponse:
+        """Execute an already-bound raw query, returning the streaming response."""
+        plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        return await self.request(
+            plan.body,
+            plan.params,
+            headers=plan.headers,
+            files=_plan_raw_files(plan),
+            stream=True,
+            server_wait=False,
+            retries=runtime.retries,
+        )
 
     async def execute_command(
         self,

@@ -284,6 +284,44 @@ def plan_query_request(
     return QueryRequestPlan(False, params, headers, body=final_query)
 
 
+def plan_raw_query_request(
+    final_query: str | bytes,
+    bind_params: dict[str, str],
+    external_data: ExternalData | None,
+    runtime: QueryRuntime,
+    form_encode_query_params: bool,
+    transport_settings: dict[str, str] | None,
+) -> QueryRequestPlan:
+    """Shape an already-bound raw query into an HTTP request plan.
+
+    Unlike plan_query_request, raw queries carry no probe, compression, or
+    FORMAT handling, and settings precede the database in the params order.
+    """
+    params: dict[str, str] = dict(runtime.settings)
+    if runtime.database:
+        params["database"] = runtime.database
+    headers: dict[str, Any] = dict_copy(transport_settings or {})
+    use_form = use_form_encoding(final_query, bind_params, form_encode_query_params)
+    if external_data and not use_form and isinstance(final_query, bytes):
+        raise ProgrammingError("Binary query cannot be placed in URL when using External Data; enable form encoding.")
+    if use_form:
+        form_values: dict[str, Any] = {"query": final_query}
+        form_values.update(bind_params)
+        form_files: dict[str, Any] = {}
+        if external_data:
+            params.update(external_data.query_params)
+            form_files = external_data.form_data
+        return QueryRequestPlan(False, params, headers, form_values=form_values, form_files=form_files)
+    if external_data:
+        params.update(bind_params)
+        assert isinstance(final_query, str)  # the guard above rejects bytes
+        params["query"] = final_query
+        params.update(external_data.query_params)
+        return QueryRequestPlan(False, params, headers, form_files=external_data.form_data)
+    params.update(bind_params)
+    return QueryRequestPlan(False, params, headers, body=final_query)
+
+
 @dataclass
 class InsertRequestPlan:
     """A shaped HTTP insert request. body is set only by the raw-insert

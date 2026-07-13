@@ -502,7 +502,7 @@ class TestQuery:
 
         return body, params, fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query(self, mock_raw_request):
         """Test raw_query with neither form_encode_query_params nor external_data"""
         self.client.form_encode_query_params = False
@@ -530,7 +530,7 @@ class TestQuery:
         assert "param_id" in params
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_form_encode(self, mock_raw_request):
         """Test raw_query with form_encode_query_params=True"""
         self.client.form_encode_query_params = True
@@ -560,7 +560,7 @@ class TestQuery:
         assert "param_id" in fields
         assert "param_id" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_auto_form_encode_large_params(self, mock_raw_request):
         """Large bind params auto-promote to form data even with form_encode_query_params=False"""
         self.client.form_encode_query_params = False
@@ -579,7 +579,7 @@ class TestQuery:
         assert "param_name" in fields
         assert "param_name" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_external_data_only(self, mock_raw_request):
         """Test raw_query with external_data only (no form_encode)"""
         self.client.form_encode_query_params = False
@@ -609,7 +609,7 @@ class TestQuery:
         assert "_file1_format" in params
         assert "_file1" in fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_form_encode_and_external_data(self, mock_raw_request):
         """Test raw_query with both form_encode_query_params and external_data"""
         self.client.form_encode_query_params = True
@@ -641,7 +641,7 @@ class TestQuery:
         assert "_file1" in fields
         assert "param_min_val" in fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_form_encode_without_external_data(self, mock_raw_request):
         """Test that query goes to fields when form_encode is True but no external_data"""
         self.client.form_encode_query_params = True
@@ -669,7 +669,7 @@ class TestQuery:
         assert isinstance(fields["query"], str)
         assert fields["query"] == query
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_settings(self, mock_raw_request):
         """Test raw_query properly handles settings parameter"""
         self.client.form_encode_query_params = False
@@ -698,7 +698,7 @@ class TestQuery:
         assert params["max_memory_usage"] == 1000000
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_format(self, mock_raw_request):
         """Test raw_query properly appends FORMAT clause"""
         self.client.form_encode_query_params = False
@@ -725,7 +725,7 @@ class TestQuery:
         assert params is not None
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_database_handling(self, mock_raw_request):
         """Test raw_query properly handles database parameter"""
         self.client.form_encode_query_params = False

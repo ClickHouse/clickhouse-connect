@@ -29,7 +29,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
     columns_only_re,  # noqa: F401  (compatibility re-export)
-    decompress_response,
+    decompress_response,  # noqa: F401  (compatibility re-export)
     ex_header,  # noqa: F401  (compatibility re-export)
     ex_tag_header,
     negotiate_compression,
@@ -37,9 +37,16 @@ from clickhouse_connect.driver.backend.httpcommon import (
 )
 from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
 from clickhouse_connect.driver.backend.orchestration import init_sequence, insert_context_sequence, run_async
-from clickhouse_connect.driver.binding import bind_query, use_form_encoding
+from clickhouse_connect.driver.binding import (
+    bind_query,
+    use_form_encoding,  # noqa: F401  (compatibility re-export)
+)
 from clickhouse_connect.driver.client import Client, _apply_arrow_tz_policy
-from clickhouse_connect.driver.common import StreamContext, coerce_bool, dict_copy
+from clickhouse_connect.driver.common import (
+    StreamContext,
+    coerce_bool,
+    dict_copy,  # noqa: F401  (compatibility re-export)
+)
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
@@ -733,22 +740,8 @@ class AsyncClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        body, params, headers, files = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        if transport_settings:
-            headers = dict_copy(headers, transport_settings)
-
-        response = await self._raw_request(body, params, headers=headers, files=files, retries=self.query_retries)
-        try:
-            response_data = await response.read()
-            encoding = response.headers.get("Content-Encoding")
-        finally:
-            release_lease(response)
-
-        if encoding:
-            loop = asyncio.get_running_loop()
-            response_data = await loop.run_in_executor(None, decompress_response, response_data, encoding)
-
-        return response_data
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
+        return await self._backend.execute_raw_query(final_query, bind_params, external_data, runtime, transport_settings)
 
     async def raw_stream(  # type: ignore[override]
         self,
@@ -761,13 +754,8 @@ class AsyncClient(Client):
         transport_settings: dict[str, str] | None = None,
     ) -> StreamContext:
 
-        body, params, headers, files = self._prep_raw_query(query, parameters, settings, fmt, use_database, external_data)
-        if transport_settings:
-            headers = dict_copy(headers, transport_settings)
-
-        response = await self._raw_request(
-            body, params, headers=headers, files=files, stream=True, server_wait=False, retries=self.query_retries
-        )
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
+        response = await self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
 
         async def byte_iterator():
             async for chunk in response.content.iter_any():
@@ -781,53 +769,6 @@ class AsyncClient(Client):
                     release_lease(response)
 
         return StreamContext(_RawStreamSource(), byte_iterator())
-
-    def _prep_raw_query(self, query, parameters, settings, fmt, use_database, external_data):
-        """
-        Prepare raw query for execution.
-
-        Note: Unlike sync client which returns (body, params, fields), this async version
-        returns (body, params, headers, files) because aiohttp requires headers to be
-        configured before the request() call, while urllib3 can add them during request.
-        """
-        if fmt:
-            query += f"\n FORMAT {fmt}"
-
-        final_query, bind_params = bind_query(query, parameters, self.server_tz)
-        params = self._validate_settings(settings or {})
-        if use_database and self.database:
-            params["database"] = self.database
-
-        headers = {}
-        files = None
-        body = None
-
-        use_form = use_form_encoding(final_query, bind_params, self.form_encode_query_params)
-        if external_data and not use_form and isinstance(final_query, bytes):
-            raise ProgrammingError("Binary query cannot be placed in URL when using External Data; enable form encoding.")
-
-        if use_form:
-            files = {}
-            files["query"] = (None, final_query if isinstance(final_query, str) else final_query.decode())
-            for k, v in bind_params.items():
-                files[k] = (None, str(v))
-
-            if external_data:
-                params.update(external_data.query_params)
-                files.update(external_data.form_data)
-
-            body = None
-        elif external_data:
-            params.update(bind_params)
-            params["query"] = final_query
-            params.update(external_data.query_params)
-            files = external_data.form_data
-            body = None
-        else:
-            params.update(bind_params)
-            body = final_query.encode() if isinstance(final_query, str) else final_query
-
-        return body, params, headers, files
 
     async def insert(  # type: ignore[override]
         self,
@@ -905,26 +846,8 @@ class AsyncClient(Client):
         self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
 
-        body, params, headers, files = self._prep_raw_query(
-            query,
-            parameters,
-            settings,
-            fmt="ArrowStream",
-            use_database=True,
-            external_data=external_data,
-        )
-        if transport_settings:
-            headers = dict_copy(headers, transport_settings)
-
-        response = await self._raw_request(
-            body,
-            params,
-            headers=headers,
-            files=files,
-            stream=True,
-            server_wait=False,
-            retries=self.query_retries,
-        )
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, "ArrowStream", True)
+        response = await self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
         encoding = response.headers.get("Content-Encoding")
         exception_tag = response.headers.get(ex_tag_header)
 
@@ -966,15 +889,8 @@ class AsyncClient(Client):
         self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
 
-        body, params, headers, files = self._prep_raw_query(
-            query, parameters, settings, fmt="ArrowStream", use_database=True, external_data=external_data
-        )
-        if transport_settings:
-            headers = dict_copy(headers, transport_settings)
-
-        response = await self._raw_request(
-            body, params, headers=headers, files=files, stream=True, server_wait=False, retries=self.query_retries
-        )
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, "ArrowStream", True)
+        response = await self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
         encoding = response.headers.get("Content-Encoding")
         exception_tag = response.headers.get(ex_tag_header)
 
@@ -1095,15 +1011,8 @@ class AsyncClient(Client):
             raise ValueError(f"dataframe_library must be 'pandas' or 'polars', got '{dataframe_library}'")
         settings = self._update_arrow_settings(settings, use_strings)
 
-        body, params, headers, files = self._prep_raw_query(
-            query, parameters, settings, fmt="ArrowStream", use_database=True, external_data=external_data
-        )
-        if transport_settings:
-            headers = dict_copy(headers, transport_settings)
-
-        response = await self._raw_request(
-            body, params, headers=headers, files=files, stream=True, server_wait=False, retries=self.query_retries
-        )
+        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, "ArrowStream", True)
+        response = await self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
         encoding = response.headers.get("Content-Encoding")
         exception_tag = response.headers.get(ex_tag_header)
 

@@ -20,13 +20,14 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import options, tzutil
 from clickhouse_connect.driver.backend.adapters import SyncClientExecutor
-from clickhouse_connect.driver.backend.models import ClientConfig
+from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
 from clickhouse_connect.driver.backend.orchestration import (
     InitializationResult,
     init_sequence,
     insert_context_sequence,
     run_sync,
 )
+from clickhouse_connect.driver.binding import bind_query
 from clickhouse_connect.driver.common import (
     StreamContext,
     coerce_bool,
@@ -448,6 +449,25 @@ class Client(ABC):
         :return: StreamContext -- Iterable stream context that returns blocks of rows
         """
         return self._context_query(locals(), use_numpy=False, streaming=True).rows_stream
+
+    def _prep_raw_query_runtime(
+        self,
+        query: str,
+        parameters: Sequence | dict[str, Any] | None,
+        settings: dict[str, Any] | None,
+        fmt: str | None,
+        use_database: bool,
+    ) -> tuple[str | bytes, dict[str, str], QueryRuntime]:
+        """Append the format, bind parameters, and build the runtime for a raw query."""
+        if fmt:
+            query += f"\n FORMAT {fmt}"
+        final_query, bind_params = bind_query(query, parameters, self.server_tz)
+        runtime = QueryRuntime(
+            database=self.database if use_database else None,
+            settings=self._validate_settings(settings or {}),
+            retries=self.query_retries,
+        )
+        return final_query, bind_params, runtime
 
     @abstractmethod
     def raw_query(
