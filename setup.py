@@ -84,7 +84,8 @@ def run_setup(try_c: bool = True):
             "async": ["aiohttp>=3.9.0"],
             # The chdb backend lives in the chdb package and self-registers through the
             # clickhouse_connect.backends entry point; this extra just pulls chdb in.
-            "chdb": ["chdb>=3.7"],
+            # chdb 4.2.1 is the first release that ships chdb.cc_backend and the entry point.
+            "chdb": ["chdb>=4.2.1"],
         },
         tests_require=["pytest"],
         entry_points={
