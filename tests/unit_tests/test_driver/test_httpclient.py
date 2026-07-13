@@ -9,6 +9,7 @@ import pytest
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
@@ -760,7 +761,7 @@ class TestQuery:
         assert "database" not in params
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context(self, mock_raw_request):
         """Test _query_with_context with neither form_encode_query_params nor external_data"""
         self.client.form_encode_query_params = False
@@ -784,7 +785,7 @@ class TestQuery:
         assert "param_id" in params
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_form_encode(self, mock_raw_request):
         """Test _query_with_context with form_encode_query_params=True"""
         self.client.form_encode_query_params = True
@@ -809,7 +810,7 @@ class TestQuery:
         assert "param_id" in fields
         assert "param_id" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_auto_form_encode_large_params(self, mock_raw_request):
         """Large bind params auto-promote to form data even with form_encode_query_params=False"""
         self.client.form_encode_query_params = False
@@ -827,7 +828,7 @@ class TestQuery:
         assert "param_name" in fields
         assert "param_name" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_external_data(self, mock_raw_request):
         """Test _query_with_context with external_data only"""
         self.client.form_encode_query_params = False
@@ -854,7 +855,7 @@ class TestQuery:
         assert "_file1_format" in params
         assert "_file1" in fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_with_form_encode_and_external_data(self, mock_raw_request):
         """Test _query_with_context with both form_encode_query_params and external_data"""
         self.client.form_encode_query_params = True
@@ -885,8 +886,8 @@ class TestQuery:
         assert "_file1" in fields
         assert "param_min_val" in fields
 
-    @patch.object(HttpClient, "_raw_request")
-    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    @patch.object(HttpSyncBackend, "request")
+    @patch("clickhouse_connect.driver.backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_form_encode(self, mock_columns_re, mock_raw_request):
         """Test that schema-probe queries (LIMIT 0) work correctly with form_encode_query_params"""
         self.client.form_encode_query_params = True
@@ -932,8 +933,8 @@ class TestQuery:
         assert "query" not in params
         assert "param_id" not in params
 
-    @patch.object(HttpClient, "_raw_request")
-    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    @patch.object(HttpSyncBackend, "request")
+    @patch("clickhouse_connect.driver.backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_external_data(self, mock_columns_re, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with external data but no form encoding"""
         self.client.form_encode_query_params = False
@@ -973,8 +974,8 @@ class TestQuery:
         assert "_file1_format" in params  # External data query params
         assert "_file1" in fields  # External data form fields
 
-    @patch.object(HttpClient, "_raw_request")
-    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    @patch.object(HttpSyncBackend, "request")
+    @patch("clickhouse_connect.driver.backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_form_encode_external_data(self, mock_columns_re, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with both form encoding and external data"""
         self.client.form_encode_query_params = True
@@ -1058,9 +1059,9 @@ class TestResponseTimezone:
         context = self._make_context()
 
         with (
-            patch.object(HttpClient, "_raw_request", return_value=mock_response),
+            patch.object(HttpSyncBackend, "request", return_value=mock_response),
             patch("clickhouse_connect.driver.httpclient.RespBuffCls"),
-            patch("clickhouse_connect.driver.httpclient.ResponseSource"),
+            patch("clickhouse_connect.driver.backend.http_sync.ResponseSource"),
             patch.object(self.client._transform, "parse_response", return_value=Mock()),
         ):
             self.client._query_with_context(context)

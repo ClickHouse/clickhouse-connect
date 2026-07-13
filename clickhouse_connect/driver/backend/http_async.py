@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import io
+import json
 import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 
@@ -25,14 +26,38 @@ from clickhouse_connect.driver.backend.httpcommon import (
     build_http_error,
     decompress_response,
     ex_header,
+    ex_tag_header,
+    plan_query_request,
     retryable_http_statuses,
+    summary_from_headers,
 )
+from clickhouse_connect.driver.backend.models import QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
+from clickhouse_connect.driver.streaming import start_streaming_response
+
+if TYPE_CHECKING:
+    from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
+    from clickhouse_connect.driver.query import QueryContext
 
 logger = logging.getLogger(__name__)
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+
+
+def _plan_files(plan: QueryRequestPlan) -> dict[str, Any] | None:
+    """Merge a plan's form parts into aiohttp files: file parts first, then
+    plain values wrapped as text fields."""
+    if plan.form_values is None and plan.form_files is None:
+        return None
+    if plan.form_values is None:
+        return plan.form_files
+    files: dict[str, Any] = {}
+    if plan.form_files:
+        files.update(plan.form_files)
+    for key, value in plan.form_values.items():
+        files[key] = (None, str(value))
+    return files
 
 
 class SessionLease:
@@ -108,6 +133,8 @@ class HttpAsyncBackend:
         server_host_name: str | None,
         token_provider: Callable[[], str | Awaitable[str]] | None,
         autogenerate_query_id: bool,
+        read_format: str = "Native",
+        form_encode_query_params: bool = False,
     ):
         self.url = url
         self.headers = headers
@@ -119,7 +146,11 @@ class HttpAsyncBackend:
         self.server_host_name = server_host_name
         self.token_provider = token_provider
         self.autogenerate_query_id = autogenerate_query_id
+        self.read_format = read_format
+        self.form_encode_query_params = form_encode_query_params
         self.show_clickhouse_errors = True
+        self.compression: str | None = None
+        self.send_comp_setting = False
         self.send_progress: bool | None = None
         self.progress_interval: str | None = None
         self.session_lease: SessionLease | None = None
@@ -196,6 +227,54 @@ class HttpAsyncBackend:
             self.url,
             retried,
         ) from None
+
+    async def execute_query(self, context: QueryContext, runtime: QueryRuntime, prepped_query: str | bytes) -> QueryExecution:
+        """Execute a query context, returning either a started streaming byte
+        source or the column metadata from a columns-only probe."""
+        plan = plan_query_request(
+            context,
+            runtime,
+            form_encode_query_params=self.form_encode_query_params,
+            compression=self.compression,
+            send_comp_setting=self.send_comp_setting,
+            read_format=self.read_format,
+            prepped_query=prepped_query,
+        )
+        files = _plan_files(plan)
+        if plan.columns_only:
+            response = await self.request(plan.body, plan.params, plan.headers, files=files, retries=runtime.retries)
+            try:
+                body = await response.read()
+                encoding = response.headers.get("Content-Encoding")
+            finally:
+                release_lease(response)
+            loop = asyncio.get_running_loop()
+
+            def decompress_and_parse_json():
+                decompressed_body = decompress_response(body, encoding) if encoding else body
+                return json.loads(decompressed_body)
+
+            json_result = await loop.run_in_executor(None, decompress_and_parse_json)
+            return QueryExecution(columns=json_result["meta"])
+        response = await self.request(
+            plan.body,
+            plan.params,
+            dict_copy(plan.headers, context.transport_settings),
+            files=files,
+            server_wait=not context.streaming,
+            stream=True,
+            retries=runtime.retries,
+        )
+        source = await start_streaming_response(
+            response,
+            encoding=response.headers.get("Content-Encoding"),
+            exception_tag=response.headers.get(ex_tag_header),
+        )
+        return QueryExecution(
+            source=source,
+            summary=summary_from_headers(response.headers),
+            response_tz_name=response.headers.get("X-ClickHouse-Timezone"),
+        )
 
     async def request(
         self,

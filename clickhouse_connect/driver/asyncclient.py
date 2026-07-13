@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import ssl
 import sys
@@ -9,7 +8,7 @@ import uuid
 from base64 import b64encode
 from collections.abc import Awaitable, Callable, Generator, Sequence
 from datetime import tzinfo
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
 import aiohttp
 
@@ -29,7 +28,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     add_integration_tag,
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
-    columns_only_re,
+    columns_only_re,  # noqa: F401  (compatibility re-export)
     decompress_response,
     embed_insert_query,
     ex_header,  # noqa: F401  (compatibility re-export)
@@ -38,7 +37,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     parse_command_body,
     summary_from_headers,
 )
-from clickhouse_connect.driver.backend.models import ClientConfig
+from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
 from clickhouse_connect.driver.backend.orchestration import init_sequence, insert_context_sequence, run_async
 from clickhouse_connect.driver.binding import bind_query, use_form_encoding
 from clickhouse_connect.driver.client import Client, _apply_arrow_tz_policy
@@ -152,7 +151,6 @@ class AsyncClient(Client):
             proxy_path = "/" + proxy_path
         self.uri = f"{interface}://{host}:{port}{proxy_path}"
         self.url = self.uri
-        self.form_encode_query_params = form_encode_query_params
         self._rename_response_column = rename_response_column
         self._initial_settings = settings
         self.headers = {}
@@ -238,7 +236,6 @@ class AsyncClient(Client):
         if sys.version_info < (3, 12, 7) or sys.version_info[:3] == (3, 13, 0):
             connector_kwargs["enable_cleanup_closed"] = True
 
-        self._read_format = "Native"
         self._write_format = "Native"
         self._transform = NativeTransform()
         self._client_settings: dict[str, str] = {}
@@ -267,6 +264,8 @@ class AsyncClient(Client):
             server_host_name=server_host_name,
             token_provider=token_provider,
             autogenerate_query_id=(common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id),
+            read_format="Native",
+            form_encode_query_params=form_encode_query_params,
         )
 
         # Call parent init with autoconnect=False to set up config without blocking I/O
@@ -313,6 +312,30 @@ class AsyncClient(Client):
     @property
     def _proxy_url(self) -> str | None:
         return self._backend.proxy_url
+
+    @property
+    def form_encode_query_params(self) -> bool:
+        return self._backend.form_encode_query_params
+
+    @form_encode_query_params.setter
+    def form_encode_query_params(self, value: bool) -> None:
+        self._backend.form_encode_query_params = value
+
+    @property
+    def _read_format(self) -> str:
+        return self._backend.read_format
+
+    @_read_format.setter
+    def _read_format(self, value: str) -> None:
+        self._backend.read_format = value
+
+    @property
+    def compression(self) -> str | None:  # type: ignore[override]
+        return self._backend.compression
+
+    @compression.setter
+    def compression(self, value: str | None) -> None:
+        self._backend.compression = value
 
     async def _initialize(self):
         """
@@ -395,137 +418,29 @@ class AsyncClient(Client):
     def set_access_token(self, access_token: str) -> None:
         self._backend.set_access_token(access_token)
 
-    def _prep_query(self, context: QueryContext):
-        final_query = super()._prep_query(context)
-        if context.is_insert:
-            return final_query
-        fmt = f"\n FORMAT {self._read_format}"
-        if isinstance(final_query, bytes):
-            return final_query + fmt.encode()
-        return final_query + fmt
-
     async def _query_with_context(self, context: QueryContext) -> QueryResult:  # type: ignore[override]
-        headers: dict[str, Any] = {}
-        params: dict[str, str] = {}
-        if self.database:
-            params["database"] = self.database
-        if self.protocol_version:
-            params["client_protocol_version"] = str(self.protocol_version)
-            context.block_info = True
-        params.update(self._validate_settings(context.settings))
         context.rename_response_column = self._rename_response_column
-        use_form = use_form_encoding(context.final_query, context.bind_params, self.form_encode_query_params)
-
-        files: dict[str, Any] | None = None
-        if not context.is_insert and columns_only_re.search(context.uncommented_query):
-            fmt_json_query = f"{context.final_query}\n FORMAT JSON"
-            fields = {"query": fmt_json_query}
-            fields.update(context.bind_params)
-
-            if use_form:
-                files = {}
-                if context.external_data:
-                    params.update(context.external_data.query_params)
-                    files.update(context.external_data.form_data)
-
-                for k, v in fields.items():
-                    files[k] = (None, str(v))
-                response = await self._raw_request(None, params, headers, files=files, retries=self.query_retries)
-            elif context.external_data:
-                params.update(context.bind_params)
-                params.update(context.external_data.query_params)
-                params["query"] = fmt_json_query
-                response = await self._raw_request(None, params, headers, files=context.external_data.form_data, retries=self.query_retries)
-            else:
-                params.update(context.bind_params)
-                response = await self._raw_request(fmt_json_query, params, headers, retries=self.query_retries)
-
-            try:
-                body = await response.read()
-                encoding = response.headers.get("Content-Encoding")
-            finally:
-                release_lease(response)
-            loop = asyncio.get_running_loop()
-
-            def decompress_and_parse_json():
-                if encoding:
-                    decompressed_body = decompress_response(body, encoding)
-                else:
-                    decompressed_body = body
-                return json.loads(decompressed_body)
-
-            # Offload to executor
-            json_result = await loop.run_in_executor(None, decompress_and_parse_json)
-
-            names: list[str] = []
-            types: list[ClickHouseType] = []
-            renamer = context.column_renamer
-            for col in json_result["meta"]:
-                name = col["name"]
-                if renamer is not None:
-                    try:
-                        name = renamer(name)
-                    except Exception as e:
-                        logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
-                names.append(name)
-                types.append(get_from_name(col["type"]))
-            return QueryResult([], None, tuple(names), tuple(types))  # type: ignore[arg-type]
-
-        if self.compression:
-            headers["Accept-Encoding"] = self.compression
-            if self._send_comp_setting:
-                params["enable_http_compression"] = "1"
-
-        final_query = self._prep_query(context)
-
-        files = None
-        data: Any = None
-
-        if use_form:
-            fields = {"query": final_query}
-            fields.update(context.bind_params)
-
-            files = {}
-            if context.external_data:
-                params.update(context.external_data.query_params)
-                files.update(context.external_data.form_data)
-
-            for k, v in fields.items():
-                files[k] = (None, str(v))
-        elif context.external_data:
-            params.update(context.bind_params)
-            params.update(context.external_data.query_params)
-            params["query"] = final_query
-            files = context.external_data.form_data
-        else:
-            params.update(context.bind_params)
-            data = final_query
-            headers["Content-Type"] = "text/plain; charset=utf-8"
-
-        headers = dict_copy(headers, context.transport_settings)
-
-        response = await self._raw_request(
-            data,
-            params,
-            headers,
-            files=files,
-            server_wait=not context.streaming,
-            stream=True,
+        if self.protocol_version:
+            context.block_info = True
+        runtime = QueryRuntime(
+            database=self.database,
+            protocol_version=self.protocol_version,
+            settings=self._validate_settings(context.settings),
             retries=self.query_retries,
         )
-        encoding = response.headers.get("Content-Encoding")
-        tz_header = response.headers.get("X-ClickHouse-Timezone")
-        exception_tag = response.headers.get(ex_tag_header)
+        execution = await self._backend.execute_query(context, runtime, self._prep_query(context))
+        if execution.columns is not None:
+            return self._columns_only_result(context, execution.columns)
 
+        streaming_source = cast(StreamingResponseSource, execution.source)
         loop = asyncio.get_running_loop()
-        streaming_source = await start_streaming_response(response, encoding=encoding, exception_tag=exception_tag)
 
         def parse_streaming():
             """Parse response from streaming queue (runs in executor)."""
             # Wrap streaming source with ResponseBuffer. The streaming source provides a
             #  .gen property that yields decompressed chunks.
             byte_source = RespBuffCls(streaming_source)
-            context.set_response_tz(self._check_tz_change(tz_header))
+            context.set_response_tz(self._check_tz_change(execution.response_tz_name))
             result = self._transform.parse_response(byte_source, context)
 
             # For Pandas/Numpy, we must materialize in the executor because the resulting objects
@@ -548,7 +463,7 @@ class AsyncClient(Client):
         except Exception:
             await streaming_source.aclose()
             raise
-        query_result.summary = self._summary(response)
+        query_result.summary = execution.summary
 
         # Attach streaming_source to query_result.source to ensure it gets closed
         #  when the query result is closed (e.g. by StreamContext.__exit__)

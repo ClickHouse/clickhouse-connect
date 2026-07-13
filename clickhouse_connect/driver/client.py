@@ -122,7 +122,6 @@ class Client(ABC):
 
     compression: str | None = None
     write_compression: str | None = None
-    _send_comp_setting = False
     protocol_version = 0
     # User-supplied initial ClickHouse settings, set by subclasses before
     # initialization so generated setting defaults never overwrite them
@@ -275,6 +274,22 @@ class Client(ABC):
                 return context.final_query + limit.encode()
             return context.final_query + limit
         return context.final_query
+
+    def _columns_only_result(self, context: QueryContext, columns_meta: Sequence[dict[str, Any]]) -> QueryResult:
+        """Build the empty result for a columns-only (LIMIT 0) metadata probe."""
+        names: list[str] = []
+        types: list[ClickHouseType] = []
+        renamer = context.column_renamer
+        for col in columns_meta:
+            name = col["name"]
+            if renamer is not None:
+                try:
+                    name = renamer(name)
+                except Exception as e:
+                    logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
+            names.append(name)
+            types.append(get_from_name(col["type"]))
+        return QueryResult([], None, tuple(names), tuple(types))  # type: ignore[arg-type]
 
     def _check_tz_change(self, new_tz) -> tzinfo | None:
         if new_tz:

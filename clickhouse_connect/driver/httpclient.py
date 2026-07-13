@@ -1,5 +1,4 @@
 import io
-import json
 import logging
 import uuid
 from base64 import b64encode
@@ -11,21 +10,20 @@ from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect import common
-from clickhouse_connect.datatypes import registry
-from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.backend.httpcommon import (
     add_integration_tag,
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
-    columns_only_re,
+    columns_only_re,  # noqa: F401  (compatibility re-export)
     embed_insert_query,
     ex_header,  # noqa: F401  (compatibility re-export)
-    ex_tag_header,
+    ex_tag_header,  # noqa: F401  (compatibility re-export)
     negotiate_compression,
     parse_command_body,
     summary_from_headers,
 )
+from clickhouse_connect.driver.backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import bind_query, use_form_encoding
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
@@ -33,7 +31,7 @@ from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import (
-    ResponseSource,
+    ResponseSource,  # noqa: F401  (compatibility re-export)
     check_env_proxy,
     default_pool_manager,
     get_pool_manager,
@@ -114,7 +112,6 @@ class HttpClient(Client):
             proxy_path = "/" + proxy_path
         self.url = f"{interface}://{host}:{port}{proxy_path}"
         client_headers: dict[str, str] = {}
-        self.form_encode_query_params = form_encode_query_params
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)
         pool = pool_mgr
@@ -161,7 +158,7 @@ class HttpClient(Client):
         client_headers["User-Agent"] = common.build_client_name(client_name)
         if headers:
             client_headers.update(headers)
-        self._read_format = self._write_format = "Native"
+        self._write_format = "Native"
         self._transform = NativeTransform()
 
         # There are use cases when the client needs to disable timeouts.
@@ -169,7 +166,6 @@ class HttpClient(Client):
             connect_timeout = coerce_int(connect_timeout)
         if send_receive_timeout is not None:
             send_receive_timeout = coerce_int(send_receive_timeout)
-        self._send_comp_setting = False
         self._rename_response_column = rename_response_column
 
         # allow to override the global autogenerate_session_id setting via the constructor params
@@ -199,6 +195,8 @@ class HttpClient(Client):
             token_provider=token_provider,
             # allow to override the global autogenerate_query_id setting via the constructor params
             autogenerate_query_id=(common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id),
+            read_format="Native",
+            form_encode_query_params=form_encode_query_params,
         )
         self._initial_settings = settings
         # Stashed for _init_common_settings, which needs the discovered server
@@ -275,6 +273,30 @@ class HttpClient(Client):
     def _token_provider(self) -> Callable[[], str] | None:
         return self._backend.token_provider
 
+    @property
+    def form_encode_query_params(self) -> bool:
+        return self._backend.form_encode_query_params
+
+    @form_encode_query_params.setter
+    def form_encode_query_params(self, value: bool) -> None:
+        self._backend.form_encode_query_params = value
+
+    @property
+    def _read_format(self) -> str:
+        return self._backend.read_format
+
+    @_read_format.setter
+    def _read_format(self, value: str) -> None:
+        self._backend.read_format = value
+
+    @property
+    def compression(self) -> str | None:  # type: ignore[override]
+        return self._backend.compression
+
+    @compression.setter
+    def compression(self, value: str | None) -> None:
+        self._backend.compression = value
+
     def set_client_setting(self, key: str, value: Any) -> None:
         str_value = self._validate_setting(key, value, common.get_setting("invalid_setting_action"))
         if str_value is not None:
@@ -286,104 +308,25 @@ class HttpClient(Client):
     def set_access_token(self, access_token: str) -> None:
         self._backend.set_access_token(access_token)
 
-    def _prep_query(self, context: QueryContext):
-        final_query = super()._prep_query(context)
-        if context.is_insert:
-            return final_query
-        fmt = f"\n FORMAT {self._read_format}"
-        if isinstance(final_query, bytes):
-            return final_query + fmt.encode()
-        return final_query + fmt
-
     def _query_with_context(self, context: QueryContext) -> QueryResult:
-        headers: dict[str, Any] = {}
-        params: dict[str, str] = {}
-        if self.database:
-            params["database"] = self.database
-        if self.protocol_version:
-            params["client_protocol_version"] = str(self.protocol_version)
-            context.block_info = True
-        params.update(self._validate_settings(context.settings))
         context.rename_response_column = self._rename_response_column
-        use_form = use_form_encoding(context.final_query, context.bind_params, self.form_encode_query_params)
-        fields: dict[str, Any] | None = None
-        if not context.is_insert and columns_only_re.search(context.uncommented_query):
-            # Mirror normal query behavior for form encoding and external data
-            fmt_json_query = f"{context.final_query}\n FORMAT JSON"
-            if use_form:
-                fields = {"query": fmt_json_query}
-                fields.update(context.bind_params)
-                if context.external_data:  # Deal with form encoding + external data
-                    params.update(context.external_data.query_params)
-                    fields.update(context.external_data.form_data)
-                response = self._raw_request(b"", params, headers, retries=self.query_retries, fields=fields)
-            elif context.external_data:  # Deal with external data without form encoding
-                fields = context.external_data.form_data
-                params.update(context.bind_params)
-                params.update(context.external_data.query_params)
-                params["query"] = fmt_json_query
-                response = self._raw_request(b"", params, headers, retries=self.query_retries, fields=fields)
-            else:  # Legacy behavior (plain body, bind params in URL)
-                params.update(context.bind_params)
-                response = self._raw_request(fmt_json_query, params, headers, retries=self.query_retries)
-            json_result = json.loads(response.data)
-            # ClickHouse will respond with a JSON object of meta, data, and some other objects
-            # We just grab the column names and column types from the metadata sub object
-            names: list[str] = []
-            types: list[ClickHouseType] = []
-            renamer = context.column_renamer
-            for col in json_result["meta"]:
-                name = col["name"]
-                if renamer is not None:
-                    try:
-                        name = renamer(name)
-                    except Exception as e:
-                        logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
-                names.append(name)
-                types.append(registry.get_from_name(col["type"]))
-            return QueryResult([], None, tuple(names), tuple(types))  # type: ignore[arg-type]
-
-        if self.compression:
-            headers["Accept-Encoding"] = self.compression
-            if self._send_comp_setting:
-                params["enable_http_compression"] = "1"
-        final_query = self._prep_query(context)
-        fields = {}
-        # Setup additional query parameters and body
-        if use_form:
-            body = b""
-            fields["query"] = final_query
-            fields.update(context.bind_params)
-            if context.external_data:
-                params.update(context.external_data.query_params)
-                fields.update(context.external_data.form_data)
-        elif context.external_data:
-            params.update(context.bind_params)
-            body = b""
-            params["query"] = final_query
-            params.update(context.external_data.query_params)
-            fields = context.external_data.form_data
-        else:
-            params.update(context.bind_params)
-            body = final_query
-            fields = None
-            headers["Content-Type"] = "text/plain; charset=utf-8"
-        response = self._raw_request(
-            body,
-            params,
-            dict_copy(headers, context.transport_settings),
-            stream=True,
+        if self.protocol_version:
+            context.block_info = True
+        runtime = QueryRuntime(
+            database=self.database,
+            protocol_version=self.protocol_version,
+            settings=self._validate_settings(context.settings),
             retries=self.query_retries,
-            fields=fields,
-            server_wait=not context.streaming,
         )
-        exception_tag = response.headers.get(ex_tag_header)
-        byte_source = RespBuffCls(ResponseSource(response, exception_tag=exception_tag))
-        response_tz = self._check_tz_change(response.headers.get("X-ClickHouse-Timezone"))
+        execution = self._backend.execute_query(context, runtime, self._prep_query(context))
+        if execution.columns is not None:
+            return self._columns_only_result(context, execution.columns)
+        byte_source = RespBuffCls(execution.source)
+        response_tz = self._check_tz_change(execution.response_tz_name)
         if response_tz is not None:
             context.set_response_tz(response_tz)
         query_result = self._transform.parse_response(byte_source, context)
-        query_result.summary = self._summary(response)
+        query_result.summary = execution.summary
         return cast(QueryResult, query_result)
 
     def data_insert(self, context: InsertContext) -> QuerySummary:

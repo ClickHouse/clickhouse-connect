@@ -14,6 +14,7 @@ import logging
 import re
 import zlib
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version as dist_version
 from typing import TYPE_CHECKING, Any, Protocol
@@ -23,9 +24,11 @@ import zstandard
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver.client import Client
+    from clickhouse_connect.driver.query import QueryContext
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.backend.models import QueryRuntime
+from clickhouse_connect.driver.binding import quote_identifier, use_form_encoding
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import (
@@ -160,14 +163,16 @@ def embed_insert_query(
     return insert_block, query
 
 
-class ProgressTransport(Protocol):
-    """Transport slots for the progress-header keep-alive parameters."""
+class HttpTransportState(Protocol):
+    """Transport slots for server-negotiated HTTP behavior."""
 
+    compression: str | None
+    send_comp_setting: bool
     send_progress: bool | None
     progress_interval: str | None
 
 
-def apply_http_server_settings(client: Client, transport: ProgressTransport, compression: str | None, send_receive_timeout: int) -> None:
+def apply_http_server_settings(client: Client, transport: HttpTransportState, compression: str | None, send_receive_timeout: int) -> None:
     """Apply HTTP-specific client setting defaults after server settings discovery.
 
     Sets the readonly-query cancel default (unless user-supplied), response
@@ -181,13 +186,100 @@ def apply_http_server_settings(client: Client, transport: ProgressTransport, com
     ):
         client.set_client_setting("cancel_http_readonly_queries_on_client_close", "1")
     comp_setting = client._setting_status("enable_http_compression")
-    client._send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
+    transport.send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
     if comp_setting.is_set or comp_setting.is_writable:
-        client.compression = compression
+        transport.compression = compression
     send_setting = client._setting_status("send_progress_in_http_headers")
     transport.send_progress = not send_setting.is_set and send_setting.is_writable
     if (send_setting.is_set or send_setting.is_writable) and client._setting_status("http_headers_progress_interval_ms").is_writable:
         transport.progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
+
+
+@dataclass
+class QueryRequestPlan:
+    """A shaped HTTP query request, ready for a transport to send.
+
+    form_values holds plain text form fields (query and bind parameters);
+    form_files holds external-data file fields. Transports merge the two in
+    their historical part order. body applies only when both are None.
+    """
+
+    columns_only: bool
+    params: dict[str, str]
+    headers: dict[str, Any]
+    body: str | bytes | None = None
+    form_values: dict[str, Any] | None = None
+    form_files: dict[str, Any] | None = None
+
+
+def plan_query_request(
+    context: QueryContext,
+    runtime: QueryRuntime,
+    *,
+    form_encode_query_params: bool,
+    compression: str | None,
+    send_comp_setting: bool,
+    read_format: str,
+    prepped_query: str | bytes,
+) -> QueryRequestPlan:
+    """Shape a QueryContext into an HTTP request plan.
+
+    Columns-only (LIMIT 0) probes are planned as FORMAT JSON metadata
+    requests built from context.final_query; prepped_query (the limit-applied
+    query) is used only on the non-probe path, where the read format is
+    appended and the response streams.
+    """
+    params: dict[str, str] = {}
+    if runtime.database:
+        params["database"] = runtime.database
+    if runtime.protocol_version:
+        params["client_protocol_version"] = str(runtime.protocol_version)
+    params.update(runtime.settings)
+    headers: dict[str, Any] = {}
+    use_form = use_form_encoding(context.final_query, context.bind_params, form_encode_query_params)
+
+    if not context.is_insert and columns_only_re.search(context.uncommented_query):
+        fmt_json_query = f"{context.final_query}\n FORMAT JSON"
+        if use_form:
+            form_values: dict[str, Any] = {"query": fmt_json_query}
+            form_values.update(context.bind_params)
+            form_files: dict[str, Any] = {}
+            if context.external_data:
+                params.update(context.external_data.query_params)
+                form_files = context.external_data.form_data
+            return QueryRequestPlan(True, params, headers, form_values=form_values, form_files=form_files)
+        if context.external_data:
+            params.update(context.bind_params)
+            params.update(context.external_data.query_params)
+            params["query"] = fmt_json_query
+            return QueryRequestPlan(True, params, headers, form_files=context.external_data.form_data)
+        params.update(context.bind_params)
+        return QueryRequestPlan(True, params, headers, body=fmt_json_query)
+
+    if compression:
+        headers["Accept-Encoding"] = compression
+        if send_comp_setting:
+            params["enable_http_compression"] = "1"
+    final_query: Any = prepped_query
+    if not context.is_insert:
+        fmt = f"\n FORMAT {read_format}"
+        final_query = prepped_query + fmt.encode() if isinstance(prepped_query, bytes) else prepped_query + fmt
+    if use_form:
+        form_values = {"query": final_query}
+        form_values.update(context.bind_params)
+        form_files = {}
+        if context.external_data:
+            params.update(context.external_data.query_params)
+            form_files = context.external_data.form_data
+        return QueryRequestPlan(False, params, headers, form_values=form_values, form_files=form_files)
+    if context.external_data:
+        params.update(context.bind_params)
+        params["query"] = final_query
+        params.update(context.external_data.query_params)
+        return QueryRequestPlan(False, params, headers, form_files=context.external_data.form_data)
+    params.update(context.bind_params)
+    headers["Content-Type"] = "text/plain; charset=utf-8"
+    return QueryRequestPlan(False, params, headers, body=final_query)
 
 
 def add_integration_tag(headers: dict[str, str], reported_libs: set[str], name: str) -> str | None:

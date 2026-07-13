@@ -8,11 +8,12 @@ them in place rather than rebinding.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
 
 from urllib3 import Timeout
@@ -24,15 +25,35 @@ from clickhouse_connect.driver.backend.httpcommon import (
     auth_failed_ex_code,
     build_http_error,
     ex_header,
+    ex_tag_header,
+    plan_query_request,
     retryable_http_statuses,
+    summary_from_headers,
 )
+from clickhouse_connect.driver.backend.models import QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import all_managers, check_conn_expiration, get_response_data
+from clickhouse_connect.driver.httputil import ResponseSource, all_managers, check_conn_expiration, get_response_data
+
+if TYPE_CHECKING:
+    from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
+    from clickhouse_connect.driver.query import QueryContext
 
 logger = logging.getLogger(__name__)
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+
+
+def _plan_fields(plan: QueryRequestPlan) -> dict[str, Any] | None:
+    """Merge a plan's form parts into urllib3 fields: plain values first, then files."""
+    if plan.form_values is None and plan.form_files is None:
+        return None
+    fields: dict[str, Any] = {}
+    if plan.form_values:
+        fields.update(plan.form_values)
+    if plan.form_files:
+        fields.update(plan.form_files)
+    return fields
 
 
 class HttpSyncBackend:
@@ -49,6 +70,8 @@ class HttpSyncBackend:
         token_provider: Callable[[], str] | None,
         autogenerate_query_id: bool,
         http_retries: int = 1,
+        read_format: str = "Native",
+        form_encode_query_params: bool = False,
     ):
         self.url = url
         self.http = pool_manager
@@ -60,7 +83,11 @@ class HttpSyncBackend:
         self.token_provider = token_provider
         self.autogenerate_query_id = autogenerate_query_id
         self.http_retries = http_retries
+        self.read_format = read_format
+        self.form_encode_query_params = form_encode_query_params
         self.show_clickhouse_errors = True
+        self.compression: str | None = None
+        self.send_comp_setting = False
         self.send_progress: bool | None = None
         self.progress_interval: str | None = None
         self._active_session: str | None = None
@@ -91,6 +118,42 @@ class HttpSyncBackend:
             self.url,
             retried,
         ) from None
+
+    def execute_query(self, context: QueryContext, runtime: QueryRuntime, prepped_query: str | bytes) -> QueryExecution:
+        """Execute a query context, returning either a streaming byte source or
+        the column metadata from a columns-only probe."""
+        plan = plan_query_request(
+            context,
+            runtime,
+            form_encode_query_params=self.form_encode_query_params,
+            compression=self.compression,
+            send_comp_setting=self.send_comp_setting,
+            read_format=self.read_format,
+            prepped_query=prepped_query,
+        )
+        if plan.columns_only:
+            response = self.request(
+                plan.body if plan.body is not None else b"",
+                plan.params,
+                plan.headers,
+                retries=runtime.retries,
+                fields=_plan_fields(plan),
+            )
+            return QueryExecution(columns=json.loads(response.data)["meta"])
+        response = self.request(
+            plan.body if plan.body is not None else b"",
+            plan.params,
+            dict_copy(plan.headers, context.transport_settings),
+            stream=True,
+            retries=runtime.retries,
+            fields=_plan_fields(plan),
+            server_wait=not context.streaming,
+        )
+        return QueryExecution(
+            source=ResponseSource(response, exception_tag=response.headers.get(ex_tag_header)),
+            summary=summary_from_headers(response.headers),
+            response_tz_name=response.headers.get("X-ClickHouse-Timezone"),
+        )
 
     def request(
         self,
