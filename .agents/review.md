@@ -68,4 +68,5 @@ Before saying a change looks good, make sure you understand:
 - whether optional dependency and packaging behavior still make sense
 - whether the change holds up across the compatibility axes in `.agents/architecture.md` (Python versions, Cython on and off, bare install, SQLAlchemy 1.4, ClickHouse server versions)
 - whether tests are targeted and meaningful
+- whether a `CHANGELOG.md` entry was added for any user-facing change
 - whether any important validation still has not been run
