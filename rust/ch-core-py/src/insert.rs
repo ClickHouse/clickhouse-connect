@@ -19,7 +19,7 @@ use ch_core_rs::column::{
     ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn, MapColumn,
     PrimitiveColumn, TupleColumn, Utf8Column,
 };
-use ch_core_rs::native::decode::parse_ch_type;
+use ch_core_rs::native::decode::{low_cardinality_dict_value_type, parse_ch_type};
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
 use ch_core_rs::schema::{ChType, Field, Schema};
 
@@ -158,6 +158,12 @@ fn build_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
+    // Expand SimpleAggregateFunction/geo/Nested aliases to the physical type
+    // whose column the encoder actually builds; the block header still renders
+    // the alias spelling from the Field's ChType.
+    if let Some(delegate) = ch_type.physical_delegate() {
+        return build_column(py, name, &delegate, values, row_count);
+    }
     match ch_type {
         ChType::Nullable(inner) => build_nullable_column(py, name, inner, values, row_count),
         ChType::LowCardinality(inner) => {
@@ -449,6 +455,11 @@ fn build_element_column(
 ) -> PyResult<Column> {
     let row_count = ptrs.len();
     let seq = PtrSeq(ptrs);
+    // Expand SimpleAggregateFunction/geo/Nested aliases before dispatch so a
+    // nested alias (e.g. Array(Point)) builds its physical element column.
+    if let Some(delegate) = ch_type.physical_delegate() {
+        return build_element_column(py, name, &delegate, ptrs);
+    }
     match ch_type {
         ChType::Array(inner) => array_column_from_seq(py, name, inner, &seq, row_count),
         ChType::Tuple(elements) => {
@@ -456,6 +467,11 @@ fn build_element_column(
         }
         ChType::Map(key, value) => map_column_from_seq(py, name, key, value, &seq, row_count),
         ChType::Nullable(inner) => {
+            // Nullable(Point) -> Nullable(Tuple), Nullable(SAF(T)) -> Nullable(T);
+            // the physical delegate governs the nullable element shape.
+            if let Some(delegate) = inner.physical_delegate() {
+                return build_element_column(py, name, &ChType::Nullable(Box::new(delegate)), ptrs);
+            }
             if let ChType::Tuple(elements) = inner.as_ref() {
                 return tuple_column_from_seq(py, name, elements, &seq, row_count, true);
             }
@@ -476,10 +492,10 @@ fn build_element_column(
             nullable_scalar_column(py, name, inner, &PtrRows { py, ptrs }, row_count)
         }
         ChType::LowCardinality(inner) => {
-            let (nullable, value_type) = match inner.as_ref() {
-                ChType::Nullable(value_type) => (true, value_type.as_ref()),
-                other => (false, other),
-            };
+            // Resolve the physical dict value type: strip the SAF chain, unwrap an
+            // optional Nullable, strip again. So LowCardinality(SAF(anyLast, String))
+            // and LowCardinality(SAF(anyLast, Nullable(String))) reach the String path.
+            let (nullable, value_type) = low_cardinality_dict_value_type(inner);
             if !is_low_cardinality_inner(value_type) {
                 return Err(PyNotImplementedError::new_err(format!(
                     "unsupported LowCardinality inner type {value_type} for column {name:?}"
@@ -944,6 +960,9 @@ impl<'a, 'py> MapBuilder<'a, 'py> {
 /// Default placeholder Python object for a null `Nullable(Tuple)` row's
 /// element, matching the wire defaults the server writes for null rows.
 fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<PyAny>> {
+    if let Some(delegate) = ch_type.physical_delegate() {
+        return default_pyobject(py, &delegate);
+    }
     Ok(match ch_type {
         ChType::Nullable(_) => py.None(),
         ChType::LowCardinality(inner) => default_pyobject(py, inner)?,
@@ -1009,6 +1028,12 @@ fn build_nullable_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
+    // Expand a Nullable over a name-decoration alias by its delegate:
+    // Nullable(Point) -> Nullable(Tuple), Nullable(SimpleAggregateFunction(T))
+    // -> Nullable(T). The physical delegate governs the nullable value shape.
+    if let Some(delegate) = inner.physical_delegate() {
+        return build_nullable_column(py, name, &delegate, values, row_count);
+    }
     if let ChType::Tuple(elements) = inner {
         return build_tuple_column(py, name, elements, values, row_count, true);
     }
@@ -1120,10 +1145,10 @@ fn build_low_cardinality_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
-    let (nullable, value_type) = match inner {
-        ChType::Nullable(value_type) => (true, value_type.as_ref()),
-        other => (false, other),
-    };
+    // Resolve the physical dict value type: strip the SAF chain, unwrap an
+    // optional Nullable, strip again. So LowCardinality(SAF(anyLast, String)) and
+    // LowCardinality(SAF(anyLast, Nullable(String))) reach the String path.
+    let (nullable, value_type) = low_cardinality_dict_value_type(inner);
 
     if !is_low_cardinality_inner(value_type) {
         return Err(PyNotImplementedError::new_err(format!(
@@ -3300,6 +3325,11 @@ fn column_from_scalars(
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
+        ChType::SimpleAggregateFunction { .. } | ChType::Geo(_) | ChType::Nested(_) => {
+            Err(PyNotImplementedError::new_err(
+                "name-decoration aliases are expanded to their physical type before the scalar path",
+            ))
+        }
     }
 }
 
@@ -3554,6 +3584,11 @@ fn convert_scalar(
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
+        ChType::SimpleAggregateFunction { .. } | ChType::Geo(_) | ChType::Nested(_) => {
+            Err(PyNotImplementedError::new_err(
+                "name-decoration aliases are expanded to their physical type before the scalar path",
+            ))
+        }
     }
 }
 
@@ -3599,6 +3634,11 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
+        ChType::SimpleAggregateFunction { .. } | ChType::Geo(_) | ChType::Nested(_) => {
+            Err(PyNotImplementedError::new_err(
+                "name-decoration aliases are expanded to their physical type before the scalar path",
+            ))
+        }
     }
 }
 

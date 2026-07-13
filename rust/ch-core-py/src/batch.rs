@@ -411,6 +411,15 @@ fn prepare_column_ctx<'py>(
         other => other.inner(),
     };
 
+    // SimpleAggregateFunction, the geo aliases, and Nested carry only a custom
+    // name over a physical type; the decoded Column is that physical type's
+    // column, so build the context from the delegate and recurse. `resolved`
+    // has already stripped any LowCardinality/Nullable, so Nullable(Point)
+    // reaches here as Geo(Point).
+    if let Some(delegate) = resolved.physical_delegate() {
+        return prepare_column_ctx(py, &delegate, raw_time_ticks);
+    }
+
     let enum_names = match resolved {
         ChType::Enum8 { variants } => Some(enum_name_map(py, variants)),
         ChType::Enum16 { variants } => Some(enum_name_map(py, variants)),

@@ -68,6 +68,16 @@ DECODE_MATRIX = {
     "map_low_card_key": "CAST(map(toString(number % 3), number), 'Map(LowCardinality(String), UInt64)')",
     "array_of_tuple": "arrayMap(x -> (x, toString(x)), range(number % 4))",
     "map_of_tuple_value": "CAST(map('a', (number, toString(number))), 'Map(String, Tuple(UInt64, String))')",
+    "point": "(toFloat64(number), toFloat64(number) / 2)::Point",
+    "ring": "[(toFloat64(number), toFloat64(number) / 2), (toFloat64(number) + 1, toFloat64(number))]::Ring",
+    "linestring": "[(toFloat64(number), toFloat64(number)), (toFloat64(number) + 1, 0.)]::LineString",
+    "polygon": "[[(toFloat64(number), 0.), (0., toFloat64(number)), (1., 1.)]]::Polygon",
+    "multilinestring": "[[(toFloat64(number), 0.), (1., toFloat64(number))]]::MultiLineString",
+    "multipolygon": "[[[(toFloat64(number), 0.), (0., 1.), (1., 0.)]]]::MultiPolygon",
+    "simple_agg_uint64": "CAST(number AS SimpleAggregateFunction(sum, UInt64))",
+    "simple_agg_string": "CAST(toString(number) AS SimpleAggregateFunction(anyLast, String))",
+    "simple_agg_low_card": "CAST(toString(number % 3) AS SimpleAggregateFunction(anyLast, LowCardinality(String)))",
+    "simple_agg_array": "CAST(range(number % 4) AS SimpleAggregateFunction(groupArrayArray, Array(UInt64)))",
 }
 
 
@@ -223,9 +233,11 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
 
 @pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
 def test_rust_codec_unsupported_decode(client_factory, call, native_codec):
+    # AggregateFunction is the still-unsupported sibling of SimpleAggregateFunction,
+    # which the rust decoder now handles. The rust decoder rejects it mid-stream.
     client = client_factory(native_codec=native_codec)
     with pytest.raises(NotSupportedError):
-        call(client.query, "SELECT (1., 2.)::Point AS p")
+        call(client.query, "SELECT sumState(number) AS agg FROM numbers(3)")
 
 
 def test_rust_codec_nullable_tuple_decode(client_factory, call):
@@ -634,6 +646,104 @@ def test_rust_codec_nullable_tuple_insert(client_factory, call, client_mode):
         assert result.result_rows == [(0, {"a": 1, "b": "x"}), (1, None), (2, {"a": 3, "b": "z"})]
     finally:
         call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rust_codec_geo_insert_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = "id UInt32, pt Point, rg Ring, ls LineString, pg Polygon, mls MultiLineString, mpg MultiPolygon"
+    rows = [
+        [
+            0,
+            (3.55, 3.55),
+            [(5.522, 58.472), (3.55, 3.55)],
+            [(1.0, 2.0), (3.0, 4.0)],
+            [[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]],
+            [[(0.0, 0.0), (1.0, 1.0)], [(2.0, 2.0), (3.0, 3.0)]],
+            [[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]]],
+        ],
+        [1, (4.55, 4.55), [(4.55, 4.55)], [(7.0, 8.0)], [[(2.0, 2.0)]], [[(9.0, 9.0)]], [[[(5.0, 5.0)]]]],
+    ]
+    names = ["id", "pt", "rg", "ls", "pg", "mls", "mpg"]
+    rust_table = f"rc_ins_geo_rust_{client_mode}"
+    py_table = f"rc_ins_geo_py_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=names)
+        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, py_table) == [tuple(r) for r in rows]
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_nested_insert_parity(client_factory, call, client_mode):
+    # A single Nested(...) typed column only appears with flatten_nested=0; the
+    # default splits it into sibling Array columns. Nested reads as a list of
+    # dicts keyed by the field names in both codecs.
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = "id UInt32, n Nested(sku String, qty UInt32)"
+    rows = [
+        [0, []],
+        [1, [{"sku": "sku_1", "qty": 5}, {"sku": "sku_2", "qty": 77}]],
+        [2, [{"sku": "sku_3", "qty": 13}]],
+    ]
+    expected = [
+        (0, []),
+        (1, [{"sku": "sku_1", "qty": 5}, {"sku": "sku_2", "qty": 77}]),
+        (2, [{"sku": "sku_3", "qty": 13}]),
+    ]
+    rust_table = f"rc_ins_nested_col_rust_{client_mode}"
+    py_table = f"rc_ins_nested_col_py_{client_mode}"
+
+    def roundtrip(client, read_client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id", settings={"flatten_nested": 0})
+        call(client.insert, table, rows, column_names=["id", "n"])
+        return call(read_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        # rust->rust exercises encode and decode end to end; python->python is the reference.
+        assert roundtrip(rust_client, rust_client, rust_table) == expected
+        assert roundtrip(python_client, python_client, py_table) == expected
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_simple_agg_insert_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = (
+        "id UInt32, s SimpleAggregateFunction(anyLast, String), "
+        "lc SimpleAggregateFunction(anyLast, LowCardinality(String)), "
+        "n SimpleAggregateFunction(sum, UInt64), f SimpleAggregateFunction(max, Float64), "
+        "arr SimpleAggregateFunction(groupArrayArray, Array(UInt64))"
+    )
+    rows = [
+        [0, "first", "lc_1", 100, 3.5, [1, 2, 3]],
+        [1, "second", "lc_2", 79, -1.5, []],
+    ]
+    names = ["id", "s", "lc", "n", "f", "arr"]
+    rust_table = f"rc_ins_saf_rust_{client_mode}"
+    py_table = f"rc_ins_saf_py_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=names)
+        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, py_table) == [tuple(r) for r in rows]
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
 
 
 def test_rust_codec_midstream_error_df_parity(client_factory, call, consume_stream):

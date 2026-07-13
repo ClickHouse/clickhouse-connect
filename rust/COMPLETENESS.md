@@ -35,7 +35,10 @@ handoff for Python integration work.
   `FixedString(N)`, `Date`, `Date32`, `DateTime`, `DateTime64(P[, tz])`, `UUID`,
   `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Array(T)`, `Tuple(...)`
   (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Nullable(T)`, and
-  `LowCardinality(T)` where the upstream core permits it.
+  `LowCardinality(T)` where the upstream core permits it. It also covers the three
+  name-decoration alias families the core resolves through `ChType::physical_delegate`:
+  `SimpleAggregateFunction(func, T)`, the six geo types (`Point`, `Ring`, `LineString`,
+  `MultiLineString`, `Polygon`, `MultiPolygon`), and `Nested(...)`.
 - **numpy/pandas:** `query_np`, `query_df`, and their block and row stream variants
   now route through the Rust codec via the zero-copy Arrow exit
   (`clickhouse_connect/driver/rustnumpy.py`). Per-column dtype conversion is driven by
@@ -70,6 +73,21 @@ handoff for Python integration work.
   Python before reading the response body, so once a query is eligible there is no
   mid-stream fallback: an unsupported type raises mid-stream in both `rust` and
   `rust_strict` mode rather than routing to Python.
+- **Name-decoration aliases (`SimpleAggregateFunction`, geo, `Nested`).** These add
+  no new `Column` variant. The core resolves each to a physical type via
+  `ChType::physical_delegate` (`Point` -> unnamed `Tuple(Float64, Float64)`, the five
+  array-shaped geo kinds -> nested `Array(...(Point))`, `Nested(names...)` ->
+  `Array(Tuple(named...))`, `SimpleAggregateFunction(func, T)` -> `T`), and the binding
+  calls the same `physical_delegate` at each ChType-dispatch point (`prepare_column_ctx`
+  on decode; `build_column`/`build_element_column`/`build_nullable_column`/
+  `default_pyobject` on encode) and recurses into the existing Tuple/Array/scalar
+  machinery. Value shapes therefore fall out for free and match the Python codec: a
+  `Point` reads as a 2-`tuple`, a `Ring` as a list of 2-tuples, a `Nested` as a list of
+  `dict`s keyed by the field names, and a `SimpleAggregateFunction` as its inner type's
+  value. `Nullable(Point)` works both directions. No driver-side (`rustcodec.py`,
+  `rustnumpy.py`) change was needed: query eligibility is context-level and insert
+  support is probed by a zero-row `encode_native_block`, so these types route to Rust
+  automatically once the binding supports them.
 - **Deferred (LowCardinality object identity below Array-nested containers):** a
   `LowCardinality` value inside a container that is itself nested under `Array`
   (for example `Array(Tuple(a LowCardinality(String)))`) is rebuilt as a fresh

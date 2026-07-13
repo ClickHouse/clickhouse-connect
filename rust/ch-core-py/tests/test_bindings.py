@@ -170,8 +170,7 @@ def _build_low_cardinality_body_no_prefix(type_name, values):
     element column.
     """
     inner = type_name[len("LowCardinality("):-1]
-    nullable = inner.startswith("Nullable(")
-    value_type = inner[len("Nullable("):-1] if nullable else inner
+    nullable, value_type = _lc_dict_value_type(inner)
 
     if len(values) == 0:
         return b""
@@ -328,6 +327,58 @@ def _parse_map_types(type_name):
     return key, value
 
 
+_POINT_PHYSICAL = "Tuple(Float64, Float64)"
+
+# Geo alias -> physical nesting (unnamed Point tuple, one Array level per depth).
+_GEO_PHYSICAL = {
+    "Point": _POINT_PHYSICAL,
+    "Ring": f"Array({_POINT_PHYSICAL})",
+    "LineString": f"Array({_POINT_PHYSICAL})",
+    "Polygon": f"Array(Array({_POINT_PHYSICAL}))",
+    "MultiLineString": f"Array(Array({_POINT_PHYSICAL}))",
+    "MultiPolygon": f"Array(Array(Array({_POINT_PHYSICAL})))",
+}
+
+
+def _expand_alias(type_name):
+    """Physical type string of a name-decoration alias, else the input unchanged.
+
+    SimpleAggregateFunction, the six geo aliases, and Nested carry a custom name
+    over a physical type whose wire body is byte-identical, so the helper emits
+    the alias header but the physical body. Recurses through Nullable
+    (Nullable(Point) is legal); container recursion is left to the body helpers,
+    which expand each inner type in turn.
+    """
+    if type_name.startswith("Nullable("):
+        return f"Nullable({_expand_alias(type_name[len('Nullable('):-1])})"
+    if type_name in _GEO_PHYSICAL:
+        return _GEO_PHYSICAL[type_name]
+    if type_name.startswith("SimpleAggregateFunction("):
+        return _expand_alias(
+            _split_top_level_commas(type_name[len("SimpleAggregateFunction("):-1])[1]
+        )
+    if type_name.startswith("Nested("):
+        return f"Array(Tuple({type_name[len('Nested('):-1]}))"
+    return type_name
+
+
+def _strip_saf(type_name):
+    """Strip a SimpleAggregateFunction name-decoration chain to its inner type."""
+    while type_name.startswith("SimpleAggregateFunction("):
+        type_name = _split_top_level_commas(type_name[len("SimpleAggregateFunction("):-1])[1]
+    return type_name
+
+
+def _lc_dict_value_type(inner):
+    """(nullable, physical_value_type) for a LowCardinality inner, mirroring the
+    core: strip the SAF chain, unwrap an optional Nullable, strip the SAF chain
+    again. LowCardinality(SAF(anyLast, Nullable(String))) is index-level nullable."""
+    inner = _strip_saf(inner)
+    if inner.startswith("Nullable("):
+        return True, _strip_saf(inner[len("Nullable("):-1])
+    return False, inner
+
+
 def _element_state_prefix(type_name):
     """State prefix hoisted to the front of a column, recursing into containers.
 
@@ -335,6 +386,7 @@ def _element_state_prefix(type_name):
     Map, and Nullable recurse into their inner types in serialization order;
     every leaf writes nothing. Matches the core's read_state_prefix chain.
     """
+    type_name = _expand_alias(type_name)
     if type_name.startswith("Array("):
         return _element_state_prefix(type_name[len("Array("):-1])
     if type_name.startswith("Nullable("):
@@ -351,6 +403,7 @@ def _element_state_prefix(type_name):
 
 def _build_body_no_prefix(type_name, values):
     """Column body with its state prefix omitted (already hoisted by the caller)."""
+    type_name = _expand_alias(type_name)
     if type_name.startswith("Array("):
         return _build_array_body(type_name, values)
     if type_name.startswith("Map("):
@@ -458,26 +511,31 @@ def build_native_block(columns, *, block_info=False):
         if num_rows == 0:
             continue
 
-        if type_name.startswith("LowCardinality("):
-            buf.extend(_build_low_cardinality_body(type_name, values))
+        # Emit the alias header but the physical type's body: a name-decoration
+        # alias (geo, Nested, SimpleAggregateFunction) is byte-identical on the
+        # wire to its physical type.
+        physical = _expand_alias(type_name)
+
+        if physical.startswith("LowCardinality("):
+            buf.extend(_build_low_cardinality_body(physical, values))
             continue
 
-        if type_name.startswith("Array("):
-            buf.extend(_element_state_prefix(type_name))
-            buf.extend(_build_array_body(type_name, values))
+        if physical.startswith("Array("):
+            buf.extend(_element_state_prefix(physical))
+            buf.extend(_build_array_body(physical, values))
             continue
 
         nullable_tuple = (
-            type_name.startswith("Nullable(")
-            and type_name[len("Nullable("):-1].startswith("Tuple(")
+            physical.startswith("Nullable(")
+            and physical[len("Nullable("):-1].startswith("Tuple(")
         )
-        if type_name.startswith("Tuple(") or type_name.startswith("Map(") or nullable_tuple:
-            buf.extend(_element_state_prefix(type_name))
-            buf.extend(_build_body_no_prefix(type_name, values))
+        if physical.startswith("Tuple(") or physical.startswith("Map(") or nullable_tuple:
+            buf.extend(_element_state_prefix(physical))
+            buf.extend(_build_body_no_prefix(physical, values))
             continue
 
-        is_nullable = type_name.startswith("Nullable(")
-        inner_type = type_name[len("Nullable("):-1] if is_nullable else type_name
+        is_nullable = physical.startswith("Nullable(")
+        inner_type = physical[len("Nullable("):-1] if is_nullable else physical
         if is_nullable:
             for v in values:
                 buf.append(0x01 if v is None else 0x00)
@@ -3664,6 +3722,246 @@ class TestMap:
         block = build_native_block_from_bodies([("m", "Map(UInt8, UInt8)", body)], 2)
         with pytest.raises(ValueError, match="Invalid Array layout"):
             _ch_core.ColBatch.decode_native(block)
+
+
+# ---------------------------------------------------------------------------
+# Geo aliases (Point/Ring/LineString/Polygon/MultiLineString/MultiPolygon)
+# ---------------------------------------------------------------------------
+
+# A Point decodes to an (x, y) tuple; each array-based kind wraps it in one more
+# list level. Rows round-trip unchanged (tuples in, tuples out).
+_GEO_DECODE = [
+    ("Point", [(1.5, 2.5), (-3.25, 4.0), (0.0, 0.0)]),
+    ("Ring", [[(1.0, 2.0), (3.0, 4.0)], [], [(5.5, 6.5)]]),
+    ("LineString", [[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)], [], [(7.5, 8.5)]]),
+    ("Polygon", [[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], [(0.25, 0.25)]], []]),
+    ("MultiLineString", [[[(0.0, 0.0), (1.0, 1.0)], [(2.0, 2.0)]], []]),
+    ("MultiPolygon", [[[[(0.0, 0.0), (1.0, 0.0)]], [[(2.0, 2.0)], [(3.0, 3.0)]]], []]),
+]
+
+
+class TestGeo:
+    @pytest.mark.parametrize("type_name,rows", _GEO_DECODE)
+    def test_decode_shape_and_type_name(self, type_name, rows):
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("g", type_name, rows)]))
+        assert batch.column_type_names == [type_name]
+        # `==` distinguishes tuple from list, so equality enforces the Point ->
+        # tuple, array-level -> list nesting exactly.
+        assert list(batch.column_data(0)) == rows
+
+    def test_point_leaves_are_tuples(self):
+        decoded = list(
+            _ch_core.ColBatch.decode_native(
+                build_native_block([("g", "Point", [(1.5, 2.5), (-3.25, 4.0)])])
+            ).column_data(0)
+        )
+        assert all(isinstance(v, tuple) and len(v) == 2 for v in decoded)
+
+    @pytest.mark.parametrize("type_name,rows", _GEO_DECODE)
+    def test_encode_round_trip_and_golden(self, type_name, rows):
+        encoded = _ch_core.encode_native_block(["g"], [type_name], [rows], len(rows))
+        assert encoded == build_native_block([("g", type_name, rows)])
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == rows
+
+    @pytest.mark.parametrize("type_name,rows", _GEO_DECODE)
+    def test_all_exit_paths_agree(self, type_name, rows):
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("g", type_name, rows)]))
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == rows
+
+    def test_nullable_point_null_rows_are_none(self):
+        # Nullable(Point) parses as Nullable(Geo(Point)); the delegate is a Tuple,
+        # so the decoded column carries tuple-level validity and null rows read
+        # as None across all exit paths.
+        rows = [(1.5, 2.5), None, (-3.25, 4.0), None]
+        batch = _ch_core.ColBatch.decode_native(
+            build_native_block([("g", "Nullable(Point)", rows)])
+        )
+        assert batch.column_type_names == ["Nullable(Point)"]
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == rows
+
+    def test_nullable_point_encode_round_trip(self):
+        rows = [(1.5, 2.5), None, (0.0, -1.0)]
+        encoded = _ch_core.encode_native_block(["g"], ["Nullable(Point)"], [rows], len(rows))
+        assert encoded == build_native_block([("g", "Nullable(Point)", rows)])
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+
+# ---------------------------------------------------------------------------
+# Nested (physical Array(Tuple(named ...)))
+# ---------------------------------------------------------------------------
+
+class TestNested:
+    def test_decode_to_list_of_dicts(self):
+        type_name = "Nested(a UInt32, b String)"
+        wire_rows = [[(13, "north"), (79, "south")], [], [(5, "east")]]
+        expected = [
+            [{"a": 13, "b": "north"}, {"a": 79, "b": "south"}],
+            [],
+            [{"a": 5, "b": "east"}],
+        ]
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("n", type_name, wire_rows)]))
+        assert batch.column_type_names == [type_name]
+        decoded = list(batch.column_data(0))
+        assert decoded == expected
+        assert all(isinstance(item, dict) for row in decoded for item in row)
+
+    def test_all_exit_paths_agree(self):
+        type_name = "Nested(a UInt32, b String)"
+        wire_rows = [[(13, "north")], [], [(5, "east"), (7, "west")]]
+        expected = [[{"a": 13, "b": "north"}], [], [{"a": 5, "b": "east"}, {"a": 7, "b": "west"}]]
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("n", type_name, wire_rows)]))
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == expected
+
+    def test_encode_positional_golden_and_round_trip(self):
+        type_name = "Nested(a UInt32, b String)"
+        wire_rows = [[(13, "north"), (79, "south")], [], [(5, "east")]]
+        encoded = _ch_core.encode_native_block(["n"], [type_name], [wire_rows], len(wire_rows))
+        assert encoded == build_native_block([("n", type_name, wire_rows)])
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == [
+            [{"a": 13, "b": "north"}, {"a": 79, "b": "south"}],
+            [],
+            [{"a": 5, "b": "east"}],
+        ]
+
+    def test_encode_dict_rows_match_positional(self):
+        type_name = "Nested(a UInt32, b String)"
+        positional = [[(13, "north"), (79, "south")], [], [(5, "east")]]
+        dict_rows = [
+            [{"a": 13, "b": "north"}, {"a": 79, "b": "south"}],
+            [],
+            [{"a": 5, "b": "east"}],
+        ]
+        expected = _ch_core.encode_native_block(["n"], [type_name], [positional], 3)
+        assert _ch_core.encode_native_block(["n"], [type_name], [dict_rows], 3) == expected
+
+    def test_nested_low_cardinality_field_round_trip(self):
+        # A LowCardinality Nested field resolves through the LC path; the core's
+        # LC index word differs from the helper's, so this round-trips instead of
+        # golden-comparing.
+        type_name = "Nested(city LowCardinality(String), pop UInt32)"
+        dict_rows = [
+            [{"city": "harbor", "pop": 13}, {"city": "harbor", "pop": 79}],
+            [],
+            [{"city": "ridge", "pop": 5}],
+        ]
+        encoded = _ch_core.encode_native_block(["n"], [type_name], [dict_rows], 3)
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == dict_rows
+
+    def test_nested_point_field_golden_and_round_trip(self):
+        # A geo alias (Point) nested inside a non-alias container: Nested expands
+        # to Array(Tuple(p Point, q UInt32)) and the Point field expands again.
+        type_name = "Nested(p Point, q UInt32)"
+        wire_rows = [[((1.5, 2.5), 13), ((3.0, 4.0), 79)], [], [((5.5, 6.5), 5)]]
+        encoded = _ch_core.encode_native_block(["n"], [type_name], [wire_rows], len(wire_rows))
+        assert encoded == build_native_block([("n", type_name, wire_rows)])
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == [
+            [{"p": (1.5, 2.5), "q": 13}, {"p": (3.0, 4.0), "q": 79}],
+            [],
+            [{"p": (5.5, 6.5), "q": 5}],
+        ]
+
+
+# ---------------------------------------------------------------------------
+# SimpleAggregateFunction (physical == the inner type)
+# ---------------------------------------------------------------------------
+
+class TestSimpleAggregateFunction:
+    def test_sum_uint64_golden_and_round_trip(self):
+        type_name = "SimpleAggregateFunction(sum, UInt64)"
+        values = [13, 79, 0, 18446744073709551615]
+        encoded = _ch_core.encode_native_block(["s"], [type_name], [values], len(values))
+        assert encoded == build_native_block([("s", type_name, values)])
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        decoded = list(batch.column_data(0))
+        assert decoded == values
+        assert all(isinstance(v, int) for v in decoded)
+
+    def test_any_string_golden_and_round_trip(self):
+        type_name = "SimpleAggregateFunction(any, String)"
+        values = ["red", "", "green"]
+        encoded = _ch_core.encode_native_block(["s"], [type_name], [values], len(values))
+        assert encoded == build_native_block([("s", type_name, values)])
+        decoded = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+        assert decoded == values
+        assert all(isinstance(v, str) for v in decoded)
+
+    def test_anylast_low_cardinality_string_round_trip(self):
+        # The inner LowCardinality resolves through the LC path; the core's LC
+        # index word differs from the helper's, so this round-trips.
+        type_name = "SimpleAggregateFunction(anyLast, LowCardinality(String))"
+        values = ["red", "blue", "red", "red", "green"]
+        encoded = _ch_core.encode_native_block(["s"], [type_name], [values], len(values))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == values
+
+    def test_all_exit_paths_agree(self):
+        type_name = "SimpleAggregateFunction(sum, UInt64)"
+        values = [13, 79, 5]
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("s", type_name, values)]))
+        via_column_data = list(batch.column_data(0))
+        via_columns = list(batch.to_python_columns()[0])
+        via_rows = [r[0] for r in batch.to_python_rows()]
+        assert via_column_data == via_columns == via_rows == values
+
+    def test_array_of_saf_golden_and_round_trip(self):
+        # A SAF alias nested inside a non-alias Array container.
+        type_name = "Array(SimpleAggregateFunction(sum, UInt64))"
+        rows = [[13, 79], [], [5, 5, 18446744073709551615]]
+        encoded = _ch_core.encode_native_block(["a"], [type_name], [rows], len(rows))
+        assert encoded == build_native_block([("a", type_name, rows)])
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    def test_low_cardinality_string_round_trip(self):
+        # LowCardinality(SAF(anyLast, String)): the SAF chain resolves through the
+        # LC path. Server round-trips this live; the python codec cannot. The
+        # core's LC index word differs from the helper's, so no golden compare.
+        type_name = "LowCardinality(SimpleAggregateFunction(anyLast, String))"
+        values = ["red", "blue", "red", "red", "green"]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == values
+        built = build_native_block([("v", type_name, values)])
+        assert list(_ch_core.ColBatch.decode_native(built).column_data(0)) == values
+
+    def test_low_cardinality_nullable_string_round_trip(self):
+        # LowCardinality(SAF(anyLast, Nullable(String))) is index-level nullable:
+        # the SAF chain is stripped before the Nullable is detected.
+        type_name = "LowCardinality(SimpleAggregateFunction(anyLast, Nullable(String)))"
+        values = ["red", None, "red", None, "blue"]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == values
+        built = build_native_block([("v", type_name, values)])
+        assert list(_ch_core.ColBatch.decode_native(built).column_data(0)) == values
+
+
+class TestAliasRejections:
+    @pytest.mark.parametrize(
+        "type_name",
+        ["Nullable(Ring)", "Nullable(Nested(a UInt32, b String))"],
+    )
+    def test_server_illegal_nullable_alias_rejected(self, type_name):
+        # Ring and Nested expand to an Array, which is not nullable-able, so the
+        # core parser rejects the type and encode raises at the header stage.
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["x"], [type_name], [[None]], 1)
 
 
 # ---------------------------------------------------------------------------
