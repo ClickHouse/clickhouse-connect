@@ -24,12 +24,13 @@ import zstandard
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver.client import Client
+    from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.query import QueryContext
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier, use_form_encoding
-from clickhouse_connect.driver.common import coerce_bool
+from clickhouse_connect.driver.common import coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
@@ -280,6 +281,62 @@ def plan_query_request(
     params.update(context.bind_params)
     headers["Content-Type"] = "text/plain; charset=utf-8"
     return QueryRequestPlan(False, params, headers, body=final_query)
+
+
+@dataclass
+class CommandRequestPlan:
+    """A shaped HTTP command request, ready for a transport to send.
+
+    payload is the request body (the bound command itself, or user data with
+    the command moved to the query URL parameter); form_files holds
+    external-data file fields.
+    """
+
+    params: dict[str, str]
+    headers: dict[str, Any]
+    method: str
+    payload: str | bytes | None = None
+    form_files: dict[str, Any] | None = None
+
+
+def plan_command_request(
+    bound_cmd: str | bytes,
+    bind_params: dict[str, str],
+    data: str | bytes | None,
+    external_data: ExternalData | None,
+    runtime: QueryRuntime,
+    transport_settings: dict[str, str] | None,
+) -> CommandRequestPlan:
+    """Shape an already-bound command into an HTTP request plan."""
+    params = dict(bind_params)
+    headers: dict[str, Any] = {}
+    payload: str | bytes | None = None
+    form_files = None
+    if external_data:
+        if data:
+            raise ProgrammingError("Cannot combine command data with external data") from None
+        form_files = external_data.form_data
+        params.update(external_data.query_params)
+    elif isinstance(data, str):
+        headers["Content-Type"] = "text/plain; charset=utf-8"
+        payload = data.encode()
+    elif isinstance(data, bytes):
+        headers["Content-Type"] = "application/octet-stream"
+        payload = data
+    if payload is None and not bound_cmd:
+        raise ProgrammingError("Command sent without query or recognized data") from None
+    if payload or form_files:
+        if isinstance(bound_cmd, bytes):
+            raise ProgrammingError("Binary parameter bind cannot be combined with command data or external data") from None
+        params["query"] = bound_cmd
+    else:
+        payload = bound_cmd
+    if runtime.database:
+        params["database"] = runtime.database
+    params.update(runtime.settings)
+    headers = dict_copy(headers, transport_settings)
+    method = "POST" if payload or form_files else "GET"
+    return CommandRequestPlan(params, headers, method, payload=payload, form_files=form_files)
 
 
 def add_integration_tag(headers: dict[str, str], reported_libs: set[str], name: str) -> str | None:

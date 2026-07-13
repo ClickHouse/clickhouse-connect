@@ -27,17 +27,19 @@ from clickhouse_connect.driver.backend.httpcommon import (
     decompress_response,
     ex_header,
     ex_tag_header,
+    plan_command_request,
     plan_query_request,
     retryable_http_statuses,
     summary_from_headers,
 )
-from clickhouse_connect.driver.backend.models import QueryExecution, QueryRuntime
+from clickhouse_connect.driver.backend.models import CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
+    from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.query import QueryContext
 
 logger = logging.getLogger(__name__)
@@ -275,6 +277,29 @@ class HttpAsyncBackend:
             summary=summary_from_headers(response.headers),
             response_tz_name=response.headers.get("X-ClickHouse-Timezone"),
         )
+
+    async def execute_command(
+        self,
+        bound_cmd: str | bytes,
+        bind_params: dict[str, str],
+        data: str | bytes | None,
+        external_data: ExternalData | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> CommandExecution:
+        """Execute an already-bound command, returning its decompressed body and summary."""
+        plan = plan_command_request(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
+        response = await self.request(plan.payload, plan.params, plan.headers, files=plan.form_files, method=plan.method, server_wait=False)
+        try:
+            body = await response.read()
+            encoding = response.headers.get("Content-Encoding")
+            summary = summary_from_headers(response.headers)
+        finally:
+            release_lease(response)
+        if body and encoding:
+            loop = asyncio.get_running_loop()
+            body = await loop.run_in_executor(None, decompress_response, body, encoding)
+        return CommandExecution(body=body, summary=summary)
 
     async def request(
         self,

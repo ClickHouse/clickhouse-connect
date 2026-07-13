@@ -424,40 +424,17 @@ class HttpClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        bound_cmd, params = bind_query(cmd, parameters, self.server_tz)
-        headers: dict[str, Any] = {}
-        payload: str | bytes | None = None
-        fields = None
-        if external_data:
-            if data:
-                raise ProgrammingError("Cannot combine command data with external data") from None
-            fields = external_data.form_data
-            params.update(external_data.query_params)
-        elif isinstance(data, str):
-            headers["Content-Type"] = "text/plain; charset=utf-8"
-            payload = data.encode()
-        elif isinstance(data, bytes):
-            headers["Content-Type"] = "application/octet-stream"
-            payload = data
-        if payload is None and not bound_cmd:
-            raise ProgrammingError("Command sent without query or recognized data") from None
-        if payload or fields:
-            if isinstance(bound_cmd, bytes):
-                raise ProgrammingError("Binary parameter bind cannot be combined with command data or external data") from None
-            params["query"] = bound_cmd
-        else:
-            payload = bound_cmd
-        if use_database and self.database:
-            params["database"] = self.database
-        params.update(self._validate_settings(settings or {}))
-        headers = dict_copy(headers, transport_settings)
-        method = "POST" if payload or fields else "GET"
-        response = self._raw_request(payload, params, headers, method, fields=fields, server_wait=False)
-        if response.data:
-            return parse_command_body(response.data)
+        bound_cmd, bind_params = bind_query(cmd, parameters, self.server_tz)
+        runtime = QueryRuntime(
+            database=self.database if use_database else None,
+            settings=self._validate_settings(settings or {}),
+        )
+        execution = self._backend.execute_command(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
+        if execution.body:
+            return parse_command_body(execution.body)
         if returns_empty_string_on_empty_body(bound_cmd):
             return ""
-        return QuerySummary(self._summary(response))
+        return QuerySummary(execution.summary)
 
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         self._backend.error_handler(response, retried)

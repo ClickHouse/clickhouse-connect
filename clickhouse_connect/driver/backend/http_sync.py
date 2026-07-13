@@ -26,17 +26,19 @@ from clickhouse_connect.driver.backend.httpcommon import (
     build_http_error,
     ex_header,
     ex_tag_header,
+    plan_command_request,
     plan_query_request,
     retryable_http_statuses,
     summary_from_headers,
 )
-from clickhouse_connect.driver.backend.models import QueryExecution, QueryRuntime
+from clickhouse_connect.driver.backend.models import CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.httputil import ResponseSource, all_managers, check_conn_expiration, get_response_data
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
+    from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.query import QueryContext
 
 logger = logging.getLogger(__name__)
@@ -154,6 +156,20 @@ class HttpSyncBackend:
             summary=summary_from_headers(response.headers),
             response_tz_name=response.headers.get("X-ClickHouse-Timezone"),
         )
+
+    def execute_command(
+        self,
+        bound_cmd: str | bytes,
+        bind_params: dict[str, str],
+        data: str | bytes | None,
+        external_data: ExternalData | None,
+        runtime: QueryRuntime,
+        transport_settings: dict[str, str] | None,
+    ) -> CommandExecution:
+        """Execute an already-bound command, returning its body and summary."""
+        plan = plan_command_request(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
+        response = self.request(plan.payload, plan.params, plan.headers, plan.method, fields=plan.form_files, server_wait=False)
+        return CommandExecution(body=response.data or b"", summary=summary_from_headers(response.headers))
 
     def request(
         self,

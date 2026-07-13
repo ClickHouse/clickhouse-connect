@@ -56,6 +56,15 @@ class QueryRuntime:
 
 
 @dataclass
+class CommandExecution:
+    """Result of a backend command execution: the response body, decoded per
+    transport (possibly empty), and the query summary."""
+
+    body: bytes
+    summary: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class QueryExecution:
     """Result of a backend query execution.
 
