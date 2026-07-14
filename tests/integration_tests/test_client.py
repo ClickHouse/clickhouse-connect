@@ -9,6 +9,7 @@ from clickhouse_connect import create_client, datatypes
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
 CSV_CONTENT = """abc,1,1
@@ -43,6 +44,30 @@ def test_query(param_client, call):
 def test_command(param_client, call):
     version = call(param_client.command, "SELECT version()")
     assert int(version.split(".")[0]) >= 19
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "SELECT 13 WHERE 0",
+        "SELECT number FROM numbers(0)",
+    ],
+)
+def test_command_empty_read_returns_empty_string(param_client, call, cmd):
+    # A read that produces zero rows returns an empty value, not a truthy QuerySummary (issue #865).
+    assert call(param_client.command, cmd) == ""
+
+
+def test_command_show_policies_returns_value(param_client, call):
+    # SHOW POLICIES produces a result set, so an empty policy list returns a value, not a QuerySummary (issue #761).
+    result = call(param_client.command, "SHOW POLICIES")
+    assert not isinstance(result, QuerySummary)
+
+
+def test_command_control_statement_returns_summary(param_client, call):
+    # A control statement produces no result set, so it still returns a QuerySummary.
+    result = call(param_client.command, "DROP TABLE IF EXISTS ch_connect_missing_865")
+    assert isinstance(result, QuerySummary)
 
 
 def test_query_error_exposes_structured_code(param_client, call):
