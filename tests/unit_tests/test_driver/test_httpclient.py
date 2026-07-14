@@ -1110,7 +1110,7 @@ class TestResponseTimezone:
 
         with (
             patch.object(HttpSyncBackend, "request", return_value=mock_response),
-            patch("clickhouse_connect.driver.httpclient.RespBuffCls"),
+            patch("clickhouse_connect.driver.backendclient.RespBuffCls"),
             patch("clickhouse_connect.driver.backend.http_sync.ResponseSource"),
             patch.object(self.client._transform, "parse_response", return_value=Mock()),
         ):

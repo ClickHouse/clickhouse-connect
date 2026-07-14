@@ -1,9 +1,8 @@
-import io
 import logging
 import uuid
 from base64 import b64encode
-from collections.abc import Callable, Generator, Sequence
-from typing import Any, BinaryIO, cast
+from collections.abc import Callable
+from typing import Any, cast
 
 from urllib3 import Timeout
 from urllib3.poolmanager import PoolManager
@@ -19,18 +18,13 @@ from clickhouse_connect.driver.backend.httpcommon import (
     ex_header,  # noqa: F401  (compatibility re-export)
     ex_tag_header,  # noqa: F401  (compatibility re-export)
     negotiate_compression,
-    parse_command_body,
 )
-from clickhouse_connect.driver.backend.models import QueryRuntime
+from clickhouse_connect.driver.backendclient import SyncBackendClient
 from clickhouse_connect.driver.binding import (
-    bind_query,
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
-from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
-from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.httputil import (
     ResponseSource,  # noqa: F401  (compatibility re-export)
     check_env_proxy,
@@ -38,15 +32,14 @@ from clickhouse_connect.driver.httputil import (
     get_pool_manager,
     get_proxy_manager,
 )
-from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryContext, QueryResult, TzMode, TzSource, returns_empty_string_on_empty_body
-from clickhouse_connect.driver.summary import QuerySummary
+from clickhouse_connect.driver.query import TzMode, TzSource
 from clickhouse_connect.driver.transform import NativeTransform
 
 logger = logging.getLogger(__name__)
 
 
-class HttpClient(Client):
+class HttpClient(SyncBackendClient):
+    _backend: HttpSyncBackend
     params: dict[str, str] = {}
     valid_transport_settings = {
         "database",
@@ -309,94 +302,6 @@ class HttpClient(Client):
     def set_access_token(self, access_token: str) -> None:
         self._backend.set_access_token(access_token)
 
-    def _query_with_context(self, context: QueryContext) -> QueryResult:
-        context.rename_response_column = self._rename_response_column
-        if self.protocol_version:
-            context.block_info = True
-        runtime = QueryRuntime(
-            database=self.database,
-            protocol_version=self.protocol_version,
-            settings=self._validate_settings(context.settings),
-            retries=self.query_retries,
-        )
-        execution = self._backend.execute_query(context, runtime, self._prep_query(context))
-        if execution.columns is not None:
-            return self._columns_only_result(context, execution.columns)
-        byte_source = RespBuffCls(execution.source)
-        response_tz = self._check_tz_change(execution.response_tz_name)
-        if response_tz is not None:
-            context.set_response_tz(response_tz)
-        query_result = self._transform.parse_response(byte_source, context)
-        query_result.summary = execution.summary
-        return cast(QueryResult, query_result)
-
-    def data_insert(self, context: InsertContext) -> QuerySummary:
-        """
-        See BaseClient doc_string for this method
-        """
-        if context.empty:
-            logger.debug("No data included in insert, skipping")
-            return QuerySummary()
-
-        if context.compression is None:
-            context.compression = self.write_compression
-        block_gen = self._transform.build_insert(context)
-
-        def rebuild_block_gen():
-            context.current_row = 0
-            context.current_block = 0
-            return self._transform.build_insert(context)
-
-        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
-        try:
-            return QuerySummary(self._backend.execute_data_insert(context, runtime, block_gen, rebuild_block_gen))
-        finally:
-            context.data = None
-
-    def raw_insert(
-        self,
-        table: str | None = None,
-        column_names: Sequence[str] | None = None,
-        insert_block: str | bytes | Generator[bytes, None, None] | BinaryIO | None = None,
-        settings: dict | None = None,
-        fmt: str | None = None,
-        compression: str | None = None,
-        transport_settings: dict[str, str] | None = None,
-    ) -> QuerySummary:
-        """
-        See BaseClient doc_string for this method
-        """
-        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}))
-        summary = self._backend.execute_raw_insert(
-            table, column_names, insert_block, fmt if fmt else self._write_format, compression, runtime, transport_settings
-        )
-        return QuerySummary(summary)
-
-    def command(
-        self,
-        cmd: str,
-        parameters: Sequence | dict[str, Any] | None = None,
-        data: str | bytes | None = None,
-        settings: dict | None = None,
-        use_database: bool = True,
-        external_data: ExternalData | None = None,
-        transport_settings: dict[str, str] | None = None,
-    ) -> str | int | Sequence[str] | QuerySummary:
-        """
-        See BaseClient doc_string for this method
-        """
-        bound_cmd, bind_params = bind_query(cmd, parameters, self.server_tz)
-        runtime = QueryRuntime(
-            database=self.database if use_database else None,
-            settings=self._validate_settings(settings or {}),
-        )
-        execution = self._backend.execute_command(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
-        if execution.body:
-            return parse_command_body(execution.body)
-        if returns_empty_string_on_empty_body(bound_cmd):
-            return ""
-        return QuerySummary(execution.summary)
-
     def _error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         self._backend.error_handler(response, retried)
 
@@ -426,52 +331,8 @@ class HttpClient(Client):
             retry_body=retry_body,
         )
 
-    def raw_query(
-        self,
-        query: str,
-        parameters: Sequence | dict[str, Any] | None = None,
-        settings: dict[str, Any] | None = None,
-        fmt: str | None = None,
-        use_database: bool = True,
-        external_data: ExternalData | None = None,
-        transport_settings: dict[str, str] | None = None,
-    ) -> bytes:
-        """
-        See BaseClient doc_string for this method
-        """
-        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
-        return self._backend.execute_raw_query(final_query, bind_params, external_data, runtime, transport_settings)
-
-    def raw_stream(
-        self,
-        query: str,
-        parameters: Sequence | dict[str, Any] | None = None,
-        settings: dict[str, Any] | None = None,
-        fmt: str | None = None,
-        use_database: bool = True,
-        external_data: ExternalData | None = None,
-        transport_settings: dict[str, str] | None = None,
-    ) -> io.IOBase:
-        """
-        See BaseClient doc_string for this method
-        """
-        final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
-        return self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
-
     def _add_integration_tag(self, name: str):
         """
         Dynamically adds a product (like pandas or sqlalchemy) to the User-Agent string details section.
         """
         add_integration_tag(self.headers, self._reported_libs, name)
-
-    def ping(self) -> bool:
-        """
-        See BaseClient doc_string for this method
-        """
-        return self._backend.ping()
-
-    def close_connections(self) -> None:
-        self._backend.close_connections()
-
-    def close(self) -> None:
-        self._backend.close()
