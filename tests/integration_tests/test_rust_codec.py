@@ -18,6 +18,14 @@ SCALAR_QUERY = (
 
 # Decoder-supported type shapes, including the higher-risk timezone-materialization paths.
 DECODE_MATRIX = {
+    "nullable_nothing": "NULL",
+    "array_nothing": "[]",
+    "array_nullable_nothing": "[NULL]",
+    "tuple_nullable_nothing": "tuple(NULL, toUInt8(number))",
+    "array_tuple_nullable_nothing": "[tuple(NULL, toUInt8(number))]",
+    "tuple_array_nothing": "tuple([], toUInt8(number))",
+    "map_nothing": "map()",
+    "map_nullable_nothing_value": "mapFromArrays([toUInt8(number)], [NULL])",
     "int128": "toInt128(number) - toInt128('170141183460469231731687303715884105000')",
     "uint128": "toUInt128('340282366920938463463374607431768211000') + number",
     "int256": "toInt256(number) - toInt256('57896044618658097711785492504343953926634992332820282019728792003956564819000')",
@@ -296,6 +304,77 @@ def test_rust_codec_decode_matrix_parity(client_factory, call, expr):
 
     assert rust_result.result_rows == python_result.result_rows
     assert [t.name for t in rust_result.column_types] == [t.name for t in python_result.column_types]
+
+
+def test_rust_codec_nothing_insert_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    schema = "id UInt8, tn Tuple(Nullable(Nothing), UInt8), at Array(Tuple(Nullable(Nothing), UInt8)), an Tuple(Array(Nothing), UInt8)"
+    rows = [
+        [0, (None, 13), [(None, 5), (None, 7)], ([], 79)],
+        [1, (None, 79), [], ([], 13)],
+    ]
+    names = ["id", "tn", "at", "an"]
+    rust_table = f"rc_ins_nothing_rust_{client_mode}"
+    py_table = f"rc_ins_nothing_py_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(client.insert, table, rows, column_names=names)
+        select = f"SELECT * FROM {table} ORDER BY id"
+        assert call(rust_client.query, select).result_rows == call(python_client.query, select).result_rows
+        return call(rust_client.query, select).result_rows
+
+    try:
+        expected = [tuple(row) for row in rows]
+        assert roundtrip(rust_client, rust_table) == expected
+        assert roundtrip(python_client, py_table) == expected
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_nothing_np_df_parity(client_factory, call):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+
+    # Sibling scalars inside tuples/maps are the accepted value-equal residue
+    # (rust python int vs numpy scalar); assert_array_equal and
+    # assert_frame_equal compare by value.
+    parity_queries = [
+        "SELECT NULL AS c FROM numbers(3)",
+        "SELECT [NULL] AS c FROM numbers(3)",
+        "SELECT tuple(NULL, toUInt8(number)) AS c FROM numbers(3)",
+        "SELECT map() AS c FROM numbers(3)",
+        "SELECT mapFromArrays([toUInt8(number)], [NULL]) AS c FROM numbers(3)",
+    ]
+    for query in parity_queries:
+        rust_np = call(rust_client.query_np, query)
+        python_np = call(python_client.query_np, query)
+        assert rust_np.dtype == python_np.dtype
+        np.testing.assert_array_equal(rust_np, python_np)
+
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            assert rust_df["c"].dtype == python_df["c"].dtype
+            pd.testing.assert_frame_equal(rust_df, python_df)
+
+    # Empty flat Array runs break query_np identically in both codecs, so these
+    # shapes are df-only.
+    df_only_queries = [
+        "SELECT array() AS c FROM numbers(3)",
+        "SELECT tuple([], toUInt8(number)) AS c FROM numbers(3)",
+    ]
+    for query in df_only_queries:
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            assert rust_df["c"].dtype == python_df["c"].dtype
+            pd.testing.assert_frame_equal(rust_df, python_df)
 
 
 def test_rust_codec_streaming_parity(client_factory, call, consume_stream):

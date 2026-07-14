@@ -63,12 +63,13 @@ numbers, with scope notes in `RESULTS.md` that matter before quoting them.
 
 ## Supported types
 
-Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
+Nothing, Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
 UInt128/256, Float32/64, BFloat16, String,
 FixedString, Date, Date32, DateTime, DateTime64 with precision and
-timezone, and Nullable of any of these. Anything else is rejected at decode
-time with a clean `ValueError` naming the column. Type coverage lives in
-the core, so new types land there once and every binding gets them.
+timezone, Nullable, LowCardinality where ClickHouse permits it, Array, Tuple,
+Map, and the supported name-decoration aliases. Unsupported types are rejected
+at decode time with a clean `ValueError` naming the column. Type coverage lives
+in the core, so new types land there once and every binding gets them.
 
 ## Prerequisite: the core crate
 

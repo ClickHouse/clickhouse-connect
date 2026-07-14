@@ -4,6 +4,7 @@ from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
@@ -77,6 +78,12 @@ class Nothing(ArrayType):
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.nullable = True
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        # base_type is not a pandas dtype; every value is null regardless of token
+        if ctx.use_extended_dtypes:
+            return options.np.full(len(column), None, dtype="object")
+        return super()._finalize_column(column, ctx)
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, _ctx):
         dest += bytes(0x30 for _ in range(len(column)))

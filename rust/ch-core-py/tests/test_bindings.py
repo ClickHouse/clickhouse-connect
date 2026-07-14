@@ -241,7 +241,9 @@ def _build_low_cardinality_body(type_name, values):
 def _encode_plain_body(inner_type, values):
     """Encode a plain (non-wrapper) column body; None renders as the type default."""
     buf = bytearray()
-    if inner_type in _FIXED_TYPES:
+    if inner_type == "Nothing":
+        buf.extend(b"0" * len(values))
+    elif inner_type in _FIXED_TYPES:
         fmt, _ = _FIXED_TYPES[inner_type]
         default = 0 if "Int" in inner_type or "UInt" in inner_type else (
             0.0 if "Float" in inner_type else 0
@@ -522,7 +524,7 @@ def build_native_block(columns, *, block_info=False):
     """Build a ClickHouse Native format block from column specs.
 
     Each column is (name, type_name, values).
-    Supports: Bool, Int8/16/32/64/128/256, UInt8/16/32/64/128/256, Float32,
+    Supports: Nothing, Bool, Int8/16/32/64/128/256, UInt8/16/32/64/128/256, Float32,
     Float64, String, FixedString(N),
     UUID, IPv4, IPv6, Enum8/16, Decimal, temporal, Nullable(*), LowCardinality(*),
     and Array(*) over those inner types. For Array(T) each value is a sequence of
@@ -813,6 +815,150 @@ class TestEncodeNativeBlock:
             _ch_core.encode_native_block(["v"], ["JSON"], [[{"a": 1}]], 1)
         with pytest.raises(ValueError, match="label"):
             _ch_core.encode_native_block(["e"], ["Enum8('ok' = 1)"], [["missing"]], 1)
+
+
+class TestNothing:
+    @pytest.mark.parametrize(
+        ("type_name", "values", "expected"),
+        [
+            ("Nothing", [13, None, "ignored"], [None, None, None]),
+            ("Nullable(Nothing)", [13, None, "ignored"], [None, None, None]),
+            (
+                "Array(Nothing)",
+                [[13, None], [], ["ignored"]],
+                [[None, None], [], [None]],
+            ),
+            (
+                "Array(Nullable(Nothing))",
+                [[None, None], [], [None]],
+                [[None, None], [], [None]],
+            ),
+            (
+                "Tuple(Nothing, UInt8)",
+                [(13, 13), (None, 79), ("ignored", 5)],
+                [(None, 13), (None, 79), (None, 5)],
+            ),
+            (
+                "Tuple(Nullable(Nothing), UInt8)",
+                [(None, 13), (None, 79), (None, 5)],
+                [(None, 13), (None, 79), (None, 5)],
+            ),
+            (
+                "Array(Tuple(Nothing, UInt8))",
+                [[(13, 13), (None, 79)], [], [("ignored", 5)]],
+                [[(None, 13), (None, 79)], [], [(None, 5)]],
+            ),
+            (
+                "Map(Nothing, UInt8)",
+                [{13: 13}, {}, {"ignored": 79}],
+                [{None: 13}, {}, {None: 79}],
+            ),
+            (
+                "Map(UInt8, Nothing)",
+                [{13: 13}, {}, {79: "ignored"}],
+                [{13: None}, {}, {79: None}],
+            ),
+            (
+                "Map(UInt8, Nullable(Nothing))",
+                [{13: None}, {}, {79: None}],
+                [{13: None}, {}, {79: None}],
+            ),
+        ],
+    )
+    def test_encode_decode_type_matrix_and_all_object_exits(self, type_name, values, expected):
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        assert encoded == build_native_block([("v", type_name, values)])
+
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == expected
+        assert list(batch.to_python_columns()[0]) == expected
+        assert [row[0] for row in batch.to_python_rows()] == expected
+
+    def test_noncanonical_wire_placeholder_bytes_are_ignored(self):
+        data = build_native_block_from_bodies(
+            [
+                ("v", "Nothing", b"\x00\x7f\xff"),
+                ("sentinel", "UInt8", bytes([13, 79, 5])),
+            ],
+            3,
+        )
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == [None, None, None]
+        assert list(batch.column_data(1)) == [13, 79, 5]
+
+    def test_nullable_nothing_with_structurally_valid_row_is_still_none(self):
+        data = build_native_block_from_bodies([("v", "Nullable(Nothing)", b"\x00\x01" + b"01")], 2)
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == [None, None]
+
+    @pytest.mark.parametrize("type_name", ["Nothing", "Nullable(Nothing)", "Array(Nothing)"])
+    def test_zero_rows(self, type_name):
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [[]], 0)
+        assert encoded == build_native_block([("v", type_name, [])])
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == []
+
+    @pytest.mark.parametrize("container", [list, tuple, _NdarrayLikeColumn])
+    def test_python_values_only_affect_nullable_structural_mask(self, container):
+        values = container([13, None, "ignored"])
+        plain = _ch_core.encode_native_block(["v"], ["Nothing"], [values], 3)
+        nullable = _ch_core.encode_native_block(["v"], ["Nullable(Nothing)"], [values], 3)
+        assert plain == build_native_block([("v", "Nothing", [13, None, "ignored"])])
+        assert nullable == build_native_block([("v", "Nullable(Nothing)", [13, None, "ignored"])])
+
+    def test_exact_bytes(self):
+        # Pin the canonical 0x30 marker run independently of build_native_block.
+        plain = _ch_core.encode_native_block(["v"], ["Nothing"], [[None, None, None]], 3)
+        assert plain == build_native_block_from_bodies([("v", "Nothing", b"\x30\x30\x30")], 3)
+        nullable = _ch_core.encode_native_block(["v"], ["Nullable(Nothing)"], [[None, 13, None]], 3)
+        assert nullable == build_native_block_from_bodies(
+            [("v", "Nullable(Nothing)", b"\x01\x00\x01" + b"\x30\x30\x30")], 3
+        )
+
+    def test_multi_entry_map_nothing_keys_collapse(self):
+        # Dict representation: all-None keys collide, keeping the last value.
+        data = build_native_block_from_bodies(
+            [("v", "Map(Nothing, UInt8)", b"\x02\x00\x00\x00\x00\x00\x00\x00" + b"00" + bytes([13, 79]))],
+            1,
+        )
+        batch = _ch_core.ColBatch.decode_native(data)
+        assert list(batch.column_data(0)) == [{None: 79}]
+
+    @pytest.mark.parametrize("type_name", ["nothing", "NOTHING", "Nothing "])
+    def test_type_name_is_case_sensitive(self, type_name):
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["v"], [type_name], [[]], 0)
+
+    @pytest.mark.parametrize(
+        "type_name",
+        ["LowCardinality(Nothing)", "LowCardinality(Nullable(Nothing))"],
+    )
+    def test_low_cardinality_nothing_rejected(self, type_name):
+        with pytest.raises(NotImplementedError, match="unsupported LowCardinality"):
+            _ch_core.encode_native_block(["v"], [type_name], [[]], 0)
+
+    def test_truncated_marker_run_rejected(self):
+        data = build_native_block_from_bodies([("v", "Nothing", b"00")], 3)
+        with pytest.raises(EOFError):
+            _ch_core.ColBatch.decode_native(data)
+
+    def test_arrow_null_type(self):
+        pa = pytest.importorskip("pyarrow")
+        encoded = _ch_core.encode_native_block(
+            ["v", "n", "a"],
+            ["Nothing", "Nullable(Nothing)", "Array(Nothing)"],
+            [[None, None], [None, None], [[None], []]],
+            2,
+        )
+        table = pa.RecordBatchReader.from_stream(_ch_core.ColBatch.decode_native(encoded)).read_all()
+        assert table.schema.types == [pa.null(), pa.null(), pa.large_list(pa.null())]
+        assert table.schema.field("v").nullable
+        assert table.schema.field("n").nullable
+        assert table.column("v").to_pylist() == [None, None]
+        assert table.column("n").to_pylist() == [None, None]
+        assert table.column("a").to_pylist() == [[None], []]
 
 
 class TestEncodeFastPaths:

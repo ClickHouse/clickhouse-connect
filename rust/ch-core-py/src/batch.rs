@@ -1306,6 +1306,17 @@ unsafe fn fill_column<S>(
 where
     S: FnMut(usize, *mut ffi::PyObject),
 {
+    if matches!(col, Column::Nothing(_)) {
+        // Nothing has no host value. Its optional bitmap only preserves the
+        // structural null map of Nullable(Nothing) for Native re-encoding;
+        // both valid and invalid bits materialize as Python None. Keep this
+        // as a column-wide fill so flat results do not check that bitmap or
+        // redispatch the Column enum for every row.
+        for i in 0..rows {
+            sink(i, none_owned_ptr());
+        }
+        return Ok(());
+    }
     if fill_fixed_width(py, col, ctx, rows, sink)? {
         return Ok(());
     }
@@ -1586,9 +1597,10 @@ unsafe fn column_value_nonnull_ptr(
         Column::AggregateState(_) => Err(PyNotImplementedError::new_err(
             "AggregateFunction Python object materialization is not implemented",
         )),
-        Column::Nothing(_) => Err(PyNotImplementedError::new_err(
-            "Nothing Python object materialization is not implemented",
-        )),
+        // The bulk fill above serves top-level and Tuple/Map column runs.
+        // This per-cell arm is needed for Array(Nothing) and other recursive
+        // container paths.
+        Column::Nothing(_) => Ok(none_owned_ptr()),
         Column::Date(c) => Ok(make_date(py, c.values[index] as i64)?.into_ptr()),
         Column::Date32(c) => Ok(make_date(py, c.values[index] as i64)?.into_ptr()),
         Column::DateTime(c) => Ok(make_datetime(py, c.values[index] as i64, 0, ctx)?.into_ptr()),

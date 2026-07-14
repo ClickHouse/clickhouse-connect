@@ -4,7 +4,7 @@ use std::ffi::{c_int, c_long};
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::buffer::{Element, PyBuffer};
-use pyo3::exceptions::{PyNotImplementedError, PyValueError};
+use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -17,7 +17,7 @@ use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn, MapColumn,
-    PrimitiveColumn, TupleColumn, Utf8Column,
+    NothingColumn, PrimitiveColumn, TupleColumn, Utf8Column,
 };
 use ch_core_rs::native::decode::{low_cardinality_dict_value_type, parse_ch_type};
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
@@ -165,6 +165,7 @@ fn build_column(
         return build_column(py, name, &delegate, values, row_count);
     }
     match ch_type {
+        ChType::Nothing => build_nothing_column(name, values, row_count, false),
         ChType::Nullable(inner) => build_nullable_column(py, name, inner, values, row_count),
         ChType::LowCardinality(inner) => {
             build_low_cardinality_column(py, name, inner, values, row_count)
@@ -174,6 +175,66 @@ fn build_column(
         ChType::Map(key, value) => build_map_column(py, name, key, value, values, row_count),
         _ => build_plain_column(py, name, ch_type, values, row_count),
     }
+}
+
+/// Build Nothing from a Python column without constructing per-row scalar
+/// values. Plain Nothing ignores every placeholder, matching the Python
+/// codec. Nullable(Nothing) additionally retains which placeholders were
+/// Python None so the core can emit the structural null map before the
+/// canonical Nothing marker bytes.
+fn build_nothing_column(
+    name: &str,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let column_values = ColumnValues::new(values, name)?;
+    check_row_count(name, &column_values, row_count)?;
+
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return Ok(nothing_column_from_seq(&ListSeq(list), row_count, nullable));
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return Ok(nothing_column_from_seq(
+            &TupleSeq(tuple),
+            row_count,
+            nullable,
+        ));
+    }
+
+    let validity = if nullable {
+        let mut null_map = Vec::with_capacity(row_count);
+        for row in 0..row_count {
+            null_map.push(u8::from(column_values.get_item(row)?.is_none()));
+        }
+        Some(Bitmap::from_ch_null_map(&null_map))
+    } else {
+        None
+    };
+    Ok(nothing_column(row_count, validity))
+}
+
+fn nothing_column_from_seq<S: FastSeq>(seq: &S, row_count: usize, nullable: bool) -> Column {
+    // The unsafe seq reads below are in bounds only under this equality.
+    assert_eq!(seq.size(), row_count);
+    let validity = nullable.then(|| {
+        let mut null_map = Vec::with_capacity(row_count);
+        for row in 0..row_count {
+            // SAFETY: row < row_count == seq.size(), the sequence is borrowed
+            // while the GIL is held, and comparing to Py_None runs no Python.
+            let value = unsafe { seq.get(row) };
+            null_map.push(u8::from(value == unsafe { ffi::Py_None() }));
+        }
+        Bitmap::from_ch_null_map(&null_map)
+    });
+    nothing_column(row_count, validity)
+}
+
+fn nothing_column(row_count: usize, validity: Option<Bitmap>) -> Column {
+    Column::Nothing(match validity {
+        Some(validity) => NothingColumn::new_nullable(row_count, validity),
+        None => NothingColumn::new(row_count),
+    })
 }
 
 /// Build an `Array(T)` column: each row is a sequence of elements, flattened
@@ -461,6 +522,7 @@ fn build_element_column(
         return build_element_column(py, name, &delegate, ptrs);
     }
     match ch_type {
+        ChType::Nothing => Ok(nothing_column_from_seq(&seq, row_count, false)),
         ChType::Array(inner) => array_column_from_seq(py, name, inner, &seq, row_count),
         ChType::Tuple(elements) => {
             tuple_column_from_seq(py, name, elements, &seq, row_count, false)
@@ -474,6 +536,9 @@ fn build_element_column(
             }
             if let ChType::Tuple(elements) = inner.as_ref() {
                 return tuple_column_from_seq(py, name, elements, &seq, row_count, true);
+            }
+            if matches!(inner.as_ref(), ChType::Nothing) {
+                return Ok(nothing_column_from_seq(&seq, row_count, true));
             }
             if matches!(
                 inner.as_ref(),
@@ -966,6 +1031,7 @@ fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<PyAny>> {
     Ok(match ch_type {
         ChType::Nullable(_) => py.None(),
         ChType::LowCardinality(inner) => default_pyobject(py, inner)?,
+        ChType::Nothing => py.None(),
         ChType::Bool => PyBool::new(py, false).to_owned().into_any().unbind(),
         ChType::String | ChType::FixedString(_) => PyString::new(py, "").into_any().unbind(),
         ChType::Array(_) => PyList::empty(py).into_any().unbind(),
@@ -1036,6 +1102,9 @@ fn build_nullable_column(
     }
     if let ChType::Tuple(elements) = inner {
         return build_tuple_column(py, name, elements, values, row_count, true);
+    }
+    if matches!(inner, ChType::Nothing) {
+        return build_nothing_column(name, values, row_count, true);
     }
     if matches!(
         inner,
@@ -3468,8 +3537,8 @@ fn column_from_scalars(
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
             "AggregateFunction insert conversion is not implemented",
         )),
-        ChType::Nothing => Err(PyNotImplementedError::new_err(
-            "Nothing insert conversion is not implemented",
+        ChType::Nothing => Err(PyRuntimeError::new_err(
+            "internal error: Nothing columns use the length-only builder",
         )),
         ChType::Date => primitive_column!(scalars, validity, Date, Date, u16),
         ChType::Date32 => primitive_column!(scalars, validity, Date32, Date32, i32),
@@ -3724,8 +3793,8 @@ fn convert_scalar(
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
             "AggregateFunction insert conversion is not implemented",
         )),
-        ChType::Nothing => Err(PyNotImplementedError::new_err(
-            "Nothing insert conversion is not implemented",
+        ChType::Nothing => Err(PyRuntimeError::new_err(
+            "internal error: Nothing columns use the length-only builder",
         )),
         ChType::String => Ok(Scalar::Bytes(bytes_value(value, column, row, "String")?)),
         ChType::FixedString(width) => Ok(Scalar::Bytes(fixed_string_value(
@@ -3820,8 +3889,8 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
             "AggregateFunction insert conversion is not implemented",
         )),
-        ChType::Nothing => Err(PyNotImplementedError::new_err(
-            "Nothing insert conversion is not implemented",
+        ChType::Nothing => Err(PyRuntimeError::new_err(
+            "internal error: Nothing columns use the length-only builder",
         )),
         ChType::String => Ok(Scalar::Bytes(Vec::new())),
         ChType::FixedString(width) => Ok(Scalar::Bytes(vec![0; *width])),

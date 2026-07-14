@@ -31,7 +31,7 @@ handoff for Python integration work.
   inserts use `EncodeOptions { protocol_revision: 0 }`, so there is no
   `BlockInfo` preamble and no per-column custom-serialization marker.
 - **Current type scope:** the first binding encoder targets the upstream
-  encodable set: `Bool`, fixed-width numerics, floats, `String`,
+  encodable set: `Nothing`, `Bool`, fixed-width numerics, floats, `String`,
   `FixedString(N)`, `Date`, `Date32`, `DateTime`, `DateTime64(P[, tz])`, `UUID`,
   `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Array(T)`, `Tuple(...)`
   (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Nullable(T)`, and
@@ -73,6 +73,16 @@ handoff for Python integration work.
   Python before reading the response body, so once a query is eligible there is no
   mid-stream fallback: an unsupported type raises mid-stream in both `rust` and
   `rust_strict` mode rather than routing to Python.
+- **Nothing.** Decode materializes both bare `Nothing` and `Nullable(Nothing)`
+  as Python `None` regardless of the latter's structural null map. The flat
+  object exit uses a column-wide fill, while recursive Array/Tuple/Map paths use
+  the same per-cell policy. Arrow remains the core's zero-copy Null export, and
+  the pandas exits ride the object path via a `Nothing._finalize_column`
+  override in the Python datatypes (`base_type` is not a pandas dtype).
+  Encode builds a length-only column: bare `Nothing` ignores Python placeholder
+  values, matching the Python codec, and `Nullable(Nothing)` scans them only to
+  retain the Native null map before the canonical one-byte marker run.
+  `LowCardinality(Nothing)` remains invalid, as required by ClickHouse.
 - **Name-decoration aliases (`SimpleAggregateFunction`, geo, `Nested`).** These add
   no new `Column` variant. The core resolves each to a physical type via
   `ChType::physical_delegate` (`Point` -> unnamed `Tuple(Float64, Float64)`, the five
