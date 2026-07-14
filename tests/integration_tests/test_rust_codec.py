@@ -190,6 +190,72 @@ def test_rust_codec_time_parity(client_factory, call, test_config):
             pd.testing.assert_frame_equal(rust_df, python_df)
 
 
+def test_rust_codec_interval_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = (
+        "SELECT toIntervalYear(-13), toIntervalQuarter(79), toIntervalMonth(-13), "
+        "toIntervalWeek(79), toIntervalDay(-13), toIntervalHour(79), "
+        "toIntervalMinute(-13), toIntervalSecond(79), toIntervalMillisecond(-13), "
+        "toIntervalMicrosecond(79), toIntervalNanosecond(-13), 'sentinel'"
+    )
+
+    rust_result = call(rust_client.query, query)
+    python_result = call(python_client.query, query)
+    assert rust_result.result_rows == python_result.result_rows
+    assert [ch_type.name for ch_type in rust_result.column_types] == [ch_type.name for ch_type in python_result.column_types]
+
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    parity_queries = [
+        "SELECT toIntervalDay(v) AS c FROM values('v Int64', (-13), (0), (79))",
+        "SELECT toIntervalSecond(v) AS c FROM values('v Int64', (-13), (0), (79))",
+        "SELECT toIntervalDay(v) AS c FROM values('v Nullable(Int64)', (-13), (NULL), (79))",
+        "SELECT toIntervalNanosecond(v) AS c FROM values('v Nullable(Int64)', (-13), (NULL), (79))",
+        "SELECT [toIntervalMinute(-13), toIntervalMinute(79)] AS c",
+        "SELECT tuple(toIntervalSecond(-13), 'x') AS c",
+        "SELECT [CAST(NULL AS Nullable(IntervalHour)), toIntervalHour(79)] AS c",
+        "SELECT map(toIntervalDay(-13), 'x') AS c",
+    ]
+    for parity_query in parity_queries:
+        rust_np = call(rust_client.query_np, parity_query)
+        python_np = call(python_client.query_np, parity_query)
+        assert rust_np.dtype == python_np.dtype
+        np.testing.assert_array_equal(rust_np, python_np)
+
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, parity_query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, parity_query, use_extended_dtypes=use_extended_dtypes)
+            assert rust_df["c"].dtype == python_df["c"].dtype
+            pd.testing.assert_frame_equal(rust_df, python_df)
+
+    lc_query = "SELECT toLowCardinality(toIntervalHour(v)) AS c FROM values('v Int64', (13), (79), (13))"
+    rust_df = call(rust_client.query_df, lc_query)
+    python_df = call(python_client.query_df, lc_query)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+
+    table = f"rc_ins_interval_{client_mode}"
+    schema = (
+        "id UInt32, d IntervalDay, n Nullable(IntervalHour), a Array(IntervalMinute), "
+        "t Tuple(IntervalSecond, String), "
+        "at Array(Tuple(IntervalMillisecond, IntervalMonth)), m Map(IntervalDay, String)"
+    )
+    rows = [
+        [0, -13, None, [-13, 79], (-13, "x"), [(-13, 1), (79, -2)], {-13: "x"}],
+        [1, 79, 13, [], (79, "y"), [], {}],
+    ]
+    try:
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+        call(python_client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(rust_client.insert, table, rows, column_names=["id", "d", "n", "a", "t", "at", "m"])
+
+        expected = [tuple(row) for row in rows]
+        assert call(rust_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows == expected
+        assert call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows == expected
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
 @pytest.mark.parametrize(
     "expr",
     [

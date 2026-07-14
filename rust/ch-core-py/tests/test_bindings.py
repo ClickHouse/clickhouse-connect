@@ -84,6 +84,20 @@ _WIDE_TYPES = {
     "UInt256": (32, False),
 }
 
+_INTERVAL_TYPES = (
+    "IntervalYear",
+    "IntervalQuarter",
+    "IntervalMonth",
+    "IntervalWeek",
+    "IntervalDay",
+    "IntervalHour",
+    "IntervalMinute",
+    "IntervalSecond",
+    "IntervalMillisecond",
+    "IntervalMicrosecond",
+    "IntervalNanosecond",
+)
+
 
 def _temporal_struct_fmt(inner_type: str):
     """Wire struct format for a temporal type, or None if not temporal.
@@ -104,6 +118,8 @@ def _temporal_struct_fmt(inner_type: str):
         return "<i"  # i32 seconds
     if inner_type.startswith("Time64("):
         return "<q"  # i64 ticks
+    if inner_type in _INTERVAL_TYPES:
+        return "<q"  # i64 count in the named interval unit
     return None
 
 
@@ -634,6 +650,52 @@ class TestEncodeNativeBlock:
             dt.datetime(1970, 1, 1, 0, 0, 0, 999000),
         ]
 
+    @pytest.mark.parametrize("type_name", _INTERVAL_TYPES)
+    def test_interval_round_trip_preserves_kind_and_signed_i64(self, type_name):
+        values = [-(2**63), -79, 0, 13, 2**63 - 1]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+
+        assert encoded == build_native_block([("v", type_name, values)])
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name]
+        assert list(batch.column_data(0)) == values
+        assert list(batch.to_python_columns()[0]) == values
+        assert batch.to_python_rows() == [(value,) for value in values]
+
+    def test_interval_wrappers_and_containers_round_trip(self):
+        columns = [
+            ("scalar", "IntervalDay", [-13, 0, 79]),
+            ("nullable", "Nullable(IntervalHour)", [-13, None, 79]),
+            ("array", "Array(IntervalMinute)", [[-13, 79], [], [0]]),
+            ("tuple", "Tuple(IntervalSecond, String)", [(-13, "x"), (0, "y"), (79, "z")]),
+            (
+                "array_tuple",
+                "Array(Tuple(IntervalMillisecond, IntervalMonth))",
+                [[(-13, 1), (79, -2)], [], [(0, 3)]],
+            ),
+            ("map", "Map(IntervalDay, String)", [{-13: "x"}, {}, {79: "z"}]),
+            ("low_cardinality", "LowCardinality(IntervalHour)", [13, 79, 13]),
+        ]
+        encoded = _ch_core.encode_native_block(
+            [name for name, _, _ in columns],
+            [type_name for _, type_name, _ in columns],
+            [values for _, _, values in columns],
+            3,
+        )
+
+        assert encoded == build_native_block(columns)
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert batch.column_type_names == [type_name for _, type_name, _ in columns]
+        assert batch.to_python_columns() == [values for _, _, values in columns]
+
+    @pytest.mark.parametrize(
+        "type_name",
+        ["intervalDay", "Intervalday", "INTERVALDAY", "IntervalDays", "IntervalDay()"],
+    )
+    def test_interval_type_names_are_exact(self, type_name):
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["v"], [type_name], [[13]], 1)
+
     def test_prefix_is_prepended(self):
         payload = _ch_core.encode_native_block(["v"], ["Int8"], [[13]], 1)
         prefix = b"INSERT INTO t FORMAT Native\n"
@@ -776,11 +838,18 @@ class TestEncodeFastPaths:
             ("UInt64", [-1]),
             ("UInt64", [2**64]),
             ("Float64", [10**400]),
+            ("IntervalDay", [2**63]),
+            ("IntervalDay", [-(2**63) - 1]),
         ],
     )
     def test_out_of_range_raises_conversion_error(self, type_name, values):
         with pytest.raises(ValueError, match=f"row {len(values) - 1} cannot be converted to {type_name}"):
             self._encode(type_name, values)
+
+    @pytest.mark.parametrize("value", [1.5, "5", dt.timedelta(days=5)])
+    def test_interval_rejects_non_int_values(self, value):
+        with pytest.raises(ValueError, match="row 0 cannot be converted to IntervalDay"):
+            self._encode("IntervalDay", [value])
 
     def test_none_in_non_nullable_raises(self):
         with pytest.raises(ValueError, match='column "v" row 1 is None but Int64 is not Nullable'):
@@ -827,6 +896,7 @@ class TestEncodeFastPaths:
         [
             ("Int8", "int8", [-128, 0, 127]),
             ("Int64", "int64", [-(2**63), 0, 2**63 - 1]),
+            ("IntervalDay", "int64", [-(2**63), 0, 2**63 - 1]),
             ("UInt64", "uint64", [0, 2**64 - 1]),
             ("Float32", "float32", [0.0, -1.5, 3.25]),
             ("Float64", "float64", [0.0, -1.5, 1e300]),

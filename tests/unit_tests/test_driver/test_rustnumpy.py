@@ -23,6 +23,55 @@ class _ArrowColumn:
 
 
 @pytest.mark.parametrize(
+    ("type_name", "duration_unit"),
+    [
+        ("IntervalYear", None),
+        ("IntervalSecond", "s"),
+        ("IntervalMillisecond", "ms"),
+        ("IntervalMicrosecond", "us"),
+        ("IntervalNanosecond", "ns"),
+    ],
+)
+def test_interval_converter_returns_raw_int64_counts(monkeypatch, type_name, duration_unit):
+    np = pytest.importorskip("numpy")
+    pa = pytest.importorskip("pyarrow")
+    values = [-13, 0, 79]
+    arrow_type = pa.duration(duration_unit) if duration_unit else pa.int64()
+    wire = pa.array(values, type=arrow_type)
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+
+    converter = rustnumpy._build_converter(get_from_name(type_name), QueryContext(use_numpy=True))
+    result = converter(None, None, 0)
+
+    assert result.dtype == np.dtype("int64")
+    np.testing.assert_array_equal(result, np.array(values, dtype="int64"))
+
+
+@pytest.mark.parametrize(
+    ("type_name", "duration_unit"),
+    [
+        ("IntervalYear", None),
+        ("IntervalDay", None),
+        ("IntervalSecond", "s"),
+        ("IntervalNanosecond", "ns"),
+    ],
+)
+def test_nullable_interval_extended_dtype_returns_pandas_int64(monkeypatch, type_name, duration_unit):
+    pd = pytest.importorskip("pandas")
+    pa = pytest.importorskip("pyarrow")
+    arrow_type = pa.duration(duration_unit) if duration_unit else pa.int64()
+    wire = pa.array([-13, None, 79], type=arrow_type)
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+    context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+
+    converter = rustnumpy._build_converter(get_from_name(f"Nullable({type_name})"), context)
+    result = converter(None, None, 0)
+
+    assert str(result.dtype) == "Int64"
+    assert list(result) == [-13, pd.NA, 79]
+
+
+@pytest.mark.parametrize(
     ("type_name", "dtype", "ticks"),
     [
         ("Time", "timedelta64[s]", [-5, 0, 90_000]),

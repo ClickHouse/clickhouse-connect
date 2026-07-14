@@ -1985,6 +1985,7 @@ fn try_fast_column_seq<S: FastSeq>(
         }
         ChType::Time => prim::<TimeVal, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Time64 { .. } => prim::<Time64Val, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::Interval(_) => prim::<IntervalVal, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Uuid => uuid_seq(py, seq, ch_type, name, row_count, nullable).map(Some),
         ChType::Ipv4 => ipv4_seq(py, seq, ch_type, name, row_count, nullable).map(Some),
         ChType::Enum8 { variants } => {
@@ -2518,6 +2519,7 @@ fn try_buffer_column(
         ChType::UInt64 => buf::<u64>(py, values, row_count, nullable),
         ChType::Float32 => buf::<f32>(py, values, row_count, nullable),
         ChType::Float64 => buf::<f64>(py, values, row_count, nullable),
+        ChType::Interval(_) => buf::<IntervalVal>(py, values, row_count, nullable),
         _ => Ok(None),
     }
 }
@@ -2554,6 +2556,24 @@ fn time64_scale(precision: u8) -> i64 {
 fn max_time64_ticks(precision: u8) -> i64 {
     let scale = time64_scale(precision);
     MAX_TIME_SECONDS * scale + (scale - 1)
+}
+
+/// Reinterprets a `Vec` of a `#[repr(transparent)]` wrapper as its inner type,
+/// or the reverse, without copying.
+///
+/// # Safety
+/// Every `T` bit pattern must be a valid `U`.
+unsafe fn cast_vec<T, U>(values: Vec<T>) -> Vec<U> {
+    const {
+        assert!(std::mem::size_of::<T>() == std::mem::size_of::<U>());
+        assert!(std::mem::align_of::<T>() == std::mem::align_of::<U>());
+    }
+    let mut values = std::mem::ManuallyDrop::new(values);
+    Vec::from_raw_parts(
+        values.as_mut_ptr().cast::<U>(),
+        values.len(),
+        values.capacity(),
+    )
 }
 
 /// Temporal wire values: the fast path accepts exact raw ints only (the same
@@ -2594,16 +2614,8 @@ macro_rules! impl_fast_temporal {
             }
 
             fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
-                // SAFETY: $name is #[repr(transparent)] over $prim, so the Vec
-                // can be reinterpreted in place without copying.
-                let values = unsafe {
-                    let mut values = std::mem::ManuallyDrop::new(values);
-                    Vec::from_raw_parts(
-                        values.as_mut_ptr().cast::<$prim>(),
-                        values.len(),
-                        values.capacity(),
-                    )
-                };
+                // SAFETY: $name is #[repr(transparent)] over $prim.
+                let values = unsafe { cast_vec::<Self, $prim>(values) };
                 Column::$variant(match validity {
                     Some(validity) => PrimitiveColumn::new_nullable(values, validity),
                     None => PrimitiveColumn::new(values),
@@ -2617,6 +2629,50 @@ impl_fast_temporal!(DateVal, u16, Date);
 impl_fast_temporal!(Date32Val, i32, Date32);
 impl_fast_temporal!(DateTimeVal, u32, DateTime);
 impl_fast_temporal!(DateTime64Val, i64, DateTime64);
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct IntervalVal(i64);
+
+impl FastValue for IntervalVal {
+    const DEFAULT: Self = Self(0);
+
+    #[inline]
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        _ch_type: &ChType,
+        _fast_limit: i64,
+    ) -> Result<Self, ()> {
+        exact_long_as_i64(ptr).map(Self)
+    }
+
+    fn from_scalar(scalar: Scalar) -> PyResult<Self> {
+        match scalar {
+            Scalar::Interval(value) => Ok(Self(value)),
+            _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+        }
+    }
+
+    fn from_buffer(
+        py: Python<'_>,
+        values: &Bound<'_, PyAny>,
+        row_count: usize,
+    ) -> PyResult<Option<Vec<Self>>> {
+        // SAFETY: IntervalVal is #[repr(transparent)] over i64.
+        Ok(buffer_values::<i64>(py, values, row_count)?
+            .map(|values| unsafe { cast_vec::<i64, Self>(values) }))
+    }
+
+    fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
+        // SAFETY: IntervalVal is #[repr(transparent)] over i64.
+        let values = unsafe { cast_vec::<Self, i64>(values) };
+        Column::Interval(match validity {
+            Some(validity) => PrimitiveColumn::new_nullable(values, validity),
+            None => PrimitiveColumn::new(values),
+        })
+    }
+}
+
 impl_fast_temporal!(
     TimeVal,
     i32,
@@ -3172,6 +3228,7 @@ enum Scalar {
     DateTime64(i64),
     Time(i32),
     Time64(i64),
+    Interval(i64),
     Bytes(Vec<u8>),
     Ipv4(u32),
     Enum8(i8),
@@ -3198,6 +3255,7 @@ enum ScalarKey {
     DateTime64(i64),
     Time(i32),
     Time64(i64),
+    Interval(i64),
     Bytes(Vec<u8>),
     Ipv4(u32),
     Enum8(i8),
@@ -3225,6 +3283,7 @@ impl Scalar {
             Scalar::DateTime64(v) => ScalarKey::DateTime64(*v),
             Scalar::Time(v) => ScalarKey::Time(*v),
             Scalar::Time64(v) => ScalarKey::Time64(*v),
+            Scalar::Interval(v) => ScalarKey::Interval(*v),
             Scalar::Bytes(v) => ScalarKey::Bytes(v.clone()),
             Scalar::Ipv4(v) => ScalarKey::Ipv4(*v),
             Scalar::Enum8(v) => ScalarKey::Enum8(*v),
@@ -3281,6 +3340,12 @@ fn column_from_scalars(
         }
         ChType::Float32 => primitive_column!(scalars, validity, Float32, Float32, f32),
         ChType::Float64 => primitive_column!(scalars, validity, Float64, Float64, f64),
+        ChType::BFloat16 => Err(PyNotImplementedError::new_err(
+            "BFloat16 insert conversion is not implemented",
+        )),
+        ChType::Nothing => Err(PyNotImplementedError::new_err(
+            "Nothing insert conversion is not implemented",
+        )),
         ChType::Date => primitive_column!(scalars, validity, Date, Date, u16),
         ChType::Date32 => primitive_column!(scalars, validity, Date32, Date32, i32),
         ChType::DateTime { .. } => {
@@ -3291,6 +3356,7 @@ fn column_from_scalars(
         }
         ChType::Time => primitive_column!(scalars, validity, Time, Time, i32),
         ChType::Time64 { .. } => primitive_column!(scalars, validity, Time64, Time64, i64),
+        ChType::Interval(_) => primitive_column!(scalars, validity, Interval, Interval, i64),
         ChType::String => build_utf8_column(scalars, validity),
         ChType::FixedString(width) => build_fixed_binary_column(scalars, *width, validity),
         ChType::Uuid => build_uuid_column(scalars, validity),
@@ -3522,6 +3588,12 @@ fn convert_scalar(
             .extract::<f64>()
             .map(Scalar::Float64)
             .map_err(|_| conversion_error(column, row, "Float64")),
+        ChType::BFloat16 => Err(PyNotImplementedError::new_err(
+            "BFloat16 insert conversion is not implemented",
+        )),
+        ChType::Nothing => Err(PyNotImplementedError::new_err(
+            "Nothing insert conversion is not implemented",
+        )),
         ChType::String => Ok(Scalar::Bytes(bytes_value(value, column, row, "String")?)),
         ChType::FixedString(width) => Ok(Scalar::Bytes(fixed_string_value(
             value, *width, column, row,
@@ -3559,6 +3631,10 @@ fn convert_scalar(
         ChType::Time64 { precision } => Ok(Scalar::Time64(time64_ticks(
             value, *precision, column, row,
         )?)),
+        ChType::Interval(_) => value
+            .extract::<i64>()
+            .map(Scalar::Interval)
+            .map_err(|_| conversion_error(column, row, &ch_type.to_string())),
         ChType::Uuid => Ok(Scalar::Bytes(uuid_bytes(value, column, row)?)),
         ChType::Ipv4 => Ok(Scalar::Ipv4(ipv4_value(value, column, row)?)),
         ChType::Ipv6 => Ok(Scalar::Bytes(ipv6_bytes(value, column, row)?)),
@@ -3607,6 +3683,12 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Int256 | ChType::UInt256 => Ok(Scalar::WideInt(vec![0; 32])),
         ChType::Float32 => Ok(Scalar::Float32(0.0)),
         ChType::Float64 => Ok(Scalar::Float64(0.0)),
+        ChType::BFloat16 => Err(PyNotImplementedError::new_err(
+            "BFloat16 insert conversion is not implemented",
+        )),
+        ChType::Nothing => Err(PyNotImplementedError::new_err(
+            "Nothing insert conversion is not implemented",
+        )),
         ChType::String => Ok(Scalar::Bytes(Vec::new())),
         ChType::FixedString(width) => Ok(Scalar::Bytes(vec![0; *width])),
         ChType::Date => Ok(Scalar::Date(0)),
@@ -3615,6 +3697,7 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::DateTime64 { .. } => Ok(Scalar::DateTime64(0)),
         ChType::Time => Ok(Scalar::Time(0)),
         ChType::Time64 { .. } => Ok(Scalar::Time64(0)),
+        ChType::Interval(_) => Ok(Scalar::Interval(0)),
         ChType::Uuid => Ok(Scalar::Bytes(vec![0; 16])),
         ChType::Ipv4 => Ok(Scalar::Ipv4(0)),
         ChType::Ipv6 => Ok(Scalar::Bytes(vec![0; 16])),
@@ -4661,6 +4744,8 @@ fn twos_complement_in_place(bytes: &mut [u8]) {
     }
 }
 
+// Insert-supported subset of core's LowCardinality inner-type allowlist, not
+// a copy of it; extend only as insert support for a type lands.
 fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
     matches!(
         ch_type,
@@ -4685,6 +4770,7 @@ fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
             | ChType::Date32
             | ChType::DateTime { .. }
             | ChType::Time
+            | ChType::Interval(_)
             | ChType::Uuid
             | ChType::Ipv4
             | ChType::Ipv6

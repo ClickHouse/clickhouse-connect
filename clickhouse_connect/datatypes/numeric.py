@@ -455,45 +455,57 @@ class Decimal256(BigDecimal):
     dec_size = 256
 
 
-class IntervalNanosecond(Int32):
+class Interval(Int64, registered=False):
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.read_format(ctx) == "string":
+            return [str(x) for x in column]
+        if ctx.use_extended_dtypes and self.nullable:
+            # base_type is the interval type name, which is not a pandas dtype
+            return options.pd.array(column, dtype="Int64")
+        if ctx.use_numpy and self.nullable and (not ctx.use_none):
+            return options.np.array(column, dtype=self.np_type)
+        return column
+
+
+class IntervalNanosecond(Interval):
     pass
 
 
-class IntervalMicrosecond(Int32):
+class IntervalMicrosecond(Interval):
     pass
 
 
-class IntervalMillisecond(Int32):
+class IntervalMillisecond(Interval):
     pass
 
 
-class IntervalSecond(Int32):
+class IntervalSecond(Interval):
     pass
 
 
-class IntervalMinute(Int32):
+class IntervalMinute(Interval):
     pass
 
 
-class IntervalHour(Int32):
+class IntervalHour(Interval):
     pass
 
 
-class IntervalDay(Int32):
+class IntervalDay(Interval):
     pass
 
 
-class IntervalWeek(Int32):
+class IntervalWeek(Interval):
     pass
 
 
-class IntervalMonth(Int32):
+class IntervalMonth(Interval):
     pass
 
 
-class IntervalQuarter(Int32):
+class IntervalQuarter(Interval):
     pass
 
 
-class IntervalYear(Int32):
+class IntervalYear(Interval):
     pass

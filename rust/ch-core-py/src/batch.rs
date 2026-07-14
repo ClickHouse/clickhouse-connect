@@ -4,7 +4,7 @@ use std::ffi::c_int;
 use std::ffi::{c_char, c_long, CString};
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
+use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -865,12 +865,15 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::UInt64(c) => c.validity.as_ref(),
         Column::Float32(c) => c.validity.as_ref(),
         Column::Float64(c) => c.validity.as_ref(),
+        Column::BFloat16(c) => c.validity.as_ref(),
+        Column::Nothing(c) => c.validity.as_ref(),
         Column::Date(c) => c.validity.as_ref(),
         Column::Date32(c) => c.validity.as_ref(),
         Column::DateTime(c) => c.validity.as_ref(),
         Column::DateTime64(c) => c.validity.as_ref(),
         Column::Time(c) => c.validity.as_ref(),
         Column::Time64(c) => c.validity.as_ref(),
+        Column::Interval(c) => c.validity.as_ref(),
         Column::Utf8(c) => c.validity.as_ref(),
         Column::FixedBinary(c) => c.validity.as_ref(),
         Column::Ipv4(c) => c.validity.as_ref(),
@@ -1089,6 +1092,13 @@ where
             &c.values[..rows],
             c.validity.as_ref(),
             |v| unsafe { ffi::PyFloat_FromDouble(v) },
+            sink,
+        )?,
+        Column::Interval(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyLong_FromLongLong(v) },
             sink,
         )?,
         Column::Time(c) => {
@@ -1555,6 +1565,12 @@ unsafe fn column_value_nonnull_ptr(
         Column::UInt128(c) | Column::UInt256(c) => wide_int_value_ptr(py, c.value(index), false),
         Column::Float32(c) => ptr_to_result(py, ffi::PyFloat_FromDouble(c.values[index].into())),
         Column::Float64(c) => ptr_to_result(py, ffi::PyFloat_FromDouble(c.values[index])),
+        Column::BFloat16(_) => Err(PyNotImplementedError::new_err(
+            "BFloat16 Python object materialization is not implemented",
+        )),
+        Column::Nothing(_) => Err(PyNotImplementedError::new_err(
+            "Nothing Python object materialization is not implemented",
+        )),
         Column::Date(c) => Ok(make_date(py, c.values[index] as i64)?.into_ptr()),
         Column::Date32(c) => Ok(make_date(py, c.values[index] as i64)?.into_ptr()),
         Column::DateTime(c) => Ok(make_datetime(py, c.values[index] as i64, 0, ctx)?.into_ptr()),
@@ -1576,6 +1592,7 @@ unsafe fn column_value_nonnull_ptr(
                 Ok(make_time64(py, c.values[index], ctx.time_scale)?.into_ptr())
             }
         }
+        Column::Interval(c) => ptr_to_result(py, ffi::PyLong_FromLongLong(c.values[index])),
         Column::Utf8(c) => utf8_or_hex_owned_ptr(py, c.value(index)),
         Column::FixedBinary(c) => {
             let bytes = c.value(index);

@@ -15,6 +15,7 @@ from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Map, Tuple
+from clickhouse_connect.datatypes.numeric import Interval
 from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
@@ -48,6 +49,11 @@ def _arrow_column(arrow_table: Any, index: int) -> Any:
 
 def _numeric_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
     return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
+
+
+def _interval_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+    column = _arrow_column(arrow_table, index)
+    return column.cast(options.arrow.int64()).to_numpy(zero_copy_only=False)
 
 
 def _make_date_convert(as_pandas: bool) -> BlockConverter:
@@ -367,6 +373,14 @@ def _make_nullable_int_convert(pd_dtype: Any) -> BlockConverter:
     return convert
 
 
+def _make_nullable_interval_convert(pd_dtype: Any) -> BlockConverter:
+    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+        column = _arrow_column(arrow_table, index).cast(options.arrow.int64())
+        return pd_dtype.__from_arrow__(column)
+
+    return convert
+
+
 def _nullable_float_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
     # The Python codec renders nullable Float32/Float64 as a plain float64 array with NaN in null positions.
     return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("float64")
@@ -391,6 +405,11 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         return _Converter(True, _make_time_convert(ch_type, context.as_pandas))
     if isinstance(ch_type, Time) and ch_type.low_card:
         return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
+    if isinstance(ch_type, Interval) and not ch_type.low_card:
+        if not ch_type.nullable:
+            return _Converter(True, _interval_convert)
+        if context.as_pandas and context.use_extended_dtypes:
+            return _Converter(True, _make_nullable_interval_convert(options.pd.Int64Dtype()))
     array_time = _array_time_leaf(ch_type)
     if array_time is not None:
         depth, leaf = array_time

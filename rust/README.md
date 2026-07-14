@@ -63,7 +63,8 @@ numbers, with scope notes in `RESULTS.md` that matter before quoting them.
 
 ## Supported types
 
-Bool, Int8 through Int64, UInt8 through UInt64, Float32/64, String,
+Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
+UInt128/256, Float32/64, String,
 FixedString, Date, Date32, DateTime, DateTime64 with precision and
 timezone, and Nullable of any of these. Anything else is rejected at decode
 time with a clean `ValueError` naming the column. Type coverage lives in
@@ -145,8 +146,9 @@ side, configurable via `CHC_BASELINE_PATH`.
 
 ## Status
 
-A read-path POC: Native decode, streaming, Arrow export, and Python
-materialization, parity-verified against clickhouse-connect v1 cell for
-cell on every supported type. No inserts, no TCP protocol, no packaging.
-The binding builds only against a local or git checkout of the private
-core. None of this code changes the `clickhouse_connect` package itself.
+The Native codec supports query decode, streaming, Arrow export, Python
+materialization, and insert encoding through the `clickhouse_connect`
+`native_codec="rust"` and `native_codec="rust_strict"` client options. It
+does not implement the TCP protocol. The binding still builds against a
+local or git checkout of the private core and is not part of the default
+package build.

@@ -62,6 +62,29 @@ def test_bfloat16_empty_and_all_null_inserts(param_client, call, table_context: 
 
 
 def test_interval_selects(param_client, call):
-    """Test that interval type selects work correctly."""
-    result = call(param_client.query, "SELECT INTERVAL 30 DAY")
-    assert result.result_rows[0][0] == 30
+    """Interval columns use signed Int64 bodies without corrupting following columns."""
+    result = call(
+        param_client.query,
+        "SELECT toIntervalYear(-13), toIntervalQuarter(79), toIntervalMonth(-13), "
+        "toIntervalWeek(79), toIntervalDay(-13), toIntervalHour(79), "
+        "toIntervalMinute(-13), toIntervalSecond(79), toIntervalMillisecond(-13), "
+        "toIntervalMicrosecond(79), toIntervalNanosecond(-13), 'sentinel'",
+    )
+    assert result.result_rows == [(-13, 79, -13, 79, -13, 79, -13, 79, -13, 79, -13, "sentinel")]
+
+
+def test_interval_dataframe(param_client, call):
+    """Nullable interval columns finalize to pandas Int64 instead of raising on the type name."""
+    pd = pytest.importorskip("pandas")
+    df = call(
+        param_client.query_df,
+        "SELECT toIntervalDay(v) AS c FROM values('v Nullable(Int64)', (-13), (NULL), (79))",
+    )
+    assert str(df["c"].dtype) == "Int64"
+    assert list(df["c"]) == [-13, pd.NA, 79]
+
+    nested = call(
+        param_client.query_df,
+        "SELECT [CAST(NULL AS Nullable(IntervalHour)), toIntervalHour(79)] AS c",
+    )
+    assert list(nested["c"][0]) == [pd.NA, 79]
