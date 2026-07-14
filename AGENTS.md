@@ -57,6 +57,7 @@ This is a typed library. It ships PEP 561 type information: `clickhouse_connect/
 - Assume a local ClickHouse server is available on `localhost`. If it is needed and unavailable, tell the user rather than guessing around it.
 - For client-level behavior changes, use the shared sync and async integration fixtures in `tests/integration_tests/conftest.py` (`client_mode`, `call`, `param_client`, `client_factory`, `consume_stream`) so tests run against both clients. See `.agents/architecture.md` for when this applies.
 - Reuse existing fixtures and patterns instead of inventing new ones.
+- Update `CHANGELOG.md` in the same PR for any user-facing change (a bug fix users can observe, a new feature, or a behavior change). Do not defer it to release time or leave it only in the PR description. Add the entry under the top-most unreleased version, following the existing format.
 
 ## Server Behavior Is Authoritative
 
