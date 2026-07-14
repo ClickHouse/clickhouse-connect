@@ -9,15 +9,16 @@ use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAnyMethods, PyBool, PyByteArray, PyBytes, PyDate, PyDateTime, PyDelta, PyDeltaAccess, PyDict,
-    PyFloat, PyFrozenSet, PyList, PySet, PyString, PyStringMethods, PyTime, PyTimeAccess, PyTuple,
+    PyAnyMethods, PyBool, PyByteArray, PyByteArrayMethods, PyBytes, PyDate, PyDateTime, PyDelta,
+    PyDeltaAccess, PyDict, PyFloat, PyFrozenSet, PyList, PySet, PyString, PyStringMethods, PyTime,
+    PyTimeAccess, PyTuple,
 };
 
 use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
-    ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn, FixedBinaryColumn, MapColumn,
-    NothingColumn, PrimitiveColumn, TupleColumn, Utf8Column,
+    AggregateStateColumn, ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn,
+    FixedBinaryColumn, MapColumn, NothingColumn, PrimitiveColumn, TupleColumn, Utf8Column,
 };
 use ch_core_rs::native::decode::{low_cardinality_dict_value_type, parse_ch_type};
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
@@ -166,6 +167,9 @@ fn build_column(
     }
     match ch_type {
         ChType::Nothing => build_nothing_column(name, values, row_count, false),
+        ChType::AggregateFunction { .. } => {
+            build_aggregate_state_column(py, name, ch_type, values, row_count)
+        }
         ChType::Nullable(inner) => build_nullable_column(py, name, inner, values, row_count),
         ChType::LowCardinality(inner) => {
             build_low_cardinality_column(py, name, inner, values, row_count)
@@ -235,6 +239,147 @@ fn nothing_column(row_count: usize, validity: Option<Bitmap>) -> Column {
         Some(validity) => NothingColumn::new_nullable(row_count, validity),
         None => NothingColumn::new(row_count),
     })
+}
+
+/// Build one AggregateFunction state column from exact serialized state bytes.
+/// State framing and validation are function-specific, so the binding only
+/// recovers Python buffer boundaries; the core encoder validates every slice
+/// against the codec registered for the declared ChType.
+fn build_aggregate_state_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Column> {
+    let column_values = ColumnValues::new(values, name)?;
+    check_row_count(name, &column_values, row_count)?;
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return aggregate_state_column_from_seq(py, name, ch_type, &ListSeq(list), row_count);
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return aggregate_state_column_from_seq(py, name, ch_type, &TupleSeq(tuple), row_count);
+    }
+    aggregate_state_column_from_rows(name, ch_type, &column_values, row_count)
+}
+
+fn aggregate_state_column_from_rows<'py, R: RowAccess<'py>>(
+    name: &str,
+    ch_type: &ChType,
+    rows: &R,
+    row_count: usize,
+) -> PyResult<Column> {
+    let mut offsets = Vec::with_capacity(row_count + 1);
+    let mut data = Vec::new();
+    offsets.push(0);
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        append_aggregate_state(&value, name, ch_type, row, &mut offsets, &mut data)?;
+    }
+    Ok(Column::AggregateState(AggregateStateColumn::new(
+        offsets, data,
+    )))
+}
+
+fn aggregate_state_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    seq: &S,
+    row_count: usize,
+) -> PyResult<Column> {
+    let mut offsets = Vec::with_capacity(row_count + 1);
+    let mut data = Vec::with_capacity(aggregate_state_size_hint(py, seq, row_count));
+    offsets.push(0);
+    for row in 0..row_count {
+        // SAFETY: row is in bounds; the size is checked against row_count up
+        // front and revalidated after any row that ran Python.
+        // `from_borrowed_ptr` takes a strong reference, so container mutation
+        // during generic buffer conversion cannot invalidate `value`.
+        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        let ran_python =
+            append_aggregate_state(&value, name, ch_type, row, &mut offsets, &mut data)?;
+        if ran_python {
+            // Dropping the strong reference can run __del__, which can resize
+            // the container, so it must precede the size revalidation.
+            drop(value);
+            check_not_resized(seq, name, row_count)?;
+        }
+    }
+    Ok(Column::AggregateState(AggregateStateColumn::new(
+        offsets, data,
+    )))
+}
+
+/// Exact data size when every row is exact bytes, read via `Py_SIZE` without
+/// running Python; 0 (no reservation) otherwise.
+fn aggregate_state_size_hint<S: FastSeq>(_py: Python<'_>, seq: &S, row_count: usize) -> usize {
+    let mut total = 0usize;
+    for row in 0..row_count {
+        // SAFETY: the GIL is held, row is in bounds, and no Python runs in
+        // this loop, so the borrowed pointer stays valid.
+        let ptr = unsafe { seq.get(row) };
+        if unsafe { ffi::PyBytes_CheckExact(ptr) } == 0 {
+            return 0;
+        }
+        total = total.saturating_add(unsafe { ffi::Py_SIZE(ptr) } as usize);
+    }
+    total
+}
+
+fn agg_offset_overflow(name: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "column {name:?} AggregateFunction state data exceeds i64 offset capacity"
+    ))
+}
+
+fn agg_state_convert_err(py: Python<'_>, name: &str, row: usize, err: PyErr) -> PyErr {
+    let wrapped = PyValueError::new_err(format!(
+        "column {name:?} row {row} cannot be converted to AggregateFunction state bytes"
+    ));
+    wrapped.set_cause(py, Some(err));
+    wrapped
+}
+
+/// Append one Python bytes-like state directly into the column data run.
+/// Returns true when generic buffer conversion may have executed Python.
+fn append_aggregate_state(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+    ch_type: &ChType,
+    row: usize,
+    offsets: &mut Vec<i64>,
+    data: &mut Vec<u8>,
+) -> PyResult<bool> {
+    if value.is_none() {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} row {row} is None but {ch_type} is not Nullable"
+        )));
+    }
+    let ran_python = if let Ok(bytes) = value.downcast::<PyBytes>() {
+        data.extend_from_slice(bytes.as_bytes());
+        false
+    } else if let Ok(bytes) = value.downcast::<PyByteArray>() {
+        // SAFETY: the GIL is held and extend_from_slice copies the complete
+        // buffer before any Python or PyO3 API can run and invalidate it.
+        data.extend_from_slice(unsafe { bytes.as_bytes() });
+        false
+    } else {
+        let buffer = PyBuffer::<u8>::get(value)
+            .map_err(|err| agg_state_convert_err(value.py(), name, row, err))?;
+        let start = data.len();
+        let end = start
+            .checked_add(buffer.item_count())
+            .ok_or_else(|| agg_offset_overflow(name))?;
+        data.resize(end, 0);
+        if let Err(err) = buffer.copy_to_slice(value.py(), &mut data[start..end]) {
+            data.truncate(start);
+            return Err(agg_state_convert_err(value.py(), name, row, err));
+        }
+        true
+    };
+    offsets.push(i64::try_from(data.len()).map_err(|_| agg_offset_overflow(name))?);
+    Ok(ran_python)
 }
 
 /// Build an `Array(T)` column: each row is a sequence of elements, flattened
@@ -523,6 +668,9 @@ fn build_element_column(
     }
     match ch_type {
         ChType::Nothing => Ok(nothing_column_from_seq(&seq, row_count, false)),
+        ChType::AggregateFunction { .. } => {
+            aggregate_state_column_from_seq(py, name, ch_type, &seq, row_count)
+        }
         ChType::Array(inner) => array_column_from_seq(py, name, inner, &seq, row_count),
         ChType::Tuple(elements) => {
             tuple_column_from_seq(py, name, elements, &seq, row_count, false)
@@ -1042,6 +1190,11 @@ fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<PyAny>> {
                 .map(|(_, element_type)| default_pyobject(py, element_type))
                 .collect::<PyResult<Vec<_>>>()?;
             PyTuple::new(py, defaults)?.into_any().unbind()
+        }
+        ChType::AggregateFunction { .. } => {
+            return Err(PyNotImplementedError::new_err(
+                "null Nullable(Tuple(...)) rows containing AggregateFunction are unsupported until the core provides a canonical placeholder state",
+            ));
         }
         // Every remaining scalar accepts a raw 0 (epoch units, enum code,
         // integer UUID/IP forms, Decimal("0")).
@@ -3887,7 +4040,7 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Float64 => Ok(Scalar::Float64(0.0)),
         ChType::BFloat16 => Ok(Scalar::BFloat16([0; 2])),
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
-            "AggregateFunction insert conversion is not implemented",
+            "AggregateFunction has no generic default state; provide exact serialized state bytes",
         )),
         ChType::Nothing => Err(PyRuntimeError::new_err(
             "internal error: Nothing columns use the length-only builder",

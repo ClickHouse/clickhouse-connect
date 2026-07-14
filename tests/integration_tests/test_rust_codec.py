@@ -406,12 +406,54 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
 
 
 @pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
-def test_rust_codec_unsupported_decode(client_factory, call, native_codec):
-    # AggregateFunction is the still-unsupported sibling of SimpleAggregateFunction,
-    # which the rust decoder now handles. The rust decoder rejects it mid-stream.
+def test_rust_codec_aggregate_function_decode(client_factory, call, native_codec):
+    client = client_factory(native_codec=native_codec)
+    result = call(
+        client.query,
+        "SELECT countState() AS count_state, sumState(toUInt64(number)) AS sum_state FROM numbers(13)",
+    )
+
+    assert result.result_rows == [(b"\x0d", (78).to_bytes(8, "little"))]
+    assert [column_type.name for column_type in result.column_types] == [
+        "AggregateFunction(count)",
+        "AggregateFunction(sum, UInt64)",
+    ]
+
+
+def test_rust_codec_aggregate_function_streaming(client_factory, call, consume_stream):
+    client = client_factory(native_codec="rust_strict")
+    query = "SELECT number, sumState(toUInt64(number)) AS state FROM numbers(3) GROUP BY number ORDER BY number"
+    expected = [(number, number.to_bytes(8, "little")) for number in range(3)]
+    rows = []
+    consume_stream(call(client.query_rows_stream, query), rows.append)
+
+    assert rows == expected
+
+
+def test_rust_codec_aggregate_function_np_df(client_factory, call):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    client = client_factory(native_codec="rust_strict")
+    query = "SELECT number, sumState(toUInt64(number)) AS state FROM numbers(3) GROUP BY number ORDER BY number"
+    expected_states = [number.to_bytes(8, "little") for number in range(3)]
+
+    array = call(client.query_np, query)
+    assert array.dtype["state"] == np.dtype("O")
+    assert array["state"].tolist() == expected_states
+
+    frame = call(client.query_df, query)
+    assert frame["state"].dtype == np.dtype("O")
+    pd.testing.assert_series_equal(
+        frame["state"],
+        pd.Series(expected_states, name="state", dtype=object),
+    )
+
+
+@pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
+def test_rust_codec_unsupported_aggregate_function_decode(client_factory, call, native_codec):
     client = client_factory(native_codec=native_codec)
     with pytest.raises(NotSupportedError):
-        call(client.query, "SELECT sumState(number) AS agg FROM numbers(3)")
+        call(client.query, "SELECT avgState(number) AS agg FROM numbers(3)")
 
 
 def test_rust_codec_nullable_tuple_decode(client_factory, call):
@@ -421,6 +463,18 @@ def test_rust_codec_nullable_tuple_decode(client_factory, call):
     query = "SELECT if(number % 2 = 0, CAST((number, 'x'), 'Nullable(Tuple(UInt64, String))'), NULL) AS t FROM numbers(4)"
     result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
     assert result.result_rows == [((0, "x"),), (None,), ((2, "x"),), (None,)]
+
+
+def test_rust_codec_nullable_tuple_aggregate_function_decode(client_factory, call):
+    # Null rows carry server-written placeholder states under the null mask,
+    # so boundary recovery must stay correct across the masked rows.
+    client = client_factory(native_codec="rust_strict")
+    query = (
+        "SELECT if(number % 2 = 0, tuple(initializeAggregation('countState', number)), NULL) AS t "
+        "FROM numbers(4)"
+    )
+    result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
+    assert result.result_rows == [((b"\x01",),), (None,), ((b"\x01",),), (None,)]
 
 
 def test_rust_codec_eligibility_routing(client_factory, call):
@@ -1062,6 +1116,53 @@ def test_rust_codec_simple_agg_insert_parity(client_factory, call, client_mode):
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_aggregate_function_insert(client_factory, call, client_mode):
+    client = client_factory(native_codec="rust_strict")
+    table = f"rc_ins_aggregate_function_{client_mode}"
+    rows = [
+        [0, b"\x00", (13).to_bytes(8, "little")],
+        [1, b"\x0d", (79).to_bytes(8, "little")],
+        [2, b"\x80\x01", (258).to_bytes(8, "little")],
+    ]
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            client.command,
+            f"CREATE TABLE {table} ("
+            "id UInt8, count_state AggregateFunction(count), "
+            "sum_state AggregateFunction(sum, UInt64)) ENGINE Memory",
+        )
+        call(
+            client.insert,
+            table,
+            rows,
+            column_names=["id", "count_state", "sum_state"],
+        )
+        result = call(
+            client.query,
+            f"SELECT id, finalizeAggregation(count_state), finalizeAggregation(sum_state) FROM {table} ORDER BY id",
+        )
+        assert result.result_rows == [(0, 0, 13), (1, 13, 79), (2, 128, 258)]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rust_codec_aggregate_function_insert_failure(client_factory, call, client_mode):
+    client = client_factory(native_codec="rust_strict")
+    table = f"rc_ins_aggregate_function_bad_{client_mode}"
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            client.command,
+            f"CREATE TABLE {table} (s AggregateFunction(sum, UInt64)) ENGINE Memory",
+        )
+        with pytest.raises(ValueError, match="not exactly one valid serialized"):
+            call(client.insert, table, [[b"\x00" * 7]], column_names=["s"])
+        assert call(client.query, f"SELECT count() FROM {table}").result_rows == [(0,)]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
 
 
 def test_rust_codec_midstream_error_df_parity(client_factory, call, consume_stream):

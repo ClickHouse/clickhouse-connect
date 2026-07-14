@@ -38,7 +38,9 @@ handoff for Python integration work.
   `LowCardinality(T)` where the upstream core permits it. It also covers the three
   name-decoration alias families the core resolves through `ChType::physical_delegate`:
   `SimpleAggregateFunction(func, T)`, the six geo types (`Point`, `Ring`, `LineString`,
-  `MultiLineString`, `Polygon`, `MultiPolygon`), and `Nested(...)`.
+  `MultiLineString`, `Polygon`, `MultiPolygon`), and `Nested(...)`. Registered
+  `AggregateFunction(...)` signatures use the core's function-specific state
+  framing and validation.
 - **numpy/pandas:** `query_np`, `query_df`, and their block and row stream variants
   now route through the Rust codec via the zero-copy Arrow exit
   (`clickhouse_connect/driver/rustnumpy.py`). Per-column dtype conversion is driven by
@@ -83,6 +85,19 @@ handoff for Python integration work.
   values, matching the Python codec, and `Nullable(Nothing)` scans them only to
   retain the Native null map before the canonical one-byte marker run.
   `LowCardinality(Nothing)` remains invalid, as required by ClickHouse.
+- **AggregateFunction.** The Python object exit returns each supported
+  function's exact serialized state as `bytes`; Arrow remains the core's
+  zero-copy LargeBinary export. Insert accepts bytes-like state values and
+  builds one i64 offsets run plus one contiguous data buffer, then delegates
+  signature and per-state validation to the core encoder. Scalar, Array, Tuple,
+  Array(Tuple), and Map-value shapes compose through the existing container
+  machinery. Direct Nullable and LowCardinality wrappers remain server-illegal,
+  and aggregate signatures without a registered core boundary codec remain
+  unsupported because Native has no generic per-state length framing. Null rows
+  in a legal `Nullable(Tuple(...))` containing an aggregate state are rejected
+  explicitly on insert until the core exposes a canonical valid placeholder
+  state; decode of such null rows works, the server writes placeholder states
+  under the null mask.
 - **Name-decoration aliases (`SimpleAggregateFunction`, geo, `Nested`).** These add
   no new `Column` variant. The core resolves each to a physical type via
   `ChType::physical_delegate` (`Point` -> unnamed `Tuple(Float64, Float64)`, the five

@@ -67,9 +67,12 @@ Nothing, Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
 UInt128/256, Float32/64, BFloat16, String,
 FixedString, Date, Date32, DateTime, DateTime64 with precision and
 timezone, Nullable, LowCardinality where ClickHouse permits it, Array, Tuple,
-Map, and the supported name-decoration aliases. Unsupported types are rejected
-at decode time with a clean `ValueError` naming the column. Type coverage lives
-in the core, so new types land there once and every binding gets them.
+Map, the supported name-decoration aliases, and the function signatures for
+`AggregateFunction` registered by the core. Aggregate states materialize as
+exact Python `bytes` and export zero-copy as Arrow LargeBinary. Unsupported
+types and aggregate signatures are rejected at decode time with a clean
+`ValueError` naming the column. Type coverage lives in the core, so new types
+land there once and every binding gets them.
 
 ## Prerequisite: the core crate
 

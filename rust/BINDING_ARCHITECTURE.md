@@ -252,6 +252,10 @@ Value policy, the binding's reason to exist, lives here:
 - **Strings.** CPython's own UTF-8 decode is the validation, a single scan.
   Only on a `UnicodeDecodeError` does the fallback render the raw bytes as
   lowercase hex, matching clickhouse-connect's String policy exactly.
+- **Aggregate states.** A supported `AggregateFunction(...)` materializes as
+  the exact serialized state `bytes` recovered by the core's function-specific
+  decoder. The binding adds no length prefix and does not interpret the state.
+  Columnar consumers use the core's zero-copy Arrow LargeBinary export instead.
 - **Temporals.** A per-column `TemporalCtx` is resolved once per call, not
   per cell, so a tz-aware column imports its `ZoneInfo` exactly once per
   table. Naive columns, meaning Date, Date32, and any DateTime in UTC or

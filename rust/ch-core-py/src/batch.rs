@@ -4,7 +4,7 @@ use std::ffi::c_int;
 use std::ffi::{c_char, c_long, CString};
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
+use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -20,7 +20,9 @@ unsafe impl Send for SendableStream {}
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::bitmap::Bitmap;
-use ch_core_rs::column::{Column, DecimalColumn, DictionaryColumn, MapColumn, TupleColumn};
+use ch_core_rs::column::{
+    AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, MapColumn, TupleColumn,
+};
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::decode::decode_all_bytes;
 use ch_core_rs::schema::ChType;
@@ -851,6 +853,22 @@ unsafe fn ptr_to_result(py: Python<'_>, ptr: *mut ffi::PyObject) -> PyResult<*mu
     }
 }
 
+/// Copy one binary value into a Python bytes object.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference; the caller must take over the
+/// reference count.
+unsafe fn bytes_owned_ptr(py: Python<'_>, bytes: &[u8]) -> PyResult<*mut ffi::PyObject> {
+    ptr_to_result(
+        py,
+        ffi::PyBytes_FromStringAndSize(
+            bytes.as_ptr() as *const c_char,
+            bytes.len() as ffi::Py_ssize_t,
+        ),
+    )
+}
+
 /// The column's validity bitmap, if any.
 fn column_validity(col: &Column) -> Option<&Bitmap> {
     match col {
@@ -1214,6 +1232,43 @@ where
     Ok(true)
 }
 
+/// Materialize serialized AggregateFunction states as exact Python bytes.
+/// The core recovers state boundaries into one offsets run and one contiguous
+/// data buffer; the offsets content is trusted as decoder-constructed, the
+/// same model as the Utf8 and FixedBinary arms. Python necessarily copies
+/// each state into its bytes object; the Arrow exit remains zero-copy for
+/// columnar consumers.
+///
+/// # Safety
+///
+/// Requires the GIL. Each pointer passed to `sink` is an owned reference the
+/// sink must take over exactly once.
+unsafe fn fill_aggregate_states<S>(
+    py: Python<'_>,
+    col: &AggregateStateColumn,
+    rows: usize,
+    sink: &mut S,
+) -> PyResult<()>
+where
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    if rows == 0 {
+        return Ok(());
+    }
+    if col.offsets.len() <= rows {
+        return Err(PyValueError::new_err(
+            "Malformed payload: invalid AggregateFunction state offsets",
+        ));
+    }
+    let mut start = col.offsets[0] as usize;
+    for (row, &end) in col.offsets[1..=rows].iter().enumerate() {
+        let end = end as usize;
+        sink(row, bytes_owned_ptr(py, &col.data[start..end])?);
+        start = end;
+    }
+    Ok(())
+}
+
 /// Materialize a dictionary (LowCardinality) column into `sink`: build each
 /// referenced dictionary value once through `column_value_nonnull_ptr`, then
 /// emit every cell as an INCREF of its cached object — the python codec's
@@ -1316,6 +1371,9 @@ where
             sink(i, none_owned_ptr());
         }
         return Ok(());
+    }
+    if let Column::AggregateState(states) = col {
+        return fill_aggregate_states(py, states, rows, sink);
     }
     if fill_fixed_width(py, col, ctx, rows, sink)? {
         return Ok(());
@@ -1594,9 +1652,7 @@ unsafe fn column_value_nonnull_ptr(
             py,
             ffi::PyFloat_FromDouble(bfloat16_to_f32(c.values[index]).into()),
         ),
-        Column::AggregateState(_) => Err(PyNotImplementedError::new_err(
-            "AggregateFunction Python object materialization is not implemented",
-        )),
+        Column::AggregateState(c) => bytes_owned_ptr(py, c.value(index)),
         // The bulk fill above serves top-level and Tuple/Map column runs.
         // This per-cell arm is needed for Array(Nothing) and other recursive
         // container paths.
@@ -1624,16 +1680,7 @@ unsafe fn column_value_nonnull_ptr(
         }
         Column::Interval(c) => ptr_to_result(py, ffi::PyLong_FromLongLong(c.values[index])),
         Column::Utf8(c) => utf8_or_hex_owned_ptr(py, c.value(index)),
-        Column::FixedBinary(c) => {
-            let bytes = c.value(index);
-            ptr_to_result(
-                py,
-                ffi::PyBytes_FromStringAndSize(
-                    bytes.as_ptr() as *const c_char,
-                    bytes.len() as ffi::Py_ssize_t,
-                ),
-            )
-        }
+        Column::FixedBinary(c) => bytes_owned_ptr(py, c.value(index)),
         // LowCardinality(T): resolve the row's dictionary index, then build the
         // inner value through this same constructor. The cell is known non-null
         // here (callers check the index validity first), so the resolved slot is
