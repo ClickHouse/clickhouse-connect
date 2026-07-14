@@ -3,6 +3,7 @@
 import datetime as dt
 import decimal
 import ipaddress
+import math
 import os
 import struct
 import subprocess
@@ -141,6 +142,17 @@ def _uuid_wire_bytes(value: uuid.UUID) -> bytes:
     ).to_bytes(8, "little")
 
 
+def _bfloat16_bytes(value) -> bytes:
+    """Truncate a Float32 to its upper 16 bits in Native little-endian order."""
+    bits32 = struct.unpack("<I", struct.pack("<f", value))[0]
+    return struct.pack("<H", bits32 >> 16)
+
+
+def _bfloat16_value(value) -> float:
+    """Return the Python float represented by ClickHouse's truncated BF16 word."""
+    return struct.unpack("<f", b"\x00\x00" + _bfloat16_bytes(value))[0]
+
+
 def _encode_lc_dict_values(dict_values, value_type):
     """Serialize a LowCardinality block dictionary (the inner type's bulk form)."""
     buf = bytearray()
@@ -157,6 +169,9 @@ def _encode_lc_dict_values(dict_values, value_type):
         width, signed = _WIDE_TYPES[value_type]
         for v in dict_values:
             buf.extend(int(v).to_bytes(width, "little", signed=signed))
+    elif value_type == "BFloat16":
+        for v in dict_values:
+            buf.extend(_bfloat16_bytes(v))
     elif (temporal_fmt := _temporal_struct_fmt(value_type)) is not None:
         for v in dict_values:
             buf.extend(struct.pack(temporal_fmt, v))
@@ -233,6 +248,9 @@ def _encode_plain_body(inner_type, values):
         )
         for v in values:
             buf.extend(struct.pack(fmt, v if v is not None else default))
+    elif inner_type == "BFloat16":
+        for v in values:
+            buf.extend(_bfloat16_bytes(v if v is not None else 0.0))
     elif inner_type in _WIDE_TYPES:
         width, signed = _WIDE_TYPES[inner_type]
         for v in values:
@@ -2027,6 +2045,162 @@ class TestDecodeFloat64:
         assert vals[0] == pytest.approx(1.5)
         assert vals[1] == pytest.approx(2.7)
         assert vals[2] == pytest.approx(-0.1)
+
+
+class TestBFloat16:
+    def test_encode_decode_type_matrix_and_all_object_exits(self):
+        columns = [
+            ("scalar", "BFloat16", [1.1, -1.1, 13.0]),
+            ("nullable", "Nullable(BFloat16)", [1.1, None, -1.1]),
+            ("array", "Array(BFloat16)", [[1.1, -1.1], [], [13.0]]),
+            (
+                "tuple",
+                "Tuple(BFloat16, String)",
+                [(1.1, "user_1"), (-1.1, "user_2"), (13.0, "user_3")],
+            ),
+            (
+                "array_tuple",
+                "Array(Tuple(BFloat16, UInt8))",
+                [[(1.1, 13), (-1.1, 79)], [], [(13.0, 5)]],
+            ),
+            (
+                "map",
+                "Map(BFloat16, String)",
+                [{1.1: "user_1"}, {}, {-1.1: "user_2"}],
+            ),
+            (
+                "low_cardinality",
+                "LowCardinality(BFloat16)",
+                [1.1, -1.1, 1.1],
+            ),
+            (
+                "low_cardinality_nullable",
+                "LowCardinality(Nullable(BFloat16))",
+                [1.1, None, 1.1],
+            ),
+        ]
+        expected = [
+            [_bfloat16_value(1.1), _bfloat16_value(-1.1), 13.0],
+            [_bfloat16_value(1.1), None, _bfloat16_value(-1.1)],
+            [[_bfloat16_value(1.1), _bfloat16_value(-1.1)], [], [13.0]],
+            [
+                (_bfloat16_value(1.1), "user_1"),
+                (_bfloat16_value(-1.1), "user_2"),
+                (13.0, "user_3"),
+            ],
+            [
+                [(_bfloat16_value(1.1), 13), (_bfloat16_value(-1.1), 79)],
+                [],
+                [(13.0, 5)],
+            ],
+            [{_bfloat16_value(1.1): "user_1"}, {}, {_bfloat16_value(-1.1): "user_2"}],
+            [_bfloat16_value(1.1), _bfloat16_value(-1.1), _bfloat16_value(1.1)],
+            [_bfloat16_value(1.1), None, _bfloat16_value(1.1)],
+        ]
+
+        encoded = _ch_core.encode_native_block(
+            [name for name, _, _ in columns],
+            [type_name for _, type_name, _ in columns],
+            [values for _, _, values in columns],
+            3,
+        )
+
+        assert encoded == build_native_block(columns)
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert list(batch.to_python_columns()) == expected
+        assert [list(column) for column in zip(*batch.to_python_rows())] == expected
+        assert [list(batch.column_data(index)) for index in range(len(columns))] == expected
+
+    @pytest.mark.parametrize("make", [list, tuple, _NdarrayLikeColumn])
+    def test_scalar_container_paths_match_golden_bytes(self, make):
+        values = [3.141592, -2.71828, 13]
+        encoded = _ch_core.encode_native_block(
+            ["v"],
+            ["BFloat16"],
+            [make(values)],
+            len(values),
+        )
+        assert encoded == build_native_block([("v", "BFloat16", values)])
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    def test_numpy_buffer_matches_list_path(self, dtype):
+        np = pytest.importorskip("numpy")
+        values = [3.141592, -2.71828, 13.0]
+        array = np.array(values, dtype=dtype)
+        from_buffer = _ch_core.encode_native_block(["v"], ["BFloat16"], [array], len(array))
+        from_list = _ch_core.encode_native_block(["v"], ["BFloat16"], [list(array)], len(array))
+        assert from_buffer == from_list == build_native_block([("v", "BFloat16", values)])
+
+    def test_numpy_strided_buffer_matches_list_path(self):
+        np = pytest.importorskip("numpy")
+        array = np.array([1.1, 0.0, -1.1, 0.0, 13.0], dtype="float32")[::2]
+        from_buffer = _ch_core.encode_native_block(["v"], ["BFloat16"], [array], len(array))
+        from_list = _ch_core.encode_native_block(["v"], ["BFloat16"], [list(array)], len(array))
+        assert from_buffer == from_list
+
+    def test_float32_buffer_signaling_nan_encodes_nan_word(self):
+        np = pytest.importorskip("numpy")
+        # sNaN whose payload lives only in the low 16 mantissa bits; plain
+        # truncation would produce 0x7F80 (+inf).
+        array = np.array([0x7F800001], dtype=np.uint32).view(np.float32)
+        encoded = _ch_core.encode_native_block(["v"], ["BFloat16"], [array], 1)
+        word = struct.unpack("<H", encoded[-2:])[0]
+        assert word & 0x7F80 == 0x7F80 and word & 0x007F, hex(word)
+        assert word == 0x7FC0
+        decoded = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+        assert math.isnan(decoded[0])
+
+    def test_special_values_and_arrow_raw_words(self):
+        pa = pytest.importorskip("pyarrow")
+        values = [0.0, -0.0, float("inf"), float("-inf"), float("nan"), 2**-133]
+        encoded = _ch_core.encode_native_block(["v"], ["BFloat16"], [values], len(values))
+        assert encoded == build_native_block([("v", "BFloat16", values)])
+
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        decoded = list(batch.column_data(0))
+        assert decoded[:4] == [0.0, -0.0, float("inf"), float("-inf")]
+        assert math.copysign(1.0, decoded[1]) == -1.0
+        assert math.isnan(decoded[4])
+        assert decoded[5] == 2**-133
+
+        arrow_column = pa.RecordBatchReader.from_stream(batch).read_all().column("v")
+        assert arrow_column.type == pa.binary(2)
+        assert arrow_column.to_pylist() == [_bfloat16_bytes(value) for value in values]
+
+    def test_nullable_all_null_and_zero_rows(self):
+        values = [None, None, None]
+        encoded = _ch_core.encode_native_block(
+            ["v"], ["Nullable(BFloat16)"], [values], len(values)
+        )
+        assert encoded == build_native_block([("v", "Nullable(BFloat16)", values)])
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
+
+        empty = _ch_core.encode_native_block(["v"], ["BFloat16"], [[]], 0)
+        assert empty == build_native_block([("v", "BFloat16", [])])
+        assert list(_ch_core.ColBatch.decode_native(empty).column_data(0)) == []
+
+    @pytest.mark.parametrize(
+        "type_name",
+        ["bfloat16", "Bfloat16", "BFLOAT16", "BFloat16()", "BFloat32"],
+    )
+    def test_type_name_is_exact(self, type_name):
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["v"], [type_name], [[13.0]], 1)
+
+    def test_invalid_value_names_row_and_type(self):
+        with pytest.raises(ValueError, match='column "v" row 1 cannot be converted to BFloat16'):
+            _ch_core.encode_native_block(["v"], ["BFloat16"], [[13.0, "invalid"]], 2)
+
+    @pytest.mark.parametrize("make", [list, tuple, _NdarrayLikeColumn])
+    def test_finite_float32_overflow_is_rejected(self, make):
+        with pytest.raises(ValueError, match='column "v" row 1 cannot be converted to BFloat16'):
+            _ch_core.encode_native_block(["v"], ["BFloat16"], [make([13.0, 1e300])], 2)
+
+    def test_float64_buffer_finite_float32_overflow_is_rejected(self):
+        np = pytest.importorskip("numpy")
+        values = np.array([13.0, 1e300], dtype="float64")
+        with pytest.raises(ValueError, match='column "v" row 1 cannot be converted to BFloat16'):
+            _ch_core.encode_native_block(["v"], ["BFloat16"], [values], len(values))
 
 
 # ---------------------------------------------------------------------------

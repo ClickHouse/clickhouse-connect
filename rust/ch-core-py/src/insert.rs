@@ -1459,14 +1459,33 @@ trait FastValue: Copy {
     /// no buffer representation or containers that do not match.
     fn from_buffer(
         py: Python<'_>,
+        name: &str,
         values: &Bound<'_, PyAny>,
         row_count: usize,
     ) -> PyResult<Option<Vec<Self>>> {
-        let _ = (py, values, row_count);
+        let _ = (py, name, values, row_count);
         Ok(None)
     }
 
     fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column;
+}
+
+/// Truncate a Float32 to ClickHouse's upper-16-bit BFloat16 representation.
+/// NaN inputs get the quiet bit set so truncation cannot yield infinity.
+#[inline]
+fn f32_to_bfloat16(value: f32) -> [u8; 2] {
+    let bits = value.to_bits() | if value.is_nan() { 0x0040_0000 } else { 0 };
+    ((bits >> 16) as u16).to_le_bytes()
+}
+
+/// Narrow a Float64 without turning a finite out-of-range value into infinity.
+#[inline]
+fn checked_f64_to_bfloat16(value: f64) -> Result<[u8; 2], ()> {
+    let narrowed = value as f32;
+    if value.is_finite() && narrowed.is_infinite() {
+        return Err(());
+    }
+    Ok(f32_to_bfloat16(narrowed))
 }
 
 /// Read an exact `int` as i64. On overflow the pending exception is cleared
@@ -1500,6 +1519,7 @@ macro_rules! impl_fast_prim_common {
 
         fn from_buffer(
             py: Python<'_>,
+            _name: &str,
             values: &Bound<'_, PyAny>,
             row_count: usize,
         ) -> PyResult<Option<Vec<Self>>> {
@@ -1623,6 +1643,63 @@ impl FastValue for f32 {
     impl_fast_prim_common!(f32, Float32);
 }
 
+/// BFloat16 wire word; a distinct type so `[u8; 2]` can serve other 2-byte
+/// wire types.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct Bf16Word([u8; 2]);
+
+impl FastValue for Bf16Word {
+    const DEFAULT: Self = Bf16Word([0; 2]);
+
+    #[inline]
+    unsafe fn from_exact(
+        ptr: *mut ffi::PyObject,
+        ch_type: &ChType,
+        fast_limit: i64,
+    ) -> Result<Self, ()> {
+        f64::from_exact(ptr, ch_type, fast_limit)
+            .and_then(checked_f64_to_bfloat16)
+            .map(Self)
+    }
+
+    fn from_scalar(scalar: Scalar) -> PyResult<Self> {
+        match scalar {
+            Scalar::BFloat16(value) => Ok(Self(value)),
+            _ => Err(PyValueError::new_err("internal scalar type mismatch")),
+        }
+    }
+
+    fn from_buffer(
+        py: Python<'_>,
+        name: &str,
+        values: &Bound<'_, PyAny>,
+        row_count: usize,
+    ) -> PyResult<Option<Vec<Self>>> {
+        if let Some(values) =
+            map_buffer_values::<f32, _, _>(py, values, row_count, |_row, value| {
+                Ok(Self(f32_to_bfloat16(value)))
+            })?
+        {
+            return Ok(Some(values));
+        }
+        map_buffer_values::<f64, _, _>(py, values, row_count, |row, value| {
+            checked_f64_to_bfloat16(value)
+                .map(Self)
+                .map_err(|_| conversion_error(name, row, "BFloat16"))
+        })
+    }
+
+    fn into_column(values: Vec<Self>, validity: Option<Bitmap>) -> Column {
+        // SAFETY: Bf16Word is #[repr(transparent)] over [u8; 2].
+        let values = unsafe { cast_vec::<Self, [u8; 2]>(values) };
+        Column::BFloat16(match validity {
+            Some(validity) => PrimitiveColumn::new_nullable(values, validity),
+            None => PrimitiveColumn::new(values),
+        })
+    }
+}
+
 /// Bool wire byte (0/1); a distinct type so u8 can serve UInt8.
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -1674,18 +1751,14 @@ impl FastValue for WireBool {
 /// maps format b'c' (char) to a 1-byte unsigned integer; both would change
 /// the encoded values versus the generic per-item path. Any such buffer
 /// falls through to the generic path instead.
-fn buffer_values<T: Element>(
-    py: Python<'_>,
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-) -> PyResult<Option<Vec<T>>> {
+fn matching_buffer<T: Element>(values: &Bound<'_, PyAny>, row_count: usize) -> Option<PyBuffer<T>> {
     let Ok(buffer) = PyBuffer::<T>::get(values) else {
-        return Ok(None);
+        return None;
     };
     let (order, code) = match *buffer.format().to_bytes() {
         [code] => (b'@', code),
         [order, code] => (order, code),
-        _ => return Ok(None),
+        _ => return None,
     };
     let native_order = match order {
         b'@' => true,
@@ -1694,12 +1767,53 @@ fn buffer_values<T: Element>(
         _ => false,
     };
     if !native_order || code == b'c' {
-        return Ok(None);
+        return None;
     }
     if buffer.dimensions() != 1 || buffer.item_count() != row_count {
-        return Ok(None);
+        return None;
     }
+    Some(buffer)
+}
+
+fn buffer_values<T: Element>(
+    py: Python<'_>,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Option<Vec<T>>> {
+    let Some(buffer) = matching_buffer::<T>(values, row_count) else {
+        return Ok(None);
+    };
     buffer.to_vec(py).map(Some)
+}
+
+/// Map a matching one-dimensional Python buffer through a per-element
+/// conversion. Contiguous buffers are read directly and allocate only the
+/// destination; strided buffers use PyO3's safe gather before the same
+/// Rust conversion.
+fn map_buffer_values<T: Element, U, F: Fn(usize, T) -> PyResult<U>>(
+    py: Python<'_>,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    map: F,
+) -> PyResult<Option<Vec<U>>> {
+    let Some(buffer) = matching_buffer::<T>(values, row_count) else {
+        return Ok(None);
+    };
+    if let Some(values) = buffer.as_slice(py) {
+        return values
+            .iter()
+            .enumerate()
+            .map(|(row, value)| map(row, value.get()))
+            .collect::<PyResult<Vec<_>>>()
+            .map(Some);
+    }
+    buffer
+        .to_vec(py)?
+        .into_iter()
+        .enumerate()
+        .map(|(row, value)| map(row, value))
+        .collect::<PyResult<Vec<_>>>()
+        .map(Some)
 }
 
 /// Borrowed positional access to an exact list or tuple.
@@ -1936,7 +2050,7 @@ fn try_fast_column(
     {
         return Ok(Some(column));
     }
-    try_buffer_column(py, ch_type, values, row_count, nullable)
+    try_buffer_column(py, name, ch_type, values, row_count, nullable)
 }
 
 /// Per-type dispatch over a borrowed-pointer run; runs once per column.
@@ -1975,6 +2089,7 @@ fn try_fast_column_seq<S: FastSeq>(
         }
         ChType::Float32 => prim::<f32, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Float64 => prim::<f64, S>(py, name, ch_type, seq, row_count, nullable),
+        ChType::BFloat16 => prim::<Bf16Word, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Date => prim::<DateVal, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::Date32 => prim::<Date32Val, S>(py, name, ch_type, seq, row_count, nullable),
         ChType::DateTime { .. } => {
@@ -2490,6 +2605,7 @@ fn try_numpy_timedelta_column(
 /// Copy from a buffer-protocol container whose element type matches exactly.
 fn try_buffer_column(
     py: Python<'_>,
+    name: &str,
     ch_type: &ChType,
     values: &Bound<'_, PyAny>,
     row_count: usize,
@@ -2497,11 +2613,12 @@ fn try_buffer_column(
 ) -> PyResult<Option<Column>> {
     fn buf<T: FastValue>(
         py: Python<'_>,
+        name: &str,
         values: &Bound<'_, PyAny>,
         row_count: usize,
         nullable: bool,
     ) -> PyResult<Option<Column>> {
-        Ok(T::from_buffer(py, values, row_count)?.map(|vals| {
+        Ok(T::from_buffer(py, name, values, row_count)?.map(|vals| {
             // A buffer holds no Python objects, so a nullable column is all-valid.
             let validity = nullable.then(|| Bitmap::all_valid(row_count));
             T::into_column(vals, validity)
@@ -2509,17 +2626,18 @@ fn try_buffer_column(
     }
 
     match ch_type {
-        ChType::Int8 => buf::<i8>(py, values, row_count, nullable),
-        ChType::Int16 => buf::<i16>(py, values, row_count, nullable),
-        ChType::Int32 => buf::<i32>(py, values, row_count, nullable),
-        ChType::Int64 => buf::<i64>(py, values, row_count, nullable),
-        ChType::UInt8 => buf::<u8>(py, values, row_count, nullable),
-        ChType::UInt16 => buf::<u16>(py, values, row_count, nullable),
-        ChType::UInt32 => buf::<u32>(py, values, row_count, nullable),
-        ChType::UInt64 => buf::<u64>(py, values, row_count, nullable),
-        ChType::Float32 => buf::<f32>(py, values, row_count, nullable),
-        ChType::Float64 => buf::<f64>(py, values, row_count, nullable),
-        ChType::Interval(_) => buf::<IntervalVal>(py, values, row_count, nullable),
+        ChType::Int8 => buf::<i8>(py, name, values, row_count, nullable),
+        ChType::Int16 => buf::<i16>(py, name, values, row_count, nullable),
+        ChType::Int32 => buf::<i32>(py, name, values, row_count, nullable),
+        ChType::Int64 => buf::<i64>(py, name, values, row_count, nullable),
+        ChType::UInt8 => buf::<u8>(py, name, values, row_count, nullable),
+        ChType::UInt16 => buf::<u16>(py, name, values, row_count, nullable),
+        ChType::UInt32 => buf::<u32>(py, name, values, row_count, nullable),
+        ChType::UInt64 => buf::<u64>(py, name, values, row_count, nullable),
+        ChType::Float32 => buf::<f32>(py, name, values, row_count, nullable),
+        ChType::Float64 => buf::<f64>(py, name, values, row_count, nullable),
+        ChType::BFloat16 => buf::<Bf16Word>(py, name, values, row_count, nullable),
+        ChType::Interval(_) => buf::<IntervalVal>(py, name, values, row_count, nullable),
         _ => Ok(None),
     }
 }
@@ -2655,6 +2773,7 @@ impl FastValue for IntervalVal {
 
     fn from_buffer(
         py: Python<'_>,
+        _name: &str,
         values: &Bound<'_, PyAny>,
         row_count: usize,
     ) -> PyResult<Option<Vec<Self>>> {
@@ -3222,6 +3341,7 @@ enum Scalar {
     WideInt(Vec<u8>),
     Float32(f32),
     Float64(f64),
+    BFloat16([u8; 2]),
     Date(u16),
     Date32(i32),
     DateTime(u32),
@@ -3249,6 +3369,7 @@ enum ScalarKey {
     WideInt(Vec<u8>),
     Float32(u32),
     Float64(u64),
+    BFloat16([u8; 2]),
     Date(u16),
     Date32(i32),
     DateTime(u32),
@@ -3277,6 +3398,7 @@ impl Scalar {
             Scalar::WideInt(v) => ScalarKey::WideInt(v.clone()),
             Scalar::Float32(v) => ScalarKey::Float32(v.to_bits()),
             Scalar::Float64(v) => ScalarKey::Float64(v.to_bits()),
+            Scalar::BFloat16(v) => ScalarKey::BFloat16(*v),
             Scalar::Date(v) => ScalarKey::Date(*v),
             Scalar::Date32(v) => ScalarKey::Date32(*v),
             Scalar::DateTime(v) => ScalarKey::DateTime(*v),
@@ -3340,8 +3462,11 @@ fn column_from_scalars(
         }
         ChType::Float32 => primitive_column!(scalars, validity, Float32, Float32, f32),
         ChType::Float64 => primitive_column!(scalars, validity, Float64, Float64, f64),
-        ChType::BFloat16 => Err(PyNotImplementedError::new_err(
-            "BFloat16 insert conversion is not implemented",
+        ChType::BFloat16 => {
+            primitive_column!(scalars, validity, BFloat16, BFloat16, [u8; 2])
+        }
+        ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
+            "AggregateFunction insert conversion is not implemented",
         )),
         ChType::Nothing => Err(PyNotImplementedError::new_err(
             "Nothing insert conversion is not implemented",
@@ -3588,8 +3713,16 @@ fn convert_scalar(
             .extract::<f64>()
             .map(Scalar::Float64)
             .map_err(|_| conversion_error(column, row, "Float64")),
-        ChType::BFloat16 => Err(PyNotImplementedError::new_err(
-            "BFloat16 insert conversion is not implemented",
+        ChType::BFloat16 => value
+            .extract::<f64>()
+            .map_err(|_| conversion_error(column, row, "BFloat16"))
+            .and_then(|value| {
+                checked_f64_to_bfloat16(value)
+                    .map(Scalar::BFloat16)
+                    .map_err(|_| conversion_error(column, row, "BFloat16"))
+            }),
+        ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
+            "AggregateFunction insert conversion is not implemented",
         )),
         ChType::Nothing => Err(PyNotImplementedError::new_err(
             "Nothing insert conversion is not implemented",
@@ -3683,8 +3816,9 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Int256 | ChType::UInt256 => Ok(Scalar::WideInt(vec![0; 32])),
         ChType::Float32 => Ok(Scalar::Float32(0.0)),
         ChType::Float64 => Ok(Scalar::Float64(0.0)),
-        ChType::BFloat16 => Err(PyNotImplementedError::new_err(
-            "BFloat16 insert conversion is not implemented",
+        ChType::BFloat16 => Ok(Scalar::BFloat16([0; 2])),
+        ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
+            "AggregateFunction insert conversion is not implemented",
         )),
         ChType::Nothing => Err(PyNotImplementedError::new_err(
             "Nothing insert conversion is not implemented",
@@ -4764,6 +4898,7 @@ fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
             | ChType::UInt256
             | ChType::Float32
             | ChType::Float64
+            | ChType::BFloat16
             | ChType::String
             | ChType::FixedString(_)
             | ChType::Date

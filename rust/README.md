@@ -64,7 +64,7 @@ numbers, with scope notes in `RESULTS.md` that matter before quoting them.
 ## Supported types
 
 Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
-UInt128/256, Float32/64, String,
+UInt128/256, Float32/64, BFloat16, String,
 FixedString, Date, Date32, DateTime, DateTime64 with precision and
 timezone, and Nullable of any of these. Anything else is rejected at decode
 time with a clean `ValueError` naming the column. Type coverage lives in

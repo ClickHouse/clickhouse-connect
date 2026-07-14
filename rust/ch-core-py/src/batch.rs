@@ -875,6 +875,7 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::Time64(c) => c.validity.as_ref(),
         Column::Interval(c) => c.validity.as_ref(),
         Column::Utf8(c) => c.validity.as_ref(),
+        Column::AggregateState(_) => None,
         Column::FixedBinary(c) => c.validity.as_ref(),
         Column::Ipv4(c) => c.validity.as_ref(),
         Column::Ipv6(c) => c.validity.as_ref(),
@@ -898,6 +899,12 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         // values column inside `entries`.
         Column::Map(_) => None,
     }
+}
+
+/// Widen one exact little-endian ClickHouse BFloat16 word to Float32.
+#[inline]
+fn bfloat16_to_f32(word: [u8; 2]) -> f32 {
+    f32::from_bits(u32::from(u16::from_le_bytes(word)) << 16)
 }
 
 /// Tight per-value loop for one primitive column: `make` is the per-value FFI
@@ -1092,6 +1099,13 @@ where
             &c.values[..rows],
             c.validity.as_ref(),
             |v| unsafe { ffi::PyFloat_FromDouble(v) },
+            sink,
+        )?,
+        Column::BFloat16(c) => fill_prim(
+            py,
+            &c.values[..rows],
+            c.validity.as_ref(),
+            |v| unsafe { ffi::PyFloat_FromDouble(bfloat16_to_f32(v).into()) },
             sink,
         )?,
         Column::Interval(c) => fill_prim(
@@ -1565,8 +1579,12 @@ unsafe fn column_value_nonnull_ptr(
         Column::UInt128(c) | Column::UInt256(c) => wide_int_value_ptr(py, c.value(index), false),
         Column::Float32(c) => ptr_to_result(py, ffi::PyFloat_FromDouble(c.values[index].into())),
         Column::Float64(c) => ptr_to_result(py, ffi::PyFloat_FromDouble(c.values[index])),
-        Column::BFloat16(_) => Err(PyNotImplementedError::new_err(
-            "BFloat16 Python object materialization is not implemented",
+        Column::BFloat16(c) => ptr_to_result(
+            py,
+            ffi::PyFloat_FromDouble(bfloat16_to_f32(c.values[index]).into()),
+        ),
+        Column::AggregateState(_) => Err(PyNotImplementedError::new_err(
+            "AggregateFunction Python object materialization is not implemented",
         )),
         Column::Nothing(_) => Err(PyNotImplementedError::new_err(
             "Nothing Python object materialization is not implemented",

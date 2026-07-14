@@ -15,7 +15,7 @@ from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Map, Tuple
-from clickhouse_connect.datatypes.numeric import Interval
+from clickhouse_connect.datatypes.numeric import BFloat16, Interval
 from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
@@ -49,6 +49,26 @@ def _arrow_column(arrow_table: Any, index: int) -> Any:
 
 def _numeric_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
     return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
+
+
+def _make_bfloat16_convert(as_extended_pandas: bool) -> BlockConverter:
+    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+        column = _arrow_column(arrow_table, index)
+        data = column.buffers()[1]
+        if data is None:
+            values = options.np.zeros(len(column), dtype=options.np.float32)
+        else:
+            words = options.np.frombuffer(data, dtype="<u2", count=len(column), offset=column.offset * 2)
+            values = words.astype(options.np.uint32)
+            values <<= options.np.uint32(16)
+            values = values.view(options.np.float32)
+        if column.null_count:
+            values[column.is_null().to_numpy(zero_copy_only=False)] = options.np.nan
+        if as_extended_pandas:
+            return options.pd.array(values, dtype="Float32")
+        return values
+
+    return convert
 
 
 def _interval_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
@@ -171,7 +191,7 @@ def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null
 
 def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
     extended_time_null = context.as_pandas and context.use_extended_dtypes
-    refinalize = extended_time_null and _needs_refinalize(ch_type)
+    leaf_predicate = _refinalize_predicate(ch_type, context)
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         try:
@@ -183,8 +203,8 @@ def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) ->
             ) from ex
         for row, value in enumerate(column):
             column[row] = _materialize_raw_times(ch_type, value, extended_time_null)
-        if refinalize:
-            column = _refinalize_leaves(ch_type, column, context)
+        if leaf_predicate is not None:
+            column = _refinalize_leaves(ch_type, column, context, leaf_predicate)
         return column
 
     return convert
@@ -250,17 +270,46 @@ def _make_low_card_time_convert(ch_type: Time, as_pandas: bool) -> BlockConverte
     return convert
 
 
-def _needs_refinalize(ch_type: ClickHouseType) -> bool:
-    # Only leaves need rewriting. Nullable leaves gain pd.NA/NaN/NaT, and Date leaves are converted from
-    # rust's datetime.date objects to the numpy datetime64 values produced by the Python codec. Time leaves
-    # are excluded: _materialize_raw_times fully renders them before refinalize runs.
-    return _any_leaf(
-        ch_type,
-        lambda leaf: (leaf.nullable and not isinstance(leaf, (Time, Time64))) or isinstance(leaf, Date),
-    )
+def _extended_refinalize_leaf(leaf: ClickHouseType) -> bool:
+    # Nullable leaves gain pd.NA/NaN/NaT, and Date leaves are converted from rust's datetime.date objects
+    # to the numpy datetime64 values produced by the Python codec. Time leaves are excluded:
+    # _materialize_raw_times fully renders them before refinalize runs.
+    return (leaf.nullable and not isinstance(leaf, (Time, Time64))) or isinstance(leaf, Date)
 
 
-def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryContext) -> list:
+def _bfloat16_refinalize_leaf(leaf: ClickHouseType) -> bool:
+    # Non-extended numpy output only densifies nullable BFloat16 leaves. Other nullable leaves keep
+    # python None, matching the Python codec.
+    return isinstance(leaf, BFloat16) and leaf.nullable and not leaf.low_card
+
+
+LeafPredicate = Callable[[ClickHouseType], bool]
+
+
+def _needs_refinalize(ch_type: ClickHouseType, leaf_predicate: LeafPredicate = _extended_refinalize_leaf) -> bool:
+    # Only leaves need rewriting.
+    return _any_leaf(ch_type, leaf_predicate)
+
+
+def _refinalize_predicate(ch_type: ClickHouseType, context: QueryContext) -> LeafPredicate | None:
+    """Select the leaf predicate for nested refinalize, or None when no leaf needs it."""
+    if not isinstance(ch_type, (Array, Tuple, Map)):
+        return None
+    if context.as_pandas and context.use_extended_dtypes:
+        predicate: LeafPredicate = _extended_refinalize_leaf
+    elif context.use_numpy:
+        predicate = _bfloat16_refinalize_leaf
+    else:
+        return None
+    return predicate if _needs_refinalize(ch_type, predicate) else None
+
+
+def _refinalize_leaves(
+    ch_type: ClickHouseType,
+    column: list,
+    context: QueryContext,
+    leaf_predicate: LeafPredicate = _extended_refinalize_leaf,
+) -> list:
     """Rebuild a rust-decoded object column so nested leaves match the Python codec.
 
     The rust object exit materializes nulls as python None. The Python codec finalizes each flat leaf
@@ -274,6 +323,7 @@ def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryCont
             ch_type.element_type,
             [item for cell in column if cell is not None for item in cell],
             context,
+            leaf_predicate,
         )
         out: list = []
         pos = 0
@@ -285,7 +335,7 @@ def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryCont
             pos += length
         return out
     if isinstance(ch_type, Tuple):
-        refinalize_indexes = [index for index, elem in enumerate(ch_type.element_types) if _needs_refinalize(elem)]
+        refinalize_indexes = [index for index, elem in enumerate(ch_type.element_types) if _needs_refinalize(elem, leaf_predicate)]
         if not refinalize_indexes:
             return column
         keyed = bool(ch_type.element_names) and isinstance(first_value(column), dict)
@@ -296,7 +346,10 @@ def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryCont
                 continue
             for slot, key in zip(columns, keys):
                 slot.append(row[key])
-        columns = [_refinalize_leaves(ch_type.element_types[index], slot, context) for index, slot in zip(refinalize_indexes, columns)]
+        columns = [
+            _refinalize_leaves(ch_type.element_types[index], slot, context, leaf_predicate)
+            for index, slot in zip(refinalize_indexes, columns)
+        ]
         rows_iter = iter(zip(*columns))
         out = []
         for row in column:
@@ -315,16 +368,18 @@ def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryCont
                 out.append(tuple(values))
         return out
     if isinstance(ch_type, Map):
-        refinalize_keys = _needs_refinalize(ch_type.key_type)
-        refinalize_values = _needs_refinalize(ch_type.value_type)
+        refinalize_keys = _needs_refinalize(ch_type.key_type, leaf_predicate)
+        refinalize_values = _needs_refinalize(ch_type.value_type, leaf_predicate)
         if not refinalize_keys and not refinalize_values:
             return column
         key_iter = None
         if refinalize_keys:
-            key_iter = iter(_refinalize_leaves(ch_type.key_type, [key for row in column if row for key in row], context))
+            key_iter = iter(_refinalize_leaves(ch_type.key_type, [key for row in column if row for key in row], context, leaf_predicate))
         value_iter = None
         if refinalize_values:
-            value_iter = iter(_refinalize_leaves(ch_type.value_type, [value for row in column if row for value in row.values()], context))
+            value_iter = iter(
+                _refinalize_leaves(ch_type.value_type, [value for row in column if row for value in row.values()], context, leaf_predicate)
+            )
         out = []
         for row in column:
             if row is None:
@@ -336,7 +391,8 @@ def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryCont
             out.append(mapped)
         return out
     # Float leaf nulls become numpy NaN via the Python codec's numpy read rather than _finalize_column.
-    if _np_kind(ch_type) == "f":
+    # BFloat16 leaves fall through to _finalize_column, which produces pd.array Float32 in extended mode.
+    if _np_kind(ch_type) == "f" and not (isinstance(ch_type, BFloat16) and not ch_type.low_card):
         return list(options.np.array(column, dtype=ch_type.np_type))
     # Aware stdlib datetimes from the rust exit become Timestamps so _finalize_column takes its tz-aware path.
     if isinstance(ch_type, DateTimeBase) and getattr(first_value(column), "tzinfo", None) is not None:
@@ -347,9 +403,7 @@ def _refinalize_leaves(ch_type: ClickHouseType, column: list, context: QueryCont
 
 
 def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
-    refinalize = (
-        context.as_pandas and context.use_extended_dtypes and isinstance(ch_type, (Array, Tuple, Map)) and _needs_refinalize(ch_type)
-    )
+    leaf_predicate = _refinalize_predicate(ch_type, context)
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         try:
@@ -359,8 +413,8 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
                 f"The rust native codec cannot decode this column for numpy/pandas output: {ex}. "
                 'Use native_codec="python" to fall back to the Python codec'
             ) from ex
-        if refinalize:
-            column = _refinalize_leaves(ch_type, column, context)
+        if leaf_predicate is not None:
+            column = _refinalize_leaves(ch_type, column, context, leaf_predicate)
         return ch_type._finalize_column(column, context)
 
     return convert
@@ -398,6 +452,9 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     # rust core's physical_delegate expansion and the Python codec's delegated read.
     if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
+    if isinstance(ch_type, BFloat16) and not ch_type.low_card:
+        extended = ch_type.nullable and context.as_pandas and context.use_extended_dtypes
+        return _Converter(True, _make_bfloat16_convert(extended))
     # LowCardinality(T) routes through the object exit regardless of inner type. Its values are correct there,
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.

@@ -469,6 +469,115 @@ def test_rust_codec_np_df_parity(client_factory, call, expr):
     pd.testing.assert_frame_equal(rust_df, python_df)
 
 
+def test_rust_codec_bfloat16_parity(client_factory, call, client_mode):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    settings = {"allow_suspicious_low_cardinality_types": 1}
+    rust_client = client_factory(native_codec="rust_strict", settings=settings)
+    python_client = client_factory(native_codec="python", settings=settings)
+    if not python_client.min_version("24.11"):
+        pytest.skip("BFloat16 requires ClickHouse 24.11+")
+
+    query = (
+        "SELECT "
+        "CAST(toFloat32(number) + 0.1 AS BFloat16) AS bf, "
+        "CAST(if(number = 1, NULL, toFloat32(number) + 0.1) AS Nullable(BFloat16)) AS nbf, "
+        "[CAST(toFloat32(number) + 0.1 AS BFloat16)] AS abf, "
+        "tuple(CAST(toFloat32(number) + 0.1 AS BFloat16), toString(number)) AS tbf, "
+        "[tuple(CAST(toFloat32(number) + 0.1 AS BFloat16), toUInt8(number))] AS atbf, "
+        "CAST(toFloat32(number % 2) + 0.1 AS LowCardinality(BFloat16)) AS lcbf "
+        "FROM numbers(3)"
+    )
+    rust_result = call(rust_client.query, query)
+    python_result = call(python_client.query, query)
+    assert rust_result.result_rows == python_result.result_rows
+    assert [ch_type.name for ch_type in rust_result.column_types] == [ch_type.name for ch_type in python_result.column_types]
+
+    numpy_query = (
+        "SELECT "
+        "CAST(toFloat32(number) + 0.1 AS BFloat16) AS bf, "
+        "CAST(if(number = 1, NULL, toFloat32(number) + 0.1) AS Nullable(BFloat16)) AS nbf "
+        "FROM numbers(3)"
+    )
+    rust_np = call(rust_client.query_np, numpy_query)
+    python_np = call(python_client.query_np, numpy_query)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_equal(rust_np, python_np)
+
+    for use_extended_dtypes in (False, True):
+        rust_df = call(rust_client.query_df, numpy_query, use_extended_dtypes=use_extended_dtypes)
+        python_df = call(python_client.query_df, numpy_query, use_extended_dtypes=use_extended_dtypes)
+        pd.testing.assert_frame_equal(rust_df, python_df)
+
+    # Nested nullable BFloat16 leaves densify to np.float32 with NaN in numpy output and pd.NA in
+    # extended output. The Nullable(Float32) tuple sibling keeps python float/None in numpy output.
+    nested_query = (
+        "SELECT "
+        "CAST(multiIf(number = 0, [toFloat32(1.5), NULL, toFloat32(-0.0)], number = 1, [NULL], number = 2, [], "
+        "[toFloat32(nan), toFloat32(79)]), 'Array(Nullable(BFloat16))') AS anbf, "
+        "CAST((if(number = 0, NULL, toFloat32(1.5)), if(number = 1, NULL, toFloat32(2.5))), "
+        "'Tuple(Nullable(BFloat16), Nullable(Float32))') AS tnbf "
+        "FROM numbers(4)"
+    )
+
+    def assert_nested_equal(rust_value, python_value):
+        assert type(rust_value) is type(python_value)
+        if isinstance(rust_value, (list, tuple)):
+            assert len(rust_value) == len(python_value)
+            for rust_item, python_item in zip(rust_value, python_value):
+                assert_nested_equal(rust_item, python_item)
+        elif rust_value is python_value:
+            pass
+        elif isinstance(rust_value, (float, np.floating)) and np.isnan(rust_value):
+            assert np.isnan(python_value)
+        else:
+            assert rust_value == python_value
+
+    rust_nested_np = call(rust_client.query_np, nested_query)
+    python_nested_np = call(python_client.query_np, nested_query)
+    assert_nested_equal(rust_nested_np.tolist(), python_nested_np.tolist())
+    assert [type(leaf) for leaf in rust_nested_np[0, 0]] == [np.float32, np.float32, np.float32]
+    assert np.isnan(rust_nested_np[0, 0][1])
+    assert isinstance(rust_nested_np[0, 1][0], np.float32) and np.isnan(rust_nested_np[0, 1][0])
+    assert rust_nested_np[1, 1][1] is None
+
+    for use_extended_dtypes in (False, True):
+        rust_df = call(rust_client.query_df, nested_query, use_extended_dtypes=use_extended_dtypes)
+        python_df = call(python_client.query_df, nested_query, use_extended_dtypes=use_extended_dtypes)
+        pd.testing.assert_frame_equal(rust_df, python_df)
+        cell = rust_df["anbf"].iloc[0]
+        if use_extended_dtypes:
+            assert cell[1] is pd.NA
+        else:
+            assert np.isnan(cell[1])
+
+    schema = (
+        "id UInt8, bf BFloat16, nbf Nullable(BFloat16), abf Array(BFloat16), "
+        "tbf Tuple(BFloat16, String), atbf Array(Tuple(BFloat16, UInt8)), "
+        "lcbf LowCardinality(BFloat16)"
+    )
+    rows = [
+        [0, 1.1, None, [1.1, -1.1], (1.1, "user_1"), [(1.1, 13)], 1.1],
+        [1, -1.1, -1.1, [], (-1.1, "user_2"), [], -1.1],
+        [2, 13.0, 79.0, [13.0], (13.0, "user_3"), [(13.0, 79)], 1.1],
+    ]
+    names = ["id", "bf", "nbf", "abf", "tbf", "atbf", "lcbf"]
+    rust_table = f"rc_ins_bf16_rust_{client_mode}"
+    python_table = f"rc_ins_bf16_python_{client_mode}"
+
+    def roundtrip(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=names)
+        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, python_table)
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+
+
 @pytest.mark.parametrize(
     "expr",
     [

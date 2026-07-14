@@ -234,7 +234,7 @@ class BFloat16(ArrayType):
         if self.nullable:
             first = next((x for x in column if x is not None), None)
             if isinstance(first, float):
-                column = [0 if (x is None or isnan(x) or isinf(x)) else x for x in column]
+                column = [0 if x is None else x for x in column]
             else:
                 column = [0 if x is None else float(x) for x in column]
         elif not isinstance(column[0], float):

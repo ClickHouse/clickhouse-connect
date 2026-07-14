@@ -22,6 +22,88 @@ class _ArrowColumn:
         return self.values.tolist()
 
 
+def test_bfloat16_converter_widens_fixed_binary_words(monkeypatch):
+    np = pytest.importorskip("numpy")
+    pa = pytest.importorskip("pyarrow")
+    wire = pa.array([b"\x8c\x3f", b"\x8c\xbf", b"\x50\x41"], type=pa.binary(2))
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+
+    converter = rustnumpy._build_converter(get_from_name("BFloat16"), QueryContext(use_numpy=True))
+    result = converter(None, None, 0)
+
+    assert converter.needs_arrow is True
+    assert result.dtype == np.dtype("float32")
+    np.testing.assert_array_equal(result, np.array([1.09375, -1.09375, 13.0], dtype="float32"))
+
+
+def test_bfloat16_converter_honors_arrow_offset_and_nulls(monkeypatch):
+    np = pytest.importorskip("numpy")
+    pa = pytest.importorskip("pyarrow")
+    source = pa.array([b"\x00\x00", b"\x8c\x3f", None, b"\x8c\xbf"], type=pa.binary(2))
+    wire = source.slice(1, 3)
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+
+    converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), QueryContext(use_numpy=True))
+    result = converter(None, None, 0)
+
+    assert result.dtype == np.dtype("float32")
+    assert result[0] == np.float32(1.09375)
+    assert np.isnan(result[1])
+    assert result[2] == np.float32(-1.09375)
+
+
+def test_simple_agg_bfloat16_routes_to_fast_converter(monkeypatch):
+    np = pytest.importorskip("numpy")
+    pa = pytest.importorskip("pyarrow")
+    wire = pa.array([b"\x8c\x3f", b"\x50\x41"], type=pa.binary(2))
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+
+    converter = rustnumpy._build_converter(get_from_name("SimpleAggregateFunction(anyLast, BFloat16)"), QueryContext(use_numpy=True))
+    result = converter(None, None, 0)
+
+    assert converter.needs_arrow is True
+    assert result.dtype == np.dtype("float32")
+    np.testing.assert_array_equal(result, np.array([1.09375, 13.0], dtype="float32"))
+
+
+def test_bfloat16_converter_empty_and_all_null(monkeypatch):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    pa = pytest.importorskip("pyarrow")
+    wire = pa.array([], type=pa.binary(2))
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+
+    converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), QueryContext(use_numpy=True))
+    result = converter(None, None, 0)
+    assert result.dtype == np.dtype("float32")
+    assert len(result) == 0
+
+    wire = pa.array([None, None], type=pa.binary(2))
+    result = converter(None, None, 0)
+    assert result.dtype == np.dtype("float32")
+    assert np.isnan(result).all()
+
+    extended_context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+    converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), extended_context)
+    result = converter(None, None, 0)
+    assert str(result.dtype) == "Float32"
+    assert list(result) == [pd.NA, pd.NA]
+
+
+def test_nullable_bfloat16_extended_converter_returns_pandas_float32(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    pa = pytest.importorskip("pyarrow")
+    wire = pa.array([b"\x8c\x3f", None, b"\x8c\xbf"], type=pa.binary(2))
+    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+    context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+
+    converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), context)
+    result = converter(None, None, 0)
+
+    assert str(result.dtype) == "Float32"
+    assert list(result) == [pd.Float32Dtype().type(1.09375), pd.NA, pd.Float32Dtype().type(-1.09375)]
+
+
 @pytest.mark.parametrize(
     ("type_name", "duration_unit"),
     [
@@ -208,7 +290,7 @@ def test_nested_time64_converter_preserves_nanoseconds():
             assert raw_time_ticks is True
             return [[(-5, -1), (13, None), (79, 1)]]
 
-    context = type("Context", (), {"as_pandas": False, "use_extended_dtypes": False})()
+    context = type("Context", (), {"as_pandas": False, "use_extended_dtypes": False, "use_numpy": True})()
     result = rustnumpy._make_nested_time_convert(ch_type, context)(None, _Batch(), 0)
 
     assert result == [
