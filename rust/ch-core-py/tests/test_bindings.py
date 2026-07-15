@@ -4409,6 +4409,27 @@ class TestAggregateFunction:
         assert encoded == expected
         assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
 
+    @pytest.mark.parametrize(
+        ("type_name", "width", "value"),
+        [
+            ("AggregateFunction(sum, Nullable(UInt8))", 8, 13),
+            ("AggregateFunction(sum, Nullable(Int32))", 8, -13),
+            ("AggregateFunction(sum, Nullable(UInt128))", 16, 79),
+            ("AggregateFunction(sum, Nullable(Decimal(9, 2)))", 16, 1300),
+            ("AggregateFunction(sum, Nullable(UInt256))", 32, 79),
+        ],
+    )
+    def test_nullable_sum_variable_width_states_round_trip(self, type_name, width, value):
+        accumulator = value.to_bytes(width, "little", signed=value < 0)
+        states = [b"\x00", b"\x01" + accumulator, b"\x80" + accumulator]
+        encoded = _ch_core.encode_native_block(["s"], [type_name], [states], len(states))
+
+        assert encoded == build_native_block_from_bodies(
+            [("s", type_name, b"".join(states))],
+            len(states),
+        )
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == states
+
     def test_nothing_uint64_state_round_trip(self):
         type_name = "AggregateFunction(nothingUInt64, Nullable(Nothing))"
         states = [b"\x00", b"\x00", b"\x00"]
@@ -4428,6 +4449,14 @@ class TestAggregateFunction:
                 [[b"\x0d", b"\x4f"], [], [b"\x80\x01"]],
             ),
             (
+                "Array(AggregateFunction(sum, Nullable(Int32)))",
+                [
+                    [b"\x00", b"\x01" + (-13).to_bytes(8, "little", signed=True)],
+                    [],
+                    [b"\x80" + (79).to_bytes(8, "little")],
+                ],
+            ),
+            (
                 "Tuple(AggregateFunction(sum, UInt64), UInt8)",
                 [((13).to_bytes(8, "little"), 5), ((79).to_bytes(8, "little"), 11)],
             ),
@@ -4443,6 +4472,17 @@ class TestAggregateFunction:
                 [[(b"\x0d", 5), (b"\x4f", 11)], [], [(b"\x80\x01", 17)]],
             ),
             (
+                "Array(Tuple(AggregateFunction(sum, Nullable(UInt64)), UInt8))",
+                [
+                    [
+                        (b"\x00", 5),
+                        (b"\x01" + (13).to_bytes(8, "little"), 11),
+                    ],
+                    [],
+                    [(b"\x80" + (79).to_bytes(8, "little"), 17)],
+                ],
+            ),
+            (
                 "Nullable(Tuple(AggregateFunction(count)))",
                 [(b"\x0d",), (b"\x4f",)],
             ),
@@ -4456,19 +4496,28 @@ class TestAggregateFunction:
         encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
         assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
 
-    def test_arrow_export_is_large_binary(self):
+    @pytest.mark.parametrize(
+        ("type_name", "states"),
+        [
+            ("AggregateFunction(count)", [b"\x0d", b"\x80\x01", b"\x05"]),
+            (
+                "AggregateFunction(sum, Nullable(UInt64))",
+                [b"\x00", b"\x01" + (13).to_bytes(8, "little"), b"\x00"],
+            ),
+        ],
+    )
+    def test_arrow_export_is_large_binary(self, type_name, states):
         pa = pytest.importorskip("pyarrow")
-        type_name = "AggregateFunction(count)"
-        states = [b"\x0d", b"\x80\x01", b"\x05"]
         native = build_native_block_from_bodies(
-            [("c", type_name, b"".join(states))],
+            [("s", type_name, b"".join(states))],
             len(states),
         )
         batch = _ch_core.ColBatch.decode_native(native)
 
         table = pa.RecordBatchReader.from_stream(batch).read_all()
-        assert table.schema.field("c").type == pa.large_binary()
-        assert table.column("c").to_pylist() == states
+        assert table.schema.field("s").type == pa.large_binary()
+        assert not table.schema.field("s").nullable
+        assert table.column("s").to_pylist() == states
 
     def test_stream_decoder_preserves_variable_state_boundaries_across_chunks(self):
         type_name = "AggregateFunction(count)"
@@ -4497,8 +4546,48 @@ class TestAggregateFunction:
         assert combined.num_chunks == 2
         assert list(combined.column_data(0)) == first_states + second_states
 
-    def test_zero_rows_preserves_schema(self):
-        type_name = "AggregateFunction(sum, UInt64)"
+    def test_nullable_sum_stream_decoder_preserves_conditional_boundaries(self):
+        type_name = "AggregateFunction(sum, Nullable(UInt64))"
+        first_states = [b"\x00", b"\x01" + (13).to_bytes(8, "little")]
+        second_states = [b"\x80" + (79).to_bytes(8, "little"), b"\x00"]
+        native = b"".join(
+            build_native_block_from_bodies(
+                [("s", type_name, b"".join(states))],
+                len(states),
+            )
+            for states in (first_states, second_states)
+        )
+        decoder = _ch_core.StreamDecoder()
+        batches = []
+        for byte in native:
+            batches.extend(decoder.feed(bytes([byte])))
+        batches.extend(decoder.finish())
+
+        combined = _ch_core.ColBatch.from_batches(batches)
+        expected = first_states + second_states
+        assert combined.num_chunks == 2
+        assert list(combined.column_data(0)) == expected
+        assert list(combined.to_python_columns()[0]) == expected
+        assert combined.to_python_rows() == [(state,) for state in expected]
+
+    @pytest.mark.parametrize("state", [b"", b"\x01", b"\x01" + b"\x0d" * 7])
+    def test_nullable_sum_truncation_is_eof(self, state):
+        native = build_native_block_from_bodies(
+            [("s", "AggregateFunction(sum, Nullable(UInt64))", state)],
+            1,
+        )
+
+        with pytest.raises(EOFError, match="Truncated Native data"):
+            _ch_core.ColBatch.decode_native(native)
+
+    @pytest.mark.parametrize(
+        "type_name",
+        [
+            "AggregateFunction(sum, UInt64)",
+            "AggregateFunction(sum, Nullable(UInt64))",
+        ],
+    )
+    def test_zero_rows_preserves_schema(self, type_name):
         native = build_native_block_from_bodies([("s", type_name, b"")], 0)
         batch = _ch_core.ColBatch.decode_native(native)
 
@@ -4527,6 +4616,26 @@ class TestAggregateFunction:
             (
                 "AggregateFunction(sum, UInt64)",
                 b"\x00" * 7,
+                "not exactly one valid serialized",
+            ),
+            (
+                "AggregateFunction(sum, Nullable(UInt64))",
+                b"",
+                "not exactly one valid serialized",
+            ),
+            (
+                "AggregateFunction(sum, Nullable(UInt64))",
+                b"\x00\x0d",
+                "not exactly one valid serialized",
+            ),
+            (
+                "AggregateFunction(sum, Nullable(UInt64))",
+                b"\x01" + b"\x0d" * 7,
+                "not exactly one valid serialized",
+            ),
+            (
+                "AggregateFunction(sum, Nullable(UInt64))",
+                b"\x01" + b"\x0d" * 9,
                 "not exactly one valid serialized",
             ),
         ],
@@ -4561,6 +4670,8 @@ class TestAggregateFunction:
             "Nullable(AggregateFunction(count))",
             "LowCardinality(AggregateFunction(count))",
             "Aggregatefunction(count)",
+            "AggregateFunction(sum, Nullable(Nothing))",
+            "AggregateFunction(sum, Nullable(String))",
         ],
     )
     def test_illegal_or_misspelled_type_is_rejected(self, type_name):

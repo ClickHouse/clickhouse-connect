@@ -410,20 +410,44 @@ def test_rust_codec_aggregate_function_decode(client_factory, call, native_codec
     client = client_factory(native_codec=native_codec)
     result = call(
         client.query,
-        "SELECT countState() AS count_state, sumState(toUInt64(number)) AS sum_state FROM numbers(13)",
+        "SELECT countState() AS count_state, "
+        "sumState(toUInt64(number)) AS sum_state, "
+        "sumState(CAST(number, 'Nullable(UInt64)')) AS nullable_sum_state, "
+        "sumState(CAST(NULL, 'Nullable(UInt64)')) AS empty_nullable_sum_state "
+        "FROM numbers(13)",
     )
 
-    assert result.result_rows == [(b"\x0d", (78).to_bytes(8, "little"))]
+    assert result.result_rows == [
+        (
+            b"\x0d",
+            (78).to_bytes(8, "little"),
+            b"\x01" + (78).to_bytes(8, "little"),
+            b"\x00",
+        )
+    ]
     assert [column_type.name for column_type in result.column_types] == [
         "AggregateFunction(count)",
         "AggregateFunction(sum, UInt64)",
+        "AggregateFunction(sum, Nullable(UInt64))",
+        "AggregateFunction(sum, Nullable(UInt64))",
     ]
 
 
 def test_rust_codec_aggregate_function_streaming(client_factory, call, consume_stream):
     client = client_factory(native_codec="rust_strict")
-    query = "SELECT number, sumState(toUInt64(number)) AS state FROM numbers(3) GROUP BY number ORDER BY number"
-    expected = [(number, number.to_bytes(8, "little")) for number in range(3)]
+    query = (
+        "SELECT number, sumState(toUInt64(number)) AS state, "
+        "sumState(CAST(number, 'Nullable(UInt64)')) AS nullable_state "
+        "FROM numbers(3) GROUP BY number ORDER BY number"
+    )
+    expected = [
+        (
+            number,
+            number.to_bytes(8, "little"),
+            b"\x01" + number.to_bytes(8, "little"),
+        )
+        for number in range(3)
+    ]
     rows = []
     consume_stream(call(client.query_rows_stream, query), rows.append)
 
@@ -434,18 +458,30 @@ def test_rust_codec_aggregate_function_np_df(client_factory, call):
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
     client = client_factory(native_codec="rust_strict")
-    query = "SELECT number, sumState(toUInt64(number)) AS state FROM numbers(3) GROUP BY number ORDER BY number"
+    query = (
+        "SELECT number, sumState(toUInt64(number)) AS state, "
+        "sumState(CAST(number, 'Nullable(UInt64)')) AS nullable_state "
+        "FROM numbers(3) GROUP BY number ORDER BY number"
+    )
     expected_states = [number.to_bytes(8, "little") for number in range(3)]
+    expected_nullable_states = [b"\x01" + state for state in expected_states]
 
     array = call(client.query_np, query)
     assert array.dtype["state"] == np.dtype("O")
+    assert array.dtype["nullable_state"] == np.dtype("O")
     assert array["state"].tolist() == expected_states
+    assert array["nullable_state"].tolist() == expected_nullable_states
 
     frame = call(client.query_df, query)
     assert frame["state"].dtype == np.dtype("O")
+    assert frame["nullable_state"].dtype == np.dtype("O")
     pd.testing.assert_series_equal(
         frame["state"],
         pd.Series(expected_states, name="state", dtype=object),
+    )
+    pd.testing.assert_series_equal(
+        frame["nullable_state"],
+        pd.Series(expected_nullable_states, name="nullable_state", dtype=object),
     )
 
 
@@ -1122,9 +1158,19 @@ def test_rust_codec_aggregate_function_insert(client_factory, call, client_mode)
     client = client_factory(native_codec="rust_strict")
     table = f"rc_ins_aggregate_function_{client_mode}"
     rows = [
-        [0, b"\x00", (13).to_bytes(8, "little")],
-        [1, b"\x0d", (79).to_bytes(8, "little")],
-        [2, b"\x80\x01", (258).to_bytes(8, "little")],
+        [0, b"\x00", (13).to_bytes(8, "little"), b"\x00"],
+        [
+            1,
+            b"\x0d",
+            (79).to_bytes(8, "little"),
+            b"\x01" + (-13).to_bytes(8, "little", signed=True),
+        ],
+        [
+            2,
+            b"\x80\x01",
+            (258).to_bytes(8, "little"),
+            b"\x80" + (79).to_bytes(8, "little"),
+        ],
     ]
     call(client.command, f"DROP TABLE IF EXISTS {table}")
     try:
@@ -1132,19 +1178,25 @@ def test_rust_codec_aggregate_function_insert(client_factory, call, client_mode)
             client.command,
             f"CREATE TABLE {table} ("
             "id UInt8, count_state AggregateFunction(count), "
-            "sum_state AggregateFunction(sum, UInt64)) ENGINE Memory",
+            "sum_state AggregateFunction(sum, UInt64), "
+            "nullable_sum_state AggregateFunction(sum, Nullable(Int32))) ENGINE Memory",
         )
         call(
             client.insert,
             table,
             rows,
-            column_names=["id", "count_state", "sum_state"],
+            column_names=["id", "count_state", "sum_state", "nullable_sum_state"],
         )
         result = call(
             client.query,
-            f"SELECT id, finalizeAggregation(count_state), finalizeAggregation(sum_state) FROM {table} ORDER BY id",
+            f"SELECT id, finalizeAggregation(count_state), finalizeAggregation(sum_state), "
+            f"finalizeAggregation(nullable_sum_state) FROM {table} ORDER BY id",
         )
-        assert result.result_rows == [(0, 0, 13), (1, 13, 79), (2, 128, 258)]
+        assert result.result_rows == [
+            (0, 0, 13, None),
+            (1, 13, 79, -13),
+            (2, 128, 258, 79),
+        ]
     finally:
         call(client.command, f"DROP TABLE IF EXISTS {table}")
 

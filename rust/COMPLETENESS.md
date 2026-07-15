@@ -89,15 +89,18 @@ handoff for Python integration work.
   function's exact serialized state as `bytes`; Arrow remains the core's
   zero-copy LargeBinary export. Insert accepts bytes-like state values and
   builds one i64 offsets run plus one contiguous data buffer, then delegates
-  signature and per-state validation to the core encoder. Scalar, Array, Tuple,
-  Array(Tuple), and Map-value shapes compose through the existing container
-  machinery. Direct Nullable and LowCardinality wrappers remain server-illegal,
-  and aggregate signatures without a registered core boundary codec remain
-  unsupported because Native has no generic per-state length framing. Null rows
-  in a legal `Nullable(Tuple(...))` containing an aggregate state are rejected
-  explicitly on insert until the core exposes a canonical valid placeholder
-  state; decode of such null rows works, the server writes placeholder states
-  under the null mask.
+  signature and per-state validation to the core encoder. This includes base
+  `sum` over a nullable numeric, Decimal, BFloat16, or Enum argument, whose
+  one-byte presence flag and conditional accumulator remain part of the opaque
+  state slice rather than becoming Python or Arrow nullability. Scalar, Array,
+  Tuple, Array(Tuple), and Map-value shapes compose through the existing
+  container machinery. Direct Nullable and LowCardinality wrappers remain
+  server-illegal, and aggregate signatures without a registered core boundary
+  codec remain unsupported because Native has no generic per-state length
+  framing. Null rows in a legal `Nullable(Tuple(...))` containing an aggregate
+  state are rejected explicitly on insert until the core exposes a canonical
+  valid placeholder state. Decode of such null rows works, the server writes
+  placeholder states under the null mask.
 - **Name-decoration aliases (`SimpleAggregateFunction`, geo, `Nested`).** These add
   no new `Column` variant. The core resolves each to a physical type via
   `ChType::physical_delegate` (`Point` -> unnamed `Tuple(Float64, Float64)`, the five
