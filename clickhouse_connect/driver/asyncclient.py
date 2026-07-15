@@ -58,7 +58,6 @@ from clickhouse_connect.driver.query import (
     TzMode,
     TzSource,
     arrow_buffer,
-    returns_empty_string_on_empty_body,
 )
 from clickhouse_connect.driver.streaming import (
     QueuedStreamSource,
@@ -732,7 +731,8 @@ class AsyncClient(Client):
         if execution.body:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, parse_command_body, execution.body)
-        if returns_empty_string_on_empty_body(bound_cmd):
+        # A result-producing statement reports its output format even when the result is empty
+        if execution.result_format is not None:
             return ""
         return QuerySummary(execution.summary)
 

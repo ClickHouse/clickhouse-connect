@@ -20,7 +20,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.query import QueryContext, QueryResult, returns_empty_string_on_empty_body
+from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
 
 if TYPE_CHECKING:
@@ -120,7 +120,8 @@ class SyncBackendClient(Client):
         execution = self._backend.execute_command(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
         if execution.body:
             return parse_command_body(execution.body)
-        if returns_empty_string_on_empty_body(bound_cmd):
+        # A result-producing statement reports its output format even when the result is empty
+        if execution.result_format is not None:
             return ""
         return QuerySummary(execution.summary)
 

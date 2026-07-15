@@ -206,6 +206,22 @@ class TestChdbCommand:
         result = client.command("CREATE TABLE cmd_ddl (a UInt32) ENGINE MergeTree ORDER BY a")
         assert isinstance(result, QuerySummary)
 
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "SELECT name FROM system.databases WHERE name = 'db_no_match_79'",
+            "SHOW TABLES LIKE 'no_match_pattern_79'",
+            "SELECT 13 AS x WHERE 0 FORMAT JSONEachRow",
+        ],
+    )
+    def test_command_empty_result_returns_empty_string(self, client, cmd):
+        # A result-producing statement with zero rows returns an empty value,
+        # not a QuerySummary, matching the HTTP client (issue #865)
+        assert client.command(cmd) == ""
+
+    def test_command_embedded_format(self, client):
+        assert client.command("SELECT 13 AS x FORMAT JSONEachRow") == '{"x":13}'
+
     def test_command_with_data(self, client):
         client.command("CREATE TABLE cmd_data (a UInt32) ENGINE MergeTree ORDER BY a")
         client.command("INSERT INTO cmd_data FORMAT CSV", data="1\n2\n3\n")

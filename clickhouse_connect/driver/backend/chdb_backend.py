@@ -613,8 +613,24 @@ class ChdbBackend:
         params = _strip_param_prefix(bind_params)
         # DDL rejects a SETTINGS clause, so command settings use the SET dance
         settings = self._engine_settings(runtime.settings)
-        result = self._run_with_settings(cmd, "TabSeparated", settings, params=params, database=runtime.database)
-        return CommandExecution(body=result.bytes() or b"", summary=self._summary(result))
+        embedded_fmt = _trailing_format(cmd)
+        if embedded_fmt is not None:
+            # An embedded FORMAT clause wins over the format argument, and a
+            # statement that can carry one produces a result set, so report it
+            result = self._run_with_settings(cmd, "TabSeparated", settings, params=params, database=runtime.database)
+            return CommandExecution(body=result.bytes() or b"", summary=self._summary(result), result_format=embedded_fmt)
+        # HTTP reports a result set via the X-ClickHouse-Format header even when
+        # it has zero rows. chdb has no headers, so run the command with names:
+        # a result-producing statement always emits at least the names line,
+        # while a control statement emits nothing in any format. Strip the
+        # names line to keep the TabSeparated body parse_command_body expects.
+        result = self._run_with_settings(cmd, "TabSeparatedWithNames", settings, params=params, database=runtime.database)
+        body = result.bytes() or b""
+        if not body:
+            return CommandExecution(body=b"", summary=self._summary(result))
+        newline = body.find(b"\n")
+        body = body[newline + 1 :] if newline >= 0 else b""
+        return CommandExecution(body=body, summary=self._summary(result), result_format="TabSeparated")
 
     def execute_data_insert(
         self,

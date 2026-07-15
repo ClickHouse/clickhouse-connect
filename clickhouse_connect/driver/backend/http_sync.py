@@ -260,7 +260,11 @@ class HttpSyncBackend:
         """Execute an already-bound command, returning its body and summary."""
         plan = plan_command_request(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
         response = self.request(plan.payload, plan.params, plan.headers, plan.method, fields=plan.form_files, server_wait=False)
-        return CommandExecution(body=response.data or b"", summary=summary_from_headers(response.headers))
+        return CommandExecution(
+            body=response.data or b"",
+            summary=summary_from_headers(response.headers),
+            result_format=response.headers.get("X-ClickHouse-Format"),
+        )
 
     def request(
         self,

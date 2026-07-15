@@ -396,12 +396,13 @@ class HttpAsyncBackend:
             body = await response.read()
             encoding = response.headers.get("Content-Encoding")
             summary = summary_from_headers(response.headers)
+            result_format = response.headers.get("X-ClickHouse-Format")
         finally:
             release_lease(response)
         if body and encoding:
             loop = asyncio.get_running_loop()
             body = await loop.run_in_executor(None, decompress_response, body, encoding)
-        return CommandExecution(body=body, summary=summary)
+        return CommandExecution(body=body, summary=summary, result_format=result_format)
 
     async def request(
         self,

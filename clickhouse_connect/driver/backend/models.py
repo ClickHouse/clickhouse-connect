@@ -67,10 +67,13 @@ class QueryRuntime:
 @dataclass
 class CommandExecution:
     """Result of a backend command execution: the response body, decoded per
-    transport (possibly empty), and the query summary."""
+    transport (possibly empty), the query summary, and the output format of
+    the result set. result_format is None when the statement produced no
+    result set, such as a DDL or other control command."""
 
     body: bytes
     summary: dict[str, Any] = field(default_factory=dict)
+    result_format: str | None = None
 
 
 @dataclass
