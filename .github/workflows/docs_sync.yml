@@ -174,7 +174,7 @@ jobs:
           git commit -m "Sync ${SOURCE_REPO} docs (${REASON})"
           git push --force origin "$SYNC_BRANCH"
 
-          title="Sync ${SOURCE_REPO} docs"
+          title="Docs: Sync ${SOURCE_REPO} docs"
           body=$(cat <<EOF
           Automated one-way docs sync from [\`${SOURCE_REPO}\`](https://github.com/${SOURCE_REPO}).
 
