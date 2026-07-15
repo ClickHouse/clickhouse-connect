@@ -129,8 +129,8 @@ def init_sequence(config: ClientConfig) -> InitializationSequence:
             )
             if isinstance(protocol_result, (bytes, bytearray)) and protocol_result[8:16] == b"\x01\x01\x05check":
                 protocol_version = PROTOCOL_VERSION_WITH_LOW_CARD
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.debug("client_protocol_version probe failed, continuing with protocol version 0: %s", ex)
 
     # Generated defaults skip keys the user supplied. Clients apply user
     # settings themselves, so the returned writes are defaults only.
