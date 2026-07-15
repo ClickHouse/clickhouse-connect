@@ -22,6 +22,7 @@ use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, MapColumn, TupleColumn,
+    VariantColumn,
 };
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::decode::decode_all_bytes;
@@ -356,7 +357,9 @@ struct ColumnCtx<'py> {
     element: Option<Box<ColumnCtx<'py>>>,
     /// Recursively-prepared per-field contexts. For a Tuple column, one per
     /// element in declaration order; for a Map column, exactly two (the key
-    /// context then the value context). `None` for any other type.
+    /// context then the value context); for a Variant column, one per dense
+    /// alternative in the server's canonical discriminator order. `None` for
+    /// any other type.
     fields: Option<Vec<ColumnCtx<'py>>>,
     /// Pre-built element-name keys for a NAMED Tuple column, materialized as a
     /// `dict` keyed by these (clickhouse-connect's default read format).
@@ -545,6 +548,15 @@ fn prepare_column_ctx<'py>(
                 prepare_column_ctx(py, key, raw_time_ticks)?,
                 prepare_column_ctx(py, value, raw_time_ticks)?,
             ];
+            (Some(fields), None)
+        }
+        // Variant alternatives always materialize finalized values; the
+        // driver's raw-ticks materializer does not walk Variant cells.
+        ChType::Variant(alternatives) => {
+            let fields = alternatives
+                .iter()
+                .map(|alternative| prepare_column_ctx(py, alternative, false))
+                .collect::<PyResult<Vec<_>>>()?;
             (Some(fields), None)
         }
         _ => (None, None),
@@ -913,9 +925,14 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         // A Nullable(Tuple) carries tuple-level validity here; element nulls
         // live on the field columns. A plain Tuple has `validity == None`.
         Column::Tuple(c) => c.validity.as_ref(),
+        // Dynamic binding support has not landed; it has no validity bitmap.
+        Column::Dynamic(_) => None,
         // Maps are never nullable at the map level; value nulls live on the
         // values column inside `entries`.
         Column::Map(_) => None,
+        // Variant has intrinsic NULL rows in its dense-union routing buffers,
+        // not a top-level validity bitmap.
+        Column::Variant(_) => None,
     }
 }
 
@@ -1331,6 +1348,86 @@ where
     Ok(())
 }
 
+/// Materialize a Variant column child by child: route each logical row to its
+/// dense child slot from the discriminator run, then scatter each child's bulk
+/// fill into those row positions.
+///
+/// # Safety
+///
+/// Requires the GIL. `fill_column`'s sink contract applies.
+unsafe fn fill_variant<S>(
+    py: Python<'_>,
+    col: &VariantColumn,
+    ctx: &ColumnCtx<'_>,
+    rows: usize,
+    sink: &mut S,
+) -> PyResult<()>
+where
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    let contexts = ctx
+        .fields
+        .as_deref()
+        .ok_or_else(|| ctx_missing("Variant"))?;
+    if contexts.len() != col.variants.len() {
+        return Err(ctx_count_mismatch("Variant"));
+    }
+    let discriminators = col.discriminators();
+    if rows != col.len() || discriminators.len() != rows {
+        return Err(variant_shape_err());
+    }
+
+    let mut starts = Vec::with_capacity(col.variants.len() + 1);
+    starts.push(0usize);
+    for child in &col.variants {
+        let next = starts
+            .last()
+            .copied()
+            .unwrap_or_default()
+            .checked_add(child.len())
+            .ok_or_else(variant_shape_err)?;
+        starts.push(next);
+    }
+    // Occurrence ordinals are the dense child offsets, so per-alternative
+    // running counters assign each non-NULL row a distinct slot; the written
+    // counter is the completeness check.
+    let mut destinations = vec![0usize; starts.last().copied().unwrap_or_default()];
+    let mut counters = vec![0usize; col.variants.len()];
+    let mut written = 0usize;
+    let mut nulls = 0usize;
+    for (row, &discriminator) in discriminators.iter().enumerate() {
+        if discriminator == u8::MAX {
+            nulls += 1;
+            sink(row, none_owned_ptr());
+            continue;
+        }
+        let alternative = usize::from(discriminator);
+        if alternative >= col.variants.len() {
+            return Err(variant_shape_err());
+        }
+        let slot = starts[alternative] + counters[alternative];
+        if slot >= starts[alternative + 1] {
+            return Err(variant_shape_err());
+        }
+        counters[alternative] += 1;
+        destinations[slot] = row;
+        written += 1;
+    }
+    if nulls != col.nulls.len || written != destinations.len() {
+        return Err(variant_shape_err());
+    }
+
+    for (alternative, (child, child_ctx)) in col.variants.iter().zip(contexts).enumerate() {
+        let positions = &destinations[starts[alternative]..starts[alternative + 1]];
+        let mut scatter = |child_row: usize, item: *mut ffi::PyObject| {
+            sink(positions[child_row], item);
+        };
+        let mut erased: DynSink<'_> = &mut scatter;
+        fill_column(py, child, child_ctx, child.len(), &mut erased)?;
+    }
+    Ok(())
+}
+
 /// Error for a LowCardinality index outside its dictionary.
 fn lc_index_err() -> PyErr {
     PyValueError::new_err("Malformed payload: LowCardinality index out of dictionary range")
@@ -1347,10 +1444,12 @@ type DynSink<'a> = &'a mut dyn FnMut(usize, *mut ffi::PyObject);
 ///
 /// # Safety
 ///
-/// Requires the GIL. `sink` is called exactly once per row in ascending row
-/// order with an owned reference it must take over, and it must keep every
-/// item alive until this call returns (the Tuple fill writes into containers
-/// after sinking them).
+/// Requires the GIL. `sink` is called exactly once per row with the cell's
+/// positional row index and an owned reference it must take over. Variant
+/// fills call it in child-major order; every other fill calls it in ascending
+/// row order, which `materialize_run`'s push sink enforces. The sink must keep
+/// every item alive until this call returns because Tuple fills write into
+/// containers after sinking them.
 unsafe fn fill_column<S>(
     py: Python<'_>,
     col: &Column,
@@ -1380,6 +1479,7 @@ where
     }
     match col {
         Column::Dictionary(dict) => fill_dictionary(py, dict, ctx, rows, sink),
+        Column::Variant(c) => fill_variant(py, c, ctx, rows, sink),
         Column::Tuple(c) => fill_tuple(py, c, ctx, rows, sink),
         Column::Map(c) => fill_map(py, c, ctx, rows, sink),
         _ => {
@@ -1566,28 +1666,61 @@ unsafe fn fill_map(
 }
 
 /// Materialize the first `rows` cells of `col` into owned objects through the
-/// bulk fill machinery. Error paths drop whatever was already produced.
+/// bulk fill machinery. The indexed slots accept Variant's child-major scatter
+/// while preserving logical row order for Map key/value runs. Error paths drop
+/// whatever was already produced.
 unsafe fn materialize_run(
     py: Python<'_>,
     col: &Column,
     ctx: &ColumnCtx<'_>,
     rows: usize,
 ) -> PyResult<Vec<Py<PyAny>>> {
-    let mut out: Vec<Py<PyAny>> = Vec::with_capacity(rows);
+    if !matches!(col, Column::Variant(_)) {
+        let mut out: Vec<Py<PyAny>> = Vec::with_capacity(rows);
+        // Items sunk out of ascending order are an internal error; they stay
+        // alive here until the fill returns, per the sink contract.
+        let mut misordered: Vec<Py<PyAny>> = Vec::new();
+        {
+            let mut sink = |i: usize, item: *mut ffi::PyObject| {
+                // Safety: item is an owned reference the sink takes over.
+                let item = unsafe { Py::from_owned_ptr(py, item) };
+                if i == out.len() {
+                    out.push(item);
+                } else {
+                    misordered.push(item);
+                }
+            };
+            let mut erased: DynSink<'_> = &mut sink;
+            fill_column(py, col, ctx, rows, &mut erased)?;
+        }
+        if !misordered.is_empty() {
+            return Err(PyValueError::new_err(
+                "internal error: column fill ran out of row order",
+            ));
+        }
+        if out.len() != rows {
+            return Err(PyValueError::new_err(
+                "internal error: column fill produced the wrong row count",
+            ));
+        }
+        return Ok(out);
+    }
+
+    let mut out: Vec<Option<Py<PyAny>>> = Vec::with_capacity(rows);
+    out.resize_with(rows, || None);
     {
-        let mut sink = |_i: usize, item: *mut ffi::PyObject| {
+        let mut sink = |i: usize, item: *mut ffi::PyObject| {
             // Safety: item is an owned reference the sink takes over.
-            out.push(unsafe { Py::from_owned_ptr(py, item) });
+            out[i] = Some(unsafe { Py::from_owned_ptr(py, item) });
         };
         let mut erased: DynSink<'_> = &mut sink;
         fill_column(py, col, ctx, rows, &mut erased)?;
     }
-    if out.len() != rows {
-        return Err(PyValueError::new_err(
-            "internal error: column fill produced the wrong row count",
-        ));
-    }
-    Ok(out)
+    out.into_iter()
+        .map(|item| {
+            item.ok_or_else(|| PyValueError::new_err("internal error: column fill omitted a row"))
+        })
+        .collect()
 }
 
 /// Lazy cache of materialized dictionary slot objects, one entry per slot.
@@ -1905,6 +2038,37 @@ unsafe fn column_value_nonnull_ptr(
             }
             Ok(dict.into_ptr())
         }
+        // Variant's row routing selects one value from a dense alternative
+        // column. This per-cell path is used when Variant is itself inside an
+        // Array or another container whose elements are materialized by index;
+        // top-level and Tuple/Map Variant runs use the bulk scatter above.
+        Column::Variant(c) => {
+            let contexts = ctx
+                .fields
+                .as_deref()
+                .ok_or_else(|| ctx_missing("Variant"))?;
+            if contexts.len() != c.variants.len() {
+                return Err(ctx_count_mismatch("Variant"));
+            }
+            let (discriminator, offset) = c.value_position(index).ok_or_else(variant_shape_err)?;
+            if discriminator == u8::MAX {
+                return Ok(none_owned_ptr());
+            }
+            let alternative = usize::from(discriminator);
+            let child = c.variants.get(alternative).ok_or_else(variant_shape_err)?;
+            let child_ctx = contexts.get(alternative).ok_or_else(variant_shape_err)?;
+            column_value_to_owned_ptr(
+                py,
+                child,
+                child_ctx,
+                usize::try_from(offset).map_err(|_| variant_shape_err())?,
+                None,
+            )
+        }
+        // Dynamic binding support has not landed.
+        Column::Dynamic(_) => Err(PyValueError::new_err(
+            "Dynamic columns are not supported by the native decoder",
+        )),
     }
 }
 
@@ -2004,6 +2168,11 @@ fn tuple_shape_err() -> PyErr {
 /// an internal invariant violation (the core always builds this shape).
 fn map_entries_err() -> PyErr {
     PyValueError::new_err("internal error: Map entries are not a two-field tuple")
+}
+
+/// Error for malformed Variant dense-union routing or child lengths.
+fn variant_shape_err() -> PyErr {
+    PyValueError::new_err("Malformed payload: Variant routing or child length mismatch")
 }
 
 /// Error for a UUID/IPv6 cell whose fixed width is not 16 bytes.

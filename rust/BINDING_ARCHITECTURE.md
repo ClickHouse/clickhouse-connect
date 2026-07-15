@@ -256,6 +256,17 @@ Value policy, the binding's reason to exist, lives here:
   the exact serialized state `bytes` recovered by the core's function-specific
   decoder. The binding adds no length prefix and does not interpret the state.
   Columnar consumers use the core's zero-copy Arrow LargeBinary export instead.
+- **Variant.** Intrinsic NULL rows become `None`. Each alternative is dense in
+  the core, so the object exit computes logical destinations once and runs each
+  child through the same bulk fill used by a top-level column. Insert performs
+  the inverse operation in one logical-row scan, using exact Python types for
+  ordinary dispatch and `typed_variant` for ambiguous alternatives. Arrow
+  consumers receive the core's zero-copy dense union. Two deliberate
+  divergences from the Python codec: `query_np`/`query_df` Variant cells are
+  plain Python objects rather than value-equal numpy scalars, and a
+  `LowCardinality` alternative inside a per-cell-materialized container
+  (`Array(Variant(...))`) does not share per-dictionary-slot objects (the
+  per-cell Tuple/Map arms behave the same).
 - **Temporals.** A per-column `TemporalCtx` is resolved once per call, not
   per cell, so a tz-aware column imports its `ZoneInfo` exactly once per
   table. Naive columns, meaning Date, Date32, and any DateTime in UTC or

@@ -11,16 +11,7 @@ from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
-from tests.integration_tests.conftest import TestConfig
-
-
-def type_available(param_client: Client, data_type: str):
-    if param_client.get_client_setting(f"allow_experimental_{data_type}_type") is None:
-        return
-    setting_def = param_client.server_settings.get(f"allow_experimental_{data_type}_type", None)
-    if setting_def is not None and setting_def.value == "1":
-        return
-    pytest.skip(f"New {data_type.upper()} type not available in this version: {param_client.server_version}")
+from tests.integration_tests.conftest import TestConfig, type_available
 
 
 def test_variant(param_client: Client, call, table_context: Callable):

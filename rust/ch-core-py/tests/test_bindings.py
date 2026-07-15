@@ -4116,6 +4116,268 @@ class TestMap:
 
 
 # ---------------------------------------------------------------------------
+# Variant
+# ---------------------------------------------------------------------------
+
+
+def _basic_variant_block(discriminators, string_values, uint_values):
+    """Independent Native Variant(String, UInt64) fixture.
+
+    BASIC mode is UInt64 zero, followed by one discriminator byte per logical
+    row, then the String and UInt64 dense child bodies in canonical order.
+    """
+    body = bytearray(struct.pack("<Q", 0))
+    body.extend(discriminators)
+    body.extend(_encode_plain_body("String", string_values))
+    body.extend(_encode_plain_body("UInt64", uint_values))
+    return build_native_block_from_bodies(
+        [("v", "Variant(String, UInt64)", bytes(body))], len(discriminators)
+    )
+
+
+class TestVariant:
+    def test_golden_decode_all_object_exits_and_arrow(self):
+        expected = [None, "user_1", 13, "user_2", 79, None]
+        native = _basic_variant_block([255, 0, 1, 0, 1, 255], ["user_1", "user_2"], [13, 79])
+        batch = _ch_core.ColBatch.decode_native(native)
+
+        assert batch.column_type_names == ["Variant(String, UInt64)"]
+        assert list(batch.column_data(0)) == expected
+        assert list(batch.to_python_columns()[0]) == expected
+        assert [row[0] for row in batch.to_python_rows()] == expected
+
+        pa = pytest.importorskip("pyarrow")
+        column = pa.RecordBatchReader.from_stream(batch).read_all().column("v")
+        assert pa.types.is_union(column.type)
+        assert column.to_pylist() == expected
+
+    def test_encode_matches_golden_and_canonicalizes_alternatives(self):
+        values = [None, "user_1", 13, "user_2", 79, None]
+        encoded = _ch_core.encode_native_block(["v"], ["Variant(UInt64, String)"], [values], len(values))
+        assert encoded == _basic_variant_block([255, 0, 1, 0, 1, 255], ["user_1", "user_2"], [13, 79])
+        assert encoded == _ch_core.encode_native_block(["v"], ["Variant(UInt64, String)"], [tuple(values)], len(values))
+        assert encoded == _ch_core.encode_native_block(["v"], ["Variant(UInt64, String)"], [_NdarrayLikeColumn(values)], len(values))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
+
+        spaced = _ch_core.encode_native_block(["v"], ["Variant( UInt64 , String )"], [values], len(values))
+        assert spaced == encoded
+
+    def test_typed_variant_resolves_ambiguous_python_types(self):
+        from clickhouse_connect.datatypes.dynamic import TypedVariant, typed_variant
+
+        type_name = "Variant(Array(String), Array(UInt32))"
+        values = [
+            typed_variant([13, 79], "Array(UInt32)"),
+            typed_variant(["a", "b"], "Array(String)"),
+            typed_variant([], "Array(UInt32)"),
+            None,
+        ]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == [
+            [13, 79],
+            ["a", "b"],
+            [],
+            None,
+        ]
+
+        with pytest.raises(ValueError, match="cannot map Python type list"):
+            _ch_core.encode_native_block(["v"], [type_name], [[[13, 79]]], 1)
+
+        class TypedVariantSubclass(TypedVariant):
+            pass
+
+        subclass_values = [TypedVariantSubclass([79, 13], "Array(UInt32)")]
+        subclass_encoded = _ch_core.encode_native_block(["v"], [type_name], [subclass_values], 1)
+        assert list(_ch_core.ColBatch.decode_native(subclass_encoded).column_data(0)) == [[79, 13]]
+
+        resizing_values = [None, typed_variant([], "Array(UInt32)")]
+
+        class ResizingTypedVariant(TypedVariant):
+            @property
+            def value(self):
+                resizing_values.pop()
+                return tuple.__getitem__(self, 0)
+
+        resizing_values[0] = ResizingTypedVariant([13], "Array(UInt32)")
+        with pytest.raises(ValueError, match="resized during encoding"):
+            _ch_core.encode_native_block(["v"], [type_name], [resizing_values], len(resizing_values))
+
+    def test_dense_child_error_reports_logical_row(self):
+        from clickhouse_connect.datatypes.dynamic import typed_variant
+
+        values = ["ok", typed_variant("not-an-int", "UInt64")]
+        with pytest.raises(ValueError, match=r'column "v" row 1 .*UInt64'):
+            _ch_core.encode_native_block(["v"], ["Variant(String, UInt64)"], [values], len(values))
+
+    def test_exact_type_dispatch_keeps_bool_distinct_from_int(self):
+        values = [True, 13, False, -79]
+        encoded = _ch_core.encode_native_block(["v"], ["Variant(Int32, Bool)"], [values], len(values))
+        decoded = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
+        assert decoded == values
+        assert [type(value) for value in decoded] == [bool, int, bool, int]
+
+    def test_low_cardinality_alternative_prefix_and_identity(self):
+        type_name = "Variant(LowCardinality(String), UInt64)"
+        discriminators = [0, 1, 0, 255]
+        body = bytearray(struct.pack("<Q", 0))
+        body.extend(_element_state_prefix("LowCardinality(String)"))
+        body.extend(discriminators)
+        body.extend(_build_low_cardinality_body_no_prefix("LowCardinality(String)", ["user_1", "user_1"]))
+        body.extend(_encode_plain_body("UInt64", [13]))
+        native = build_native_block_from_bodies([("v", type_name, bytes(body))], len(discriminators))
+
+        batch = _ch_core.ColBatch.decode_native(native)
+        decoded = list(batch.column_data(0))
+        assert decoded == ["user_1", 13, "user_1", None]
+        assert decoded[0] is decoded[2]
+        assert _ch_core.encode_native_block(["v"], [type_name], [decoded], len(decoded)) == native
+
+    def test_nested_container_matrix_and_map_order(self):
+        columns = [
+            (
+                "a",
+                "Array(Variant(String, UInt64))",
+                [["a", 13, None], [], [79, "b"]],
+            ),
+            (
+                "t",
+                "Tuple(Variant(Bool, String), Variant(Int32, String))",
+                [(True, 13), (False, "x"), ("s", 79)],
+            ),
+            (
+                "m",
+                "Map(String, Variant(String, UInt64))",
+                [{"a": "x", "b": 13, "c": "y"}, {}, {"d": 79, "e": "z"}],
+            ),
+            (
+                "at",
+                "Array(Tuple(Variant(Int32, String), UInt8))",
+                [[(13, 1), ("a", 2)], [], [(79, 3), ("b", 4)]],
+            ),
+        ]
+        encoded = _ch_core.encode_native_block(
+            [name for name, _, _ in columns],
+            [type_name for _, type_name, _ in columns],
+            [values for _, _, values in columns],
+            3,
+        )
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        expected = [values for _, _, values in columns]
+        assert [list(batch.column_data(index)) for index in range(4)] == expected
+        assert [list(column) for column in batch.to_python_columns()] == expected
+        assert list(batch.to_python_rows()) == list(zip(*expected))
+
+    def test_composite_alternatives_preserve_outer_null(self):
+        type_name = "Variant(Array(Nullable(String)), Map(String, UInt64))"
+        values = [None, ["x", None], {"a": 13}, [], {}]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
+
+    def test_variant_default_inside_nullable_tuple(self):
+        type_name = "Nullable(Tuple(Variant(Int32, String), String))"
+        values = [None, (13, "a"), ("x", "b")]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
+
+    def test_zero_rows_and_multiple_blocks(self):
+        empty = _ch_core.encode_native_block(["v"], ["Variant(String, UInt64)"], [[]], 0)
+        assert empty == build_native_block([("v", "Variant(String, UInt64)", [])])
+        all_null = _ch_core.encode_native_block(
+            ["v"], ["Variant(String, UInt64)"], [[None, None, None]], 3
+        )
+        assert all_null == _basic_variant_block([255, 255, 255], [], [])
+        assert list(_ch_core.ColBatch.decode_native(all_null).column_data(0)) == [None, None, None]
+        first = _basic_variant_block([0, 1], ["a"], [13])
+        second = _basic_variant_block([255, 1, 0], ["b"], [79])
+        batch = _ch_core.ColBatch.decode_native(first + second)
+        assert list(batch.column_data(0)) == ["a", 13, None, 79, "b"]
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            struct.pack("<Q", 2),
+            struct.pack("<Q", 0) + b"\x02",
+        ],
+        ids=["invalid_mode", "invalid_discriminator"],
+    )
+    def test_invalid_layout_is_value_error(self, body):
+        block = build_native_block_from_bodies([("v", "Variant(String, UInt64)", body)], 1)
+        with pytest.raises(ValueError, match="Invalid Variant layout"):
+            _ch_core.ColBatch.decode_native(block)
+
+    @pytest.mark.parametrize("slots", [(), ("x",)], ids=["empty", "one_slot"])
+    def test_undersized_exact_typed_variant_raises_cleanly(self, slots):
+        # tuple.__new__ builds an exact TypedVariant without the two-slot layout;
+        # the encoder must fall back to attribute access, not read raw slots.
+        from clickhouse_connect.datatypes.dynamic import TypedVariant
+
+        values = [tuple.__new__(TypedVariant, slots)]
+        with pytest.raises(IndexError):
+            _ch_core.encode_native_block(["v"], ["Variant(String, UInt64)"], [values], 1)
+
+    def test_metaclass_hash_never_runs_during_dispatch(self):
+        # Dispatch is a pointer-identity scan, so a metaclass __hash__/__eq__
+        # that mutates the source list never runs and the list stays intact.
+        values = []
+
+        class MutatingMeta(type):
+            def __hash__(cls):
+                values.clear()
+                return 13
+
+            def __eq__(cls, other):
+                values.clear()
+                return NotImplemented
+
+        class UserValue(metaclass=MutatingMeta):
+            pass
+
+        values.extend([UserValue(), 79])
+        with pytest.raises(ValueError, match="cannot map Python type"):
+            _ch_core.encode_native_block(["v"], ["Variant(String, UInt64)"], [values], 2)
+        assert len(values) == 2
+
+    def test_str_subclass_type_name_matches_exact(self):
+        from clickhouse_connect.datatypes.dynamic import TypedVariant
+
+        class TypeName(str):
+            pass
+
+        type_names = ["Variant(String, UInt64)"]
+        exact = [TypedVariant(13, "UInt64"), TypedVariant("user_1", "String")]
+        subclassed = [TypedVariant(13, TypeName("UInt64")), TypedVariant("user_1", TypeName("String"))]
+        expected = _ch_core.encode_native_block(["v"], type_names, [exact], 2)
+        assert _ch_core.encode_native_block(["v"], type_names, [subclassed], 2) == expected
+
+    def test_variant_cells_ignore_raw_time_ticks(self):
+        from clickhouse_connect.datatypes.dynamic import typed_variant
+
+        type_name = "Tuple(Time64(3), Variant(String, Time64(3)))"
+        leaf = dt.timedelta(milliseconds=13)
+        cell = dt.timedelta(milliseconds=79)
+        rows = [(leaf, typed_variant(cell, "Time64(3)")), (leaf, "user_1")]
+        encoded = _ch_core.encode_native_block(["t"], [type_name], [rows], 2)
+        decoded = list(_ch_core.ColBatch.decode_native(encoded).column_data(0, raw_time_ticks=True))
+        assert decoded == [(13, cell), (13, "user_1")]
+        assert isinstance(decoded[0][0], int)
+        assert isinstance(decoded[0][1], dt.timedelta)
+
+    def test_zero_selected_low_cardinality_alternative(self):
+        # No LC rows selected: the golden body is the mode word, the hoisted LC
+        # key version, the discriminators, no LC body, then the UInt64 body.
+        type_name = "Variant(LowCardinality(String), UInt64)"
+        values = [13, 79]
+        body = bytearray(struct.pack("<Q", 0))
+        body.extend(_element_state_prefix("LowCardinality(String)"))
+        body.extend(bytes([1, 1]))
+        body.extend(_encode_plain_body("UInt64", values))
+        expected = build_native_block_from_bodies([("v", type_name, bytes(body))], 2)
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], 2)
+        assert encoded == expected
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == values
+
+
+# ---------------------------------------------------------------------------
 # Geo aliases (Point/Ring/LineString/Polygon/MultiLineString/MultiPolygon)
 # ---------------------------------------------------------------------------
 
@@ -4141,11 +4403,7 @@ class TestGeo:
         assert list(batch.column_data(0)) == rows
 
     def test_point_leaves_are_tuples(self):
-        decoded = list(
-            _ch_core.ColBatch.decode_native(
-                build_native_block([("g", "Point", [(1.5, 2.5), (-3.25, 4.0)])])
-            ).column_data(0)
-        )
+        decoded = list(_ch_core.ColBatch.decode_native(build_native_block([("g", "Point", [(1.5, 2.5), (-3.25, 4.0)])])).column_data(0))
         assert all(isinstance(v, tuple) and len(v) == 2 for v in decoded)
 
     @pytest.mark.parametrize("type_name,rows", _GEO_DECODE)

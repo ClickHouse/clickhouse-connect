@@ -4,7 +4,9 @@ from datetime import timedelta
 
 import pytest
 
-from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.datatypes.dynamic import typed_variant
+from clickhouse_connect.driver.exceptions import DataError, NotSupportedError, ProgrammingError, StreamFailureError
+from tests.integration_tests.conftest import type_available
 
 pytest.importorskip("_ch_core")
 
@@ -99,6 +101,77 @@ def test_rust_codec_ab_parity(client_factory, call):
     assert rust_result.result_rows == python_result.result_rows
     assert rust_result.column_names == python_result.column_names
     assert [t.name for t in rust_result.column_types] == [t.name for t in python_result.column_types]
+
+
+def test_rust_codec_variant_round_trip_parity(client_factory, call, client_mode):
+    pytest.importorskip("pandas")
+    probe = client_factory(native_codec="python")
+    type_available(probe, "variant")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    rust_table = f"rc_variant_rust_{client_mode}"
+    python_table = f"rc_variant_python_{client_mode}"
+    schema = (
+        "id UInt8, v Variant(String, UInt64), "
+        "a Array(Variant(Bool, Int32, String)), "
+        "m Map(String, Variant(String, UInt64)), "
+        "va Variant(Array(String), Array(UInt32))"
+    )
+    rows = [
+        [
+            0,
+            None,
+            [True, 13, "a", None],
+            {"a": "x", "b": 13, "c": "y"},
+            typed_variant([13, 79], "Array(UInt32)"),
+        ],
+        [
+            1,
+            "user_1",
+            [],
+            {},
+            typed_variant(["a", "b"], "Array(String)"),
+        ],
+        [
+            2,
+            79,
+            [False, -13, "b"],
+            {"d": 79, "e": "z"},
+            typed_variant([], "Array(UInt32)"),
+        ],
+    ]
+    names = ["id", "v", "a", "m", "va"]
+    expected = [
+        (0, None, [True, 13, "a", None], {"a": "x", "b": 13, "c": "y"}, [13, 79]),
+        (1, "user_1", [], {}, ["a", "b"]),
+        (2, 79, [False, -13, "b"], {"d": 79, "e": "z"}, []),
+    ]
+
+    def round_trip(insert_client, table):
+        call(insert_client.command, f"DROP TABLE IF EXISTS {table}")
+        call(insert_client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(insert_client.insert, table, rows, column_names=names)
+        query = f"SELECT * FROM {table} ORDER BY id"
+        rust_result = call(rust_client.query, query)
+        python_result = call(python_client.query, query)
+        assert rust_result.result_rows == python_result.result_rows == expected
+        assert [ch_type.name for ch_type in rust_result.column_types] == [ch_type.name for ch_type in python_result.column_types]
+        rust_np = call(rust_client.query_np, query)
+        python_np = call(python_client.query_np, query)
+        assert rust_np.dtype == python_np.dtype
+        assert rust_np.tolist() == python_np.tolist()
+        rust_df = call(rust_client.query_df, query)
+        python_df = call(python_client.query_df, query)
+        # Cells are objects; cell-type parity is a known divergence, so compare values only.
+        assert list(rust_df.dtypes) == list(python_df.dtypes)
+        assert rust_df.equals(python_df)
+
+    try:
+        round_trip(rust_client, rust_table)
+        round_trip(python_client, python_table)
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
 
 
 def test_rust_codec_time_parity(client_factory, call, test_config):
@@ -1210,7 +1283,7 @@ def test_rust_codec_aggregate_function_insert_failure(client_factory, call, clie
             client.command,
             f"CREATE TABLE {table} (s AggregateFunction(sum, UInt64)) ENGINE Memory",
         )
-        with pytest.raises(ValueError, match="not exactly one valid serialized"):
+        with pytest.raises(DataError, match="not exactly one valid serialized"):
             call(client.insert, table, [[b"\x00" * 7]], column_names=["s"])
         assert call(client.query, f"SELECT count() FROM {table}").result_rows == [(0,)]
     finally:

@@ -7,7 +7,7 @@ from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ch_read_formats, ch_write_formats
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
-from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedError, ProgrammingError, StreamFailureError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
@@ -367,6 +367,10 @@ class RustNativeTransform:
                     )
                 except Exception as ex:
                     logger.error("Error serializing insert with Rust Native encoder", exc_info=True)
+                    if not isinstance(ex, Error):
+                        wrapped = DataError(str(ex))
+                        wrapped.__cause__ = ex
+                        ex = wrapped
                     context.insert_exception = ex
                     yield b"INTERNAL EXCEPTION WHILE SERIALIZING"
                     return

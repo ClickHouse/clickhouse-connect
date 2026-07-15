@@ -34,8 +34,9 @@ handoff for Python integration work.
   encodable set: `Nothing`, `Bool`, fixed-width numerics, floats, `String`,
   `FixedString(N)`, `Date`, `Date32`, `DateTime`, `DateTime64(P[, tz])`, `UUID`,
   `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Array(T)`, `Tuple(...)`
-  (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Nullable(T)`, and
-  `LowCardinality(T)` where the upstream core permits it. It also covers the three
+  (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Variant(...)`,
+  `Nullable(T)`, and `LowCardinality(T)` where the upstream core permits it. It
+  also covers the three
   name-decoration alias families the core resolves through `ChType::physical_delegate`:
   `SimpleAggregateFunction(func, T)`, the six geo types (`Point`, `Ring`, `LineString`,
   `MultiLineString`, `Polygon`, `MultiPolygon`), and `Nested(...)`. Registered
@@ -85,6 +86,19 @@ handoff for Python integration work.
   values, matching the Python codec, and `Nullable(Nothing)` scans them only to
   retain the Native null map before the canonical one-byte marker run.
   `LowCardinality(Nothing)` remains invalid, as required by ClickHouse.
+- **Variant.** Decode preserves the server's intrinsic NULL as Python `None`
+  and scatters each dense alternative directly into its logical row positions,
+  including nested Array, Tuple, and Map shapes. Insert scans logical rows once,
+  stores one discriminator byte per row, and builds each dense child once through
+  the existing per-type fast paths. Automatic selection matches the Python
+  codec's exact `type(value)` policy; ambiguous alternatives use
+  `typed_variant(value, type_name)`. Arrow export remains the core's zero-copy
+  dense union. Two deliberate divergences from the Python codec: `query_np`/
+  `query_df` Variant cells are plain Python objects rather than value-equal
+  numpy scalars, and a `LowCardinality` alternative inside a per-cell-
+  materialized container (`Array(Variant(...))`) does not share
+  per-dictionary-slot objects (the per-cell Tuple/Map arms behave the same).
+  Dynamic is still unsupported.
 - **AggregateFunction.** The Python object exit returns each supported
   function's exact serialized state as `bytes`; Arrow remains the core's
   zero-copy LargeBinary export. Insert accepts bytes-like state values and
