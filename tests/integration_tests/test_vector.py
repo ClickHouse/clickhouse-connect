@@ -164,6 +164,53 @@ def test_qbit_batch_insert(param_client: Client, call, table_context: Callable):
             assert retrieved_vec == pytest.approx(original_vec, rel=1e-6)
 
 
+# dim > 8 needs multi-byte planes; 20 and 33 are not multiples of 8
+@pytest.mark.parametrize(
+    "element_type, dim, array_type, bits, tol",
+    [
+        ("Float32", 16, "Float32", 32, 1e-3),
+        ("Float32", 20, "Float32", 32, 1e-3),
+        ("Float64", 33, "Float64", 64, 1e-6),
+        ("BFloat16", 20, "Float32", 16, 5e-2),
+    ],
+)
+def test_qbit_native_insert_matches_server(param_client: Client, call, table_context: Callable, element_type, dim, array_type, bits, tol):
+    """Native insert of QBit(N > 8) must use the server's plane byte order"""
+
+    table = f"qbit_srv_{element_type}_{dim}"
+    with table_context(table, ["id Int32", f"vec QBit({element_type}, {dim})"]):
+        vec = [(i + 1) / dim for i in range(dim)]
+        call(param_client.insert, table, [(1, vec)])
+
+        distance = call(
+            param_client.query,
+            f"SELECT L2DistanceTransposed(vec, {{orig:Array({array_type})}}, {bits}) FROM {table} WHERE id = 1",
+            parameters={"orig": vec},
+        ).result_set[0][0]
+        assert distance == pytest.approx(0.0, abs=tol)
+
+
+@pytest.mark.parametrize(
+    "element_type, dim, rel",
+    [
+        ("Float64", 33, 1e-9),
+        ("Float32", 20, 1e-6),
+        ("BFloat16", 20, 1e-2),
+    ],
+)
+def test_qbit_read_matches_server_written(param_client: Client, call, table_context: Callable, element_type, dim, rel):
+    """Reading a server-written QBit(N > 8) row must decode correctly"""
+
+    table = f"qbit_read_{element_type}_{dim}"
+    with table_context(table, ["id Int32", f"vec QBit({element_type}, {dim})"]):
+        vec = [(i + 1) / dim for i in range(dim)]
+        literal = "[" + ",".join(repr(x) for x in vec) + "]"
+        call(param_client.command, f"INSERT INTO {table} VALUES (1, {literal})")
+
+        retrieved_vec = call(param_client.query, f"SELECT vec FROM {table} WHERE id = 1").result_set[0][0]
+        assert retrieved_vec == pytest.approx(vec, rel=rel, abs=rel)
+
+
 def test_qbit_null_handling(param_client: Client, call, table_context: Callable):
     """Test QBit with NULL values using Nullable wrapper"""
 
