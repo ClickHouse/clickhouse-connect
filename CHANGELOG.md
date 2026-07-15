@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.5.0, 2026-07-15
+
 ### Bug Fixes
 
 - SQLAlchemy: the Alembic `op.rename_table` now emits `RENAME TABLE old TO new`. It previously emitted the standard `ALTER TABLE old RENAME TO new`, which ClickHouse rejects. Standard SQLAlchemy indexes are now filtered from ClickHouse autogenerate output, and `Column(index=True)`, `Index(...)`, `op.create_index`, and `op.drop_index` raise a clear Alembic error before partially applying DDL. Use the ClickHouse-specific `op.add_clickhouse_index` and `op.drop_clickhouse_index` helpers for data-skipping indexes. Part of [#839](https://github.com/ClickHouse/clickhouse-connect/issues/839).
