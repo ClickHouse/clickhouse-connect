@@ -272,6 +272,27 @@ def test_untranspose_manual_bit_pattern():
     assert result[1] == pytest.approx(2.0, rel=1e-6)
 
 
+def test_qbit_plane_byte_order_dim20():
+    """Server-independent guard for QBit plane byte order at N > 8"""
+
+    qbit = get_from_name("QBit(Float32, 20)")
+    vector = [1.0] * 20
+    set_plane = b"\x0f\xff\xff"
+    expected = tuple(set_plane if 2 <= p <= 8 else b"\x00\x00\x00" for p in range(32))
+
+    original_np = options.np
+    try:
+        options.np = None  # pure-Python path
+        assert qbit._transpose_row(vector) == expected
+        assert qbit._untranspose_row(expected) == pytest.approx(vector, rel=1e-6)
+    finally:
+        options.np = original_np
+
+    if np is not None:  # numpy path
+        assert qbit._transpose_row(vector) == expected
+        assert qbit._untranspose_row(expected) == pytest.approx(vector, rel=1e-6)
+
+
 def test_transpose_different_element_types():
     """Test transposition works correctly for all supported element types"""
     test_cases = [
