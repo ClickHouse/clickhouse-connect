@@ -7,6 +7,7 @@
 - An `AsyncClient` created with both client certificates and an access token now sends the mutual TLS authentication headers and the `Authorization: Bearer` header together, matching the sync client. The certificates previously suppressed the token at construction, while the `token_provider` option re-added its token right after initialization, so the two async token paths disagreed with each other. The server resolves the credential precedence.
 
 ### Improvements
+- Async clients now emit URL query parameters in the same order as the sync client on every request. The parameter names and values are unchanged, so this is only visible to systems that match or sign the exact request URL.
 - Client creation no longer fails when the `client_protocol_version` capability probe errors on the sync client. The client falls back to running without the newer native protocol features and logs the probe failure at debug level, matching the async client.
 - Added an experimental in-process chDB backend. `get_client(interface='chdb')` or a `chdb://` DSN returns a standard client that runs queries against an embedded chDB engine instead of a ClickHouse server, supporting the full query, insert, streaming, and Arrow client surface. Use the `path` argument or a `chdb:///on/disk/path` DSN for a persistent database. Requires the `chdb` package, installable with `pip install clickhouse-connect[chdb]`. chDB allows one engine per process, has no async client, and does not support external data.
 

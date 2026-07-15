@@ -215,7 +215,9 @@ def create_client(
     :param secure: Use https/TLS. This overrides inferred values from the interface or port arguments.
     :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
       will be extracted from this string if not set otherwise. A chdb scheme selects the chdb backend, e.g.
-      chdb://memory, chdb://memory/my_database, or chdb:///on/disk/path.
+      chdb://memory, chdb://memory/my_database, or chdb:///on/disk/path. As with HTTP connections, a database
+      named in the DSN must already exist, so the my_database form only works when joining an engine where an
+      earlier client created it.
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
