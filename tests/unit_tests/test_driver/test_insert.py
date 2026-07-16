@@ -29,3 +29,17 @@ def test_block_size():
         data,
     )
     assert ctx.block_row_count == 8192
+
+
+def test_block_size_empty_array_sample():
+    # An empty Array(Dynamic) row in the sample must not divide by zero.
+    ctx = InsertContext(
+        "fake_table",
+        ["key", "dyn_array"],
+        [
+            get_from_name("UInt8"),
+            get_from_name("Array(Dynamic)"),
+        ],
+        [(0, []), (1, [13, "user_1"])],
+    )
+    assert ctx.block_row_count > 0

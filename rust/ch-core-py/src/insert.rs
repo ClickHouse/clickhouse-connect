@@ -75,9 +75,12 @@ pub(crate) fn encode_native_block(
         })?;
         let values = data_seq.get_item(index, "column_data")?;
         let column = build_column(py, name, &ch_type, &values, row_count)?;
+        // Dynamic inserts ship a String column the server casts back with
+        // type inference, so the Native header carries the substituted type.
+        let header_type = dynamic_insert_type(&ch_type).unwrap_or(ch_type);
         fields.push(Field {
             name: name.clone(),
-            ch_type,
+            ch_type: header_type,
         });
         columns.push(column);
     }
@@ -89,6 +92,8 @@ pub(crate) fn encode_native_block(
                 &batch,
                 &EncodeOptions {
                     protocol_revision: 0,
+                    // V1/V2 Dynamic layout: pre-25.6 servers reject FLATTENED.
+                    flattened_dynamic: false,
                 },
             )
         })
@@ -181,8 +186,91 @@ fn build_column(
         ChType::Variant(alternatives) => {
             build_variant_column(py, name, alternatives, values, row_count)
         }
+        ChType::Dynamic { .. } => build_dynamic_string_column(name, values, row_count),
         _ => build_plain_column(py, name, ch_type, values, row_count),
     }
+}
+
+/// The insert-header substitution for a type containing Dynamic: Dynamic
+/// encodes as a String column the server casts back with
+/// `cast_string_to_dynamic_use_inference`, recursing into Array/Tuple/Map
+/// exactly like the python codec's `insert_name` chain. `None` when the type
+/// contains no Dynamic.
+fn dynamic_insert_type(ch_type: &ChType) -> Option<ChType> {
+    // Expand name-decoration aliases (Nested, geo) to the physical type first,
+    // matching `build_column`'s dispatch, so the substituted header describes
+    // the column actually built.
+    if let Some(delegate) = ch_type.physical_delegate() {
+        return dynamic_insert_type(&delegate);
+    }
+    match ch_type {
+        ChType::Dynamic { .. } => Some(ChType::String),
+        ChType::Array(inner) => {
+            dynamic_insert_type(inner).map(|inner| ChType::Array(Box::new(inner)))
+        }
+        ChType::Map(key, value) => {
+            let new_key = dynamic_insert_type(key);
+            let new_value = dynamic_insert_type(value);
+            if new_key.is_none() && new_value.is_none() {
+                return None;
+            }
+            Some(ChType::Map(
+                Box::new(new_key.unwrap_or_else(|| (**key).clone())),
+                Box::new(new_value.unwrap_or_else(|| (**value).clone())),
+            ))
+        }
+        ChType::Tuple(elements) => {
+            let substituted: Vec<Option<ChType>> = elements
+                .iter()
+                .map(|(_, element)| dynamic_insert_type(element))
+                .collect();
+            if substituted.iter().all(Option::is_none) {
+                return None;
+            }
+            Some(ChType::Tuple(
+                elements
+                    .iter()
+                    .zip(substituted)
+                    .map(|((name, element), sub)| {
+                        (name.clone(), sub.unwrap_or_else(|| element.clone()))
+                    })
+                    .collect(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Build a Dynamic column as its String insert form: each value stringifies
+/// with `str()` and None becomes the literal "NULL", matching the python
+/// codec's `write_str_values`.
+fn build_dynamic_string_column(
+    name: &str,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Column> {
+    let column_values = ColumnValues::new(values, name)?;
+    check_row_count(name, &column_values, row_count)?;
+    dynamic_string_column(&column_values, row_count)
+}
+
+fn dynamic_string_column<'py, R: RowAccess<'py>>(rows: &R, row_count: usize) -> PyResult<Column> {
+    let mut offsets = Vec::with_capacity(row_count + 1);
+    offsets.push(0i32);
+    let mut data = Vec::new();
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        if value.is_none() {
+            data.extend_from_slice(b"NULL");
+        } else {
+            let text = value.str()?;
+            data.extend_from_slice(text.to_str()?.as_bytes());
+        }
+        let offset = i32::try_from(data.len())
+            .map_err(|_| PyValueError::new_err("String column data exceeds i32 offset capacity"))?;
+        offsets.push(offset);
+    }
+    Ok(Column::Utf8(Utf8Column::new(offsets, data)))
 }
 
 /// Build Nothing from a Python column without constructing per-row scalar
@@ -697,6 +785,7 @@ fn build_element_column(
         ChType::Variant(alternatives) => {
             variant_column_from_seq(py, name, alternatives, &seq, row_count)
         }
+        ChType::Dynamic { .. } => dynamic_string_column(&PtrRows { py, ptrs }, row_count),
         ChType::Nullable(inner) => {
             // Nullable(Point) -> Nullable(Tuple), Nullable(SAF(T)) -> Nullable(T);
             // the physical delegate governs the nullable element shape.
@@ -1516,7 +1605,9 @@ fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<PyAny>> {
         return default_pyobject(py, &delegate);
     }
     Ok(match ch_type {
-        ChType::Nullable(_) | ChType::Variant(_) => py.None(),
+        // A Dynamic placeholder stays None; the String insert path renders it
+        // as the literal "NULL".
+        ChType::Nullable(_) | ChType::Variant(_) | ChType::Dynamic { .. } => py.None(),
         ChType::LowCardinality(inner) => default_pyobject(py, inner)?,
         ChType::Nothing => py.None(),
         ChType::Bool => PyBool::new(py, false).to_owned().into_any().unbind(),
@@ -4084,9 +4175,8 @@ fn column_from_scalars(
                 "name-decoration aliases are expanded to their physical type before the scalar path",
             ))
         }
-        // Dynamic binding support has not landed.
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
-            "Dynamic columns are not supported by the native encoder",
+            "Dynamic columns are built by the String insert path, not the scalar path",
         )),
     }
 }
@@ -4367,9 +4457,8 @@ fn convert_scalar(
                 "name-decoration aliases are expanded to their physical type before the scalar path",
             ))
         }
-        // Dynamic binding support has not landed.
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
-            "Dynamic columns are not supported by the native encoder",
+            "Dynamic columns are built by the String insert path, not the scalar path",
         )),
     }
 }
@@ -4431,9 +4520,8 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
                 "name-decoration aliases are expanded to their physical type before the scalar path",
             ))
         }
-        // Dynamic binding support has not landed.
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
-            "Dynamic columns are not supported by the native encoder",
+            "Dynamic columns are built by the String insert path, not the scalar path",
         )),
     }
 }

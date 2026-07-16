@@ -1,5 +1,7 @@
 use pyo3::buffer::PyBuffer;
-use pyo3::exceptions::{PyEOFError, PyOSError, PyRuntimeError, PyStopIteration, PyValueError};
+use pyo3::exceptions::{
+    PyEOFError, PyNotImplementedError, PyOSError, PyRuntimeError, PyStopIteration, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 
@@ -16,20 +18,21 @@ use ch_core_rs::batch::ColBatch as RustColBatch;
 use crate::batch::ColBatch;
 
 /// Map a core decode error to the Python exception for its failure class.
+/// Unsupported input becomes NotImplementedError, matching the insert side.
 /// Truncation (UnexpectedEof) becomes EOFError so callers can tell incomplete
-/// data apart from corruption or unsupported input.
+/// data apart from corruption.
 pub(crate) fn decode_err(e: DecodeError) -> PyErr {
     match e {
-        DecodeError::UnsupportedType { column, type_name } => PyValueError::new_err(format!(
-            "Unsupported ClickHouse type '{type_name}' for column '{column}'"
-        )),
+        DecodeError::UnsupportedType { column, type_name } => PyNotImplementedError::new_err(
+            format!("Unsupported ClickHouse type '{type_name}' for column '{column}'"),
+        ),
         DecodeError::InvalidBlockInfo { field_num } => {
             PyValueError::new_err(format!("Unknown BlockInfo field number {field_num}"))
         }
         DecodeError::UnsupportedSerialization {
             column,
             serialization_byte,
-        } => PyValueError::new_err(format!(
+        } => PyNotImplementedError::new_err(format!(
             "Unsupported custom serialization (marker {serialization_byte}) for column '{column}'"
         )),
         DecodeError::BlockSchemaMismatch { block_index } => PyValueError::new_err(format!(

@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -172,6 +172,130 @@ def test_rust_codec_variant_round_trip_parity(client_factory, call, client_mode)
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+
+
+DYNAMIC_QUERY = """
+    SELECT id, d, s, [d, CAST('tail', 'Dynamic')] AS a,
+           tuple(d, id) AS t, map('v', d) AS m
+    FROM
+    (
+        SELECT toUInt8(0) AS id, CAST(NULL, 'Dynamic') AS d,
+               CAST(NULL, 'Dynamic(max_types=0)') AS s
+        UNION ALL
+        SELECT 1, CAST('user_1', 'Dynamic'),
+               CAST(toDate('2024-01-02'), 'Dynamic(max_types=0)')
+        UNION ALL
+        SELECT 2, CAST(toUInt64(79), 'Dynamic'),
+               CAST([toUInt8(1), 2, 3], 'Dynamic(max_types=0)')
+        UNION ALL
+        SELECT 3, CAST(toInt32(-13), 'Dynamic'),
+               CAST('hello', 'Dynamic(max_types=0)')
+        UNION ALL
+        SELECT 4, CAST(toFloat64(2.5), 'Dynamic'),
+               CAST(toUInt64(79), 'Dynamic(max_types=0)')
+        UNION ALL
+        SELECT 5, CAST(true, 'Dynamic'),
+               CAST(toFloat64(-0.5), 'Dynamic(max_types=0)')
+        UNION ALL
+        SELECT 6, CAST(toInt64(7), 'Dynamic'),
+               CAST(true, 'Dynamic(max_types=0)')
+    )
+    ORDER BY id
+"""
+
+# Typed SharedVariant decode under rust: date/list/str/int/float/bool.
+DYNAMIC_SHARED_TYPED = [None, date(2024, 1, 2), [1, 2, 3], "hello", 79, -0.5, True]
+# Known divergence: the python codec's shared-cell heuristic only decodes
+# int/float/str/bool and returns raw wire bytes for Date and Array cells
+# (FINDINGS.md finding 4).
+DYNAMIC_SHARED_PYTHON = [None, b"\x0f\x0cM", b"\x1e\x01\x03\x01\x02\x03", "hello", 79, -0.5, True]
+DYNAMIC_DIRECT = [None, "user_1", 79, -13, 2.5, True, 7]
+
+
+def test_rust_codec_dynamic_decode_parity(client_factory, call, consume_stream):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    probe = client_factory(native_codec="python")
+    type_available(probe, "dynamic")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+
+    rust_result = call(rust_client.query, DYNAMIC_QUERY, settings={"max_block_size": 1})
+    python_result = call(python_client.query, DYNAMIC_QUERY)
+    rust_rows = rust_result.result_rows
+    python_rows = python_result.result_rows
+    assert [t.name for t in rust_result.column_types] == [t.name for t in python_result.column_types]
+
+    # The direct Dynamic column and every container built from it are full parity.
+    for ix in (0, 1, 3, 4, 5):  # id, d, a, t, m
+        assert [row[ix] for row in rust_rows] == [row[ix] for row in python_rows]
+    assert [row[1] for row in rust_rows] == DYNAMIC_DIRECT
+    assert [row[3] for row in rust_rows] == [[value, "tail"] for value in DYNAMIC_DIRECT]
+    assert [row[4] for row in rust_rows] == list(zip(DYNAMIC_DIRECT, range(7)))
+    assert [row[5] for row in rust_rows] == [{"v": value} for value in DYNAMIC_DIRECT]
+
+    assert [row[2] for row in rust_rows] == DYNAMIC_SHARED_TYPED
+    assert [row[2] for row in python_rows] == DYNAMIC_SHARED_PYTHON
+
+    # max_block_size=1 forces one row per block, exercising block-local child unification.
+    for settings in (None, {"max_block_size": 1}):
+        rust_np = call(rust_client.query_np, DYNAMIC_QUERY, settings=settings)
+        python_np = call(python_client.query_np, DYNAMIC_QUERY, settings=settings)
+        assert rust_np.dtype == python_np.dtype
+        for name in ("id", "d", "a", "t", "m"):
+            assert rust_np[name].tolist() == python_np[name].tolist()
+        assert rust_np["s"].tolist() == DYNAMIC_SHARED_TYPED
+        assert python_np["s"].tolist() == DYNAMIC_SHARED_PYTHON
+
+        # np-scalar residue (FINDINGS.md finding 4): rust yields python-native
+        # scalars in object cells where python yields value-equal numpy scalars.
+        assert type(rust_np["d"].tolist()[2]) is int
+        assert isinstance(python_np["d"].tolist()[2], np.unsignedinteger)
+
+        rust_df = call(rust_client.query_df, DYNAMIC_QUERY, settings=settings)
+        python_df = call(python_client.query_df, DYNAMIC_QUERY, settings=settings)
+        assert list(rust_df.dtypes) == list(python_df.dtypes)
+        for name in ("id", "d", "a", "t", "m"):
+            assert rust_df[name].tolist() == python_df[name].tolist()
+        assert rust_df["s"].tolist() == DYNAMIC_SHARED_TYPED
+        # Known divergence: the python codec's pandas exit stringifies every
+        # non-null shared cell, including the heuristically decoded ones.
+        assert python_df["s"].tolist() == [None, "\x0f\x0cM", "\x1e\x01\x03\x01\x02\x03", "hello", "79", "-0.5", "True"]
+
+        # np-scalar residue inside a container cell (FINDINGS.md finding 4).
+        assert type(rust_df["a"].tolist()[2][0]) is int
+        assert isinstance(python_df["a"].tolist()[2][0], np.unsignedinteger)
+
+    streamed = []
+    consume_stream(call(rust_client.query_rows_stream, DYNAMIC_QUERY, settings={"max_block_size": 1}), streamed.append)
+    assert [row[1] for row in streamed] == DYNAMIC_DIRECT
+    assert [row[2] for row in streamed] == DYNAMIC_SHARED_TYPED
+
+
+@pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
+def test_rust_codec_dynamic_insert_parity(client_factory, call, client_mode, native_codec):
+    probe = client_factory(native_codec="python")
+    type_available(probe, "dynamic")
+    python_client = client_factory(native_codec="python")
+    rows = [[0, None], [1, True], [2, 13], [3, 2.5], [4, "user_1"], [5, [1, 2]]]
+
+    def roundtrip(codec):
+        client = client_factory(native_codec=codec)
+        table = f"rc_ins_dynamic_{codec}_{client_mode}"
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+        try:
+            call(python_client.command, f"CREATE TABLE {table} (id UInt8, d Dynamic) ENGINE Memory")
+            call(client.insert, table, rows, column_names=["id", "d"])
+            return call(python_client.query, f"SELECT id, d, dynamicType(d) FROM {table} ORDER BY id").result_rows
+        finally:
+            call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+
+    # Dynamic inserts send str(value) with None as the literal "NULL"; the rust
+    # encoder now builds that String column natively with exact wire parity, so
+    # both rust and rust_strict insert without the python fallback.
+    expected = roundtrip("python")
+    assert roundtrip(native_codec) == expected
+    assert [row[1] for row in expected] == ["NULL", "True", "13", "2.5", "user_1", "[1, 2]"]
 
 
 def test_rust_codec_time_parity(client_factory, call, test_config):
@@ -578,10 +702,7 @@ def test_rust_codec_nullable_tuple_aggregate_function_decode(client_factory, cal
     # Null rows carry server-written placeholder states under the null mask,
     # so boundary recovery must stay correct across the masked rows.
     client = client_factory(native_codec="rust_strict")
-    query = (
-        "SELECT if(number % 2 = 0, tuple(initializeAggregation('countState', number)), NULL) AS t "
-        "FROM numbers(4)"
-    )
+    query = "SELECT if(number % 2 = 0, tuple(initializeAggregation('countState', number)), NULL) AS t FROM numbers(4)"
     result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
     assert result.result_rows == [((b"\x01",),), (None,), ((b"\x01",),), (None,)]
 

@@ -1,4 +1,5 @@
 import logging
+import struct
 import sys
 from datetime import timezone
 from zoneinfo import ZoneInfo
@@ -9,7 +10,13 @@ from clickhouse_connect import common
 from clickhouse_connect.common import _native_codec_env_default
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import rustcodec
-from clickhouse_connect.driver.exceptions import NotSupportedError, ProgrammingError, StreamClosedError, StreamFailureError
+from clickhouse_connect.driver.exceptions import (
+    DataError,
+    NotSupportedError,
+    ProgrammingError,
+    StreamClosedError,
+    StreamFailureError,
+)
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.rustcodec import (
@@ -280,8 +287,10 @@ def test_build_insert_mid_block_failure(monkeypatch):
     chunks = list(RustNativeTransform(strict=False).build_insert(ctx))
 
     assert chunks == [b"rust_block", b"INTERNAL EXCEPTION WHILE SERIALIZING"]
-    assert isinstance(ctx.insert_exception, ValueError)
+    # Binding ValueErrors surface as DataError with the binding's message.
+    assert isinstance(ctx.insert_exception, DataError)
     assert str(ctx.insert_exception) == "late"
+    assert isinstance(ctx.insert_exception.__cause__, ValueError)
 
 
 def test_build_insert_global_write_format_strict_raises(monkeypatch, clean_formats):
@@ -431,19 +440,60 @@ def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
 
 
 @pytest.mark.parametrize(
-    ("exception_tag", "chunk", "expected"),
+    ("error", "exception_tag", "chunk", "expected"),
     [
-        (None, b"random block bytes", NotSupportedError),
-        (None, b"prefix Code: 62 DB::Exception boom", StreamFailureError),
-        ("T", b"prefix Code: 62 DB::Exception boom", NotSupportedError),
+        (NotImplementedError("Unsupported ClickHouse type 'X'"), None, b"random block bytes", NotSupportedError),
+        (ValueError("Malformed payload: bad bytes for column 'x'"), None, b"random block bytes", DataError),
+        (
+            NotImplementedError("Unsupported ClickHouse type 'X'"),
+            None,
+            b"prefix Code: 62 DB::Exception boom",
+            StreamFailureError,
+        ),
+        (
+            ValueError("Malformed payload: bad bytes for column 'x'"),
+            None,
+            b"prefix Code: 62 DB::Exception boom",
+            StreamFailureError,
+        ),
+        (
+            NotImplementedError("Unsupported ClickHouse type 'X'"),
+            "T",
+            b"prefix Code: 62 DB::Exception boom",
+            NotSupportedError,
+        ),
+        (
+            ValueError("Malformed payload: bad bytes for column 'x'"),
+            "T",
+            b"prefix Code: 62 DB::Exception boom",
+            DataError,
+        ),
     ],
-    ids=["unsupported_plain", "untagged_server_error", "tagged_no_false_positive"],
+    ids=[
+        "unsupported_plain",
+        "malformed_plain",
+        "unsupported_untagged_server_error",
+        "malformed_untagged_server_error",
+        "unsupported_tagged_no_false_positive",
+        "malformed_tagged_no_false_positive",
+    ],
 )
-def test_decode_valueerror_disambiguation(monkeypatch, exception_tag, chunk, expected):
-    core = _fake_decoder_core(feed_error=ValueError("Unsupported ClickHouse type 'X'"))
+def test_decode_feed_error_disambiguation(monkeypatch, error, exception_tag, chunk, expected):
+    core = _fake_decoder_core(feed_error=error)
     monkeypatch.setitem(sys.modules, "_ch_core", core)
     src = FakeSource([chunk], exception_tag=exception_tag)
-    with pytest.raises(expected):
+    with pytest.raises(expected) as excinfo:
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    if expected is DataError:
+        assert str(excinfo.value) == str(error)
+    assert src.closed is True
+
+
+def test_decode_feed_not_implemented_maps_to_not_supported(monkeypatch):
+    core = _fake_decoder_core(feed_error=NotImplementedError("python object exit"))
+    monkeypatch.setitem(sys.modules, "_ch_core", core)
+    src = FakeSource([b"random block bytes"])
+    with pytest.raises(NotSupportedError):
         RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
@@ -478,6 +528,27 @@ def test_decode_buffered_unsupported_raises(monkeypatch):
     src = FakeSource([b"chunk"])
     with pytest.raises(NotSupportedError):
         RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
+
+
+def test_decode_buffered_malformed_fill_raises_data_error(monkeypatch):
+    batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
+    batch1 = _FakeBatch(["a"], ["Int32"], error=ValueError("Malformed payload: bad cell"))
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    with pytest.raises(DataError, match="Malformed payload: bad cell"):
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert src.closed is True
+
+
+def test_decode_streaming_malformed_fill_raises_data_error(monkeypatch):
+    batch0 = _FakeBatch(["a"], ["Int32"], columns=[[13]])
+    batch1 = _FakeBatch(["a"], ["Int32"], error=ValueError("Malformed payload: bad cell"))
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
+    src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
+    with pytest.raises(DataError, match="Malformed payload: bad cell"), result.column_block_stream as stream:
+        list(stream)
     assert src.closed is True
 
 
@@ -540,3 +611,50 @@ def test_decode_tagged_exception(ch_core):
     with pytest.raises(StreamFailureError) as excinfo:
         RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert str(excinfo.value) == "Big bam occurred right while reading the data"
+
+
+def _varint_str(value: str) -> bytes:
+    encoded = value.encode()
+    return bytes([len(encoded)]) + encoded
+
+
+def _dynamic_shared_block(cells: list) -> bytes:
+    """V2 Dynamic block whose only child is SharedVariant."""
+    body = bytearray(struct.pack("<Q", 2))
+    body.append(0)  # zero named child types
+    body.extend(struct.pack("<Q", 0))  # discriminator format
+    body.extend(b"\x00" * len(cells))  # all rows in SharedVariant
+    for cell in cells:
+        body.append(len(cell))
+        body.extend(cell)
+    return b"\x01" + bytes([len(cells)]) + _varint_str("v") + _varint_str("Dynamic") + bytes(body)
+
+
+def test_decode_malformed_shared_cell_raises_data_error(ch_core):
+    # Int32 descriptor with a truncated payload fails the fill, not the prefix parse.
+    corrupt = _dynamic_shared_block([b"\x09\x01\x02"])
+    with pytest.raises(DataError, match="SharedVariant"):
+        RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
+
+
+def test_decode_malformed_shared_cell_streaming_raises_data_error(ch_core):
+    # The corrupt cell is in the second block; the first converts eagerly in parse_response.
+    valid = _dynamic_shared_block([b"\x15\x01a"])
+    corrupt = _dynamic_shared_block([b"\x09\x01\x02"])
+    result = RustNativeTransform(strict=True).parse_response(FakeSource([valid + corrupt]), eligible_ctx(streaming=True))
+    with pytest.raises(DataError, match="SharedVariant"), result.column_block_stream as stream:
+        list(stream)
+
+
+def test_decode_malformed_prefix_raises_data_error(ch_core):
+    # Dynamic prefix with an unrecognized discriminator format fails at feed time.
+    body = struct.pack("<Q", 2) + b"\x00" + struct.pack("<Q", 7) + b"\x00"
+    corrupt = b"\x01\x01" + _varint_str("v") + _varint_str("Dynamic") + body
+    with pytest.raises(DataError, match="Invalid Dynamic layout"):
+        RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
+
+
+def test_decode_unsupported_type_raises_not_supported(ch_core):
+    block = b"\x01\x01" + _varint_str("v") + _varint_str("AggregateFunction(avg, UInt64)") + b"\x00" * 8
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).parse_response(FakeSource([block]), eligible_ctx())

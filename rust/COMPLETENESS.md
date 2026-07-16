@@ -98,7 +98,25 @@ handoff for Python integration work.
   numpy scalars, and a `LowCardinality` alternative inside a per-cell-
   materialized container (`Array(Variant(...))`) does not share
   per-dictionary-slot objects (the per-cell Tuple/Map arms behave the same).
-  Dynamic is still unsupported.
+- **Dynamic.** Decode materializes each block-local typed child through the
+  same value machinery as a standalone column, including Dynamic nested under
+  Array, Tuple, and Map. Intrinsic NULL rows become `None`. The Python object
+  exits decode SharedVariant cells (binary type descriptor plus single-value
+  payload) to the same typed values as ordinary columns for every supported
+  type; AggregateFunction states and unsupported descriptors stay exact Python
+  `bytes`, and malformed cells raise a column-named `ValueError`. The Python
+  codec only heuristically decodes int/float/str/bool shared cells, so the rust
+  path is more complete there (FINDINGS.md finding 4). Arrow export is the
+  core's result-wide, name-sorted dense union, including its union-of-unions
+  representation and clean failure above 16,256 children; shared cells stay
+  `bytes` in Arrow because the schema needs a stable child type. Dynamic object
+  cells in np/df output carry the general np-scalar residue: rust yields
+  python-native scalars where the Python codec yields value-equal numpy
+  scalars. Insert builds the driver's established String input column natively
+  with exact `str(value)` parity (`None` becomes the literal `"NULL"`),
+  producing the same wire bytes as the Python codec, so the server keeps its
+  setting-dependent text inference and both `native_codec="rust"` and
+  `"rust_strict"` insert Dynamic without a fallback.
 - **AggregateFunction.** The Python object exit returns each supported
   function's exact serialized state as `bytes`; Arrow remains the core's
   zero-copy LargeBinary export. Insert accepts bytes-like state values and

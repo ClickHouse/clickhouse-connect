@@ -21,10 +21,13 @@ unsafe impl Send for SendableStream {}
 use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
-    AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, MapColumn, TupleColumn,
-    VariantColumn,
+    AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, DynamicChild, DynamicColumn,
+    MapColumn, TupleColumn, VariantColumn,
 };
 use ch_core_rs::ffi as core_ffi;
+use ch_core_rs::native::binary_value::{
+    decode_binary_value, read_binary_type_prefix, BinaryValueError,
+};
 use ch_core_rs::native::decode::decode_all_bytes;
 use ch_core_rs::schema::ChType;
 
@@ -358,8 +361,10 @@ struct ColumnCtx<'py> {
     /// Recursively-prepared per-field contexts. For a Tuple column, one per
     /// element in declaration order; for a Map column, exactly two (the key
     /// context then the value context); for a Variant column, one per dense
-    /// alternative in the server's canonical discriminator order. `None` for
-    /// any other type.
+    /// alternative in the server's canonical discriminator order. Dynamic
+    /// children are block-local, so their contexts are prepared once per child
+    /// in `fill_dynamic` instead of being stored here. `None` for any other
+    /// type.
     fields: Option<Vec<ColumnCtx<'py>>>,
     /// Pre-built element-name keys for a NAMED Tuple column, materialized as a
     /// `dict` keyed by these (clickhouse-connect's default read format).
@@ -925,7 +930,8 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         // A Nullable(Tuple) carries tuple-level validity here; element nulls
         // live on the field columns. A plain Tuple has `validity == None`.
         Column::Tuple(c) => c.validity.as_ref(),
-        // Dynamic binding support has not landed; it has no validity bitmap.
+        // Dynamic has intrinsic NULL rows in its dense-union routing buffers,
+        // not a top-level validity bitmap.
         Column::Dynamic(_) => None,
         // Maps are never nullable at the map level; value nulls live on the
         // values column inside `entries`.
@@ -1299,10 +1305,10 @@ where
 ///
 /// Requires the GIL. Each pointer passed to `sink` is an owned reference the
 /// sink must take over exactly once.
-unsafe fn fill_dictionary<S>(
-    py: Python<'_>,
+unsafe fn fill_dictionary<'py, S>(
+    py: Python<'py>,
     col: &DictionaryColumn,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     rows: usize,
     sink: &mut S,
 ) -> PyResult<()>
@@ -1355,10 +1361,10 @@ where
 /// # Safety
 ///
 /// Requires the GIL. `fill_column`'s sink contract applies.
-unsafe fn fill_variant<S>(
-    py: Python<'_>,
+unsafe fn fill_variant<'py, S>(
+    py: Python<'py>,
     col: &VariantColumn,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     rows: usize,
     sink: &mut S,
 ) -> PyResult<()>
@@ -1428,6 +1434,156 @@ where
     Ok(())
 }
 
+/// Materialize a Dynamic column child by child. Dynamic carries block-local
+/// child ids and occurrence-ordinal offsets rather than Variant's raw UInt8
+/// discriminator run, but both use the same dense child-major layout.
+/// SharedVariant cells decode to typed Python values through the core's
+/// single-value binary decoder and the same per-type conversion machinery as
+/// typed children; AggregateFunction cells and unsupported descriptors keep
+/// the raw cell bytes. The Arrow C Stream export keeps every SharedVariant
+/// cell as bytes for schema stability; only these object exits decode them.
+///
+/// # Safety
+///
+/// Requires the GIL. `fill_column`'s sink contract applies.
+unsafe fn fill_dynamic<'py, S>(
+    py: Python<'py>,
+    col: &DynamicColumn,
+    rows: usize,
+    sink: &mut S,
+) -> PyResult<()>
+where
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    if rows != col.len() || col.offsets.len() != rows {
+        return Err(dynamic_shape_err());
+    }
+
+    let mut starts = Vec::with_capacity(col.children.len() + 1);
+    starts.push(0usize);
+    for child in &col.children {
+        let next = starts
+            .last()
+            .copied()
+            .unwrap_or_default()
+            .checked_add(child.len())
+            .ok_or_else(dynamic_shape_err)?;
+        starts.push(next);
+    }
+    let mut destinations = vec![0usize; starts.last().copied().unwrap_or_default()];
+    let mut counters = vec![0usize; col.children.len()];
+    let mut nulls = 0usize;
+    for (row, (&type_id, &offset)) in col.type_ids.iter().zip(&col.offsets).enumerate() {
+        let offset = usize::try_from(offset).map_err(|_| dynamic_shape_err())?;
+        if type_id == u32::MAX {
+            if offset != nulls {
+                return Err(dynamic_shape_err());
+            }
+            nulls += 1;
+            sink(row, none_owned_ptr());
+            continue;
+        }
+        let child = usize::try_from(type_id).map_err(|_| dynamic_shape_err())?;
+        let counter = counters.get_mut(child).ok_or_else(dynamic_shape_err)?;
+        if offset != *counter || offset >= col.children[child].len() {
+            return Err(dynamic_shape_err());
+        }
+        destinations[starts[child] + offset] = row;
+        *counter += 1;
+    }
+    if nulls != col.nulls.len
+        || counters
+            .iter()
+            .zip(&col.children)
+            .any(|(&count, child)| count != child.len())
+    {
+        return Err(dynamic_shape_err());
+    }
+
+    for (child_index, child) in col.children.iter().enumerate() {
+        let positions = &destinations[starts[child_index]..starts[child_index + 1]];
+        match child {
+            DynamicChild::Typed { ch_type, values } => {
+                // Dynamic cells are type-erased at the driver boundary. As for
+                // Variant alternatives, finalize temporal leaves here instead
+                // of exposing raw ticks to a walker that cannot see the child
+                // type.
+                let child_ctx = prepare_column_ctx(py, ch_type, false)?;
+                let mut scatter = |child_row: usize, item: *mut ffi::PyObject| {
+                    sink(positions[child_row], item);
+                };
+                let mut erased: DynSink<'_> = &mut scatter;
+                fill_column(py, values, &child_ctx, child.len(), &mut erased)?;
+            }
+            DynamicChild::Shared(values) => {
+                // Cells with the same descriptor share one prepared context
+                // per fill.
+                let mut ctx_cache: HashMap<Vec<u8>, ColumnCtx<'py>> = HashMap::new();
+                for (child_row, &position) in positions.iter().enumerate() {
+                    let item =
+                        shared_cell_owned_ptr(py, values.value(child_row), Some(&mut ctx_cache))?;
+                    sink(position, item);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Materialize one SharedVariant cell (binary type descriptor + one
+/// `serializeBinary` value) as a typed Python object: decode the value to a
+/// one-row Column and route it through the same conversion machinery as a
+/// typed column. AggregateFunction cells (opaque state payloads) and cells
+/// whose descriptor does not parse or whose value encoding is unsupported
+/// stay raw Python bytes. A cell whose descriptor parsed but whose payload
+/// fails to decode is a ValueError.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference; the caller must take over
+/// the reference count.
+unsafe fn shared_cell_owned_ptr<'py>(
+    py: Python<'py>,
+    cell: &[u8],
+    ctx_cache: Option<&mut HashMap<Vec<u8>, ColumnCtx<'py>>>,
+) -> PyResult<*mut ffi::PyObject> {
+    // Cells are varint-length framed, so the raw bytes are always
+    // recoverable; an unknown descriptor tag is a future server type, not
+    // corruption. Every descriptor-parse failure falls back to bytes.
+    let Ok((ch_type, consumed)) = read_binary_type_prefix(cell) else {
+        return bytes_owned_ptr(py, cell);
+    };
+    if matches!(ch_type, ChType::AggregateFunction { .. }) {
+        return bytes_owned_ptr(py, cell);
+    }
+    let column = match decode_binary_value(&ch_type, &cell[consumed..]) {
+        Ok(column) => column,
+        Err(BinaryValueError::Unsupported(_)) => return bytes_owned_ptr(py, cell),
+        Err(err) => return Err(shared_cell_err(&err)),
+    };
+    match ctx_cache {
+        Some(cache) => {
+            if let Some(ctx) = cache.get(&cell[..consumed]) {
+                return column_value_to_owned_ptr(py, &column, ctx, 0, None);
+            }
+            let ctx = prepare_column_ctx(py, &ch_type, false)?;
+            let ctx = cache.entry(cell[..consumed].to_vec()).or_insert(ctx);
+            column_value_to_owned_ptr(py, &column, ctx, 0, None)
+        }
+        None => {
+            let ctx = prepare_column_ctx(py, &ch_type, false)?;
+            column_value_to_owned_ptr(py, &column, &ctx, 0, None)
+        }
+    }
+}
+
+/// Error for a malformed Dynamic SharedVariant cell.
+fn shared_cell_err(err: &BinaryValueError) -> PyErr {
+    PyValueError::new_err(format!(
+        "Malformed payload: invalid Dynamic SharedVariant cell: {err}"
+    ))
+}
+
 /// Error for a LowCardinality index outside its dictionary.
 fn lc_index_err() -> PyErr {
     PyValueError::new_err("Malformed payload: LowCardinality index out of dictionary range")
@@ -1445,15 +1601,15 @@ type DynSink<'a> = &'a mut dyn FnMut(usize, *mut ffi::PyObject);
 /// # Safety
 ///
 /// Requires the GIL. `sink` is called exactly once per row with the cell's
-/// positional row index and an owned reference it must take over. Variant
-/// fills call it in child-major order; every other fill calls it in ascending
-/// row order, which `materialize_run`'s push sink enforces. The sink must keep
+/// positional row index and an owned reference it must take over. Variant and
+/// Dynamic fills call it in child-major order; every other fill calls it in
+/// ascending row order, which `materialize_run`'s push sink enforces. The sink must keep
 /// every item alive until this call returns because Tuple fills write into
 /// containers after sinking them.
-unsafe fn fill_column<S>(
-    py: Python<'_>,
+unsafe fn fill_column<'py, S>(
+    py: Python<'py>,
     col: &Column,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     rows: usize,
     sink: &mut S,
 ) -> PyResult<()>
@@ -1480,21 +1636,22 @@ where
     match col {
         Column::Dictionary(dict) => fill_dictionary(py, dict, ctx, rows, sink),
         Column::Variant(c) => fill_variant(py, c, ctx, rows, sink),
+        Column::Dynamic(c) => fill_dynamic(py, c, rows, sink),
         Column::Tuple(c) => fill_tuple(py, c, ctx, rows, sink),
         Column::Map(c) => fill_map(py, c, ctx, rows, sink),
         _ => {
-            let mut dict_cache = new_array_dict_cache(col);
+            let mut chain_cache = new_array_chain_cache(col);
             match column_validity(col) {
                 None => {
                     for i in 0..rows {
-                        let item = column_value_nonnull_ptr(py, col, ctx, i, dict_cache.as_mut())?;
+                        let item = column_value_nonnull_ptr(py, col, ctx, i, chain_cache.as_mut())?;
                         sink(i, item);
                     }
                 }
                 Some(bm) => {
                     for i in 0..rows {
                         let item = if bm.is_valid(i) {
-                            column_value_nonnull_ptr(py, col, ctx, i, dict_cache.as_mut())?
+                            column_value_nonnull_ptr(py, col, ctx, i, chain_cache.as_mut())?
                         } else {
                             none_owned_ptr()
                         };
@@ -1516,10 +1673,10 @@ where
 /// Requires the GIL; `fill_column`'s sink contract applies. Containers are
 /// filled after they reach the sink, so the sink keeping items alive until
 /// this call returns is load-bearing.
-unsafe fn fill_tuple(
-    py: Python<'_>,
+unsafe fn fill_tuple<'py>(
+    py: Python<'py>,
     c: &TupleColumn,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     rows: usize,
     sink: DynSink<'_>,
 ) -> PyResult<()> {
@@ -1604,10 +1761,10 @@ unsafe fn fill_tuple(
 /// # Safety
 ///
 /// Requires the GIL; `fill_column`'s sink contract applies.
-unsafe fn fill_map(
-    py: Python<'_>,
+unsafe fn fill_map<'py>(
+    py: Python<'py>,
     c: &MapColumn,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     rows: usize,
     sink: DynSink<'_>,
 ) -> PyResult<()> {
@@ -1666,16 +1823,16 @@ unsafe fn fill_map(
 }
 
 /// Materialize the first `rows` cells of `col` into owned objects through the
-/// bulk fill machinery. The indexed slots accept Variant's child-major scatter
-/// while preserving logical row order for Map key/value runs. Error paths drop
-/// whatever was already produced.
-unsafe fn materialize_run(
-    py: Python<'_>,
+/// bulk fill machinery. The indexed slots accept Variant and Dynamic's
+/// child-major scatter while preserving logical row order for Map key/value
+/// runs. Error paths drop whatever was already produced.
+unsafe fn materialize_run<'py>(
+    py: Python<'py>,
     col: &Column,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     rows: usize,
 ) -> PyResult<Vec<Py<PyAny>>> {
-    if !matches!(col, Column::Variant(_)) {
+    if !matches!(col, Column::Variant(_) | Column::Dynamic(_)) {
         let mut out: Vec<Py<PyAny>> = Vec::with_capacity(rows);
         // Items sunk out of ascending order are an internal error; they stay
         // alive here until the fill returns, per the sink contract.
@@ -1726,40 +1883,61 @@ unsafe fn materialize_run(
 /// Lazy cache of materialized dictionary slot objects, one entry per slot.
 type DictSlotCache = Vec<Option<Py<PyAny>>>;
 
-/// A cache for the Dictionary column in an Array column's element chain, if
-/// any. One cache per array column per chunk, threaded through the per-cell
-/// path so repeated LowCardinality labels materialize once and share the
-/// object, matching `fill_dictionary`'s reuse policy. Slots fill lazily on
-/// first reference by a valid index.
-fn new_array_dict_cache(col: &Column) -> Option<DictSlotCache> {
-    fn chain_dictionary(col: &Column) -> Option<&DictionaryColumn> {
+/// A per-fill cache for the terminal of an Array column's element chain. One
+/// cache per array column per chunk, threaded through the per-cell path.
+/// `Dict` caches materialized LowCardinality dictionary slots so repeated
+/// labels share one object, matching `fill_dictionary`'s reuse policy.
+/// `Dynamic` caches one prepared `ColumnCtx` per block-local Dynamic child,
+/// plus one per distinct SharedVariant descriptor, so
+/// `column_value_nonnull_ptr` does not rebuild contexts per cell. Both fill
+/// lazily on first reference.
+enum ChainCache<'py> {
+    Dict(DictSlotCache),
+    Dynamic {
+        contexts: Vec<Option<ColumnCtx<'py>>>,
+        shared: HashMap<Vec<u8>, ColumnCtx<'py>>,
+    },
+}
+
+/// Build the cache for the Dictionary or Dynamic column terminating an Array
+/// column's element chain, if any.
+fn new_array_chain_cache<'py>(col: &Column) -> Option<ChainCache<'py>> {
+    fn chain_terminal(col: &Column) -> Option<&Column> {
         match col {
-            Column::Array(c) => chain_dictionary(&c.values),
-            Column::Dictionary(d) => Some(d),
+            Column::Array(c) => chain_terminal(&c.values),
+            Column::Dictionary(_) | Column::Dynamic(_) => Some(col),
             _ => None,
         }
     }
-    let Column::Array(c) = col else { return None };
-    chain_dictionary(&c.values).map(|dict| {
-        let mut slots = Vec::with_capacity(dict.values.len());
-        slots.resize_with(dict.values.len(), || None);
+    fn empty_slots<T>(len: usize) -> Vec<Option<T>> {
+        let mut slots = Vec::with_capacity(len);
+        slots.resize_with(len, || None);
         slots
-    })
+    }
+    let Column::Array(c) = col else { return None };
+    match chain_terminal(&c.values)? {
+        Column::Dictionary(dict) => Some(ChainCache::Dict(empty_slots(dict.values.len()))),
+        Column::Dynamic(dynamic) => Some(ChainCache::Dynamic {
+            contexts: empty_slots(dynamic.children.len()),
+            shared: HashMap::new(),
+        }),
+        _ => None,
+    }
 }
 
 /// Build the cell at `index` as an owned pointer, assuming the cell is not
-/// null; callers check validity first. `dict_cache` is the Array element
-/// chain's dictionary cache, if the caller materializes one.
+/// null; callers check validity first. `cache` is the Array element chain's
+/// per-fill cache, if the caller materializes one.
 ///
 /// # Safety
 ///
 /// Returns an owned reference; the caller must take over the reference count.
-unsafe fn column_value_nonnull_ptr(
-    py: Python<'_>,
+unsafe fn column_value_nonnull_ptr<'py>(
+    py: Python<'py>,
     col: &Column,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     index: usize,
-    mut dict_cache: Option<&mut DictSlotCache>,
+    mut cache: Option<&mut ChainCache<'py>>,
 ) -> PyResult<*mut ffi::PyObject> {
     match col {
         Column::Bool(c) => ptr_to_result(py, ffi::PyBool_FromLong(c.get(index).into())),
@@ -1827,11 +2005,11 @@ unsafe fn column_value_nonnull_ptr(
                 .and_then(|i| usize::try_from(i).ok())
                 .filter(|&slot| slot < c.values.len())
                 .ok_or_else(lc_index_err)?;
-            match dict_cache {
+            match cache {
                 // Array element path: build each referenced slot once per
                 // chunk and emit clone_ref of the cached object.
-                Some(cache) => {
-                    let entry = cache.get_mut(slot).ok_or_else(lc_index_err)?;
+                Some(ChainCache::Dict(slots)) => {
+                    let entry = slots.get_mut(slot).ok_or_else(lc_index_err)?;
                     if entry.is_none() {
                         let ptr = column_value_nonnull_ptr(py, &c.values, ctx, slot, None)?;
                         *entry = Some(Py::from_owned_ptr(py, ptr));
@@ -1842,7 +2020,7 @@ unsafe fn column_value_nonnull_ptr(
                         .clone_ref(py)
                         .into_ptr())
                 }
-                None => column_value_nonnull_ptr(py, &c.values, ctx, slot, None),
+                _ => column_value_nonnull_ptr(py, &c.values, ctx, slot, None),
             }
         }
         // Enum8/Enum16 carry only the physical signed int; map it to its label
@@ -1909,7 +2087,7 @@ unsafe fn column_value_nonnull_ptr(
                     &c.values,
                     ectx,
                     start + slot,
-                    dict_cache.as_deref_mut(),
+                    cache.as_deref_mut(),
                 )?;
                 // Safety: slot < count, the list's allocated length, and the
                 // list takes over the owned item.
@@ -2065,10 +2243,55 @@ unsafe fn column_value_nonnull_ptr(
                 None,
             )
         }
-        // Dynamic binding support has not landed.
-        Column::Dynamic(_) => Err(PyValueError::new_err(
-            "Dynamic columns are not supported by the native decoder",
-        )),
+        // Dynamic's per-cell path is used inside Array and other containers
+        // whose elements are already being materialized by index. Top-level
+        // and Tuple/Map Dynamic runs use the child-major bulk scatter above.
+        Column::Dynamic(c) => {
+            let (&type_id, &offset) = c
+                .type_ids
+                .get(index)
+                .zip(c.offsets.get(index))
+                .ok_or_else(dynamic_shape_err)?;
+            let offset = usize::try_from(offset).map_err(|_| dynamic_shape_err())?;
+            if type_id == u32::MAX {
+                if offset >= c.nulls.len {
+                    return Err(dynamic_shape_err());
+                }
+                return Ok(none_owned_ptr());
+            }
+            let child_index = usize::try_from(type_id).map_err(|_| dynamic_shape_err())?;
+            let child = c.children.get(child_index).ok_or_else(dynamic_shape_err)?;
+            if offset >= child.len() {
+                return Err(dynamic_shape_err());
+            }
+            match child {
+                DynamicChild::Typed { ch_type, values } => {
+                    // The Array chain cache holds one prepared context per
+                    // block-local child, so repeated cells of one child do
+                    // not rebuild it.
+                    if let Some(ChainCache::Dynamic { contexts, .. }) = cache {
+                        if let Some(entry) = contexts.get_mut(child_index) {
+                            if entry.is_none() {
+                                *entry = Some(prepare_column_ctx(py, ch_type, false)?);
+                            }
+                            let child_ctx = entry.as_ref().expect("entry filled above");
+                            return column_value_to_owned_ptr(py, values, child_ctx, offset, None);
+                        }
+                    }
+                    let child_ctx = prepare_column_ctx(py, ch_type, false)?;
+                    column_value_to_owned_ptr(py, values, &child_ctx, offset, None)
+                }
+                DynamicChild::Shared(values) => {
+                    // The Array chain cache also holds the per-descriptor
+                    // contexts for shared cells.
+                    let shared_cache = match cache {
+                        Some(ChainCache::Dynamic { shared, .. }) => Some(shared),
+                        _ => None,
+                    };
+                    shared_cell_owned_ptr(py, values.value(offset), shared_cache)
+                }
+            }
+        }
     }
 }
 
@@ -2173,6 +2396,11 @@ fn map_entries_err() -> PyErr {
 /// Error for malformed Variant dense-union routing or child lengths.
 fn variant_shape_err() -> PyErr {
     PyValueError::new_err("Malformed payload: Variant routing or child length mismatch")
+}
+
+/// Error for malformed Dynamic dense-union routing or child lengths.
+fn dynamic_shape_err() -> PyErr {
+    PyValueError::new_err("Malformed payload: Dynamic routing or child length mismatch")
 }
 
 /// Error for a UUID/IPv6 cell whose fixed width is not 16 bytes.
@@ -2372,16 +2600,16 @@ unsafe fn enum_value_ptr(ctx: &ColumnCtx<'_>, value: i64) -> PyResult<*mut ffi::
 /// # Safety
 ///
 /// Returns an owned reference; the caller must take over the reference count.
-unsafe fn column_value_to_owned_ptr(
-    py: Python<'_>,
+unsafe fn column_value_to_owned_ptr<'py>(
+    py: Python<'py>,
     col: &Column,
-    ctx: &ColumnCtx<'_>,
+    ctx: &ColumnCtx<'py>,
     index: usize,
-    dict_cache: Option<&mut DictSlotCache>,
+    cache: Option<&mut ChainCache<'py>>,
 ) -> PyResult<*mut ffi::PyObject> {
     if column_validity(col).is_some_and(|v| !v.is_valid(index)) {
         Ok(none_owned_ptr())
     } else {
-        column_value_nonnull_ptr(py, col, ctx, index, dict_cache)
+        column_value_nonnull_ptr(py, col, ctx, index, cache)
     }
 }

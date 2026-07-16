@@ -68,14 +68,25 @@ UInt128/256, Float32/64, BFloat16, String,
 FixedString, Date, Date32, DateTime, DateTime64 with precision and
 timezone, Nullable, LowCardinality where ClickHouse permits it, Array, Tuple,
 Map, Variant, the supported name-decoration aliases, and the function
-signatures for `AggregateFunction` registered by the core. Variant uses `None`
+signatures for `AggregateFunction` registered by the core. Dynamic query
+decode is also supported, including nested shapes and Arrow's result-wide dense
+union. Typed Dynamic children use their ordinary Python values, intrinsic NULL
+uses `None`, and the Python object exits decode SharedVariant cells to the same
+typed values as ordinary columns; AggregateFunction states and unsupported
+descriptors stay exact Python `bytes`, and the Arrow exit keeps every shared
+cell as `bytes` for schema stability. Variant uses `None`
 for its intrinsic NULL, ordinary Python values for unambiguous alternatives,
 and `typed_variant` for alternatives that share a Python type. Its Arrow exit
 is the core's zero-copy dense union. Aggregate states materialize as exact
-Python `bytes` and export zero-copy as Arrow LargeBinary. Dynamic and other
-unsupported types, plus unsupported aggregate signatures, are rejected at
-decode time with a clean `ValueError` naming the column. Type coverage lives
-in the core, so new types land there once and every binding gets them.
+Python `bytes` and export zero-copy as Arrow LargeBinary. Dynamic insert
+builds the driver's established String input column natively, with exact
+`str(value)` parity (`None` becomes the literal `"NULL"`), so the server keeps
+its setting-dependent text inference and both `native_codec="rust"` and
+`"rust_strict"` insert Dynamic without a fallback. Other unsupported types,
+plus unsupported aggregate signatures, are rejected at decode time with a
+clean `ValueError` naming the column; malformed payloads raise a column-named
+`ValueError` as well. Type coverage lives in the core, so new
+types land there once and every binding gets them.
 
 ## Prerequisite: the core crate
 

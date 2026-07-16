@@ -133,6 +133,12 @@ def _unsupported_decode_error(ex: Exception) -> NotSupportedError:
     )
 
 
+def _binding_value_error(ex: ValueError) -> Error:
+    # The binding raises NotImplementedError for unsupported input (handled separately at
+    # each call site), so any ValueError from it is malformed data.
+    return DataError(str(ex))
+
+
 def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
     if not chunk:
         return False
@@ -218,11 +224,16 @@ class RustNativeTransform:
                 if _chunk_has_server_error(last_chunk, exception_tag):
                     raise StreamFailureError(extract_error_message(last_chunk)) from ex
                 raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
-            except ValueError as ex:
+            except NotImplementedError as ex:
                 read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
                     raise StreamFailureError(extract_error_message(last_chunk)) from ex
                 raise _unsupported_decode_error(ex) from ex
+            except ValueError as ex:
+                read_source.close()
+                if _chunk_has_server_error(last_chunk, exception_tag):
+                    raise StreamFailureError(extract_error_message(last_chunk)) from ex
+                raise _binding_value_error(ex) from ex
             except Exception as ex:
                 read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
@@ -263,6 +274,9 @@ class RustNativeTransform:
             except NotImplementedError as ex:
                 read_source.close()
                 raise _unsupported_decode_error(ex) from ex
+            except ValueError as ex:
+                read_source.close()
+                raise _binding_value_error(ex) from ex
             except Exception:
                 read_source.close()
                 raise
@@ -278,6 +292,9 @@ class RustNativeTransform:
         except NotImplementedError as ex:
             read_source.close()
             raise _unsupported_decode_error(ex) from ex
+        except ValueError as ex:
+            read_source.close()
+            raise _binding_value_error(ex) from ex
         except Exception:
             read_source.close()
             raise
@@ -293,6 +310,9 @@ class RustNativeTransform:
                     except NotImplementedError as ex:
                         read_source.close()
                         raise _unsupported_decode_error(ex) from ex
+                    except ValueError as ex:
+                        read_source.close()
+                        raise _binding_value_error(ex) from ex
                     except Exception:
                         read_source.close()
                         raise
@@ -308,6 +328,9 @@ class RustNativeTransform:
                 except NotImplementedError as ex:
                     read_source.close()
                     raise _unsupported_decode_error(ex) from ex
+                except ValueError as ex:
+                    read_source.close()
+                    raise _binding_value_error(ex) from ex
                 except Exception:
                     read_source.close()
                     raise
