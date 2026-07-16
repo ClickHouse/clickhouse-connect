@@ -11,6 +11,30 @@ integration:
   - website: 'https://github.com/ClickHouse/clickhouse-connect'
 ---
 
+{/*
+{
+  "id": "python",
+  "name": "Python",
+  "pkg": "clickhouse-connect",
+  "install": "pip install clickhouse-connect",
+  "quickStartCode": "/examples/run_async.py",
+  "transports": ["HTTP"],
+  "formats": ["Native", "RowBinary", "Arrow", "Parquet", "JSONEachRow", "CSV", "TSV"],
+  "ecosystem": ["Apache Arrow", "Pandas", "SQLAlchemy", "Alembic", "Superset"],
+  "desc": "HTTP client with NumPy/Pandas/Arrow/Polars integration and async support. The default for new Python projects.",
+  "stars": "0.4k",
+  "version": "0.8.x",
+  "slug": "/integrations/python",
+  "repository": "https://github.com/ClickHouse/clickhouse-connect",
+  "packageRegistry": "pypi",
+  "packageRegistryURL": "https://pypi.org/project/clickhouse-connect/",
+  "supportLevel": "core",
+  "category": "language_client",
+  "license": "Apache-2.0",
+  "changelog": "https://github.com/ClickHouse/clickhouse-connect/blob/main/CHANGELOG.md"
+}
+*/}
+
 import ConnectionDetails from '/snippets/_gather_your_details_http.mdx';
 
 ClickHouse Connect is a core database driver providing interoperability with a wide range of Python applications.
