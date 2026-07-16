@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+- Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
+
 ## 1.5.0, 2026-07-15
 
 ### Bug Fixes
