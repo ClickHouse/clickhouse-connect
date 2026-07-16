@@ -9,7 +9,7 @@ import pytest
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
-from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
@@ -461,7 +461,7 @@ class TestHttpClientErrorHandler:
         assert isinstance(excinfo.value, OperationalError)
         response.close.assert_called_once()
 
-    @patch("clickhouse_connect.driver.backend.http_sync.get_response_data")
+    @patch("clickhouse_connect.driver._backend.http_sync.get_response_data")
     def test_error_handler_with_body_reading_exception(self, mock_get_response_data, caplog):
         """Test error handling when reading the response body throws an exception"""
         # Set up the mock to raise an exception when reading the response body
@@ -937,7 +937,7 @@ class TestQuery:
         assert "param_min_val" in fields
 
     @patch.object(HttpSyncBackend, "request")
-    @patch("clickhouse_connect.driver.backend.httpcommon.columns_only_re")
+    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_form_encode(self, mock_columns_re, mock_raw_request):
         """Test that schema-probe queries (LIMIT 0) work correctly with form_encode_query_params"""
         self.client.form_encode_query_params = True
@@ -984,7 +984,7 @@ class TestQuery:
         assert "param_id" not in params
 
     @patch.object(HttpSyncBackend, "request")
-    @patch("clickhouse_connect.driver.backend.httpcommon.columns_only_re")
+    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_external_data(self, mock_columns_re, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with external data but no form encoding"""
         self.client.form_encode_query_params = False
@@ -1025,7 +1025,7 @@ class TestQuery:
         assert "_file1" in fields  # External data form fields
 
     @patch.object(HttpSyncBackend, "request")
-    @patch("clickhouse_connect.driver.backend.httpcommon.columns_only_re")
+    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_form_encode_external_data(self, mock_columns_re, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with both form encoding and external data"""
         self.client.form_encode_query_params = True
@@ -1110,8 +1110,8 @@ class TestResponseTimezone:
 
         with (
             patch.object(HttpSyncBackend, "request", return_value=mock_response),
-            patch("clickhouse_connect.driver.backendclient.RespBuffCls"),
-            patch("clickhouse_connect.driver.backend.http_sync.ResponseSource"),
+            patch("clickhouse_connect.driver._backendclient.RespBuffCls"),
+            patch("clickhouse_connect.driver._backend.http_sync.ResponseSource"),
             patch.object(self.client._transform, "parse_response", return_value=Mock()),
         ):
             self.client._query_with_context(context)

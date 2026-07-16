@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from clickhouse_connect.driver.backend.models import _freeze_mapping
+from clickhouse_connect.driver._backend.models import _freeze_mapping
 
 
 @dataclass(frozen=True)

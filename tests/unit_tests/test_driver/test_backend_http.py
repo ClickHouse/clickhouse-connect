@@ -3,10 +3,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from clickhouse_connect.driver.backend.contracts import AsyncBackend, SyncBackend
-from clickhouse_connect.driver.backend.http_async import HttpAsyncBackend, _plan_files, _plan_raw_files
-from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend, _plan_fields
-from clickhouse_connect.driver.backend.httpcommon import (
+from clickhouse_connect.driver._backend.contracts import AsyncBackend, SyncBackend
+from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _plan_files, _plan_raw_files
+from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend, _plan_fields
+from clickhouse_connect.driver._backend.httpcommon import (
     QueryRequestPlan,
     plan_command_request,
     plan_data_insert_request,
@@ -14,7 +14,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     plan_raw_insert_request,
     plan_raw_query_request,
 )
-from clickhouse_connect.driver.backend.models import Capabilities, QueryRuntime
+from clickhouse_connect.driver._backend.models import Capabilities, QueryRuntime
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 

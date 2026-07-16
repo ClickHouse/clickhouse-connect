@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from clickhouse_connect.driver.backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
+from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 
 if TYPE_CHECKING:
     import io

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from clickhouse_connect.driver.query import QueryContext
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.backend.models import QueryRuntime
+from clickhouse_connect.driver._backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier, use_form_encoding
 from clickhouse_connect.driver.common import coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import available_compression

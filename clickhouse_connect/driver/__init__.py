@@ -126,7 +126,7 @@ def _create_chdb_client(
 ) -> Client:
     """Build a chDB-backed client from a chdb:// DSN and/or keyword arguments."""
     try:
-        from clickhouse_connect.driver.chdbclient import ChdbClient
+        from clickhouse_connect.driver._chdbclient import ChdbClient
     except ModuleNotFoundError as ex:
         if ex.name == "chdb" or (ex.name and ex.name.startswith("chdb.")):
             raise ImportError("The chdb backend requires the chdb package. Install with: pip install clickhouse-connect[chdb]") from ex

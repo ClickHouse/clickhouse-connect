@@ -22,8 +22,8 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, options
-from clickhouse_connect.driver.backend.http_async import HttpAsyncBackend, release_lease
-from clickhouse_connect.driver.backend.httpcommon import (
+from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, release_lease
+from clickhouse_connect.driver._backend.httpcommon import (
     add_integration_tag,
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
@@ -34,9 +34,9 @@ from clickhouse_connect.driver.backend.httpcommon import (
     negotiate_compression,
     parse_command_body,
 )
-from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
-from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
-from clickhouse_connect.driver.backend.orchestration import init_sequence, insert_context_sequence, run_async
+from clickhouse_connect.driver._backend.models import ClientConfig, QueryRuntime
+from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
+from clickhouse_connect.driver._backend.orchestration import init_sequence, insert_context_sequence, run_async
 from clickhouse_connect.driver.binding import (
     bind_query,
     use_form_encoding,  # noqa: F401  (compatibility re-export)

@@ -33,8 +33,8 @@ from typing import TYPE_CHECKING, Any
 
 import chdb
 
-from clickhouse_connect.driver.backend.httpcommon import columns_only_re
-from clickhouse_connect.driver.backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
+from clickhouse_connect.driver._backend.httpcommon import columns_only_re
+from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
@@ -45,7 +45,7 @@ from clickhouse_connect.driver.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from clickhouse_connect.driver.backend.contracts import SyncBackend
+    from clickhouse_connect.driver._backend.contracts import SyncBackend
     from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.insert import InsertContext
     from clickhouse_connect.driver.query import QueryContext

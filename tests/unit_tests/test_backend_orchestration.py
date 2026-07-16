@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
-from clickhouse_connect.driver.backend.models import ClientConfig, ServerInfo
-from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
-from clickhouse_connect.driver.backend.orchestration import (
+from clickhouse_connect.driver._backend.models import ClientConfig, ServerInfo
+from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
+from clickhouse_connect.driver._backend.orchestration import (
     InitializationResult,
     init_sequence,
     insert_context_sequence,

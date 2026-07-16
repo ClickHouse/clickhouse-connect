@@ -19,8 +19,8 @@ from typing import Any, cast
 from urllib.parse import urlencode
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.backend.chdb_backend import CHDB_TRANSPORT_SETTINGS, ChdbBackend
-from clickhouse_connect.driver.backendclient import SyncBackendClient
+from clickhouse_connect.driver._backend.chdb_backend import CHDB_TRANSPORT_SETTINGS, ChdbBackend
+from clickhouse_connect.driver._backendclient import SyncBackendClient
 from clickhouse_connect.driver.query import TzMode, TzSource
 from clickhouse_connect.driver.transform import NativeTransform
 

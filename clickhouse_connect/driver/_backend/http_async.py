@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, cast
 import aiohttp
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.backend.httpcommon import (
+from clickhouse_connect.driver._backend.httpcommon import (
     auth_failed_ex_code,
     build_http_error,
     decompress_response,
@@ -35,14 +35,14 @@ from clickhouse_connect.driver.backend.httpcommon import (
     retryable_http_statuses,
     summary_from_headers,
 )
-from clickhouse_connect.driver.backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
+from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
-    from clickhouse_connect.driver.backend.contracts import AsyncBackend
-    from clickhouse_connect.driver.backend.httpcommon import QueryRequestPlan
+    from clickhouse_connect.driver._backend.contracts import AsyncBackend
+    from clickhouse_connect.driver._backend.httpcommon import QueryRequestPlan
     from clickhouse_connect.driver.external import ExternalData
     from clickhouse_connect.driver.insert import InsertContext
     from clickhouse_connect.driver.query import QueryContext

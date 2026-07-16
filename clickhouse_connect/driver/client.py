@@ -19,9 +19,9 @@ from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import options, tzutil
-from clickhouse_connect.driver.backend.models import ClientConfig, QueryRuntime
-from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
-from clickhouse_connect.driver.backend.orchestration import (
+from clickhouse_connect.driver._backend.models import ClientConfig, QueryRuntime
+from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
+from clickhouse_connect.driver._backend.orchestration import (
     InitializationResult,
     init_sequence,
     insert_context_sequence,

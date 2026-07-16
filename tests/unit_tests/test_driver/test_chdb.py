@@ -12,10 +12,10 @@ import pytest
 pytest.importorskip("chdb")
 
 import clickhouse_connect
-from clickhouse_connect.driver.backend.chdb_backend import ChdbBackend
-from clickhouse_connect.driver.backend.contracts import SyncBackend
-from clickhouse_connect.driver.backend.models import Capabilities
-from clickhouse_connect.driver.chdbclient import ChdbClient
+from clickhouse_connect.driver._backend.chdb_backend import ChdbBackend
+from clickhouse_connect.driver._backend.contracts import SyncBackend
+from clickhouse_connect.driver._backend.models import Capabilities
+from clickhouse_connect.driver._chdbclient import ChdbClient
 from clickhouse_connect.driver.exceptions import DatabaseError, NotSupportedError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.summary import QuerySummary

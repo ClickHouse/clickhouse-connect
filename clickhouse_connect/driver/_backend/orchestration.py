@@ -11,8 +11,8 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.backend.models import ClientConfig, ServerInfo
-from clickhouse_connect.driver.backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
+from clickhouse_connect.driver._backend.models import ClientConfig, ServerInfo
+from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import version_at_least
 from clickhouse_connect.driver.constants import CH_VERSION_WITH_PROTOCOL, PROTOCOL_VERSION_WITH_LOW_CARD

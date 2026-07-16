@@ -9,8 +9,8 @@ from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect import common
-from clickhouse_connect.driver.backend.http_sync import HttpSyncBackend
-from clickhouse_connect.driver.backend.httpcommon import (
+from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver._backend.httpcommon import (
     add_integration_tag,
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
@@ -19,7 +19,7 @@ from clickhouse_connect.driver.backend.httpcommon import (
     ex_tag_header,  # noqa: F401  (compatibility re-export)
     negotiate_compression,
 )
-from clickhouse_connect.driver.backendclient import SyncBackendClient
+from clickhouse_connect.driver._backendclient import SyncBackendClient
 from clickhouse_connect.driver.binding import (
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )

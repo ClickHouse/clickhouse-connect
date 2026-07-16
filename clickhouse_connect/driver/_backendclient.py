@@ -13,8 +13,8 @@ import logging
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
-from clickhouse_connect.driver.backend.httpcommon import parse_command_body
-from clickhouse_connect.driver.backend.models import QueryRuntime
+from clickhouse_connect.driver._backend.httpcommon import parse_command_body
+from clickhouse_connect.driver._backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import bind_query
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ctypes import RespBuffCls
@@ -24,7 +24,7 @@ from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
 
 if TYPE_CHECKING:
-    from clickhouse_connect.driver.backend.contracts import SyncBackend
+    from clickhouse_connect.driver._backend.contracts import SyncBackend
     from clickhouse_connect.driver.transform import NativeTransform
 
 logger = logging.getLogger(__name__)
