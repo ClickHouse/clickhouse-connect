@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver._backend.models import ClientConfig, ServerInfo
 from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver._backend.orchestration import (
@@ -19,6 +18,7 @@ from clickhouse_connect.driver._backend.orchestration import (
     run_async,
     run_sync,
 )
+from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.constants import PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError

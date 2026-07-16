@@ -8,8 +8,8 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
-from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData

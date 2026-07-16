@@ -13,9 +13,9 @@ import pytest
 import clickhouse_connect.driver as drv
 from clickhouse_connect import dbapi
 from clickhouse_connect.driver import create_async_client, create_client
-from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient, auth_failed_ex_code
 
