@@ -5,7 +5,12 @@ everything in-process, so they live with the unit tests. The whole module is
 skipped when the chdb package is not installed.
 """
 
+import gc
 import io
+import os
+import subprocess
+import sys
+import threading
 
 import pytest
 
@@ -84,9 +89,52 @@ class TestChdbContract:
             clickhouse_connect.get_client(interface="chdb", database="db_does_not_exist")
 
     def test_second_engine_path_rejected(self, client, tmp_path):
-        # chdb allows one engine per process; the fixture holds :memory: open
-        with pytest.raises(ProgrammingError, match="one engine per process"):
+        # chdb allows one engine path per process; the fixture holds :memory:
+        # open, so the engine rejects a different path at connect time
+        with pytest.raises(ProgrammingError, match="Unable to open the chdb engine"):
             clickhouse_connect.get_client(interface="chdb", path=str(tmp_path / "other"))
+
+    def test_connection_string_normalizes_path(self, tmp_path):
+        from clickhouse_connect.driver._chdbclient import build_connection_string
+
+        base = str(tmp_path / "db")
+        # chdb compares engine paths literally, so spellings of one directory
+        # must produce one connection string
+        assert build_connection_string(base + "/", None) == build_connection_string(base, None)
+        assert build_connection_string("rel_db", None) == build_connection_string("./rel_db", None)
+        assert build_connection_string(None, None) == ":memory:"
+        assert build_connection_string(":memory:", None) == ":memory:"
+
+    def test_disk_path_clients_coexist(self, tmp_path):
+        # The module fixture holds :memory: open, so a disk-path engine needs
+        # its own process. Two clients on trailing-slash spellings of one
+        # directory must land on one engine and see each other's data.
+        script = (
+            "import sys\n"
+            "import clickhouse_connect\n"
+            "path = sys.argv[1]\n"
+            "first = clickhouse_connect.get_client(interface='chdb', path=path)\n"
+            "second = clickhouse_connect.get_client(interface='chdb', path=path + '/')\n"
+            "first.command('CREATE TABLE t (v UInt32) ENGINE MergeTree ORDER BY v')\n"
+            "first.insert('t', [[13], [79]], column_names=['v'])\n"
+            "assert second.query('SELECT sum(v) FROM t').result_rows == [(92,)]\n"
+            "first.close()\n"
+            "second.close()\n"
+            "print('COEXIST_OK')\n"
+        )
+        package_root = os.path.dirname(os.path.dirname(clickhouse_connect.__file__))
+        env = dict(os.environ)
+        env["PYTHONPATH"] = package_root + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / "db")],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "COEXIST_OK" in proc.stdout
 
     def test_async_client_rejected(self):
         import asyncio
@@ -164,6 +212,21 @@ class TestChdbStreaming:
         with client.query_rows_stream("SELECT number FROM numbers(1000000)") as stream:
             next(iter(stream))
         assert client.command("SELECT 1") == 1
+
+    def test_cross_thread_call_waits_for_stream(self, client):
+        # A second thread's call on the SAME client must block on the handle
+        # lock while a stream is open (a query on a handle with an open
+        # stream silently returns empty) and produce a correct result after
+        results = []
+        worker = threading.Thread(target=lambda: results.append(client.command("SELECT 13")))
+        with client.query_rows_stream("SELECT number FROM numbers(1000000)") as stream:
+            next(iter(stream))
+            worker.start()
+            worker.join(0.2)
+            assert worker.is_alive()
+        worker.join(10)
+        assert not worker.is_alive()
+        assert results == [13]
 
     def test_nested_call_during_stream_raises(self, client):
         with client.query_rows_stream("SELECT number FROM numbers(1000000)") as stream:
@@ -370,10 +433,29 @@ class TestChdbLifecycle:
             first.close()
             second.close()
 
-    def test_shared_connection_refcount(self, client):
+    def test_independent_client_handles(self, client):
         second = clickhouse_connect.get_client(interface="chdb")
         assert second.command("SELECT 1") == 1
         second.close()
+        assert client.command("SELECT 1") == 1
+
+    def test_settings_isolated_per_client(self, client):
+        probe = "SELECT value FROM system.settings WHERE name = 'max_block_size'"
+        second = clickhouse_connect.get_client(interface="chdb", settings={"max_block_size": 1234})
+        try:
+            assert second.command(probe) == 1234
+            assert client.command(probe) != 1234
+        finally:
+            second.close()
+
+    def test_stream_does_not_block_other_clients(self, client):
+        second = clickhouse_connect.get_client(interface="chdb")
+        try:
+            with client.query_rows_stream("SELECT number FROM numbers(1000000)") as stream:
+                next(iter(stream))
+                assert second.command("SELECT 79") == 79
+        finally:
+            second.close()
         assert client.command("SELECT 1") == 1
 
     def test_close_connections_is_noop(self, client):
@@ -386,6 +468,30 @@ class TestChdbLifecycle:
         scoped.close()
         with pytest.raises(ProgrammingError):
             scoped.command("SELECT 1")
+
+    def test_leaked_client_with_open_stream(self, client):
+        # A client leaked without close() while its stream holds the handle
+        # lock defers the connection close to the stream's release
+        scoped = clickhouse_connect.get_client(interface="chdb")
+        handle = scoped._backend._handle
+        stream = scoped.raw_stream("SELECT number FROM numbers(1000000)", fmt="Native")
+        assert len(stream.read(1024)) > 0
+        del scoped
+        gc.collect()
+        assert handle.close_pending
+        assert handle.conn is not None
+        stream.close()
+        assert handle.conn is None
+        assert client.command("SELECT 1") == 1
+
+    def test_leaked_client_without_streams_closes_handle(self, client):
+        scoped = clickhouse_connect.get_client(interface="chdb")
+        handle = scoped._backend._handle
+        assert scoped.command("SELECT 1") == 1
+        del scoped
+        gc.collect()
+        assert handle.conn is None
+        assert client.command("SELECT 1") == 1
 
     def test_set_access_token_is_noop(self, client):
         client.set_access_token("token")

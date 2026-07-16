@@ -15,6 +15,7 @@ those values decode as server-timezone datetimes.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -29,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 def build_connection_string(path: str | None, chdb_options: dict[str, Any] | None) -> str:
     resolved = path or ":memory:"
+    if not resolved.startswith(":memory:") and not resolved.startswith("file:"):
+        # chdb compares engine paths literally, so spellings of the same
+        # directory (trailing slash, relative path, symlink) must normalize to
+        # one path before they reach the engine. Only plain paths are
+        # normalized; :memory: and file: forms pass through verbatim.
+        resolved = os.path.realpath(resolved)
     if not chdb_options:
         return resolved
     return f"{resolved}?{urlencode(chdb_options)}"
@@ -62,13 +69,14 @@ class ChdbClient(SyncBackendClient):
         :param chdb_options: Extra chDB engine options appended to the connection string
         :param rename_response_column: See clickhouse_connect.get_client
 
-        chdb allows one engine per process, so every client for the same
-        connection string shares one engine session: session-level settings
-        applied by one client (including generated defaults such as
-        date_time_input_format) are visible to all of them. The database is
-        session state applied with USE, so setting `client.database = None`
-        after a database was applied does not reset the session to the
-        engine default; set an explicit database instead.
+        Each client owns its own chdb connection handle, so session-level
+        settings and the USE database state are per client. chdb allows one
+        engine path per process: clients on the same path share the engine
+        data, and connecting to a different path while other clients are
+        open raises ProgrammingError. The database is handle state applied
+        with USE, so setting `client.database = None` after a database was
+        applied does not reset the handle to the engine default; set an
+        explicit database instead.
         """
         self.path = path or ":memory:"
         self._rename_response_column = rename_response_column

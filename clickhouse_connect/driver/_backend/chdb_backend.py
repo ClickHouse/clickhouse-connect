@@ -5,12 +5,13 @@ run through `chdb.Connection.query`/`send_query` in Native format and stream
 into the shared codec exactly like HTTP response bytes, and inserts write the
 built Native payload to a temp file ingested with `INSERT ... FROM INFILE`.
 
-chdb permits one active engine per process, so every backend shares one
-refcounted `chdb.Connection` through an `_EngineSession` whose lock serializes
-engine calls (a concurrent call on one connection deadlocks inside the C
-extension). The session also owns the shared `USE` state and the identity of a
-thread holding the lock for an open stream, so lock-ordering hazards surface
-as `ProgrammingError` instead of deadlocks.
+Each backend owns its own `chdb.Connection` handle. chdb allows any number of
+handles to the one engine a process can host, and enforces the single engine
+path itself at connect time. Session state (`USE`, `SET`) is per handle, so
+clients stay isolated from each other the way HTTP clients are. A per-client
+lock still serializes calls on the handle: a query issued on a handle whose
+stream is open silently returns an empty result, and the `SET` apply/restore
+dance must not interleave with another thread's call on the same client.
 
 Per-call settings ride as a `SETTINGS` clause when the backend controls where
 the `FORMAT` clause lands (selects, inserts). The command, raw, and
@@ -190,67 +191,61 @@ def _decompress(data: bytes, encoding: str) -> bytes:
     raise NotSupportedError(f"Unsupported compression {encoding!r} for a chdb raw insert")
 
 
-class _EngineSession:
-    """Shared engine state for one connection string: the chdb connection, the
-    lock serializing calls on it, the session-level USE state, and the thread
-    currently holding the lock for an open stream."""
+class _EngineHandle:
+    """Per-client engine state: the chdb connection handle, the lock
+    serializing calls on it, the handle-level USE state, the thread currently
+    holding the lock for an open stream, and a deferred-close flag set when
+    _close_handle could not take the lock."""
 
-    __slots__ = ("conn", "lock", "refcount", "active_database", "stream_owner")
+    __slots__ = ("conn", "lock", "active_database", "stream_owner", "close_pending")
 
     def __init__(self, conn: Any):
         self.conn = conn
         self.lock = threading.Lock()
-        self.refcount = 0
         self.active_database: str | None = None
         self.stream_owner: int | None = None
+        self.close_pending = False
 
 
-# chdb permits one active engine per process: a second chdb.connect() with a
-# different path raises (or deadlocks on some versions), and a second connect
-# on the same path deadlocks inside the C extension. Backends therefore share
-# one refcounted _EngineSession; the connection really closes when the last
-# user releases it.
-_SESSIONS: dict[str, _EngineSession] = {}
-_SESSIONS_LOCK = threading.Lock()
+def _open_handle(conn_str: str) -> _EngineHandle:
+    """Open a dedicated chdb connection handle. chdb allows any number of
+    handles to one engine but only one engine path per process; it enforces
+    that itself, so a conflicting path surfaces as a RuntimeError here."""
+    try:
+        return _EngineHandle(chdb.connect(conn_str))
+    except RuntimeError as ex:
+        raise ProgrammingError(f"Unable to open the chdb engine at {conn_str!r}: {ex}") from ex
 
 
-def _acquire_session(conn_str: str) -> _EngineSession:
-    with _SESSIONS_LOCK:
-        for other_str, other in _SESSIONS.items():
-            if other_str != conn_str and other.refcount > 0:
-                raise ProgrammingError(
-                    f"chdb allows one engine per process: close the clients using {other_str!r} before connecting to {conn_str!r}"
-                )
-        session = _SESSIONS.get(conn_str)
-        if session is None:
-            session = _EngineSession(chdb.connect(conn_str))
-            _SESSIONS[conn_str] = session
-        session.refcount += 1
-        return session
+def _close_handle(handle: _EngineHandle, blocking: bool = False) -> None:
+    """Close a handle's chdb connection. An unclosed handle keeps the engine
+    alive, and chdb rejects a different path while any handle is open, so a
+    handle that outlives its backend must still get closed. The explicit
+    close() path blocks (its streams are already closed, so it only waits out
+    an in-flight cross-thread call); the weakref.finalize leak path must not
+    block, so when a stream still holds the lock the close is deferred via
+    close_pending and _finalize_stream retries it."""
+    handle.close_pending = True
+    if not handle.lock.acquire(blocking=blocking):
+        logger.debug("Deferring chdb connection close: its handle lock is still held")
+        return
+    try:
+        if handle.conn is not None:
+            try:
+                handle.conn.close()
+            except Exception:
+                logger.debug("Error closing chdb connection", exc_info=True)
+            handle.conn = None
+        handle.close_pending = False
+    finally:
+        handle.lock.release()
 
 
-def _release_session(conn_str: str) -> None:
-    with _SESSIONS_LOCK:
-        session = _SESSIONS.get(conn_str)
-        if session is None:
-            return
-        session.refcount -= 1
-        if session.refcount <= 0:
-            # Streams were closed by their owning backends; briefly take the
-            # lock so a cross-thread in-flight call finishes first.
-            with session.lock:
-                try:
-                    session.conn.close()
-                except Exception:
-                    logger.debug("Error closing shared chdb connection for %s", conn_str, exc_info=True)
-            _SESSIONS.pop(conn_str, None)
-
-
-def _finalize_stream(streaming_result: Any, session: _EngineSession, released_box: list[bool]) -> None:
-    """Idempotently close a chdb StreamingResult and release the session lock.
+def _finalize_stream(streaming_result: Any, handle: _EngineHandle, released_box: list[bool]) -> None:
+    """Idempotently close a chdb StreamingResult and release the handle lock.
     Registered as a weakref.finalize so a stream that is GC'd without being
     closed still releases the lock; a leaked lock would deadlock every later
-    call on the shared connection."""
+    call on the client's connection."""
     if released_box[0]:
         return
     released_box[0] = True
@@ -260,11 +255,14 @@ def _finalize_stream(streaming_result: Any, session: _EngineSession, released_bo
             close()
     except Exception:
         logger.debug("Error closing chdb StreamingResult during finalize", exc_info=True)
-    session.stream_owner = None
+    handle.stream_owner = None
     try:
-        session.lock.release()
+        handle.lock.release()
     except RuntimeError:
         pass
+    if handle.close_pending:
+        # The backend was closed or leaked while this stream held the lock
+        _close_handle(handle)
 
 
 class _BytesSource:
@@ -296,10 +294,10 @@ class _ChdbStreamSource:
 
     __slots__ = ("_sr", "_released", "_finalizer", "last_message", "exception_tag", "__weakref__")
 
-    def __init__(self, streaming_result: Any, session: _EngineSession):
+    def __init__(self, streaming_result: Any, handle: _EngineHandle):
         self._sr = streaming_result
         self._released = [False]
-        self._finalizer = weakref.finalize(self, _finalize_stream, streaming_result, session, self._released)
+        self._finalizer = weakref.finalize(self, _finalize_stream, streaming_result, handle, self._released)
         self.last_message: bytes | None = None
         self.exception_tag: str | None = None
 
@@ -328,15 +326,15 @@ class _ChdbStreamSource:
 
 class _ChdbStreamFile(io.RawIOBase):
     """io.IOBase adapter over a chdb StreamingResult for raw_stream callers.
-    Holds the session lock for its lifetime."""
+    Holds the handle lock for its lifetime."""
 
-    def __init__(self, streaming_result: Any, session: _EngineSession):
+    def __init__(self, streaming_result: Any, handle: _EngineHandle):
         super().__init__()
         self._sr = streaming_result
         self._buf = bytearray()
         self._eof = False
         self._released = [False]
-        self._finalizer = weakref.finalize(self, _finalize_stream, streaming_result, session, self._released)
+        self._finalizer = weakref.finalize(self, _finalize_stream, streaming_result, handle, self._released)
 
     def readable(self) -> bool:
         return True
@@ -396,12 +394,11 @@ class ChdbBackend:
     def __init__(self, *, connection_string: str):
         self.connection_string = connection_string
         self.show_clickhouse_errors = True
-        self._session = _acquire_session(connection_string)
+        self._handle = _open_handle(connection_string)
         self._closed = False
         self._streams: weakref.WeakSet = weakref.WeakSet()
-        # A backend leaked without close() must still release its refcount, or
-        # the one-engine-per-process guard permanently rejects other paths
-        self._release = weakref.finalize(self, _release_session, connection_string)
+        # A backend leaked without close() still releases its connection handle
+        self._release = weakref.finalize(self, _close_handle, self._handle)
 
     # ---- engine access -------------------------------------------------
 
@@ -417,33 +414,39 @@ class ChdbBackend:
     def _guard(self) -> None:
         if self._closed:
             raise ProgrammingError("The client has been closed")
-        if self._session.stream_owner == threading.get_ident():
-            # Blocking on the session lock here would deadlock: this thread
+        if self._handle.stream_owner == threading.get_ident():
+            # Blocking on the handle lock here would deadlock: this thread
             # holds it through the open stream.
             raise ProgrammingError(_STREAM_OPEN_MESSAGE)
 
+    def _guard_locked(self) -> None:
+        """Re-check under the lock: a cross-thread close() may have won the
+        race after _guard and closed the connection."""
+        if self._closed or self._handle.conn is None:
+            raise ProgrammingError("The client has been closed")
+
     def _use_database_locked(self, database: str | None) -> None:
-        """Rebind the shared session with USE when the requested database
-        differs. The USE state lives on the session because every backend for
-        the connection string shares the one engine session."""
-        if not database or database == self._session.active_database:
+        """Rebind this client's handle with USE when the requested database
+        differs. USE state is per handle, so other clients are unaffected."""
+        if not database or database == self._handle.active_database:
             return
         try:
-            self._session.conn.query(f"USE {quote_identifier(database)}", "TabSeparated")
+            self._handle.conn.query(f"USE {quote_identifier(database)}", "TabSeparated")
         except Exception as ex:
             raise self._wrap_exception(ex) from ex
-        self._session.active_database = database
+        self._handle.active_database = database
 
     def _query_locked(self, sql: str | bytes, fmt: str, params: dict[str, Any] | None = None) -> Any:
         try:
-            return self._session.conn.query(sql, fmt, params=params or {})
+            return self._handle.conn.query(sql, fmt, params=params or {})
         except Exception as ex:
             raise self._wrap_exception(ex) from ex
 
     def _run(self, sql: str | bytes, fmt: str, params: dict[str, Any] | None = None, database: str | None = None) -> Any:
         """Run one engine call, with the USE rebind atomic under the lock."""
         self._guard()
-        with self._session.lock:
+        with self._handle.lock:
+            self._guard_locked()
             self._use_database_locked(database)
             return self._query_locked(sql, fmt, params)
 
@@ -461,32 +464,34 @@ class ChdbBackend:
         if not settings:
             return self._run(sql, fmt, params=params, database=database)
         self._guard()
-        with self._session.lock:
+        with self._handle.lock:
+            self._guard_locked()
             self._use_database_locked(database)
             snapshot = self._snapshot_settings_locked(settings)
             try:
                 # Applying inside the try keeps a mid-apply SET failure from
-                # leaking the already-applied settings into the shared session
+                # leaking the already-applied settings into later calls
                 self._apply_settings_locked(settings)
                 return self._query_locked(sql, fmt, params)
             finally:
                 self._restore_settings_locked(snapshot)
 
     def _open_stream(self, sql: str | bytes, fmt: str, params: dict[str, Any] | None, database: str | None) -> Any:
-        """Start a streaming query, leaving the session lock held and owned by
+        """Start a streaming query, leaving the handle lock held and owned by
         the returned stream until it closes."""
         self._guard()
-        self._session.lock.acquire()
+        self._handle.lock.acquire()
         try:
+            self._guard_locked()
             self._use_database_locked(database)
-            streaming = self._session.conn.send_query(sql, fmt, params=params or {})
+            streaming = self._handle.conn.send_query(sql, fmt, params=params or {})
         except DatabaseError:
-            self._session.lock.release()
+            self._handle.lock.release()
             raise
         except Exception as ex:
-            self._session.lock.release()
+            self._handle.lock.release()
             raise self._wrap_exception(ex) from ex
-        self._session.stream_owner = threading.get_ident()
+        self._handle.stream_owner = threading.get_ident()
         return streaming
 
     @staticmethod
@@ -532,7 +537,7 @@ class ChdbBackend:
             snapshot[row["name"]] = (row["value"], bool(row["changed"]))
         for key in settings:
             # A name missing from system.settings (e.g. a custom setting) is
-            # restored to DEFAULT so it cannot leak into the shared session
+            # restored to DEFAULT so it cannot leak into later calls
             snapshot.setdefault(key, ("", False))
         return snapshot
 
@@ -588,7 +593,7 @@ class ChdbBackend:
 
         if context.streaming:
             streaming = self._open_stream(final_query, "Native", params, runtime.database)
-            source = _ChdbStreamSource(streaming, self._session)
+            source = _ChdbStreamSource(streaming, self._handle)
             self._streams.add(source)
             return QueryExecution(source=source)
 
@@ -747,17 +752,17 @@ class ChdbBackend:
             # Formats with a global header/footer cannot be streamed as
             # concatenated per-block chunks. Per-call settings need the SET
             # apply/restore dance, and the restore cannot run while a stream
-            # holds the session lock. Both cases materialize in one call.
+            # holds the handle lock. Both cases materialize in one call.
             return io.BytesIO(self.execute_raw_query(final_query, bind_params, external_data, runtime, transport_settings))
         streaming = self._open_stream(final_query, fmt, params, runtime.database)
-        stream = _ChdbStreamFile(streaming, self._session)
+        stream = _ChdbStreamFile(streaming, self._handle)
         self._streams.add(stream)
         return stream
 
     def set_client_setting(self, key: str, value: str) -> None:
-        """Persist a client-level setting on the chdb session with SET. Raises
-        when the engine rejects it, the analogue of HTTP failing the next
-        request when an invalid setting rides in the params."""
+        """Persist a client-level setting on this client's handle with SET.
+        Raises when the engine rejects it, the analogue of HTTP failing the
+        next request when an invalid setting rides in the params."""
         self._run(f"SET {_validate_setting_name(key)} = {_quote_setting_value(value)}", "TabSeparated")
 
     def ping(self) -> bool:
@@ -772,18 +777,21 @@ class ChdbBackend:
         if self._closed:
             return
         self._closed = True
-        # Close this backend's open streams first: they hold the session lock,
-        # and abandoning them would block every other client on this engine
+        # Close this backend's open streams first: they hold the handle lock,
+        # and _close_handle will not close a connection under a live stream
         for stream in list(self._streams):
             try:
                 stream.close()
             except Exception:
                 logger.debug("Error closing chdb stream during client close", exc_info=True)
-        self._release()
+        # detach() disarms the leak finalizer; explicit close can then block,
+        # which only waits out an in-flight cross-thread call
+        if self._release.detach() is not None:
+            _close_handle(self._handle, blocking=True)
 
     def close_connections(self) -> None:
-        # A single embedded connection is shared for the process; there are no
-        # pooled connections to recycle.
+        # Each client owns a single embedded connection; there is no pool to
+        # recycle.
         return
 
 
