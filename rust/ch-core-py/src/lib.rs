@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 mod batch;
 mod decoder;
 mod insert;
+mod pyval;
 
 #[pymodule]
 fn _ch_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
