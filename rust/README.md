@@ -137,7 +137,7 @@ pip install maturin
 cd rust/ch-core-py
 maturin develop --release
 cd ../..
-python -m pytest rust/ch-core-py/tests/test_bindings.py
+python -m pytest rust/ch-core-py/tests/
 ```
 
 Test extras: `pytest`, and `pyarrow` for the Arrow round-trip tests.

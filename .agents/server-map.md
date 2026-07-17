@@ -52,6 +52,50 @@ Cite file and class or function names in your answers. Do not cite line numbers,
 
 `src/DataTypes/DataTypeDecimalBase.{cpp,h}`, `src/DataTypes/DataTypesDecimal.h`, `src/DataTypes/Serializations/SerializationDecimal.{cpp,h}`. Stored as fixed-width two's-complement integer (32/64/128/256-bit) with precision and scale carried in the type string.
 
+### QBit
+
+- **Confirmed at v26.3.9.8-lts:** The type implementation is
+  `src/DataTypes/DataTypeQBit.{cpp,h}` in `DataTypeQBit`.
+  `DataTypeQBit::createColumn` creates a `ColumnQBit` backed by a tuple containing
+  16, 32, or 64 `FixedString(ceil(dimension / 8))` columns.
+  `DataTypeQBit::doGetSerialization` returns `SerializationQBit`. The column
+  wrapper and bit-plane storage accessors are in `src/Columns/ColumnQBit.{cpp,h}`.
+- **Confirmed at v26.3.9.8-lts:** Binary and Native serialization are implemented
+  by `SerializationQBit` in
+  `src/DataTypes/Serializations/SerializationQBit.{cpp,h}`. Row-wise binary uses
+  `serializeBinary`, `deserializeBinary`, `serializeFloatsFromQBit`,
+  `deserializeFloatsToQBit`, `transposeBits`, and `untransposeBitPlane`. Its wire
+  value is a VarUInt dimension followed by that many BFloat16, Float32, or Float64
+  values.
+- **Confirmed at v26.3.9.8-lts:** Native uses
+  `SerializationQBit::serializeBinaryBulkWithMultipleStreams` and
+  `deserializeBinaryBulkWithMultipleStreams`, reached through
+  `NativeWriter::writeData` and `NativeReader::readData` in
+  `src/Formats/NativeWriter.cpp` and `src/Formats/NativeReader.cpp`. These methods
+  delegate to the nested `SerializationTuple` implementation in
+  `src/DataTypes/Serializations/SerializationTuple.cpp`; each bit plane is emitted
+  as raw fixed-width bytes by `SerializationFixedString::serializeBinaryBulk` in
+  `src/DataTypes/Serializations/SerializationFixedString.cpp`. Native therefore
+  carries bit-transposed planes, not row-wise float arrays.
+- **Confirmed at v26.3.9.8-lts:** The binary type-schema encoding used by Dynamic
+  and related self-describing serializations is in
+  `src/DataTypes/DataTypesBinaryEncoding.{cpp,h}`. QBit uses type tag `0x36`,
+  followed by the encoded element type and a VarUInt dimension.
+- **Confirmed at v26.3.9.8-lts:** Focused tests are
+  `src/DataTypes/Serializations/tests/gtest_qbit_serialization.cpp`
+  (`QBitSerialization.FieldBinarySerializationFloat32` and
+  `QBitSerialization.RejectInvalidElementType`) and
+  `tests/queries/0_stateless/03371_qbit_read_write.{sh,reference}`, which exercises
+  text, RowBinary, and Native round trips.
+- **Confirmed at v26.3.9.8-lts:** Additional coverage is in
+  `tests/queries/0_stateless/03363_qbit_create_insert_select.{sql,reference}` for all
+  three element widths and byte-aligned/non-byte-aligned dimensions,
+  `03368_qbit_subcolumns.{sql,reference}` for bit-plane subcolumns,
+  `03372_qbit_mergetree_1.{sql,reference}` and
+  `03372_qbit_mergetree_2.{sql,reference}` for stored data,
+  `03373_qbit_dynamic.{sql,reference}` for Dynamic, and
+  `03374_qbit_nullable.{sql,reference}` for Nullable.
+
 ### Enum8 / Enum16
 
 `src/DataTypes/DataTypeEnum.{cpp,h}`, `src/DataTypes/EnumValues.{cpp,h}`, `src/DataTypes/Serializations/SerializationEnum.{cpp,h}`. Name-to-value map lives in the type string. Wire format is the underlying Int8/Int16.

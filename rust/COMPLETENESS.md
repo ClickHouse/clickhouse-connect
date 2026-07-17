@@ -60,9 +60,10 @@ handoff for Python integration work.
   a Python `tuple`, a named tuple as a `dict` keyed by the element names, and a map
   as a `dict` (wire order, last duplicate key wins), matching the Python codec's
   default read format. Top-level Tuple and Map columns decode through hoisted
-  column-major fills (`fill_tuple`/`fill_map` in `batch.rs`) with per-chunk
-  LowCardinality slot caching, so LC fields share object identity like top-level LC
-  columns. Encode policy mirrors the Python codec's acceptance: Tuple rows are any
+  column-major fills (`fill_tuple`/`fill_map` in
+  `ch-core-py/src/pyval/containers.rs`) with per-chunk LowCardinality slot caching,
+  so LC fields share object identity like top-level LC columns. Encode policy mirrors
+  the Python codec's acceptance: Tuple rows are any
   positional iterable, or dicts for named tuples (read via element name, missing
   keys become `None`); Map rows must be dict-like. Intentional divergences from the
   Python codec, where the Rust path is the reference: a wrong-arity Tuple row raises
@@ -203,7 +204,7 @@ realism, then productionization.
 2. **CI leg.** Nothing in CI builds `_ch_core` or runs the suite under
    `rust`/`rust_strict`. Add a job that builds the extension (needs the
    `ch-core-rs` checkout or a published crate, see next item) and runs
-   `tests/test_bindings.py` plus the integration suite with
+   `ch-core-py/tests/` plus the integration suite with
    `CLICKHOUSE_CONNECT_NATIVE_CODEC=rust_strict`. Until this exists every
    refactor risks silently breaking the opt-in path.
 3. **Distribution decisions.** The build is cp312-specific by design
