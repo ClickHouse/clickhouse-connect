@@ -13,7 +13,7 @@ formats: [Native, RowBinary, Arrow, Parquet, JSONEachRow, CSV, TSV]
 ecosystem: [Apache Arrow, Pandas, SQLAlchemy, Alembic, Superset]
 install:
   pip: pip install clickhouse-connect
-quickStartCode: /examples/run_async.py
+quickStartCode: /examples/quickstart.py
 desc: >-
   HTTP client with NumPy/Pandas/Arrow/Polars integration and async
   support. The default for new Python projects.
