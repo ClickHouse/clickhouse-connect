@@ -100,15 +100,15 @@ pub struct BlockDecoder {
 impl BlockDecoder {
     #[new]
     #[pyo3(signature = (data, has_block_info = false))]
-    fn new(data: Vec<u8>, has_block_info: bool) -> Self {
-        Self {
-            data,
+    fn new(data: &Bound<'_, PyAny>, has_block_info: bool) -> PyResult<Self> {
+        Ok(Self {
+            data: buffer_to_vec(data)?,
             pos: 0,
             options: decode_options(has_block_info),
             exhausted: false,
             schema: None,
             blocks_seen: 0,
-        }
+        })
     }
 
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {

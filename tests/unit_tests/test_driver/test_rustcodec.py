@@ -331,7 +331,15 @@ def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, cle
 
 @pytest.mark.parametrize(
     "type_name",
-    ["JSON", "Array(JSON)", "Tuple(id UInt8, payload JSON)", "Map(String, JSON)"],
+    [
+        "JSON",
+        "Nullable(JSON)",
+        "Array(JSON)",
+        "Tuple(id UInt8, payload JSON)",
+        "Map(String, JSON)",
+        "Variant(JSON, String)",
+        "Nested(x JSON)",
+    ],
 )
 def test_build_insert_legacy_json_strict_raises(monkeypatch, type_name):
     class FakeCore:
@@ -341,7 +349,7 @@ def test_build_insert_legacy_json_strict_raises(monkeypatch, type_name):
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
-    with pytest.raises(NotSupportedError, match="24.8-24.9"):
+    with pytest.raises(NotSupportedError, match="legacy JSON serialization"):
         RustNativeTransform(strict=True).build_insert(_json_ctx([], type_name))
 
 
@@ -357,6 +365,51 @@ def test_build_insert_legacy_json_non_strict_falls_back(monkeypatch):
     rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_json_ctx(rows)))
     python_out = b"".join(NativeTransform.build_insert(_json_ctx(rows)))
     assert rust_out == python_out
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_build_insert_modern_json_uses_rust(monkeypatch, strict):
+    calls = []
+
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(names, type_names, columns, row_count, prefix):
+            calls.append(row_count)
+            return b"rust_block"
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 1)
+    rows = [({"id": 13},), ({"name": "user_1"},)]
+
+    chunks = list(RustNativeTransform(strict=strict).build_insert(_json_ctx(rows)))
+
+    assert chunks == [b"rust_block"]
+    assert calls == [0, 2]  # probe then one block
+
+
+def _qbit_ctx(data, type_name) -> InsertContext:
+    return InsertContext("fake_table", ["vec"], [get_from_name(type_name)], data)
+
+
+@pytest.mark.parametrize("type_name", ["QBit(Float32, 8)", "Array(QBit(Float32, 8))"])
+def test_build_insert_legacy_json_flag_qbit(monkeypatch, type_name):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise NotImplementedError("unsupported")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
+    vector = [0.5, 1.5, -2.0, 13.0, 79.0, 0.0, -1.25, 3.75]
+    value = vector if type_name.startswith("QBit") else [vector]
+    rows = [(value,), (value,)]
+
+    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_qbit_ctx(rows, type_name)))
+    python_out = b"".join(NativeTransform.build_insert(_qbit_ctx(rows, type_name)))
+    assert rust_out == python_out
+
+    with pytest.raises(NotSupportedError):
+        RustNativeTransform(strict=True).build_insert(_qbit_ctx(rows, type_name))
 
 
 _USER_FORMATS = [

@@ -315,6 +315,29 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
             ({"nested": {"value": "c"}},),
         ],
     ]
+    expected = [
+        (
+            0,
+            {"typed": {"value": 13}, "name": "user_1", "active": True, "score": 17},
+            None,
+            [{"kind": "first"}, {"count": 13}],
+            {"payload": {"nested": {"value": "a"}}},
+        ),
+        (
+            1,
+            {"typed": {"value": 79}, "ratio": 2.5, "deep": {"value": "x"}, "extra": -13},
+            {"nullable": "present"},
+            [],
+            {"payload": {"nested": {"value": "b"}}},
+        ),
+        (
+            2,
+            {"typed": {"value": 5}, "other": 79, "flag": False, "tail": "shared"},
+            {"array": [1, None, 3]},
+            [{"kind": "last"}],
+            {"payload": {"nested": {"value": "c"}}},
+        ),
+    ]
 
     def create_and_insert(client, table):
         call(python_client.command, f"DROP TABLE IF EXISTS {table}")
@@ -332,10 +355,8 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
         settings = {"max_block_size": 1}
         rust_result = call(rust_client.query, rust_query, settings=settings)
         python_result = call(python_client.query, python_query, settings=settings)
-        assert rust_result.result_rows == python_result.result_rows
-        assert [ch_type.name for ch_type in rust_result.column_types] == [
-            ch_type.name for ch_type in python_result.column_types
-        ]
+        assert rust_result.result_rows == python_result.result_rows == expected
+        assert [ch_type.name for ch_type in rust_result.column_types] == [ch_type.name for ch_type in python_result.column_types]
 
         rust_np = call(rust_client.query_np, rust_query, settings=settings)
         python_np = call(python_client.query_np, python_query, settings=settings)
@@ -354,6 +375,36 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+
+
+def test_rust_codec_json_skip_regexp_round_trip(client_factory, call, client_mode):
+    probe = client_factory(native_codec="python")
+    type_available(probe, "json")
+
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    table = f"rc_json_skip_regexp_{client_mode}"
+    # SQL literal renders the regex skip'me\..* with both a single quote and a backslash.
+    schema = "id UInt8, payload JSON(SKIP REGEXP 'skip\\'me\\\\..*')"
+    rows = [
+        [0, {"kept": 13, "skip'me": {"inner": 79}}],
+        [1, {"kept": "user_1", "skip'me": {"inner": "x"}, "other": 2.5}],
+    ]
+    expected = [
+        (0, {"kept": 13}),
+        (1, {"kept": "user_1", "other": 2.5}),
+    ]
+    try:
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+        call(python_client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(rust_client.insert, table, rows, column_names=["id", "payload"])
+        query = f"SELECT * FROM {table} ORDER BY id"
+        rust_result = call(rust_client.query, query)
+        python_result = call(python_client.query, query)
+        assert rust_result.result_rows == python_result.result_rows == expected
+        assert [ch_type.name for ch_type in rust_result.column_types] == [ch_type.name for ch_type in python_result.column_types]
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
 
 
 @pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])

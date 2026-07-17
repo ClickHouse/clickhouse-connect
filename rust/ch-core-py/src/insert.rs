@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ffi::{c_int, c_long};
+use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::buffer::{Element, PyBuffer};
@@ -68,13 +69,7 @@ pub(crate) fn encode_native_block(
     let mut fields = Vec::with_capacity(column_names.len());
     let mut columns = Vec::with_capacity(column_names.len());
     for (index, (name, type_name)) in column_names.iter().zip(&column_type_names).enumerate() {
-        // clickhouse-connect renders JSON named arguments with spaces around
-        // `=`, while ClickHouse and the core use the compact canonical form.
-        // Normalize only those two JSON parameter names before parsing.
-        let normalized_type_name = type_name
-            .replace("max_dynamic_paths = ", "max_dynamic_paths=")
-            .replace("max_dynamic_types = ", "max_dynamic_types=");
-        let ch_type = parse_ch_type(&normalized_type_name).ok_or_else(|| {
+        let ch_type = parse_ch_type(type_name).ok_or_else(|| {
             PyNotImplementedError::new_err(format!(
                 "unsupported ClickHouse type {type_name:?} for column {name:?}"
             ))
@@ -319,26 +314,26 @@ fn json_text_column_from_rows<'py, R: RowAccess<'py>>(
     row_count: usize,
     nullable: bool,
 ) -> PyResult<Column> {
-    // Match the Python codec's column-wide choice: a first non-null str means
-    // every value is already JSON text; otherwise every non-null value goes
-    // through the configured serializer, including later string values.
+    // Match the Python codec's `first_value` sniff: nullable scans for the
+    // first non-null value, non-nullable inspects row 0 alone (None included).
+    // A str there marks the whole column as pre-serialized JSON text.
     let mut direct_text = false;
-    for row in 0..row_count {
-        let value = rows.value(row)?;
-        if !value.is_none() {
-            direct_text = value.downcast::<PyString>().is_ok();
-            break;
+    if nullable {
+        for row in 0..row_count {
+            let value = rows.value(row)?;
+            if !value.is_none() {
+                direct_text = value.downcast::<PyString>().is_ok();
+                break;
+            }
         }
+    } else if row_count > 0 {
+        direct_text = rows.value(0)?.downcast::<PyString>().is_ok();
     }
-    let serializer = (!direct_text)
-        .then(|| {
-            py.import("clickhouse_connect.datatypes.dynamic")?
-                .getattr("any_to_json")
-        })
-        .transpose()?;
 
+    // Resolved lazily on the first row the native writer cannot serialize.
+    let mut serializer: Option<Bound<'py, PyAny>> = None;
     let mut offsets = Vec::with_capacity(row_count + 1);
-    let mut data = Vec::new();
+    let mut data = Vec::with_capacity(row_count.saturating_mul(64));
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
     offsets.push(0i32);
     for row in 0..row_count {
@@ -353,15 +348,31 @@ fn json_text_column_from_rows<'py, R: RowAccess<'py>>(
                 null_map.push(0);
             }
             if direct_text {
-                append_json_document(&value, name, row, &mut data)?;
+                append_json_document(&value, name, row, &mut data, false)?;
             } else {
-                let encoded = serializer
-                    .as_ref()
-                    .expect("serializer resolved for non-text JSON")
-                    .call1((&value,))
-                    .map_err(|err| json_serialize_err(py, name, row, err))?;
-                rows.validate()?;
-                append_json_document(&encoded, name, row, &mut data)?;
+                let row_start = data.len();
+                if write_json_value(value.as_ptr(), &mut data, 0).is_err() {
+                    data.truncate(row_start);
+                    let serializer = match &mut serializer {
+                        Some(serializer) => &*serializer,
+                        slot => {
+                            // Import and attribute lookup run Python, so the
+                            // source list must be revalidated before the next
+                            // unchecked row read.
+                            let resolved = py
+                                .import("clickhouse_connect.datatypes.dynamic")?
+                                .getattr("any_to_json")?;
+                            let serializer = slot.insert(resolved);
+                            rows.validate()?;
+                            &*serializer
+                        }
+                    };
+                    let encoded = serializer
+                        .call1((&value,))
+                        .map_err(|err| json_serialize_err(py, name, row, err))?;
+                    rows.validate()?;
+                    append_json_document(&encoded, name, row, &mut data, true)?;
+                }
             }
         }
         offsets.push(i32::try_from(data.len()).map_err(|_| {
@@ -381,6 +392,7 @@ fn append_json_document(
     name: &str,
     row: usize,
     data: &mut Vec<u8>,
+    serialized: bool,
 ) -> PyResult<()> {
     if let Ok(text) = value.downcast::<PyString>() {
         data.extend_from_slice(
@@ -400,10 +412,17 @@ fn append_json_document(
         data.extend_from_slice(unsafe { bytes.as_bytes() });
         return Ok(());
     }
-    Err(PyValueError::new_err(format!(
-        "column {name:?} row {row} JSON serializer returned {}, expected str or bytes",
-        python_type_name(value.as_ptr())
-    )))
+    let type_name = python_type_name(value.as_ptr());
+    Err(PyValueError::new_err(if serialized {
+        format!(
+            "column {name:?} row {row} JSON serializer returned {type_name}, expected str or bytes"
+        )
+    } else {
+        format!(
+            "column {name:?} row {row} is {type_name}, expected str because the first value marked \
+             this column as pre-serialized JSON strings"
+        )
+    }))
 }
 
 fn json_serialize_err(py: Python<'_>, name: &str, row: usize, err: PyErr) -> PyErr {
@@ -412,6 +431,162 @@ fn json_serialize_err(py: Python<'_>, name: &str, row: usize, err: PyErr) -> PyE
     ));
     wrapped.set_cause(py, Some(err));
     wrapped
+}
+
+/// Marker: the native JSON writer cannot serialize this value; the caller
+/// rewinds the row and uses the Python serializer.
+struct JsonUnsupported;
+
+/// Nesting depth past which the native writer defers to the Python serializer.
+const JSON_NATIVE_MAX_DEPTH: usize = 128;
+
+/// Write one Python value as JSON text using exact-type C-API fast paths.
+/// Exact None/bool/int/float/str/dict/list/tuple traversal runs no user
+/// Python, so the source column cannot mutate mid-row; anything else
+/// (subclasses, ints past i64, non-finite floats, non-str dict keys, depth
+/// past the cap) is `JsonUnsupported` and goes through the Python serializer.
+fn write_json_value(
+    value: *mut ffi::PyObject,
+    data: &mut Vec<u8>,
+    depth: usize,
+) -> Result<(), JsonUnsupported> {
+    if depth > JSON_NATIVE_MAX_DEPTH {
+        return Err(JsonUnsupported);
+    }
+    // SAFETY: value is live, the GIL is held for the whole traversal, and the
+    // borrowed container items read below stay valid because no user Python
+    // runs on this path.
+    unsafe {
+        if value == ffi::Py_None() {
+            data.extend_from_slice(b"null");
+            return Ok(());
+        }
+        if value == ffi::Py_True() {
+            data.extend_from_slice(b"true");
+            return Ok(());
+        }
+        if value == ffi::Py_False() {
+            data.extend_from_slice(b"false");
+            return Ok(());
+        }
+        if ffi::PyLong_CheckExact(value) != 0 {
+            let long = ffi::PyLong_AsLongLong(value);
+            if long == -1 && !ffi::PyErr_Occurred().is_null() {
+                ffi::PyErr_Clear();
+                return Err(JsonUnsupported);
+            }
+            // io::Write into a Vec is infallible.
+            let _ = write!(data, "{long}");
+            return Ok(());
+        }
+        if ffi::PyFloat_CheckExact(value) != 0 {
+            let float = ffi::PyFloat_AS_DOUBLE(value);
+            if !float.is_finite() {
+                return Err(JsonUnsupported);
+            }
+            let start = data.len();
+            let _ = write!(data, "{float}");
+            // Rust Display never uses exponents; a '.'-free rendering is a
+            // whole float and keeps its float-ness with an explicit ".0".
+            if !data[start..].contains(&b'.') {
+                data.extend_from_slice(b".0");
+            }
+            return Ok(());
+        }
+        if ffi::PyUnicode_CheckExact(value) != 0 {
+            write_json_string(json_utf8(value)?, data);
+            return Ok(());
+        }
+        if ffi::PyDict_CheckExact(value) != 0 {
+            data.push(b'{');
+            let mut pos: ffi::Py_ssize_t = 0;
+            let mut key: *mut ffi::PyObject = std::ptr::null_mut();
+            let mut item: *mut ffi::PyObject = std::ptr::null_mut();
+            let mut first = true;
+            while ffi::PyDict_Next(value, &mut pos, &mut key, &mut item) != 0 {
+                if ffi::PyUnicode_CheckExact(key) == 0 {
+                    return Err(JsonUnsupported);
+                }
+                if !first {
+                    data.push(b',');
+                }
+                first = false;
+                write_json_string(json_utf8(key)?, data);
+                data.push(b':');
+                write_json_value(item, data, depth + 1)?;
+            }
+            data.push(b'}');
+            return Ok(());
+        }
+        if ffi::PyList_CheckExact(value) != 0 {
+            data.push(b'[');
+            for index in 0..ffi::PyList_GET_SIZE(value) {
+                if index > 0 {
+                    data.push(b',');
+                }
+                write_json_value(ffi::PyList_GET_ITEM(value, index), data, depth + 1)?;
+            }
+            data.push(b']');
+            return Ok(());
+        }
+        if ffi::PyTuple_CheckExact(value) != 0 {
+            data.push(b'[');
+            for index in 0..ffi::PyTuple_GET_SIZE(value) {
+                if index > 0 {
+                    data.push(b',');
+                }
+                write_json_value(ffi::PyTuple_GET_ITEM(value, index), data, depth + 1)?;
+            }
+            data.push(b']');
+            return Ok(());
+        }
+    }
+    Err(JsonUnsupported)
+}
+
+/// Borrow the UTF-8 bytes of an exact str; a lone surrogate cannot encode and
+/// defers to the Python serializer.
+///
+/// # Safety
+///
+/// `value` must be a live exact `str` and the GIL must be held. The returned
+/// slice borrows the object's cached UTF-8 buffer.
+unsafe fn json_utf8<'a>(value: *mut ffi::PyObject) -> Result<&'a [u8], JsonUnsupported> {
+    let mut size: ffi::Py_ssize_t = 0;
+    let ptr = ffi::PyUnicode_AsUTF8AndSize(value, &mut size);
+    if ptr.is_null() {
+        ffi::PyErr_Clear();
+        return Err(JsonUnsupported);
+    }
+    Ok(std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize))
+}
+
+/// Emit a JSON string with mandatory-only escapes: `"`, `\`, and control
+/// bytes below 0x20 (`\n`/`\r`/`\t` short forms, `\u00XX` otherwise).
+/// Non-ASCII bytes pass through as raw UTF-8.
+fn write_json_string(bytes: &[u8], data: &mut Vec<u8>) {
+    data.push(b'"');
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        let escape: &[u8] = match byte {
+            b'"' => b"\\\"",
+            b'\\' => b"\\\\",
+            b'\n' => b"\\n",
+            b'\r' => b"\\r",
+            b'\t' => b"\\t",
+            0x00..=0x1f => b"",
+            _ => continue,
+        };
+        data.extend_from_slice(&bytes[start..index]);
+        if escape.is_empty() {
+            let _ = write!(data, "\\u{byte:04x}");
+        } else {
+            data.extend_from_slice(escape);
+        }
+        start = index + 1;
+    }
+    data.extend_from_slice(&bytes[start..]);
+    data.push(b'"');
 }
 
 /// Build Nothing from a Python column without constructing per-row scalar

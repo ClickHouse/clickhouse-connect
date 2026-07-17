@@ -22,13 +22,14 @@ use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, DynamicChild, DynamicColumn,
-    JsonBody, JsonColumn, MapColumn, TupleColumn, VariantColumn,
+    JsonBody, JsonColumn, MapColumn, StructuredJson, TupleColumn, VariantColumn,
 };
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::binary_value::{
     decode_binary_value, read_binary_type_prefix, BinaryValueError,
 };
 use ch_core_rs::native::decode::decode_all_bytes;
+use ch_core_rs::native::varint::ByteReader;
 use ch_core_rs::schema::ChType;
 
 use crate::decoder::{buffer_to_vec, decode_err, decode_options};
@@ -379,8 +380,10 @@ struct ColumnCtx<'py> {
 
 /// One ClickHouse JSON path prepared for repeated insertion into Python dicts.
 /// Splitting precedes percent decoding because `%2E` represents a literal dot
-/// inside one key rather than a nesting separator.
+/// inside one key rather than a nesting separator. `raw` keeps the declared
+/// path spelling for the typed-path order guard.
 struct JsonPath<'py> {
+    raw: String,
     keys: Vec<Bound<'py, PyString>>,
 }
 
@@ -431,7 +434,10 @@ fn prepare_json_path<'py>(py: Python<'py>, path: &str) -> PyResult<JsonPath<'py>
             None => Ok(PyString::new(py, segment)),
         })
         .collect::<PyResult<Vec<_>>>()?;
-    Ok(JsonPath { keys })
+    Ok(JsonPath {
+        raw: path.to_owned(),
+        keys,
+    })
 }
 
 /// Resolve a column's ChType into a ColumnCtx. Cheap for the common naive case
@@ -1561,7 +1567,7 @@ where
             DynamicChild::Shared(values) => {
                 // Cells with the same descriptor share one prepared context
                 // per fill.
-                let mut ctx_cache: HashMap<Vec<u8>, ColumnCtx<'py>> = HashMap::new();
+                let mut ctx_cache: SharedCtxCache<'py> = Vec::new();
                 for (child_row, &position) in positions.iter().enumerate() {
                     let item =
                         shared_cell_owned_ptr(py, values.value(child_row), Some(&mut ctx_cache))?;
@@ -1686,9 +1692,9 @@ unsafe fn fill_json_path_column<'py>(
     let mut err: Option<PyErr> = None;
     // Items rejected after the child sink sees them must stay alive until the
     // child fill returns. Some child fills populate containers after sinking.
-    let mut discarded: Vec<Py<PyAny>> = Vec::new();
+    let mut discarded: Vec<Bound<'py, PyAny>> = Vec::new();
     let mut path_sink = |row: usize, item: *mut ffi::PyObject| {
-        let item = Py::from_owned_ptr(py, item);
+        let item = Bound::from_owned_ptr(py, item);
         if err.is_some() || validity.is_some_and(|bitmap| !bitmap.is_valid(row)) {
             discarded.push(item);
             return;
@@ -1715,9 +1721,9 @@ unsafe fn fill_json_dynamic_path<'py>(
     validity: Option<&Bitmap>,
 ) -> PyResult<()> {
     let mut err: Option<PyErr> = None;
-    let mut discarded: Vec<Py<PyAny>> = Vec::new();
+    let mut discarded: Vec<Bound<'py, PyAny>> = Vec::new();
     let mut path_sink = |row: usize, item: *mut ffi::PyObject| {
-        let item = Py::from_owned_ptr(py, item);
+        let item = Bound::from_owned_ptr(py, item);
         if err.is_some()
             || validity.is_some_and(|bitmap| !bitmap.is_valid(row))
             || item.as_ptr() == ffi::Py_None()
@@ -1786,11 +1792,7 @@ where
         return Err(json_shape_err());
     }
 
-    let estimated_keys = structured
-        .typed
-        .len()
-        .saturating_add(structured.dynamic.len())
-        .min(ffi::Py_ssize_t::MAX as usize) as ffi::Py_ssize_t;
+    let estimated_keys = json_estimated_keys(structured);
     // Borrowed pointers after `sink` takes ownership; the sink contract keeps
     // every valid-row dict alive until this fill returns.
     let mut containers: Vec<*mut ffi::PyObject> = Vec::with_capacity(rows);
@@ -1804,12 +1806,11 @@ where
         sink(row, item);
     }
 
-    for (((declared_path, column), child_ctx), path) in
-        structured.typed.iter().zip(typed_ctxs).zip(typed_paths)
+    // The fills below zip the decoded typed columns with the declared-type
+    // contexts positionally; guard the order once per column per chunk.
+    check_typed_path_order(&structured.typed, typed_paths)?;
+    for (((_, column), child_ctx), path) in structured.typed.iter().zip(typed_ctxs).zip(typed_paths)
     {
-        // The core validates this against the schema; keep a binding-side
-        // guard before using positional contexts.
-        let _ = declared_path;
         fill_json_path_column(py, column, child_ctx, path, rows, &containers, validity)?;
     }
 
@@ -1823,8 +1824,8 @@ where
     {
         return Err(json_shape_err());
     }
-    let mut path_cache: HashMap<Vec<u8>, JsonPath<'py>> = HashMap::new();
-    let mut value_ctx_cache: HashMap<Vec<u8>, ColumnCtx<'py>> = HashMap::new();
+    let mut path_cache: JsonPathCache<'py> = Vec::new();
+    let mut value_ctx_cache: SharedCtxCache<'py> = Vec::new();
     for (row, &container) in containers.iter().enumerate() {
         let start =
             usize::try_from(structured.shared_offsets[row]).map_err(|_| json_shape_err())?;
@@ -1837,13 +1838,8 @@ where
             continue;
         }
         for index in start..end {
-            let path_bytes = structured.shared_paths.value(index);
-            if !path_cache.contains_key(path_bytes) {
-                let path_name = std::str::from_utf8(path_bytes).map_err(|_| json_shape_err())?;
-                path_cache.insert(path_bytes.to_vec(), prepare_json_path(py, path_name)?);
-            }
-            let path = path_cache.get(path_bytes).expect("path inserted above");
-            let item = Py::<PyAny>::from_owned_ptr(
+            let path = cached_json_path(py, &mut path_cache, structured.shared_paths.value(index))?;
+            let item = Bound::from_owned_ptr(
                 py,
                 shared_cell_owned_ptr(
                     py,
@@ -1860,22 +1856,109 @@ where
     Ok(())
 }
 
+/// Row-dict presize estimate: typed/dynamic dotted paths collapse into their
+/// distinct top-level keys, shared pairs contribute their per-row mean.
+fn json_estimated_keys(structured: &StructuredJson) -> ffi::Py_ssize_t {
+    let mean_shared = if structured.len == 0 {
+        0
+    } else {
+        structured.shared_paths.len().div_ceil(structured.len)
+    };
+    distinct_top_level_keys(structured)
+        .saturating_add(mean_shared)
+        .min(ffi::Py_ssize_t::MAX as usize) as ffi::Py_ssize_t
+}
+
+/// Count the distinct top-level key segments across the typed and dynamic
+/// paths, for row-dict presizing.
+fn distinct_top_level_keys(structured: &StructuredJson) -> usize {
+    let mut seen: Vec<&str> = Vec::new();
+    let paths = structured
+        .typed
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .chain(structured.dynamic.iter().map(|(path, _)| path.as_str()));
+    for path in paths {
+        let top = path.split('.').next().unwrap_or(path);
+        if !seen.contains(&top) {
+            seen.push(top);
+        }
+    }
+    seen.len()
+}
+
+/// Guard for the positional zip of decoded typed columns with declared-type
+/// contexts: each column's path must equal the declared path at its index.
+/// The caller has already checked the lengths match.
+fn check_typed_path_order(typed: &[(String, Column)], paths: &[JsonPath<'_>]) -> PyResult<()> {
+    for ((declared, _), path) in typed.iter().zip(paths) {
+        if declared != &path.raw {
+            return Err(PyValueError::new_err(format!(
+                "Malformed payload: JSON typed path '{declared}' does not match the declared path '{}'",
+                path.raw
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Tiny per-fill cache of prepared JSON paths keyed by the raw path bytes.
+/// Unique dynamic/shared paths per block are typically single digits, so a
+/// linear scan beats hashing.
+type JsonPathCache<'py> = Vec<(Vec<u8>, JsonPath<'py>)>;
+
+/// Look up or build the prepared path for `path_bytes`.
+fn cached_json_path<'cache, 'py>(
+    py: Python<'py>,
+    cache: &'cache mut JsonPathCache<'py>,
+    path_bytes: &[u8],
+) -> PyResult<&'cache JsonPath<'py>> {
+    match cache.iter().position(|(key, _)| key == path_bytes) {
+        Some(found) => Ok(&cache[found].1),
+        None => {
+            let path_name = std::str::from_utf8(path_bytes).map_err(|_| json_shape_err())?;
+            let path = prepare_json_path(py, path_name)?;
+            cache.push((path_bytes.to_vec(), path));
+            Ok(&cache.last().expect("pushed above").1)
+        }
+    }
+}
+
 /// Materialize one non-null JSON row for recursive container exits. The common
 /// top-level path uses `fill_json`'s column-major implementation instead.
+/// `cache` is the Array element chain's per-fill `ChainCache::Json`, carrying
+/// the resolved `json.loads`, prepared paths, and shared-cell contexts across
+/// cells of the same column.
 unsafe fn json_value_owned_ptr<'py>(
     py: Python<'py>,
     col: &JsonColumn,
     ctx: &ColumnCtx<'py>,
     row: usize,
+    cache: Option<&mut ChainCache<'py>>,
 ) -> PyResult<*mut ffi::PyObject> {
     if row >= col.len() {
         return Err(json_shape_err());
     }
+    let json_cache = match cache {
+        Some(ChainCache::Json(json_cache)) => Some(json_cache),
+        _ => None,
+    };
     match &col.body {
         JsonBody::Text(values) => {
-            let loads = py.import("json")?.getattr("loads")?;
             let document = pyo3::types::PyBytes::new(py, values.value(row));
-            return Ok(loads.call1((document,))?.into_ptr());
+            match json_cache {
+                Some(json_cache) => {
+                    if json_cache.loads.is_none() {
+                        json_cache.loads = Some(py.import("json")?.getattr("loads")?);
+                    }
+                    let loads = json_cache.loads.as_ref().expect("filled above");
+                    Ok(loads.call1((document,))?.into_ptr())
+                }
+                None => {
+                    let loads = py.import("json")?.getattr("loads")?;
+                    Ok(loads.call1((document,))?.into_ptr())
+                }
+            }
         }
         JsonBody::Structured(structured) => {
             let typed_ctxs = ctx.fields.as_deref().ok_or_else(|| ctx_missing("JSON"))?;
@@ -1888,11 +1971,27 @@ unsafe fn json_value_owned_ptr<'py>(
             {
                 return Err(json_shape_err());
             }
-            let estimated = structured
-                .typed
-                .len()
-                .saturating_add(structured.dynamic.len())
-                .min(ffi::Py_ssize_t::MAX as usize) as ffi::Py_ssize_t;
+            let (mut cached_paths, cached_shared, order_checked, cached_estimate) = match json_cache
+            {
+                Some(json_cache) => (
+                    Some(&mut json_cache.paths),
+                    Some(&mut json_cache.shared),
+                    Some(&mut json_cache.typed_order_checked),
+                    Some(&mut json_cache.estimated_keys),
+                ),
+                None => (None, None, None, None),
+            };
+            // Once per column when cached, once per cell otherwise.
+            if !order_checked.as_ref().is_some_and(|flag| **flag) {
+                check_typed_path_order(&structured.typed, typed_paths)?;
+                if let Some(flag) = order_checked {
+                    *flag = true;
+                }
+            }
+            let estimated = match cached_estimate {
+                Some(slot) => *slot.get_or_insert_with(|| json_estimated_keys(structured)),
+                None => json_estimated_keys(structured),
+            };
             let root = ptr_to_result(py, ffi::_PyDict_NewPresized(estimated))?;
             // Own the dict until the row is complete, so every error path drops
             // partially inserted values.
@@ -1900,20 +1999,25 @@ unsafe fn json_value_owned_ptr<'py>(
             for (((_, column), child_ctx), path) in
                 structured.typed.iter().zip(typed_ctxs).zip(typed_paths)
             {
-                let item = Py::<PyAny>::from_owned_ptr(
+                let item = Bound::from_owned_ptr(
                     py,
                     column_value_to_owned_ptr(py, column, child_ctx, row, None)?,
                 );
                 set_json_path(py, root.as_ptr(), path, item.as_ptr())?;
             }
             for (path_name, dynamic) in &structured.dynamic {
-                let item = Py::<PyAny>::from_owned_ptr(
-                    py,
-                    dynamic_value_owned_ptr(py, dynamic, row, None)?,
-                );
+                let item =
+                    Bound::from_owned_ptr(py, dynamic_value_owned_ptr(py, dynamic, row, None)?);
                 if item.as_ptr() != ffi::Py_None() {
-                    let path = prepare_json_path(py, path_name)?;
-                    set_json_path(py, root.as_ptr(), &path, item.as_ptr())?;
+                    let prepared;
+                    let path = match cached_paths.as_mut() {
+                        Some(cache) => cached_json_path(py, cache, path_name.as_bytes())?,
+                        None => {
+                            prepared = prepare_json_path(py, path_name)?;
+                            &prepared
+                        }
+                    };
+                    set_json_path(py, root.as_ptr(), path, item.as_ptr())?;
                 }
             }
             if structured.shared_offsets.len() <= row + 1 {
@@ -1929,21 +2033,30 @@ unsafe fn json_value_owned_ptr<'py>(
             {
                 return Err(json_shape_err());
             }
-            let mut value_ctx_cache = HashMap::new();
+            let mut local_shared: SharedCtxCache<'py> = Vec::new();
+            let shared_cache = cached_shared.unwrap_or(&mut local_shared);
             for index in start..end {
-                let path_name = std::str::from_utf8(structured.shared_paths.value(index))
-                    .map_err(|_| json_shape_err())?;
-                let path = prepare_json_path(py, path_name)?;
-                let item = Py::<PyAny>::from_owned_ptr(
+                let path_bytes = structured.shared_paths.value(index);
+                let prepared;
+                let path = match cached_paths.as_mut() {
+                    Some(cache) => cached_json_path(py, cache, path_bytes)?,
+                    None => {
+                        let path_name =
+                            std::str::from_utf8(path_bytes).map_err(|_| json_shape_err())?;
+                        prepared = prepare_json_path(py, path_name)?;
+                        &prepared
+                    }
+                };
+                let item = Bound::from_owned_ptr(
                     py,
                     shared_cell_owned_ptr(
                         py,
                         structured.shared_values.value(index),
-                        Some(&mut value_ctx_cache),
+                        Some(&mut *shared_cache),
                     )?,
                 );
                 if item.as_ptr() != ffi::Py_None() {
-                    set_json_path(py, root.as_ptr(), &path, item.as_ptr())?;
+                    set_json_path(py, root.as_ptr(), path, item.as_ptr())?;
                 }
             }
             Ok(root.into_ptr())
@@ -1966,36 +2079,177 @@ unsafe fn json_value_owned_ptr<'py>(
 unsafe fn shared_cell_owned_ptr<'py>(
     py: Python<'py>,
     cell: &[u8],
-    ctx_cache: Option<&mut HashMap<Vec<u8>, ColumnCtx<'py>>>,
+    mut ctx_cache: Option<&mut SharedCtxCache<'py>>,
 ) -> PyResult<*mut ffi::PyObject> {
     // Cells are varint-length framed, so the raw bytes are always
     // recoverable; an unknown descriptor tag is a future server type, not
     // corruption. Every descriptor-parse failure falls back to bytes.
+    if let Some(cache) = ctx_cache.as_deref_mut() {
+        // Binary type descriptors are a prefix code (the parser consumes
+        // exactly the descriptor from the front), so a cached descriptor
+        // prefix identifies the type and the cursor advance without a parse.
+        if let Some((key, ch_type, ctx)) = cache.iter().find(|(key, ..)| cell.starts_with(key)) {
+            return shared_payload_owned_ptr(py, ch_type, ctx, cell, key.len());
+        }
+    }
     let Ok((ch_type, consumed)) = read_binary_type_prefix(cell) else {
         return bytes_owned_ptr(py, cell);
     };
     if matches!(ch_type, ChType::AggregateFunction { .. }) {
         return bytes_owned_ptr(py, cell);
     }
-    let column = match decode_binary_value(&ch_type, &cell[consumed..]) {
+    let payload = &cell[consumed..];
+    if let Some(fast) = shared_scalar_owned_ptr(py, &ch_type, payload) {
+        // Scalar contexts need no Python machinery; cache for later cells.
+        if let Some(cache) = ctx_cache {
+            let ctx = prepare_column_ctx(py, &ch_type, false)?;
+            cache.push((cell[..consumed].to_vec(), ch_type, ctx));
+        }
+        return fast;
+    }
+    // Decode before preparing a context, so a bytes-fallback descriptor
+    // (Variant, Dynamic, JSON, ...) never runs the Python ctx machinery,
+    // which can raise (for one, a nested unknown timezone).
+    let column = match decode_binary_value(&ch_type, payload) {
         Ok(column) => column,
         Err(BinaryValueError::Unsupported(_)) => return bytes_owned_ptr(py, cell),
         Err(err) => return Err(shared_cell_err(&err)),
     };
-    match ctx_cache {
-        Some(cache) => {
-            if let Some(ctx) = cache.get(&cell[..consumed]) {
-                return column_value_to_owned_ptr(py, &column, ctx, 0, None);
-            }
-            let ctx = prepare_column_ctx(py, &ch_type, false)?;
-            let ctx = cache.entry(cell[..consumed].to_vec()).or_insert(ctx);
-            column_value_to_owned_ptr(py, &column, ctx, 0, None)
-        }
-        None => {
-            let ctx = prepare_column_ctx(py, &ch_type, false)?;
-            column_value_to_owned_ptr(py, &column, &ctx, 0, None)
+    let ctx = prepare_column_ctx(py, &ch_type, false)?;
+    if let Some(cache) = ctx_cache {
+        cache.push((cell[..consumed].to_vec(), ch_type, ctx));
+        let (_, _, ctx) = cache.last().expect("pushed above");
+        column_value_to_owned_ptr(py, &column, ctx, 0, None)
+    } else {
+        column_value_to_owned_ptr(py, &column, &ctx, 0, None)
+    }
+}
+
+/// Materialize the single value after a cache-hit cell's `consumed`-byte
+/// descriptor. Cached descriptors already passed the AggregateFunction gate;
+/// an Unsupported payload (an `Array(Nothing)` value, say) still falls back
+/// to bytes.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference; the caller must take over
+/// the reference count.
+unsafe fn shared_payload_owned_ptr<'py>(
+    py: Python<'py>,
+    ch_type: &ChType,
+    ctx: &ColumnCtx<'py>,
+    cell: &[u8],
+    consumed: usize,
+) -> PyResult<*mut ffi::PyObject> {
+    let payload = &cell[consumed..];
+    if let Some(fast) = shared_scalar_owned_ptr(py, ch_type, payload) {
+        return fast;
+    }
+    let column = match decode_binary_value(ch_type, payload) {
+        Ok(column) => column,
+        Err(BinaryValueError::Unsupported(_)) => return bytes_owned_ptr(py, cell),
+        Err(err) => return Err(shared_cell_err(&err)),
+    };
+    column_value_to_owned_ptr(py, &column, ctx, 0, None)
+}
+
+/// Direct materialization for the hot scalar shared-cell types, skipping the
+/// one-row Column build. Matches `decode_binary_value` semantics: truncation
+/// and trailing bytes are errors. `None` falls through to the generic route.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference; the caller must take over
+/// the reference count.
+unsafe fn shared_scalar_owned_ptr(
+    py: Python<'_>,
+    ch_type: &ChType,
+    payload: &[u8],
+) -> Option<PyResult<*mut ffi::PyObject>> {
+    unsafe fn fixed<const N: usize>(
+        py: Python<'_>,
+        payload: &[u8],
+        build: impl FnOnce([u8; N]) -> *mut ffi::PyObject,
+    ) -> PyResult<*mut ffi::PyObject> {
+        match payload.try_into() {
+            Ok(bytes) => ptr_to_result(py, build(bytes)),
+            // Match decode_binary_value's wording exactly.
+            Err(_) => Err(shared_cell_err(&BinaryValueError::Invalid(
+                if payload.len() < N {
+                    "truncated value payload".to_string()
+                } else {
+                    format!("{} trailing bytes after the value", payload.len() - N)
+                },
+            ))),
         }
     }
+    Some(match ch_type {
+        ChType::String => shared_string_owned_ptr(py, payload),
+        ChType::Bool => fixed(py, payload, |[b]: [u8; 1]| {
+            ffi::PyBool_FromLong(c_long::from(b != 0))
+        }),
+        ChType::Int8 => fixed(py, payload, |b: [u8; 1]| {
+            ffi::PyLong_FromLongLong(i8::from_le_bytes(b).into())
+        }),
+        ChType::Int16 => fixed(py, payload, |b: [u8; 2]| {
+            ffi::PyLong_FromLongLong(i16::from_le_bytes(b).into())
+        }),
+        ChType::Int32 => fixed(py, payload, |b: [u8; 4]| {
+            ffi::PyLong_FromLongLong(i32::from_le_bytes(b).into())
+        }),
+        ChType::Int64 => fixed(py, payload, |b: [u8; 8]| {
+            ffi::PyLong_FromLongLong(i64::from_le_bytes(b))
+        }),
+        ChType::UInt8 => fixed(py, payload, |b: [u8; 1]| {
+            ffi::PyLong_FromUnsignedLongLong(u8::from_le_bytes(b).into())
+        }),
+        ChType::UInt16 => fixed(py, payload, |b: [u8; 2]| {
+            ffi::PyLong_FromUnsignedLongLong(u16::from_le_bytes(b).into())
+        }),
+        ChType::UInt32 => fixed(py, payload, |b: [u8; 4]| {
+            ffi::PyLong_FromUnsignedLongLong(u32::from_le_bytes(b).into())
+        }),
+        ChType::UInt64 => fixed(py, payload, |b: [u8; 8]| {
+            ffi::PyLong_FromUnsignedLongLong(u64::from_le_bytes(b))
+        }),
+        ChType::Float32 => fixed(py, payload, |b: [u8; 4]| {
+            ffi::PyFloat_FromDouble(f32::from_le_bytes(b).into())
+        }),
+        ChType::Float64 => fixed(py, payload, |b: [u8; 8]| {
+            ffi::PyFloat_FromDouble(f64::from_le_bytes(b))
+        }),
+        _ => return None,
+    })
+}
+
+/// String shared-cell fast path: varint length plus raw bytes, materialized
+/// with the same invalid-UTF-8 hex fallback as the bulk String fill.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference; the caller must take over
+/// the reference count.
+unsafe fn shared_string_owned_ptr(py: Python<'_>, payload: &[u8]) -> PyResult<*mut ffi::PyObject> {
+    let mut reader = ByteReader::new(payload);
+    let bytes = (|| -> Result<&[u8], BinaryValueError> {
+        let len = usize::try_from(reader.read_varint()?)
+            .map_err(|_| BinaryValueError::Invalid("String value length overflows usize".into()))?;
+        if i32::try_from(len).is_err() {
+            return Err(BinaryValueError::Invalid(
+                "String value exceeds i32 offset range".into(),
+            ));
+        }
+        let bytes = reader.read_slice(len)?;
+        if reader.remaining() != 0 {
+            return Err(BinaryValueError::Invalid(format!(
+                "{} trailing bytes after the value",
+                reader.remaining()
+            )));
+        }
+        Ok(bytes)
+    })()
+    .map_err(|err| shared_cell_err(&err))?;
+    utf8_or_hex_owned_ptr(py, bytes)
 }
 
 /// Error for a malformed Dynamic SharedVariant cell.
@@ -2305,20 +2559,39 @@ unsafe fn materialize_run<'py>(
 /// Lazy cache of materialized dictionary slot objects, one entry per slot.
 type DictSlotCache = Vec<Option<Py<PyAny>>>;
 
+/// Descriptor bytes -> parsed type plus prepared context for SharedVariant
+/// and JSON shared-data cells. Distinct descriptors per block are typically
+/// single digits, so a linear scan beats hashing.
+type SharedCtxCache<'py> = Vec<(Vec<u8>, ChType, ColumnCtx<'py>)>;
+
+/// Per-fill cache for a JSON column inside an Array element chain: the
+/// resolved `json.loads`, prepared dynamic/shared paths, shared-cell
+/// descriptor contexts, and the once-per-column typed-order check. All fill
+/// lazily on first reference.
+#[derive(Default)]
+struct JsonChainCache<'py> {
+    loads: Option<Bound<'py, PyAny>>,
+    paths: JsonPathCache<'py>,
+    shared: SharedCtxCache<'py>,
+    typed_order_checked: bool,
+    estimated_keys: Option<ffi::Py_ssize_t>,
+}
+
 /// A per-fill cache for the terminal of an Array column's element chain. One
 /// cache per array column per chunk, threaded through the per-cell path.
 /// `Dict` caches materialized LowCardinality dictionary slots so repeated
 /// labels share one object, matching `fill_dictionary`'s reuse policy.
 /// `Dynamic` caches one prepared `ColumnCtx` per block-local Dynamic child,
 /// plus one per distinct SharedVariant descriptor, so
-/// `column_value_nonnull_ptr` does not rebuild contexts per cell. Both fill
-/// lazily on first reference.
+/// `column_value_nonnull_ptr` does not rebuild contexts per cell. `Json`
+/// carries the per-column JSON state. All fill lazily on first reference.
 enum ChainCache<'py> {
     Dict(DictSlotCache),
     Dynamic {
         contexts: Vec<Option<ColumnCtx<'py>>>,
-        shared: HashMap<Vec<u8>, ColumnCtx<'py>>,
+        shared: SharedCtxCache<'py>,
     },
+    Json(JsonChainCache<'py>),
 }
 
 /// Build the cache for the Dictionary or Dynamic column terminating an Array
@@ -2327,7 +2600,7 @@ fn new_array_chain_cache<'py>(col: &Column) -> Option<ChainCache<'py>> {
     fn chain_terminal(col: &Column) -> Option<&Column> {
         match col {
             Column::Array(c) => chain_terminal(&c.values),
-            Column::Dictionary(_) | Column::Dynamic(_) => Some(col),
+            Column::Dictionary(_) | Column::Dynamic(_) | Column::Json(_) => Some(col),
             _ => None,
         }
     }
@@ -2341,8 +2614,9 @@ fn new_array_chain_cache<'py>(col: &Column) -> Option<ChainCache<'py>> {
         Column::Dictionary(dict) => Some(ChainCache::Dict(empty_slots(dict.values.len()))),
         Column::Dynamic(dynamic) => Some(ChainCache::Dynamic {
             contexts: empty_slots(dynamic.children.len()),
-            shared: HashMap::new(),
+            shared: Vec::new(),
         }),
+        Column::Json(_) => Some(ChainCache::Json(JsonChainCache::default())),
         _ => None,
     }
 }
@@ -2669,7 +2943,7 @@ unsafe fn column_value_nonnull_ptr<'py>(
         // whose elements are already being materialized by index. Top-level
         // and Tuple/Map Dynamic runs use the child-major bulk scatter above.
         Column::Dynamic(c) => dynamic_value_owned_ptr(py, c, index, cache),
-        Column::Json(c) => json_value_owned_ptr(py, c, ctx, index),
+        Column::Json(c) => json_value_owned_ptr(py, c, ctx, index, cache),
     }
 }
 

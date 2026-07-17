@@ -5,7 +5,7 @@ from typing import Any, Literal
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.datatypes.base import ch_read_formats, ch_write_formats
+from clickhouse_connect.datatypes.base import ClickHouseType, ch_read_formats, ch_write_formats
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedError, ProgrammingError, StreamFailureError
@@ -140,8 +140,13 @@ def _binding_value_error(ex: ValueError) -> Error:
     return DataError(str(ex))
 
 
-def _contains_json_type(ch_type: Any) -> bool:
-    """Return whether a ClickHouse type contains JSON through any supported container."""
+def _contains_json_type(ch_type: object) -> bool:
+    """Return whether a ClickHouse type contains JSON through any supported container.
+
+    Probed child attributes are not always types (QBit.element_type is a str), so non-types are False.
+    """
+    if not isinstance(ch_type, ClickHouseType):
+        return False
     if ch_type.base_type == "JSON":
         return True
     for attr in ("element_type", "key_type", "value_type"):
@@ -355,18 +360,14 @@ class RustNativeTransform:
         if core is None:
             raise NotSupportedError('The rust native codec is unavailable (_ch_core not importable); use native_codec="python"')
 
-        # ClickHouse 24.8-24.9 require the legacy String-header JSON insert
-        # path. The core's JSON text encoder deliberately emits the modern
-        # JSON header plus structure word 1, so route those old servers through
-        # the established Python serializer rather than sending incompatible
-        # framing.
-        if dynamic_module.json_serialization_format == 0 and any(
-            _contains_json_type(ch_type) for ch_type in context.column_types
-        ):
+        # json_serialization_format 0 selects the legacy String-header JSON insert
+        # framing, which the core's JSON encoder does not emit. Route those inserts
+        # through the Python serializer.
+        if dynamic_module.json_serialization_format == 0 and any(_contains_json_type(ch_type) for ch_type in context.column_types):
             if self.strict:
                 raise NotSupportedError(
-                    'native_codec="rust_strict" does not support JSON inserts on ClickHouse 24.8-24.9; '
-                    'use native_codec="python" or "rust"'
+                    'native_codec="rust_strict" does not support JSON inserts while the legacy JSON serialization '
+                    'format is active. Use native_codec="python" or "rust"'
                 )
             logger.debug("Legacy JSON serialization required; using the Python codec")
             return NativeTransform.build_insert(context)
