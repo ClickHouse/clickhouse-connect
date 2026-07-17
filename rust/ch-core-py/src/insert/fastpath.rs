@@ -60,6 +60,13 @@ pub(super) fn build_nullable_column(
     if matches!(inner, ChType::Json { .. }) {
         return build_json_text_column(py, name, values, row_count, true);
     }
+    if let ChType::QBit {
+        element_type,
+        dimension,
+    } = inner
+    {
+        return build_qbit_column(py, name, *element_type, *dimension, values, row_count, true);
+    }
     if matches!(
         inner,
         ChType::Nullable(_) | ChType::LowCardinality(_) | ChType::Array(_) | ChType::Map(..)
@@ -622,27 +629,7 @@ impl FastValue for WireBool {
 /// the encoded values versus the generic per-item path. Any such buffer
 /// falls through to the generic path instead.
 fn matching_buffer<T: Element>(values: &Bound<'_, PyAny>, row_count: usize) -> Option<PyBuffer<T>> {
-    let Ok(buffer) = PyBuffer::<T>::get(values) else {
-        return None;
-    };
-    let (order, code) = match *buffer.format().to_bytes() {
-        [code] => (b'@', code),
-        [order, code] => (order, code),
-        _ => return None,
-    };
-    let native_order = match order {
-        b'@' => true,
-        b'<' | b'=' => cfg!(target_endian = "little"),
-        b'>' | b'!' => cfg!(target_endian = "big"),
-        _ => false,
-    };
-    if !native_order || code == b'c' {
-        return None;
-    }
-    if buffer.dimensions() != 1 || buffer.item_count() != row_count {
-        return None;
-    }
-    Some(buffer)
+    matching_native_buffer(values, &[row_count])
 }
 
 pub(super) fn buffer_values<T: Element>(

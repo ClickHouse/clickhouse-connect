@@ -165,7 +165,9 @@ class QBit(ClickHouseType):
                 if byte_val == 0:
                     continue
 
-                base_elem_idx = byte_idx << 3  # Each byte encodes 8 elements
+                # ClickHouse stores eight-element byte groups in reverse
+                # order inside each FixedString plane.
+                base_elem_idx = (self._bytes_per_fixedstring - 1 - byte_idx) << 3
 
                 # Extract set bits from this byte
                 for bit_in_byte in range(8):
@@ -182,6 +184,9 @@ class QBit(ClickHouseType):
         total_bytes = b"".join(bit_planes)
         planes_uint8 = options.np.frombuffer(total_bytes, dtype=options.np.uint8)
         planes_uint8 = planes_uint8.reshape(self._bits_per_element, -1)
+        # Native stores the eight-element byte groups in reverse order inside
+        # every FixedString plane. Restore logical vector order before unpacking.
+        planes_uint8 = planes_uint8[:, ::-1]
 
         # 2. Unpack bits to get the boolean/integer matrix
         bits_matrix = options.np.unpackbits(planes_uint8, axis=1, bitorder="little")
@@ -246,7 +251,7 @@ class QBit(ClickHouseType):
 
             for elem_idx, word in enumerate(words):
                 if word & mask:
-                    plane[elem_idx >> 3] |= bit_shifts[elem_idx & 7]
+                    plane[bytes_per_fs - 1 - (elem_idx >> 3)] |= bit_shifts[elem_idx & 7]
 
             bit_planes.append(bytes(plane))
 
@@ -279,5 +284,6 @@ class QBit(ClickHouseType):
         bits_extracted = (v_int & masks) != 0
 
         packed = options.np.packbits(bits_extracted.view(options.np.uint8), axis=1, bitorder="little")
+        packed = packed[:, ::-1]
 
         return tuple(row.tobytes() for row in packed)

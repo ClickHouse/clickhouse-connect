@@ -355,6 +355,9 @@ pub(super) fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<
         ChType::Nothing => py.None(),
         ChType::Bool => PyBool::new(py, false).to_owned().into_any().unbind(),
         ChType::String | ChType::FixedString(_) => PyString::new(py, "").into_any().unbind(),
+        ChType::QBit { dimension, .. } => PyList::new(py, std::iter::repeat_n(0.0, *dimension))?
+            .into_any()
+            .unbind(),
         ChType::Array(_) => PyList::empty(py).into_any().unbind(),
         ChType::Map(..) => PyDict::new(py).into_any().unbind(),
         ChType::Json { .. } => PyDict::new(py).into_any().unbind(),

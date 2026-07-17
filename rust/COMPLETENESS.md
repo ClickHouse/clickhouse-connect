@@ -33,7 +33,7 @@ handoff for Python integration work.
 - **Current type scope:** the first binding encoder targets the upstream
   encodable set: `Nothing`, `Bool`, fixed-width numerics, floats, `String`,
   `FixedString(N)`, `Date`, `Date32`, `DateTime`, `DateTime64(P[, tz])`, `UUID`,
-  `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Array(T)`, `Tuple(...)`
+  `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `QBit(T, D)`, `Array(T)`, `Tuple(...)`
   (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Variant(...)`,
   `Dynamic`, `JSON`, `Nullable(T)`, and `LowCardinality(T)` where the upstream
   core permits it. It also covers the three
@@ -87,6 +87,14 @@ handoff for Python integration work.
   values, matching the Python codec, and `Nullable(Nothing)` scans them only to
   retain the Native null map before the canonical one-byte marker run.
   `LowCardinality(Nothing)` remains invalid, as required by ClickHouse.
+- **QBit.** Decode materializes one fixed-length Python float list per row,
+  preserves parent nullability, and composes through Array, Tuple, Map, and
+  Variant. Insert dispatches the element width once and fills one final typed
+  child vector. Exact lists and tuples use CPython fast paths, while contiguous
+  two-dimensional native-endian PEP 3118 buffers use a bulk copy or conversion
+  path with exact shape validation. The core performs the bit-plane transpose
+  directly between that row-major child and Native bytes. Arrow remains the
+  core's zero-copy FixedSizeList export.
 - **Variant.** Decode preserves the server's intrinsic NULL as Python `None`
   and scatters each dense alternative directly into its logical row positions,
   including nested Array, Tuple, and Map shapes. Insert scans logical rows once,

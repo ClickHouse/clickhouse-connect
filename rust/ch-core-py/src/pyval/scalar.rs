@@ -38,9 +38,7 @@ pub(super) unsafe fn column_value_nonnull_ptr<'py>(
             py,
             ffi::PyFloat_FromDouble(bfloat16_to_f32(c.values[index]).into()),
         ),
-        Column::QBit(_) => Err(PyNotImplementedError::new_err(
-            "QBit Python materialization is not implemented",
-        )),
+        Column::QBit(c) => qbit_value_owned_ptr(py, c, index),
         Column::AggregateState(c) => bytes_owned_ptr(py, c.value(index)),
         // The bulk fill above serves top-level and Tuple/Map column runs.
         // This per-cell arm is needed for Array(Nothing) and other recursive

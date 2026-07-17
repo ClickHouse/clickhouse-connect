@@ -304,6 +304,12 @@ pub(super) fn build_element_column(
             aggregate_state_column_from_seq(py, name, ch_type, &seq, row_count)
         }
         ChType::Array(inner) => array_column_from_seq(py, name, inner, &seq, row_count),
+        ChType::QBit {
+            element_type,
+            dimension,
+        } => {
+            build_qbit_column_from_seq(py, name, *element_type, *dimension, &seq, row_count, false)
+        }
         ChType::Tuple(elements) => {
             tuple_column_from_seq(py, name, elements, &seq, row_count, false)
         }
@@ -332,6 +338,21 @@ pub(super) fn build_element_column(
                     py,
                     name,
                     &PtrRows { py, ptrs },
+                    row_count,
+                    true,
+                );
+            }
+            if let ChType::QBit {
+                element_type,
+                dimension,
+            } = inner.as_ref()
+            {
+                return build_qbit_column_from_seq(
+                    py,
+                    name,
+                    *element_type,
+                    *dimension,
+                    &seq,
                     row_count,
                     true,
                 );

@@ -109,6 +109,83 @@ def test_rust_codec_ab_parity(client_factory, call):
     assert [t.name for t in rust_result.column_types] == [t.name for t in python_result.column_types]
 
 
+def test_rust_codec_qbit_cross_codec_round_trip(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    if not python_client.min_version("25.10"):
+        pytest.skip("QBit requires ClickHouse 25.10+")
+
+    setting = python_client.server_settings.get("allow_experimental_qbit_type")
+    if setting is not None and setting.value != "1":
+        try:
+            rust_client.set_client_setting("allow_experimental_qbit_type", "1")
+            python_client.set_client_setting("allow_experimental_qbit_type", "1")
+            call(python_client.command, "SELECT 1")
+        except DatabaseError:
+            pytest.skip("QBit is experimental and cannot be enabled on this server")
+
+    rust_table = f"rc_qbit_rust_{client_mode}"
+    python_table = f"rc_qbit_python_{client_mode}"
+    schema = (
+        "id UInt8, f32 QBit(Float32, 9), f64 QBit(Float64, 5), bf Nullable(QBit(BFloat16, 3)), nested Array(Tuple(QBit(Float32, 9), UInt8))"
+    )
+    names = ["id", "f32", "f64", "bf", "nested"]
+    rows = [
+        [
+            1,
+            [-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -8.0, -9.0],
+            [-0.99105519, 1.28887844, -0.43526649, -0.98520696, 0.66154391],
+            [0.1, -2.5, 3.25],
+            [([-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -8.0, -9.0], 13)],
+        ],
+        [
+            2,
+            [0.25, 1.5, -2.75, 3.0, 4.125, -5.5, 6.75, 7.0, 8.5],
+            [float("inf"), float("-inf"), -0.0, 13.0, 79.0],
+            None,
+            [],
+        ],
+    ]
+
+    def assert_rows(actual, expected):
+        assert [row[0] for row in actual] == [row[0] for row in expected]
+        for actual_row, expected_row in zip(actual, expected):
+            assert actual_row[1] == pytest.approx(expected_row[1], rel=1e-6)
+            assert actual_row[2] == pytest.approx(expected_row[2])
+            if expected_row[3] is None:
+                assert actual_row[3] is None
+            else:
+                assert actual_row[3] == pytest.approx(expected_row[3], rel=1e-2, abs=1e-2)
+            assert len(actual_row[4]) == len(expected_row[4])
+            for (actual_vector, actual_tag), (expected_vector, expected_tag) in zip(actual_row[4], expected_row[4]):
+                assert actual_tag == expected_tag
+                assert actual_vector == pytest.approx(expected_vector, rel=1e-6)
+
+    def cross_read(insert_client, table):
+        call(insert_client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(insert_client.insert, table, rows, column_names=names)
+        query = f"SELECT * FROM {table} ORDER BY id"
+        rust_rows = call(rust_client.query, query).result_rows
+        python_rows = call(python_client.query, query).result_rows
+        assert rust_rows == python_rows
+        assert_rows(rust_rows, rows)
+        distance = call(
+            python_client.query,
+            f"SELECT L2DistanceTransposed(f32, %(reference)s, 32) FROM {table} WHERE id = 1",
+            parameters={"reference": rows[0][1]},
+        ).result_rows[0][0]
+        assert distance == pytest.approx(0.0, abs=1e-7)
+
+    try:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+        cross_read(rust_client, rust_table)
+        cross_read(python_client, python_table)
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+
+
 def test_rust_codec_variant_round_trip_parity(client_factory, call, client_mode):
     pytest.importorskip("pandas")
     probe = client_factory(native_codec="python")

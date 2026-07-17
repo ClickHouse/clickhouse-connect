@@ -5,7 +5,7 @@ use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::buffer::{Element, PyBuffer};
-use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -19,18 +19,19 @@ use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     AggregateStateColumn, ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn,
-    FixedBinaryColumn, JsonColumn, MapColumn, NothingColumn, PrimitiveColumn, TupleColumn,
-    Utf8Column, VariantColumn,
+    FixedBinaryColumn, JsonColumn, MapColumn, NothingColumn, PrimitiveColumn, QBitColumn,
+    TupleColumn, Utf8Column, VariantColumn,
 };
 use ch_core_rs::native::decode::{low_cardinality_dict_value_type, parse_ch_type};
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
-use ch_core_rs::schema::{ChType, Field, Schema};
+use ch_core_rs::schema::{ChType, Field, QBitElementType, Schema};
 
 use crate::decoder::buffer_to_vec;
 
 mod containers;
 mod fastpath;
 mod json;
+mod qbit;
 mod scalar;
 mod special;
 mod temporal;
@@ -39,6 +40,7 @@ mod variant;
 use containers::*;
 use fastpath::*;
 use json::*;
+use qbit::*;
 use scalar::*;
 use special::*;
 use temporal::*;
@@ -47,6 +49,36 @@ use variant::*;
 const EPOCH_DATE_ORDINAL: i64 = 719_163;
 const IPV4_V6_PREFIX: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
 const MAX_TIME_SECONDS: i64 = 999 * 3_600 + 59 * 60 + 59;
+
+/// Match a typed, native-endian PEP 3118 buffer with exactly the requested
+/// shape. PyO3 0.23 accepts opposite-endian primitive formats and maps `c`
+/// to a one-byte unsigned integer, so both cases need explicit rejection.
+fn matching_native_buffer<T: Element>(
+    value: &Bound<'_, PyAny>,
+    expected_shape: &[usize],
+) -> Option<PyBuffer<T>> {
+    let Ok(buffer) = PyBuffer::<T>::get(value) else {
+        return None;
+    };
+    let (order, code) = match *buffer.format().to_bytes() {
+        [code] => (b'@', code),
+        [order, code] => (order, code),
+        _ => return None,
+    };
+    let native_order = match order {
+        b'@' | b'=' => true,
+        b'<' => cfg!(target_endian = "little"),
+        b'>' | b'!' => cfg!(target_endian = "big"),
+        _ => false,
+    };
+    if !native_order || code == b'c' {
+        return None;
+    }
+    if buffer.dimensions() != expected_shape.len() || buffer.shape() != expected_shape {
+        return None;
+    }
+    Some(buffer)
+}
 
 #[pyfunction]
 #[pyo3(signature = (column_names, column_type_names, column_data, row_count, prefix=None))]
@@ -198,6 +230,18 @@ fn build_column(
             build_low_cardinality_column(py, name, inner, values, row_count)
         }
         ChType::Array(inner) => build_array_column(py, name, inner, values, row_count),
+        ChType::QBit {
+            element_type,
+            dimension,
+        } => build_qbit_column(
+            py,
+            name,
+            *element_type,
+            *dimension,
+            values,
+            row_count,
+            false,
+        ),
         ChType::Tuple(elements) => build_tuple_column(py, name, elements, values, row_count, false),
         ChType::Map(key, value) => build_map_column(py, name, key, value, values, row_count),
         ChType::Variant(alternatives) => {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::ffi::c_int;
 use std::ffi::{c_char, c_long};
 
-use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
+use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -12,7 +12,7 @@ use pyo3::types::{PyDate, PyDateTime, PyDelta, PyDict, PyList, PyString, PyTuple
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, DynamicChild, DynamicColumn,
-    JsonBody, JsonColumn, MapColumn, StructuredJson, TupleColumn, VariantColumn,
+    JsonBody, JsonColumn, MapColumn, QBitColumn, StructuredJson, TupleColumn, VariantColumn,
 };
 use ch_core_rs::native::binary_value::{
     decode_binary_value, read_binary_type_prefix, BinaryValueError,
@@ -26,6 +26,7 @@ mod errors;
 mod fixed;
 mod json;
 mod ptr;
+mod qbit;
 mod scalar;
 mod temporal;
 mod variant_dynamic;
@@ -39,6 +40,7 @@ use fixed::{
 };
 use json::{fill_json, json_value_owned_ptr, JsonPathCache};
 use ptr::*;
+use qbit::{fill_qbit, qbit_value_owned_ptr};
 use scalar::{
     column_value_nonnull_ptr, decimal_value_ptr, ipv4_value_ptr, ipv6_value_ptr, uuid_value_ptr,
     wide_int_value_ptr, DecimalScratch,
@@ -86,6 +88,9 @@ where
     }
     if let Column::AggregateState(states) = col {
         return fill_aggregate_states(py, states, rows, sink);
+    }
+    if let Column::QBit(qbit) = col {
+        return fill_qbit(py, qbit, rows, sink);
     }
     if fill_fixed_width(py, col, ctx, rows, sink)? {
         return Ok(());

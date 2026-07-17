@@ -64,7 +64,7 @@ numbers, with scope notes in `RESULTS.md` that matter before quoting them.
 ## Supported types
 
 Nothing, Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
-UInt128/256, Float32/64, BFloat16, String,
+UInt128/256, Float32/64, BFloat16, QBit, String,
 FixedString, Date, Date32, DateTime, DateTime64 with precision and
 timezone, Nullable, LowCardinality where ClickHouse permits it, Array, Tuple,
 Map, Variant, the supported name-decoration aliases, and the function
@@ -95,6 +95,12 @@ unsupported aggregate signatures, are rejected at decode time with a clean
 `ValueError` naming the column; malformed payloads raise a column-named
 `ValueError` as well. Type coverage lives in the core, so new types land there
 once and every binding gets them.
+
+QBit object results materialize as fixed-length Python lists of floats, with
+`None` at the parent level for nullable rows. Inserts accept row containers and
+contiguous two-dimensional PEP 3118 buffers such as NumPy float32/float64
+matrices. The buffer path builds one typed child allocation, and Arrow exports
+the core's zero-copy FixedSizeList representation.
 
 ## Prerequisite: the core crate
 
