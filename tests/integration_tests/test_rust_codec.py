@@ -272,6 +272,90 @@ def test_rust_codec_dynamic_decode_parity(client_factory, call, consume_stream):
     assert [row[2] for row in streamed] == DYNAMIC_SHARED_TYPED
 
 
+def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream, client_mode):
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    probe = client_factory(native_codec="python")
+    type_available(probe, "json")
+    if not probe.min_version("25.3"):
+        pytest.skip("Nullable(JSON) requires ClickHouse 25.3+")
+
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    rust_table = f"rc_json_rust_{client_mode}"
+    python_table = f"rc_json_python_{client_mode}"
+    schema = (
+        "id UInt8, "
+        "payload json(max_dynamic_paths=2, `typed.value` Int64), "
+        "nullable_payload Nullable(JSON), "
+        "items Array(JSON), "
+        "wrapped Tuple(payload JSON)"
+    )
+    names = ["id", "payload", "nullable_payload", "items", "wrapped"]
+    rows = [
+        [
+            0,
+            {"typed": {"value": 13}, "name": "user_1", "active": True, "score": 17},
+            None,
+            [{"kind": "first"}, {"count": 13}],
+            ({"nested": {"value": "a"}},),
+        ],
+        [
+            1,
+            {"typed": {"value": 79}, "ratio": 2.5, "deep": {"value": "x"}, "extra": -13},
+            {"nullable": "present"},
+            [],
+            ({"nested": {"value": "b"}},),
+        ],
+        [
+            2,
+            {"typed": {"value": 5}, "other": 79, "flag": False, "tail": "shared"},
+            {"array": [1, None, 3]},
+            [{"kind": "last"}],
+            ({"nested": {"value": "c"}},),
+        ],
+    ]
+
+    def create_and_insert(client, table):
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+        call(python_client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(client.insert, table, rows, column_names=names)
+
+    try:
+        create_and_insert(rust_client, rust_table)
+        create_and_insert(python_client, python_table)
+        rust_query = f"SELECT * FROM {rust_table} ORDER BY id"
+        python_query = f"SELECT * FROM {python_table} ORDER BY id"
+
+        # max_block_size=1 varies the block-local dynamic path set and forces
+        # shared-data overflow under max_dynamic_paths=2.
+        settings = {"max_block_size": 1}
+        rust_result = call(rust_client.query, rust_query, settings=settings)
+        python_result = call(python_client.query, python_query, settings=settings)
+        assert rust_result.result_rows == python_result.result_rows
+        assert [ch_type.name for ch_type in rust_result.column_types] == [
+            ch_type.name for ch_type in python_result.column_types
+        ]
+
+        rust_np = call(rust_client.query_np, rust_query, settings=settings)
+        python_np = call(python_client.query_np, python_query, settings=settings)
+        assert rust_np.dtype == python_np.dtype
+        assert rust_np.tolist() == rust_result.result_rows
+
+        rust_df = call(rust_client.query_df, rust_query, settings=settings)
+        assert list(rust_df.itertuples(index=False, name=None)) == rust_result.result_rows
+
+        streamed = []
+        consume_stream(
+            call(rust_client.query_rows_stream, rust_query, settings=settings),
+            streamed.append,
+        )
+        assert streamed == rust_result.result_rows
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+
+
 @pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
 def test_rust_codec_dynamic_insert_parity(client_factory, call, client_mode, native_codec):
     probe = client_factory(native_codec="python")

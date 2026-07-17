@@ -3,6 +3,7 @@ from collections.abc import Generator
 from typing import Any, Literal
 
 from clickhouse_connect import common
+from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ch_read_formats, ch_write_formats
 from clickhouse_connect.driver import options
@@ -137,6 +138,17 @@ def _binding_value_error(ex: ValueError) -> Error:
     # The binding raises NotImplementedError for unsupported input (handled separately at
     # each call site), so any ValueError from it is malformed data.
     return DataError(str(ex))
+
+
+def _contains_json_type(ch_type: Any) -> bool:
+    """Return whether a ClickHouse type contains JSON through any supported container."""
+    if ch_type.base_type == "JSON":
+        return True
+    for attr in ("element_type", "key_type", "value_type"):
+        child = getattr(ch_type, attr, None)
+        if child is not None and _contains_json_type(child):
+            return True
+    return any(_contains_json_type(child) for child in getattr(ch_type, "element_types", ()))
 
 
 def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
@@ -342,6 +354,22 @@ class RustNativeTransform:
         core = _ch_core_module()
         if core is None:
             raise NotSupportedError('The rust native codec is unavailable (_ch_core not importable); use native_codec="python"')
+
+        # ClickHouse 24.8-24.9 require the legacy String-header JSON insert
+        # path. The core's JSON text encoder deliberately emits the modern
+        # JSON header plus structure word 1, so route those old servers through
+        # the established Python serializer rather than sending incompatible
+        # framing.
+        if dynamic_module.json_serialization_format == 0 and any(
+            _contains_json_type(ch_type) for ch_type in context.column_types
+        ):
+            if self.strict:
+                raise NotSupportedError(
+                    'native_codec="rust_strict" does not support JSON inserts on ClickHouse 24.8-24.9; '
+                    'use native_codec="python" or "rust"'
+                )
+            logger.debug("Legacy JSON serialization required; using the Python codec")
+            return NativeTransform.build_insert(context)
 
         if ch_write_formats:
             # The rust encoder does not consult the global write-format registry, so per-value conversions

@@ -18,8 +18,8 @@ use ch_core_rs::batch::ColBatch as RustColBatch;
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     AggregateStateColumn, ArrayColumn, BoolColumn, Column, DecimalColumn, DictionaryColumn,
-    FixedBinaryColumn, MapColumn, NothingColumn, PrimitiveColumn, TupleColumn, Utf8Column,
-    VariantColumn,
+    FixedBinaryColumn, JsonColumn, MapColumn, NothingColumn, PrimitiveColumn, TupleColumn,
+    Utf8Column, VariantColumn,
 };
 use ch_core_rs::native::decode::{low_cardinality_dict_value_type, parse_ch_type};
 use ch_core_rs::native::encode::{encode_block, EncodeError, EncodeOptions};
@@ -68,7 +68,13 @@ pub(crate) fn encode_native_block(
     let mut fields = Vec::with_capacity(column_names.len());
     let mut columns = Vec::with_capacity(column_names.len());
     for (index, (name, type_name)) in column_names.iter().zip(&column_type_names).enumerate() {
-        let ch_type = parse_ch_type(type_name).ok_or_else(|| {
+        // clickhouse-connect renders JSON named arguments with spaces around
+        // `=`, while ClickHouse and the core use the compact canonical form.
+        // Normalize only those two JSON parameter names before parsing.
+        let normalized_type_name = type_name
+            .replace("max_dynamic_paths = ", "max_dynamic_paths=")
+            .replace("max_dynamic_types = ", "max_dynamic_types=");
+        let ch_type = parse_ch_type(&normalized_type_name).ok_or_else(|| {
             PyNotImplementedError::new_err(format!(
                 "unsupported ClickHouse type {type_name:?} for column {name:?}"
             ))
@@ -187,6 +193,7 @@ fn build_column(
             build_variant_column(py, name, alternatives, values, row_count)
         }
         ChType::Dynamic { .. } => build_dynamic_string_column(name, values, row_count),
+        ChType::Json { .. } => build_json_text_column(py, name, values, row_count, false),
         _ => build_plain_column(py, name, ch_type, values, row_count),
     }
 }
@@ -271,6 +278,140 @@ fn dynamic_string_column<'py, R: RowAccess<'py>>(rows: &R, row_count: usize) -> 
         offsets.push(offset);
     }
     Ok(Column::Utf8(Utf8Column::new(offsets, data)))
+}
+
+/// Build the core's STRING-mode JSON representation. The server performs its
+/// normal JSON path/type inference from each document, while the Native header
+/// remains the declared JSON type and the core emits structure word 1.
+fn build_json_text_column(
+    py: Python<'_>,
+    name: &str,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let rows = ColumnValues::new(values, name)?;
+    check_row_count(name, &rows, row_count)?;
+    if let Ok(list) = values.downcast_exact::<PyList>() {
+        return json_text_column_from_rows(
+            py,
+            name,
+            &ListRows {
+                py,
+                list,
+                name,
+                expected: row_count,
+            },
+            row_count,
+            nullable,
+        );
+    }
+    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        return json_text_column_from_rows(py, name, &TupleRows { py, tuple }, row_count, nullable);
+    }
+    json_text_column_from_rows(py, name, &rows, row_count, nullable)
+}
+
+fn json_text_column_from_rows<'py, R: RowAccess<'py>>(
+    py: Python<'py>,
+    name: &str,
+    rows: &R,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    // Match the Python codec's column-wide choice: a first non-null str means
+    // every value is already JSON text; otherwise every non-null value goes
+    // through the configured serializer, including later string values.
+    let mut direct_text = false;
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        if !value.is_none() {
+            direct_text = value.downcast::<PyString>().is_ok();
+            break;
+        }
+    }
+    let serializer = (!direct_text)
+        .then(|| {
+            py.import("clickhouse_connect.datatypes.dynamic")?
+                .getattr("any_to_json")
+        })
+        .transpose()?;
+
+    let mut offsets = Vec::with_capacity(row_count + 1);
+    let mut data = Vec::new();
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    offsets.push(0i32);
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        if value.is_none() {
+            if let Some(null_map) = &mut null_map {
+                null_map.push(1);
+            }
+            data.extend_from_slice(b"null");
+        } else {
+            if let Some(null_map) = &mut null_map {
+                null_map.push(0);
+            }
+            if direct_text {
+                append_json_document(&value, name, row, &mut data)?;
+            } else {
+                let encoded = serializer
+                    .as_ref()
+                    .expect("serializer resolved for non-text JSON")
+                    .call1((&value,))
+                    .map_err(|err| json_serialize_err(py, name, row, err))?;
+                rows.validate()?;
+                append_json_document(&encoded, name, row, &mut data)?;
+            }
+        }
+        offsets.push(i32::try_from(data.len()).map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {name:?} JSON document data exceeds i32 offset capacity"
+            ))
+        })?);
+    }
+    let validity = null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls));
+    Ok(Column::Json(
+        JsonColumn::text(Utf8Column::new(offsets, data)).with_validity(validity),
+    ))
+}
+
+fn append_json_document(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+    row: usize,
+    data: &mut Vec<u8>,
+) -> PyResult<()> {
+    if let Ok(text) = value.downcast::<PyString>() {
+        data.extend_from_slice(
+            text.to_str()
+                .map_err(|err| json_serialize_err(value.py(), name, row, err))?
+                .as_bytes(),
+        );
+        return Ok(());
+    }
+    if let Ok(bytes) = value.downcast::<PyBytes>() {
+        data.extend_from_slice(bytes.as_bytes());
+        return Ok(());
+    }
+    if let Ok(bytes) = value.downcast::<PyByteArray>() {
+        // SAFETY: the GIL is held and the complete bytearray is copied before
+        // any Python API can run and resize it.
+        data.extend_from_slice(unsafe { bytes.as_bytes() });
+        return Ok(());
+    }
+    Err(PyValueError::new_err(format!(
+        "column {name:?} row {row} JSON serializer returned {}, expected str or bytes",
+        python_type_name(value.as_ptr())
+    )))
+}
+
+fn json_serialize_err(py: Python<'_>, name: &str, row: usize, err: PyErr) -> PyErr {
+    let wrapped = PyValueError::new_err(format!(
+        "column {name:?} row {row} cannot be serialized as JSON"
+    ));
+    wrapped.set_cause(py, Some(err));
+    wrapped
 }
 
 /// Build Nothing from a Python column without constructing per-row scalar
@@ -786,6 +927,9 @@ fn build_element_column(
             variant_column_from_seq(py, name, alternatives, &seq, row_count)
         }
         ChType::Dynamic { .. } => dynamic_string_column(&PtrRows { py, ptrs }, row_count),
+        ChType::Json { .. } => {
+            json_text_column_from_rows(py, name, &PtrRows { py, ptrs }, row_count, false)
+        }
         ChType::Nullable(inner) => {
             // Nullable(Point) -> Nullable(Tuple), Nullable(SAF(T)) -> Nullable(T);
             // the physical delegate governs the nullable element shape.
@@ -797,6 +941,15 @@ fn build_element_column(
             }
             if matches!(inner.as_ref(), ChType::Nothing) {
                 return Ok(nothing_column_from_seq(&seq, row_count, true));
+            }
+            if matches!(inner.as_ref(), ChType::Json { .. }) {
+                return json_text_column_from_rows(
+                    py,
+                    name,
+                    &PtrRows { py, ptrs },
+                    row_count,
+                    true,
+                );
             }
             if matches!(
                 inner.as_ref(),
@@ -1614,6 +1767,7 @@ fn default_pyobject(py: Python<'_>, ch_type: &ChType) -> PyResult<Py<PyAny>> {
         ChType::String | ChType::FixedString(_) => PyString::new(py, "").into_any().unbind(),
         ChType::Array(_) => PyList::empty(py).into_any().unbind(),
         ChType::Map(..) => PyDict::new(py).into_any().unbind(),
+        ChType::Json { .. } => PyDict::new(py).into_any().unbind(),
         ChType::Tuple(elements) => {
             let defaults = elements
                 .iter()
@@ -1688,6 +1842,9 @@ fn build_nullable_column(
     }
     if matches!(inner, ChType::Nothing) {
         return build_nothing_column(name, values, row_count, true);
+    }
+    if matches!(inner, ChType::Json { .. }) {
+        return build_json_text_column(py, name, values, row_count, true);
     }
     if matches!(
         inner,
@@ -2046,11 +2203,68 @@ impl<'py> ColumnValues<'py> {
 /// container or a flattened strong-reference run.
 trait RowAccess<'py> {
     fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>>;
+
+    fn validate(&self) -> PyResult<()> {
+        Ok(())
+    }
 }
 
 impl<'py> RowAccess<'py> for ColumnValues<'py> {
     fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
         self.get_item(row)
+    }
+}
+
+/// Borrowed exact-list access for JSON serialization. The configured Python
+/// serializer can execute arbitrary code, so the list size is revalidated
+/// before the next unchecked item read.
+struct ListRows<'a, 'py> {
+    py: Python<'py>,
+    list: &'a Bound<'py, PyList>,
+    name: &'a str,
+    expected: usize,
+}
+
+impl<'py> RowAccess<'py> for ListRows<'_, 'py> {
+    fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
+        // SAFETY: callers iterate below `expected`, which `validate` confirms
+        // after every operation that may execute Python.
+        Ok(unsafe {
+            Bound::from_borrowed_ptr(
+                self.py,
+                ffi::PyList_GET_ITEM(self.list.as_ptr(), row as ffi::Py_ssize_t),
+            )
+        })
+    }
+
+    fn validate(&self) -> PyResult<()> {
+        if self.list.len() == self.expected {
+            Ok(())
+        } else {
+            Err(PyValueError::new_err(format!(
+                "column {:?} values changed size during JSON serialization",
+                self.name
+            )))
+        }
+    }
+}
+
+/// Borrowed exact-tuple access needs no resize guard because tuples are
+/// immutable.
+struct TupleRows<'a, 'py> {
+    py: Python<'py>,
+    tuple: &'a Bound<'py, PyTuple>,
+}
+
+impl<'py> RowAccess<'py> for TupleRows<'_, 'py> {
+    fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
+        // SAFETY: row_count was checked against the immutable tuple length.
+        Ok(unsafe {
+            Bound::from_borrowed_ptr(
+                self.py,
+                ffi::PyTuple_GET_ITEM(self.tuple.as_ptr(), row as ffi::Py_ssize_t),
+            )
+        })
     }
 }
 
@@ -4178,6 +4392,9 @@ fn column_from_scalars(
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
             "Dynamic columns are built by the String insert path, not the scalar path",
         )),
+        ChType::Json { .. } => Err(PyNotImplementedError::new_err(
+            "JSON columns are built by the JSON text insert path, not the scalar path",
+        )),
     }
 }
 
@@ -4460,6 +4677,9 @@ fn convert_scalar(
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
             "Dynamic columns are built by the String insert path, not the scalar path",
         )),
+        ChType::Json { .. } => Err(PyNotImplementedError::new_err(
+            "JSON columns are built by the JSON text insert path, not the scalar path",
+        )),
     }
 }
 
@@ -4522,6 +4742,9 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         }
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
             "Dynamic columns are built by the String insert path, not the scalar path",
+        )),
+        ChType::Json { .. } => Err(PyNotImplementedError::new_err(
+            "JSON columns are built by the JSON text insert path, not the scalar path",
         )),
     }
 }

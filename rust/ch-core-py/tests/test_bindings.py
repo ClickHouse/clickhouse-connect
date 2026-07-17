@@ -813,7 +813,7 @@ class TestEncodeNativeBlock:
         with pytest.raises(ValueError, match="FixedString binary value"):
             _ch_core.encode_native_block(["fs"], ["FixedString(4)"], [[b"xy"]], 1)
         with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
-            _ch_core.encode_native_block(["v"], ["JSON"], [[{"a": 1}]], 1)
+            _ch_core.encode_native_block(["v"], ["Object('json')"], [[{"a": 1}]], 1)
         with pytest.raises(ValueError, match="label"):
             _ch_core.encode_native_block(["e"], ["Enum8('ok' = 1)"], [["missing"]], 1)
 
@@ -3452,9 +3452,10 @@ class TestArray:
         assert col[0][0] is col[0][2]
         assert col[0][0] is col[2][1]
 
-    def test_unsupported_element_rejected(self):
-        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
-            _ch_core.encode_native_block(["a"], ["Array(JSON)"], [[[{"a": 1}]]], 1)
+    def test_json_element_round_trip(self):
+        rows = [[{"a": 13}, {"b": "user_1"}], [], [{"c": [1, 2]}]]
+        encoded = _ch_core.encode_native_block(["a"], ["Array(JSON)"], [rows], len(rows))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
 
     def test_deeply_nested_type_rejected_not_crash(self):
         # Past the parser depth cap the type is rejected without a stack overflow.
@@ -4454,6 +4455,151 @@ _DYNAMIC_TIME = bytes.fromhex(
     000000000000000d00000000000000
     """
 )
+
+
+def _structured_json_block(nullable=False):
+    """Independent V2 JSON fixture with typed, dynamic, and shared paths."""
+    type_name = "JSON(`a%2Eb` Int64)"
+    body = bytearray(struct.pack("<Q", 2))
+    body.extend(_encode_varint(1))
+    body.extend(_encode_varint_string("nested.value"))
+
+    # The declared Int64 typed path has no prefix. The dynamic path has one
+    # String alternative plus the implicit SharedVariant, in BASIC mode.
+    body.extend(struct.pack("<Q", 2))
+    body.extend(_encode_varint(1))
+    body.extend(_encode_varint_string("String"))
+    body.extend(struct.pack("<Q", 0))
+
+    if nullable:
+        body.extend(b"\x00\x01")
+    body.extend(struct.pack("<qq", 13, 79))
+    body.extend(b"\x01\xff")
+    body.extend(_encode_plain_body("String", ["user_1"]))
+
+    # One shared pair in row 0, none in row 1. Its value is an Int64 binary
+    # descriptor followed by one scalar payload.
+    body.extend(struct.pack("<QQ", 1, 1))
+    body.extend(_encode_varint_string("shared%2Ekey.inner"))
+    shared_value = b"\x0a" + struct.pack("<q", 5)
+    body.extend(_encode_varint(len(shared_value)))
+    body.extend(shared_value)
+    if nullable:
+        type_name = f"Nullable({type_name})"
+    return build_native_block_from_bodies([("j", type_name, bytes(body))], 2)
+
+
+class TestJson:
+    def test_structured_typed_dynamic_shared_all_object_exits(self):
+        expected = [
+            {
+                "a.b": 13,
+                "nested": {"value": "user_1"},
+                "shared.key": {"inner": 5},
+            },
+            {"a.b": 79},
+        ]
+        batch = _ch_core.ColBatch.decode_native(_structured_json_block())
+        assert list(batch.column_data(0)) == expected
+        assert [list(column) for column in batch.to_python_columns()] == [expected]
+        assert list(batch.to_python_rows()) == [(expected[0],), (expected[1],)]
+
+        pa = pytest.importorskip("pyarrow")
+        table = pa.RecordBatchReader.from_stream(batch).read_all()
+        assert table.num_rows == 2
+        assert pa.types.is_struct(table.schema.field("j").type)
+
+    def test_nullable_structured_json(self):
+        batch = _ch_core.ColBatch.decode_native(_structured_json_block(nullable=True))
+        assert list(batch.column_data(0)) == [
+            {
+                "a.b": 13,
+                "nested": {"value": "user_1"},
+                "shared.key": {"inner": 5},
+            },
+            None,
+        ]
+
+    @pytest.mark.parametrize(
+        ("type_name", "rows"),
+        [
+            ("JSON", [{"a": 13}, {"b": [1, 2]}]),
+            ("Nullable(JSON)", [{"a": 13}, None]),
+            ("Array(JSON)", [[{"a": 13}, {"b": "user_1"}], []]),
+            ("Tuple(JSON, UInt8)", [({"a": 13}, 1), ({"b": "user_1"}, 2)]),
+            (
+                "Array(Tuple(JSON, UInt8))",
+                [[({"a": 13}, 1)], [({"b": "user_1"}, 2)]],
+            ),
+            (
+                "Map(String, JSON)",
+                [{"first": {"a": 13}}, {"second": {"b": "user_1"}}],
+            ),
+        ],
+    )
+    def test_text_insert_container_matrix(self, type_name, rows):
+        encoded = _ch_core.encode_native_block(["j"], [type_name], [rows], len(rows))
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    def test_text_insert_variant(self):
+        from clickhouse_connect.datatypes.dynamic import typed_variant
+
+        rows = [typed_variant({"a": 13}, "JSON"), "user_1"]
+        encoded = _ch_core.encode_native_block(
+            ["j"], ["Variant(JSON, String)"], [rows], len(rows)
+        )
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == [
+            {"a": 13},
+            "user_1",
+        ]
+
+    def test_text_insert_preserves_column_wide_string_mode(self):
+        rows = ['{"a":13}', '{"b":"user_1"}']
+        encoded = _ch_core.encode_native_block(["j"], ["JSON"], [rows], len(rows))
+        # The structure word immediately after the Native header is STRING=1.
+        header = 2 + 2 + 5
+        assert encoded[header : header + 8] == struct.pack("<Q", 1)
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == [
+            {"a": 13},
+            {"b": "user_1"},
+        ]
+
+    def test_text_insert_serializes_each_non_null_value_once(self, monkeypatch):
+        from clickhouse_connect.datatypes import dynamic
+
+        calls = []
+
+        def serialize(value):
+            calls.append(value)
+            return f'{{"id":{value["id"]}}}'
+
+        monkeypatch.setattr(dynamic, "any_to_json", serialize)
+        rows = [None, {"id": 13}, {"id": 79}]
+        encoded = _ch_core.encode_native_block(
+            ["j"], ["Nullable(JSON)"], [rows], len(rows)
+        )
+        assert calls == rows[1:]
+        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    def test_text_insert_rejects_list_resize_during_serializer(self, monkeypatch):
+        from clickhouse_connect.datatypes import dynamic
+
+        rows = [{"id": 13}, {"id": 79}]
+
+        def serialize(value):
+            rows.pop()
+            return f'{{"id":{value["id"]}}}'
+
+        monkeypatch.setattr(dynamic, "any_to_json", serialize)
+        with pytest.raises(ValueError, match="changed size during JSON serialization"):
+            _ch_core.encode_native_block(["j"], ["JSON"], [rows], len(rows))
+
+    def test_invalid_structure_maps_to_value_error(self):
+        malformed = build_native_block_from_bodies(
+            [("j", "JSON", struct.pack("<Q", 99))], 1
+        )
+        with pytest.raises(ValueError, match="Invalid JSON layout"):
+            _ch_core.ColBatch.decode_native(malformed)
 
 
 class TestDynamic:
@@ -5691,16 +5837,14 @@ class TestArrowCapsuleLifecycle:
 
 class TestUnsupportedType:
     def test_raises_value_error(self):
-        # JSON is not a supported column type, so it surfaces as a clean
-        # UnsupportedType -> ValueError. (UUID, IPv4/IPv6, Enum, Array, Tuple,
-        # and Map are decoded by the core now, so they no longer exercise this
-        # path.)
+        # A server type the core does not implement surfaces as a clean
+        # UnsupportedType error before body decoding.
         buf = bytearray()
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint(1))
         buf.extend(_encode_varint_string("id"))
-        buf.extend(_encode_varint_string("JSON"))
-        with pytest.raises(NotImplementedError, match="Unsupported ClickHouse type 'JSON'"):
+        buf.extend(_encode_varint_string("QBit(UInt8, 8)"))
+        with pytest.raises(NotImplementedError, match="Unsupported ClickHouse type 'QBit"):
             _ch_core.ColBatch.decode_native(bytes(buf))
 
 

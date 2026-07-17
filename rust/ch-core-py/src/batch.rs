@@ -22,7 +22,7 @@ use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::bitmap::Bitmap;
 use ch_core_rs::column::{
     AggregateStateColumn, Column, DecimalColumn, DictionaryColumn, DynamicChild, DynamicColumn,
-    MapColumn, TupleColumn, VariantColumn,
+    JsonBody, JsonColumn, MapColumn, TupleColumn, VariantColumn,
 };
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::binary_value::{
@@ -361,16 +361,27 @@ struct ColumnCtx<'py> {
     /// Recursively-prepared per-field contexts. For a Tuple column, one per
     /// element in declaration order; for a Map column, exactly two (the key
     /// context then the value context); for a Variant column, one per dense
-    /// alternative in the server's canonical discriminator order. Dynamic
-    /// children are block-local, so their contexts are prepared once per child
-    /// in `fill_dynamic` instead of being stored here. `None` for any other
-    /// type.
+    /// alternative in the server's canonical discriminator order. JSON uses
+    /// one entry per declared typed path. Dynamic children are block-local, so
+    /// their contexts are prepared once per child in `fill_dynamic` instead of
+    /// being stored here. `None` for any other type.
     fields: Option<Vec<ColumnCtx<'py>>>,
     /// Pre-built element-name keys for a NAMED Tuple column, materialized as a
     /// `dict` keyed by these (clickhouse-connect's default read format).
     /// `None` for an unnamed Tuple (materialized as a `tuple`) and every
     /// non-Tuple type.
     tuple_names: Option<Vec<Bound<'py, PyString>>>,
+    /// Pre-split, percent-decoded keys for each declared JSON typed path.
+    /// Dynamic and shared paths are block-local and are prepared once per path
+    /// by `fill_json`.
+    json_paths: Option<Vec<JsonPath<'py>>>,
+}
+
+/// One ClickHouse JSON path prepared for repeated insertion into Python dicts.
+/// Splitting precedes percent decoding because `%2E` represents a literal dot
+/// inside one key rather than a nesting separator.
+struct JsonPath<'py> {
+    keys: Vec<Bound<'py, PyString>>,
 }
 
 /// Cached objects to build a `uuid.UUID` the way the Cython codec does:
@@ -403,6 +414,24 @@ fn enum_name_map<'py, V: Copy + Into<i64>>(
         .iter()
         .map(|(name, value)| ((*value).into(), PyString::new(py, name)))
         .collect()
+}
+
+fn prepare_json_path<'py>(py: Python<'py>, path: &str) -> PyResult<JsonPath<'py>> {
+    let unquote = path
+        .contains('%')
+        .then(|| py.import("urllib.parse")?.getattr("unquote"))
+        .transpose()?;
+    let keys = path
+        .split('.')
+        .map(|segment| match &unquote {
+            Some(unquote) => unquote
+                .call1((segment,))?
+                .downcast_into::<PyString>()
+                .map_err(Into::into),
+            None => Ok(PyString::new(py, segment)),
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(JsonPath { keys })
 }
 
 /// Resolve a column's ChType into a ColumnCtx. Cheap for the common naive case
@@ -526,7 +555,7 @@ fn prepare_column_ctx<'py>(
     // value); its entries live in a nested Tuple column reached directly, so it
     // needs no tuple_names. `resolved` is the Nullable-unwrapped type, so a
     // `Nullable(Tuple(...))` reaches the Tuple arm here.
-    let (fields, tuple_names) = match resolved {
+    let (fields, tuple_names, json_paths) = match resolved {
         ChType::Tuple(elements) => {
             let fields = elements
                 .iter()
@@ -546,14 +575,14 @@ fn prepare_column_ctx<'py>(
             } else {
                 None
             };
-            (Some(fields), names)
+            (Some(fields), names, None)
         }
         ChType::Map(key, value) => {
             let fields = vec![
                 prepare_column_ctx(py, key, raw_time_ticks)?,
                 prepare_column_ctx(py, value, raw_time_ticks)?,
             ];
-            (Some(fields), None)
+            (Some(fields), None, None)
         }
         // Variant alternatives always materialize finalized values; the
         // driver's raw-ticks materializer does not walk Variant cells.
@@ -562,9 +591,20 @@ fn prepare_column_ctx<'py>(
                 .iter()
                 .map(|alternative| prepare_column_ctx(py, alternative, false))
                 .collect::<PyResult<Vec<_>>>()?;
-            (Some(fields), None)
+            (Some(fields), None, None)
         }
-        _ => (None, None),
+        ChType::Json { typed_paths, .. } => {
+            let fields = typed_paths
+                .iter()
+                .map(|(_, ch_type)| prepare_column_ctx(py, ch_type, raw_time_ticks))
+                .collect::<PyResult<Vec<_>>>()?;
+            let paths = typed_paths
+                .iter()
+                .map(|(path, _)| prepare_json_path(py, path))
+                .collect::<PyResult<Vec<_>>>()?;
+            (Some(fields), None, Some(paths))
+        }
+        _ => (None, None, None),
     };
 
     Ok(ColumnCtx {
@@ -580,6 +620,7 @@ fn prepare_column_ctx<'py>(
         element,
         fields,
         tuple_names,
+        json_paths,
     })
 }
 
@@ -939,6 +980,8 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         // Variant has intrinsic NULL rows in its dense-union routing buffers,
         // not a top-level validity bitmap.
         Column::Variant(_) => None,
+        // JSON only carries top-level validity under Nullable(JSON).
+        Column::Json(c) => c.validity.as_ref(),
     }
 }
 
@@ -1530,6 +1573,384 @@ where
     Ok(())
 }
 
+/// Materialize one logical Dynamic cell. Used by recursive container/JSON
+/// exits; top-level Dynamic columns keep the child-major bulk fill above.
+unsafe fn dynamic_value_owned_ptr<'py>(
+    py: Python<'py>,
+    col: &DynamicColumn,
+    index: usize,
+    mut cache: Option<&mut ChainCache<'py>>,
+) -> PyResult<*mut ffi::PyObject> {
+    let (&type_id, &offset) = col
+        .type_ids
+        .get(index)
+        .zip(col.offsets.get(index))
+        .ok_or_else(dynamic_shape_err)?;
+    let offset = usize::try_from(offset).map_err(|_| dynamic_shape_err())?;
+    if type_id == u32::MAX {
+        if offset >= col.nulls.len {
+            return Err(dynamic_shape_err());
+        }
+        return Ok(none_owned_ptr());
+    }
+    let child_index = usize::try_from(type_id).map_err(|_| dynamic_shape_err())?;
+    let child = col
+        .children
+        .get(child_index)
+        .ok_or_else(dynamic_shape_err)?;
+    if offset >= child.len() {
+        return Err(dynamic_shape_err());
+    }
+    match child {
+        DynamicChild::Typed { ch_type, values } => {
+            if let Some(ChainCache::Dynamic { contexts, .. }) = cache.as_deref_mut() {
+                if let Some(entry) = contexts.get_mut(child_index) {
+                    if entry.is_none() {
+                        *entry = Some(prepare_column_ctx(py, ch_type, false)?);
+                    }
+                    let child_ctx = entry.as_ref().expect("entry filled above");
+                    return column_value_to_owned_ptr(py, values, child_ctx, offset, None);
+                }
+            }
+            let child_ctx = prepare_column_ctx(py, ch_type, false)?;
+            column_value_to_owned_ptr(py, values, &child_ctx, offset, None)
+        }
+        DynamicChild::Shared(values) => {
+            let shared_cache = match cache {
+                Some(ChainCache::Dynamic { shared, .. }) => Some(shared),
+                _ => None,
+            };
+            shared_cell_owned_ptr(py, values.value(offset), shared_cache)
+        }
+    }
+}
+
+/// Insert one materialized value at a prepared dotted JSON path. Intermediate
+/// dicts are allocated only on first use and then reused by later paths in the
+/// same row.
+///
+/// # Safety
+///
+/// `root` must be a live exact dict and `value` a live Python object. The GIL
+/// must be held.
+unsafe fn set_json_path(
+    py: Python<'_>,
+    root: *mut ffi::PyObject,
+    path: &JsonPath<'_>,
+    value: *mut ffi::PyObject,
+) -> PyResult<()> {
+    let Some((last, parents)) = path.keys.split_last() else {
+        return Err(json_shape_err());
+    };
+    let mut current = root;
+    for key in parents {
+        let mut child = ffi::PyDict_GetItemWithError(current, key.as_ptr());
+        if child.is_null() && !ffi::PyErr_Occurred().is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        if child.is_null() || child == ffi::Py_None() {
+            let created = ptr_to_result(py, ffi::PyDict_New())?;
+            if ffi::PyDict_SetItem(current, key.as_ptr(), created) < 0 {
+                ffi::Py_DECREF(created);
+                return Err(PyErr::fetch(py));
+            }
+            // The parent dict owns a reference now; keep only a borrowed
+            // pointer while descending.
+            ffi::Py_DECREF(created);
+            child = created;
+        } else if ffi::PyDict_Check(child) == 0 {
+            return Err(PyValueError::new_err(
+                "Malformed payload: JSON paths collide at a non-object value",
+            ));
+        }
+        current = child;
+    }
+    if ffi::PyDict_SetItem(current, last.as_ptr(), value) < 0 {
+        return Err(PyErr::fetch(py));
+    }
+    Ok(())
+}
+
+/// Fill one JSON path column directly into the already-allocated row dicts.
+/// Dynamic/shared NULL values are absent paths, while typed NULL values remain
+/// explicit keys.
+unsafe fn fill_json_path_column<'py>(
+    py: Python<'py>,
+    column: &Column,
+    ctx: &ColumnCtx<'py>,
+    path: &JsonPath<'py>,
+    rows: usize,
+    containers: &[*mut ffi::PyObject],
+    validity: Option<&Bitmap>,
+) -> PyResult<()> {
+    let mut err: Option<PyErr> = None;
+    // Items rejected after the child sink sees them must stay alive until the
+    // child fill returns. Some child fills populate containers after sinking.
+    let mut discarded: Vec<Py<PyAny>> = Vec::new();
+    let mut path_sink = |row: usize, item: *mut ffi::PyObject| {
+        let item = Py::from_owned_ptr(py, item);
+        if err.is_some() || validity.is_some_and(|bitmap| !bitmap.is_valid(row)) {
+            discarded.push(item);
+            return;
+        }
+        if let Err(path_err) = set_json_path(py, containers[row], path, item.as_ptr()) {
+            err = Some(path_err);
+            discarded.push(item);
+        }
+    };
+    let mut erased: DynSink<'_> = &mut path_sink;
+    fill_column(py, column, ctx, rows, &mut erased)?;
+    if let Some(err) = err {
+        return Err(err);
+    }
+    Ok(())
+}
+
+unsafe fn fill_json_dynamic_path<'py>(
+    py: Python<'py>,
+    column: &DynamicColumn,
+    path: &JsonPath<'py>,
+    rows: usize,
+    containers: &[*mut ffi::PyObject],
+    validity: Option<&Bitmap>,
+) -> PyResult<()> {
+    let mut err: Option<PyErr> = None;
+    let mut discarded: Vec<Py<PyAny>> = Vec::new();
+    let mut path_sink = |row: usize, item: *mut ffi::PyObject| {
+        let item = Py::from_owned_ptr(py, item);
+        if err.is_some()
+            || validity.is_some_and(|bitmap| !bitmap.is_valid(row))
+            || item.as_ptr() == ffi::Py_None()
+        {
+            discarded.push(item);
+            return;
+        }
+        if let Err(path_err) = set_json_path(py, containers[row], path, item.as_ptr()) {
+            err = Some(path_err);
+            discarded.push(item);
+        }
+    };
+    fill_dynamic(py, column, rows, &mut path_sink)?;
+    if let Some(err) = err {
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Materialize a JSON column as nested Python dicts. Typed and dynamic paths
+/// are filled column-major, preserving the binding's one-dispatch-per-column
+/// policy. Shared-data descriptors and path keys are cached across rows.
+///
+/// # Safety
+///
+/// Requires the GIL; `fill_column`'s sink contract applies.
+unsafe fn fill_json<'py, S>(
+    py: Python<'py>,
+    col: &JsonColumn,
+    ctx: &ColumnCtx<'py>,
+    rows: usize,
+    sink: &mut S,
+) -> PyResult<()>
+where
+    S: FnMut(usize, *mut ffi::PyObject),
+{
+    if rows != col.len() {
+        return Err(json_shape_err());
+    }
+    let validity = col.validity.as_ref();
+    let JsonBody::Structured(structured) = &col.body else {
+        let JsonBody::Text(values) = &col.body else {
+            unreachable!()
+        };
+        let loads = py.import("json")?.getattr("loads")?;
+        for row in 0..rows {
+            if validity.is_some_and(|bitmap| !bitmap.is_valid(row)) {
+                sink(row, none_owned_ptr());
+                continue;
+            }
+            let document = pyo3::types::PyBytes::new(py, values.value(row));
+            sink(row, loads.call1((document,))?.into_ptr());
+        }
+        return Ok(());
+    };
+
+    let typed_ctxs = ctx.fields.as_deref().ok_or_else(|| ctx_missing("JSON"))?;
+    let typed_paths = ctx
+        .json_paths
+        .as_deref()
+        .ok_or_else(|| ctx_missing("JSON"))?;
+    if structured.typed.len() != typed_ctxs.len()
+        || structured.typed.len() != typed_paths.len()
+        || structured.len != rows
+    {
+        return Err(json_shape_err());
+    }
+
+    let estimated_keys = structured
+        .typed
+        .len()
+        .saturating_add(structured.dynamic.len())
+        .min(ffi::Py_ssize_t::MAX as usize) as ffi::Py_ssize_t;
+    // Borrowed pointers after `sink` takes ownership; the sink contract keeps
+    // every valid-row dict alive until this fill returns.
+    let mut containers: Vec<*mut ffi::PyObject> = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let item = if validity.is_some_and(|bitmap| !bitmap.is_valid(row)) {
+            none_owned_ptr()
+        } else {
+            ptr_to_result(py, ffi::_PyDict_NewPresized(estimated_keys))?
+        };
+        containers.push(item);
+        sink(row, item);
+    }
+
+    for (((declared_path, column), child_ctx), path) in
+        structured.typed.iter().zip(typed_ctxs).zip(typed_paths)
+    {
+        // The core validates this against the schema; keep a binding-side
+        // guard before using positional contexts.
+        let _ = declared_path;
+        fill_json_path_column(py, column, child_ctx, path, rows, &containers, validity)?;
+    }
+
+    for (path_name, dynamic) in &structured.dynamic {
+        let path = prepare_json_path(py, path_name)?;
+        fill_json_dynamic_path(py, dynamic, &path, rows, &containers, validity)?;
+    }
+
+    if structured.shared_offsets.len() != rows.saturating_add(1)
+        || structured.shared_paths.len() != structured.shared_values.len()
+    {
+        return Err(json_shape_err());
+    }
+    let mut path_cache: HashMap<Vec<u8>, JsonPath<'py>> = HashMap::new();
+    let mut value_ctx_cache: HashMap<Vec<u8>, ColumnCtx<'py>> = HashMap::new();
+    for (row, &container) in containers.iter().enumerate() {
+        let start =
+            usize::try_from(structured.shared_offsets[row]).map_err(|_| json_shape_err())?;
+        let end =
+            usize::try_from(structured.shared_offsets[row + 1]).map_err(|_| json_shape_err())?;
+        if start > end || end > structured.shared_paths.len() {
+            return Err(json_shape_err());
+        }
+        if validity.is_some_and(|bitmap| !bitmap.is_valid(row)) {
+            continue;
+        }
+        for index in start..end {
+            let path_bytes = structured.shared_paths.value(index);
+            if !path_cache.contains_key(path_bytes) {
+                let path_name = std::str::from_utf8(path_bytes).map_err(|_| json_shape_err())?;
+                path_cache.insert(path_bytes.to_vec(), prepare_json_path(py, path_name)?);
+            }
+            let path = path_cache.get(path_bytes).expect("path inserted above");
+            let item = Py::<PyAny>::from_owned_ptr(
+                py,
+                shared_cell_owned_ptr(
+                    py,
+                    structured.shared_values.value(index),
+                    Some(&mut value_ctx_cache),
+                )?,
+            );
+            // JSON nulls are absent paths, matching the Python codec.
+            if item.as_ptr() != ffi::Py_None() {
+                set_json_path(py, container, path, item.as_ptr())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Materialize one non-null JSON row for recursive container exits. The common
+/// top-level path uses `fill_json`'s column-major implementation instead.
+unsafe fn json_value_owned_ptr<'py>(
+    py: Python<'py>,
+    col: &JsonColumn,
+    ctx: &ColumnCtx<'py>,
+    row: usize,
+) -> PyResult<*mut ffi::PyObject> {
+    if row >= col.len() {
+        return Err(json_shape_err());
+    }
+    match &col.body {
+        JsonBody::Text(values) => {
+            let loads = py.import("json")?.getattr("loads")?;
+            let document = pyo3::types::PyBytes::new(py, values.value(row));
+            return Ok(loads.call1((document,))?.into_ptr());
+        }
+        JsonBody::Structured(structured) => {
+            let typed_ctxs = ctx.fields.as_deref().ok_or_else(|| ctx_missing("JSON"))?;
+            let typed_paths = ctx
+                .json_paths
+                .as_deref()
+                .ok_or_else(|| ctx_missing("JSON"))?;
+            if structured.typed.len() != typed_ctxs.len()
+                || structured.typed.len() != typed_paths.len()
+            {
+                return Err(json_shape_err());
+            }
+            let estimated = structured
+                .typed
+                .len()
+                .saturating_add(structured.dynamic.len())
+                .min(ffi::Py_ssize_t::MAX as usize) as ffi::Py_ssize_t;
+            let root = ptr_to_result(py, ffi::_PyDict_NewPresized(estimated))?;
+            // Own the dict until the row is complete, so every error path drops
+            // partially inserted values.
+            let root = Bound::from_owned_ptr(py, root).downcast_into_unchecked::<PyDict>();
+            for (((_, column), child_ctx), path) in
+                structured.typed.iter().zip(typed_ctxs).zip(typed_paths)
+            {
+                let item = Py::<PyAny>::from_owned_ptr(
+                    py,
+                    column_value_to_owned_ptr(py, column, child_ctx, row, None)?,
+                );
+                set_json_path(py, root.as_ptr(), path, item.as_ptr())?;
+            }
+            for (path_name, dynamic) in &structured.dynamic {
+                let item = Py::<PyAny>::from_owned_ptr(
+                    py,
+                    dynamic_value_owned_ptr(py, dynamic, row, None)?,
+                );
+                if item.as_ptr() != ffi::Py_None() {
+                    let path = prepare_json_path(py, path_name)?;
+                    set_json_path(py, root.as_ptr(), &path, item.as_ptr())?;
+                }
+            }
+            if structured.shared_offsets.len() <= row + 1 {
+                return Err(json_shape_err());
+            }
+            let start =
+                usize::try_from(structured.shared_offsets[row]).map_err(|_| json_shape_err())?;
+            let end = usize::try_from(structured.shared_offsets[row + 1])
+                .map_err(|_| json_shape_err())?;
+            if start > end
+                || end > structured.shared_paths.len()
+                || end > structured.shared_values.len()
+            {
+                return Err(json_shape_err());
+            }
+            let mut value_ctx_cache = HashMap::new();
+            for index in start..end {
+                let path_name = std::str::from_utf8(structured.shared_paths.value(index))
+                    .map_err(|_| json_shape_err())?;
+                let path = prepare_json_path(py, path_name)?;
+                let item = Py::<PyAny>::from_owned_ptr(
+                    py,
+                    shared_cell_owned_ptr(
+                        py,
+                        structured.shared_values.value(index),
+                        Some(&mut value_ctx_cache),
+                    )?,
+                );
+                if item.as_ptr() != ffi::Py_None() {
+                    set_json_path(py, root.as_ptr(), &path, item.as_ptr())?;
+                }
+            }
+            Ok(root.into_ptr())
+        }
+    }
+}
+
 /// Materialize one SharedVariant cell (binary type descriptor + one
 /// `serializeBinary` value) as a typed Python object: decode the value to a
 /// one-row Column and route it through the same conversion machinery as a
@@ -1637,6 +2058,7 @@ where
         Column::Dictionary(dict) => fill_dictionary(py, dict, ctx, rows, sink),
         Column::Variant(c) => fill_variant(py, c, ctx, rows, sink),
         Column::Dynamic(c) => fill_dynamic(py, c, rows, sink),
+        Column::Json(c) => fill_json(py, c, ctx, rows, sink),
         Column::Tuple(c) => fill_tuple(py, c, ctx, rows, sink),
         Column::Map(c) => fill_map(py, c, ctx, rows, sink),
         _ => {
@@ -2246,52 +2668,8 @@ unsafe fn column_value_nonnull_ptr<'py>(
         // Dynamic's per-cell path is used inside Array and other containers
         // whose elements are already being materialized by index. Top-level
         // and Tuple/Map Dynamic runs use the child-major bulk scatter above.
-        Column::Dynamic(c) => {
-            let (&type_id, &offset) = c
-                .type_ids
-                .get(index)
-                .zip(c.offsets.get(index))
-                .ok_or_else(dynamic_shape_err)?;
-            let offset = usize::try_from(offset).map_err(|_| dynamic_shape_err())?;
-            if type_id == u32::MAX {
-                if offset >= c.nulls.len {
-                    return Err(dynamic_shape_err());
-                }
-                return Ok(none_owned_ptr());
-            }
-            let child_index = usize::try_from(type_id).map_err(|_| dynamic_shape_err())?;
-            let child = c.children.get(child_index).ok_or_else(dynamic_shape_err)?;
-            if offset >= child.len() {
-                return Err(dynamic_shape_err());
-            }
-            match child {
-                DynamicChild::Typed { ch_type, values } => {
-                    // The Array chain cache holds one prepared context per
-                    // block-local child, so repeated cells of one child do
-                    // not rebuild it.
-                    if let Some(ChainCache::Dynamic { contexts, .. }) = cache {
-                        if let Some(entry) = contexts.get_mut(child_index) {
-                            if entry.is_none() {
-                                *entry = Some(prepare_column_ctx(py, ch_type, false)?);
-                            }
-                            let child_ctx = entry.as_ref().expect("entry filled above");
-                            return column_value_to_owned_ptr(py, values, child_ctx, offset, None);
-                        }
-                    }
-                    let child_ctx = prepare_column_ctx(py, ch_type, false)?;
-                    column_value_to_owned_ptr(py, values, &child_ctx, offset, None)
-                }
-                DynamicChild::Shared(values) => {
-                    // The Array chain cache also holds the per-descriptor
-                    // contexts for shared cells.
-                    let shared_cache = match cache {
-                        Some(ChainCache::Dynamic { shared, .. }) => Some(shared),
-                        _ => None,
-                    };
-                    shared_cell_owned_ptr(py, values.value(offset), shared_cache)
-                }
-            }
-        }
+        Column::Dynamic(c) => dynamic_value_owned_ptr(py, c, index, cache),
+        Column::Json(c) => json_value_owned_ptr(py, c, ctx, index),
     }
 }
 
@@ -2401,6 +2779,10 @@ fn variant_shape_err() -> PyErr {
 /// Error for malformed Dynamic dense-union routing or child lengths.
 fn dynamic_shape_err() -> PyErr {
     PyValueError::new_err("Malformed payload: Dynamic routing or child length mismatch")
+}
+
+fn json_shape_err() -> PyErr {
+    PyValueError::new_err("Malformed payload: JSON path or child layout mismatch")
 }
 
 /// Error for a UUID/IPv6 cell whose fixed width is not 16 bytes.

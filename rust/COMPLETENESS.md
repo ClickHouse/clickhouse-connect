@@ -35,8 +35,8 @@ handoff for Python integration work.
   `FixedString(N)`, `Date`, `Date32`, `DateTime`, `DateTime64(P[, tz])`, `UUID`,
   `IPv4`, `IPv6`, `Enum8`/`Enum16`, `Decimal(P, S)`, `Array(T)`, `Tuple(...)`
   (named or unnamed, including `Nullable(Tuple)`), `Map(K, V)`, `Variant(...)`,
-  `Nullable(T)`, and `LowCardinality(T)` where the upstream core permits it. It
-  also covers the three
+  `Dynamic`, `JSON`, `Nullable(T)`, and `LowCardinality(T)` where the upstream
+  core permits it. It also covers the three
   name-decoration alias families the core resolves through `ChType::physical_delegate`:
   `SimpleAggregateFunction(func, T)`, the six geo types (`Point`, `Ring`, `LineString`,
   `MultiLineString`, `Polygon`, `MultiPolygon`), and `Nested(...)`. Registered
@@ -117,6 +117,20 @@ handoff for Python integration work.
   producing the same wire bytes as the Python codec, so the server keeps its
   setting-dependent text inference and both `native_codec="rust"` and
   `"rust_strict"` insert Dynamic without a fallback.
+- **JSON.** Decode supports the core's V1, V2, flattened, and String Native
+  layouts. Structured Python exits allocate one dictionary per valid row and
+  fill typed and dynamic paths column-major, then decode shared-data cells with
+  cached path and type-descriptor metadata. This avoids cloning Dynamic columns
+  or performing a Python mapping lookup for every path segment. Escaped dots in
+  path names remain literal keys. Arrow export delegates to the core's
+  structured arrays and dynamic union representation; String-layout output is
+  UTF-8. Insert accepts the same dictionary and JSON object string inputs as the
+  Python codec, serializes each Python object once with the driver's configured
+  JSON serializer, and hands a contiguous UTF-8 column to the core's JSON text
+  encoder. Nullable and Array/Tuple/Map/Variant nesting compose through the
+  ordinary container paths. ClickHouse 24.8-24.9 requires the legacy String
+  column header for JSON inserts, so non-strict mode selects the Python encoder
+  before producing bytes and strict mode raises a targeted compatibility error.
 - **AggregateFunction.** The Python object exit returns each supported
   function's exact serialized state as `bytes`; Arrow remains the core's
   zero-copy LargeBinary export. Insert accepts bytes-like state values and
@@ -244,7 +258,7 @@ Suggested precedence:
 
 Scope should stay precise: `native_codec` applies only to client-managed
 `FORMAT Native` encode/decode. It should not affect Arrow, raw inserts, raw
-queries, JSON, Parquet, or caller-provided byte streams.
+queries, non-Native JSON formats, Parquet, or caller-provided byte streams.
 
 Fallback policy differs by direction:
 

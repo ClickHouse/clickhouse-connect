@@ -60,6 +60,10 @@ def _uint64_ctx(data, block_size=None, query_formats=None, column_formats=None) 
     )
 
 
+def _json_ctx(data, type_name="JSON") -> InsertContext:
+    return InsertContext("fake_table", ["payload"], [get_from_name(type_name)], data)
+
+
 @pytest.fixture(name="restore_native_codec")
 def restore_native_codec_fixture():
     original = common.get_setting("native_codec")
@@ -322,6 +326,36 @@ def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, cle
 
     rust_out = b"".join(RustNativeTransform(strict=False).build_insert(rust_ctx))
     python_out = b"".join(NativeTransform.build_insert(python_ctx))
+    assert rust_out == python_out
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    ["JSON", "Array(JSON)", "Tuple(id UInt8, payload JSON)", "Map(String, JSON)"],
+)
+def test_build_insert_legacy_json_strict_raises(monkeypatch, type_name):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run for legacy JSON serialization")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
+    with pytest.raises(NotSupportedError, match="24.8-24.9"):
+        RustNativeTransform(strict=True).build_insert(_json_ctx([], type_name))
+
+
+def test_build_insert_legacy_json_non_strict_falls_back(monkeypatch):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run for legacy JSON serialization")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
+    rows = [({"id": 13},), ({"name": "user_1"},)]
+    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_json_ctx(rows)))
+    python_out = b"".join(NativeTransform.build_insert(_json_ctx(rows)))
     assert rust_out == python_out
 
 

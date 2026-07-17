@@ -82,11 +82,19 @@ Python `bytes` and export zero-copy as Arrow LargeBinary. Dynamic insert
 builds the driver's established String input column natively, with exact
 `str(value)` parity (`None` becomes the literal `"NULL"`), so the server keeps
 its setting-dependent text inference and both `native_codec="rust"` and
-`"rust_strict"` insert Dynamic without a fallback. Other unsupported types,
-plus unsupported aggregate signatures, are rejected at decode time with a
-clean `ValueError` naming the column; malformed payloads raise a column-named
-`ValueError` as well. Type coverage lives in the core, so new
-types land there once and every binding gets them.
+`"rust_strict"` insert Dynamic without a fallback. JSON query decode supports
+the core's structured and text Native layouts, including typed, dynamic, and
+shared paths. Python object exits reconstruct dictionaries with escaped path
+segments preserved, while Arrow uses the core's structured zero-copy export.
+JSON inserts accept dictionaries or JSON object strings and use the core's
+text Native encoder; JSON also composes under Nullable, Array, Tuple, Map, and
+Variant. ClickHouse 24.8-24.9 JSON inserts use the Python compatibility path in
+`native_codec="rust"` and fail clearly in strict mode because those releases
+require the legacy String column header. Other unsupported types, plus
+unsupported aggregate signatures, are rejected at decode time with a clean
+`ValueError` naming the column; malformed payloads raise a column-named
+`ValueError` as well. Type coverage lives in the core, so new types land there
+once and every binding gets them.
 
 ## Prerequisite: the core crate
 
