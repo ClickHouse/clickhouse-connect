@@ -4,7 +4,7 @@ use std::ffi::c_int;
 use std::ffi::{c_char, c_long, CString};
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyUnicodeDecodeError, PyValueError};
+use pyo3::exceptions::{PyNotImplementedError, PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -948,6 +948,7 @@ fn column_validity(col: &Column) -> Option<&Bitmap> {
         Column::Float32(c) => c.validity.as_ref(),
         Column::Float64(c) => c.validity.as_ref(),
         Column::BFloat16(c) => c.validity.as_ref(),
+        Column::QBit(c) => c.validity.as_ref(),
         Column::Nothing(c) => c.validity.as_ref(),
         Column::Date(c) => c.validity.as_ref(),
         Column::Date32(c) => c.validity.as_ref(),
@@ -2726,6 +2727,9 @@ unsafe fn column_value_nonnull_ptr<'py>(
             py,
             ffi::PyFloat_FromDouble(bfloat16_to_f32(c.values[index]).into()),
         ),
+        Column::QBit(_) => Err(PyNotImplementedError::new_err(
+            "QBit Python materialization is not implemented",
+        )),
         Column::AggregateState(c) => bytes_owned_ptr(py, c.value(index)),
         // The bulk fill above serves top-level and Tuple/Map column runs.
         // This per-cell arm is needed for Array(Nothing) and other recursive

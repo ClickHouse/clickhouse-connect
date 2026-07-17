@@ -4529,6 +4529,9 @@ fn column_from_scalars(
         ChType::BFloat16 => {
             primitive_column!(scalars, validity, BFloat16, BFloat16, [u8; 2])
         }
+        ChType::QBit { .. } => Err(PyNotImplementedError::new_err(format!(
+            "unsupported ClickHouse type {ch_type}"
+        ))),
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
             "AggregateFunction insert conversion is not implemented",
         )),
@@ -4794,6 +4797,9 @@ fn convert_scalar(
                     .map(Scalar::BFloat16)
                     .map_err(|_| conversion_error(column, row, "BFloat16"))
             }),
+        ChType::QBit { .. } => Err(PyNotImplementedError::new_err(format!(
+            "unsupported ClickHouse type {ch_type} for column {column:?}"
+        ))),
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
             "AggregateFunction insert conversion is not implemented",
         )),
@@ -4901,6 +4907,9 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Float32 => Ok(Scalar::Float32(0.0)),
         ChType::Float64 => Ok(Scalar::Float64(0.0)),
         ChType::BFloat16 => Ok(Scalar::BFloat16([0; 2])),
+        ChType::QBit { .. } => Err(PyNotImplementedError::new_err(format!(
+            "unsupported ClickHouse type {ch_type}"
+        ))),
         ChType::AggregateFunction { .. } => Err(PyNotImplementedError::new_err(
             "AggregateFunction has no generic default state; provide exact serialized state bytes",
         )),
