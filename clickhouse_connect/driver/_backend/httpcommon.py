@@ -8,7 +8,6 @@ between httpclient.py and asyncclient.py.
 from __future__ import annotations
 
 import gzip
-import io
 import json
 import logging
 import re
@@ -20,7 +19,6 @@ from importlib.metadata import version as dist_version
 from typing import TYPE_CHECKING, Any, Protocol
 
 import lz4.frame
-import zstandard
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver.client import Client
@@ -32,7 +30,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier, use_form_encoding
 from clickhouse_connect.driver.common import coerce_bool, dict_copy
-from clickhouse_connect.driver.compression import available_compression
+from clickhouse_connect.driver.compression import available_compression, zstd_decompress
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     OperationalError,
@@ -134,8 +132,7 @@ def decompress_response(data: bytes, encoding: str | None) -> bytes:
         lz4_decom = lz4.frame.LZ4FrameDecompressor()
         return lz4_decom.decompress(data, len(data))
     if encoding == "zstd":
-        zstd_decom = zstandard.ZstdDecompressor()
-        return zstd_decom.stream_reader(io.BytesIO(data)).read()
+        return zstd_decompress(data)
     if encoding == "br":
         if brotli is not None:
             return brotli.decompress(data)

@@ -171,9 +171,9 @@ def _decompress(data: bytes, encoding: str) -> bytes:
 
         return lz4.frame.decompress(data)
     if encoding == "zstd":
-        import zstandard
+        from clickhouse_connect.driver.compression import zstd_decompress
 
-        return zstandard.ZstdDecompressor().decompress(data)
+        return zstd_decompress(data)
     if encoding == "gzip":
         import gzip
 

@@ -1,13 +1,36 @@
+import sys
 import zlib
 
 import lz4
 import lz4.frame
-import zstandard
+
+if sys.version_info >= (3, 14):
+    from compression import zstd as _zstd
+else:
+    from backports import zstd as _zstd
 
 try:
     import brotli
 except ImportError:
     brotli = None
+
+
+ZstdError = _zstd.ZstdError
+
+
+def zstd_compress(data: bytes) -> bytes:
+    """One-shot compression."""
+    return _zstd.compress(data)
+
+
+def zstd_decompress(data: bytes) -> bytes:
+    """One-shot decompression."""
+    return _zstd.decompress(data)
+
+
+def zstd_decompressor():
+    """Returns a ZstdDecompressor for incremental decompression."""
+    return _zstd.ZstdDecompressor()
 
 
 available_compression = ["lz4", "zstd"]
@@ -53,7 +76,7 @@ class Lz4Compressor(Compressor, tag="lz4", thread_safe=False):
 
 class ZstdCompressor(Compressor, tag="zstd"):
     def compress_block(self, block):
-        return zstandard.compress(block)
+        return zstd_compress(block)
 
 
 class BrotliCompressor(Compressor, tag="br"):
