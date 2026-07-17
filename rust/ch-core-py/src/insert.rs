@@ -1684,6 +1684,12 @@ struct VariantBuilder<'a, 'py> {
     dispatch: VariantDispatch<'py>,
     discriminators: Vec<u8>,
     values: Vec<FlatRefs>,
+    /// Explicit tag names already resolved through `_name_index`, with their
+    /// discriminators. Rows reuse the same exact-str tag objects, so a pointer
+    /// compare replaces the dict lookup. The strong references keep each
+    /// cached name alive, so a cached pointer can never be a freed-and-reused
+    /// address; exact-str-only entries mean the hit path runs no Python code.
+    tag_cache: Vec<(Py<PyAny>, usize)>,
 }
 
 impl<'a, 'py> VariantBuilder<'a, 'py> {
@@ -1710,6 +1716,7 @@ impl<'a, 'py> VariantBuilder<'a, 'py> {
             dispatch,
             discriminators: Vec::with_capacity(row_count),
             values: alternatives.iter().map(|_| FlatRefs::default()).collect(),
+            tag_cache: Vec::new(),
         })
     }
 
@@ -1838,6 +1845,16 @@ impl<'a, 'py> VariantBuilder<'a, 'py> {
             )));
         }
         let ran_python = unsafe { ffi::PyUnicode_CheckExact(explicit_name.as_ptr()) } == 0;
+        if !ran_python {
+            if let Some(&(_, discriminator)) = self
+                .tag_cache
+                .iter()
+                .find(|(cached, _)| cached.as_ptr() == explicit_name.as_ptr())
+            {
+                self.push_selected(discriminator, payload)?;
+                return Ok(false);
+            }
+        }
         let discriminator =
             unsafe { dict_index(&self.dispatch.name_index, explicit_name.as_ptr())? }.ok_or_else(
                 || {
@@ -1850,6 +1867,12 @@ impl<'a, 'py> VariantBuilder<'a, 'py> {
                     ))
                 },
             )?;
+        // Bound so a column with many distinct exact-str tag objects cannot
+        // grow an unbounded linear scan; misses fall back to the dict lookup.
+        if !ran_python && self.tag_cache.len() < 16 {
+            self.tag_cache
+                .push((explicit_name.clone().unbind(), discriminator));
+        }
         self.push_selected(discriminator, payload)?;
         Ok(ran_python)
     }
@@ -4559,11 +4582,12 @@ fn column_from_scalars(
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
-        ChType::SimpleAggregateFunction { .. } | ChType::Geo(_) | ChType::Nested(_) => {
-            Err(PyNotImplementedError::new_err(
-                "name-decoration aliases are expanded to their physical type before the scalar path",
-            ))
-        }
+        ChType::SimpleAggregateFunction { .. }
+        | ChType::Geo(_)
+        | ChType::Geometry
+        | ChType::Nested(_) => Err(PyNotImplementedError::new_err(
+            "name-decoration aliases are expanded to their physical type before the scalar path",
+        )),
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
             "Dynamic columns are built by the String insert path, not the scalar path",
         )),
@@ -4844,7 +4868,10 @@ fn convert_scalar(
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
-        ChType::SimpleAggregateFunction { .. } | ChType::Geo(_) | ChType::Nested(_) => {
+        ChType::SimpleAggregateFunction { .. }
+        | ChType::Geo(_)
+        | ChType::Geometry
+        | ChType::Nested(_) => {
             Err(PyNotImplementedError::new_err(
                 "name-decoration aliases are expanded to their physical type before the scalar path",
             ))
@@ -4910,11 +4937,12 @@ fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Nullable(_) | ChType::LowCardinality(_) => Err(PyNotImplementedError::new_err(
             "nested wrapper conversion is not supported",
         )),
-        ChType::SimpleAggregateFunction { .. } | ChType::Geo(_) | ChType::Nested(_) => {
-            Err(PyNotImplementedError::new_err(
-                "name-decoration aliases are expanded to their physical type before the scalar path",
-            ))
-        }
+        ChType::SimpleAggregateFunction { .. }
+        | ChType::Geo(_)
+        | ChType::Geometry
+        | ChType::Nested(_) => Err(PyNotImplementedError::new_err(
+            "name-decoration aliases are expanded to their physical type before the scalar path",
+        )),
         ChType::Dynamic { .. } => Err(PyNotImplementedError::new_err(
             "Dynamic columns are built by the String insert path, not the scalar path",
         )),

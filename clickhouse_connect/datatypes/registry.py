@@ -18,7 +18,8 @@ def parse_name(name: str) -> tuple[str, str, TypeDef]:
     """
     base = name
     wrappers = []
-    keys = tuple()
+    keys: tuple = tuple()
+    values: tuple = tuple()
     if base.startswith("LowCardinality"):
         wrappers.append("LowCardinality")
         base = base[15:-1]
@@ -40,6 +41,8 @@ def parse_name(name: str) -> tuple[str, str, TypeDef]:
     elif base.startswith("JSON") and len(base) > 4 and base[4] == "(":
         keys, values = parse_columns(base[4:])
         base = "JSON"
+    elif base == "GEOMETRY":
+        base = "Geometry"
     elif base == "Point":
         values = ("Float64", "Float64")
     else:

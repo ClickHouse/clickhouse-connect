@@ -8,6 +8,7 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import first_value, must_swap
 from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -154,11 +155,27 @@ class Tuple(ClickHouseType):
         for e_type in self.element_types:
             e_type.write_column_prefix(dest)
 
+    def _row_length_error(self, column: Sequence) -> DataError:
+        expected = len(self.element_types)
+        for row_number, row in enumerate(column):
+            try:
+                actual = len(row)
+            except TypeError:
+                return DataError(f"{self.name} expects a sequence with {expected} elements at row {row_number}")
+            if actual != expected:
+                return DataError(f"{self.name} expects {expected} elements, got {actual} at row {row_number}")
+        return DataError(f"{self.name} rows have inconsistent lengths")
+
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         if self.element_names and isinstance(first_value(column, self.nullable), dict):
             columns = self.convert_dict_insert(column)
         else:
-            columns = list(zip(*column))
+            try:
+                columns = list(zip(*column, strict=True))
+            except ValueError:
+                raise self._row_length_error(column) from None
+            if len(column) and len(columns) != len(self.element_types):
+                raise self._row_length_error(column)
         for e_type, elem_column in zip(self.element_types, columns):
             e_type.write_column_data(elem_column, dest, ctx)
 

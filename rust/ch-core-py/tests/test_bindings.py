@@ -4379,6 +4379,170 @@ class TestVariant:
 
 
 # ---------------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------------
+
+
+def _geometry_block():
+    """Independent Native Geometry fixture with every alternative and NULL."""
+    body = bytearray(struct.pack("<Q", 0))
+    body.extend(bytes([0, 1, 2, 3, 4, 5, 255]))
+
+    # LineString: two points.
+    body.extend(struct.pack("<Q", 2))
+    body.extend(struct.pack("<2d", 13.0, 14.0))
+    body.extend(struct.pack("<2d", 23.0, 24.0))
+    # MultiLineString: one line with two points.
+    body.extend(struct.pack("<Q", 1))
+    body.extend(struct.pack("<Q", 2))
+    body.extend(struct.pack("<2d", 31.0, 32.0))
+    body.extend(struct.pack("<2d", 41.0, 42.0))
+    # MultiPolygon: one polygon containing one one-point ring.
+    body.extend(struct.pack("<Q", 1))
+    body.extend(struct.pack("<Q", 1))
+    body.extend(struct.pack("<Q", 1))
+    body.extend(struct.pack("<d", 51.0))
+    body.extend(struct.pack("<d", 61.0))
+    # Point.
+    body.extend(struct.pack("<d", 71.0))
+    body.extend(struct.pack("<d", 81.0))
+    # Polygon: one two-point ring.
+    body.extend(struct.pack("<Q", 1))
+    body.extend(struct.pack("<Q", 2))
+    body.extend(struct.pack("<2d", 91.0, 92.0))
+    body.extend(struct.pack("<2d", 101.0, 102.0))
+    # Ring: one point.
+    body.extend(struct.pack("<Q", 1))
+    body.extend(struct.pack("<d", 111.0))
+    body.extend(struct.pack("<d", 121.0))
+    return build_native_block_from_bodies([("g", "Geometry", bytes(body))], 7)
+
+
+class TestGeometry:
+    expected = [
+        [(13.0, 23.0), (14.0, 24.0)],
+        [[(31.0, 41.0), (32.0, 42.0)]],
+        [[[(51.0, 61.0)]]],
+        (71.0, 81.0),
+        [[(91.0, 101.0), (92.0, 102.0)]],
+        [(111.0, 121.0)],
+        None,
+    ]
+    expected_arrow = [
+        [{"1": 13.0, "2": 23.0}, {"1": 14.0, "2": 24.0}],
+        [[{"1": 31.0, "2": 41.0}, {"1": 32.0, "2": 42.0}]],
+        [[[{"1": 51.0, "2": 61.0}]]],
+        {"1": 71.0, "2": 81.0},
+        [[{"1": 91.0, "2": 101.0}, {"1": 92.0, "2": 102.0}]],
+        [{"1": 111.0, "2": 121.0}],
+        None,
+    ]
+
+    @staticmethod
+    def tagged(values):
+        from clickhouse_connect.datatypes.dynamic import typed_variant
+
+        names = (
+            "LineString",
+            "MultiLineString",
+            "MultiPolygon",
+            "Point",
+            "Polygon",
+            "Ring",
+        )
+        return [typed_variant(value, name) for value, name in zip(values, names)] + [None]
+
+    def test_golden_decode_all_object_exits_and_arrow(self):
+        native = _geometry_block()
+        batch = _ch_core.ColBatch.decode_native(native)
+
+        assert batch.column_type_names == ["Geometry"]
+        assert list(batch.column_data(0)) == self.expected
+        assert list(batch.to_python_columns()[0]) == self.expected
+        assert [row[0] for row in batch.to_python_rows()] == self.expected
+
+        pa = pytest.importorskip("pyarrow")
+        column = pa.RecordBatchReader.from_stream(batch).read_all().column("g")
+        assert pa.types.is_union(column.type)
+        assert column.to_pylist() == self.expected_arrow
+
+    @pytest.mark.parametrize("type_name", ["Geometry", "GEOMETRY"])
+    def test_encode_matches_golden_and_requires_explicit_geo_name(self, type_name):
+        values = self.tagged(self.expected[:6])
+        assert _ch_core.encode_native_block(["g"], [type_name], [values], 7) == _geometry_block()
+
+        with pytest.raises(ValueError, match="cannot map Python type"):
+            _ch_core.encode_native_block(["g"], [type_name], [[self.expected[3]]], 1)
+
+    def test_bad_explicit_name_and_payload_report_the_logical_row(self):
+        from clickhouse_connect.datatypes.dynamic import typed_variant
+
+        with pytest.raises(ValueError, match=r'column "g" row 0 type "String" is not a member'):
+            _ch_core.encode_native_block(
+                ["g"], ["Geometry"], [[typed_variant("bad", "String")]], 1
+            )
+        with pytest.raises(ValueError, match=r'column "g" row 0'):
+            _ch_core.encode_native_block(
+                ["g"], ["Geometry"], [[typed_variant("bad", "Point")]], 1
+            )
+
+    @pytest.mark.parametrize(
+        ("type_name", "tagged_rows", "expected_rows"),
+        [
+            (
+                "Array(Geometry)",
+                lambda tag: [[tag((13.0, 23.0), "Point"), None], [], [tag([(31.0, 41.0)], "Ring")]],
+                [[(13.0, 23.0), None], [], [[(31.0, 41.0)]],],
+            ),
+            (
+                "Tuple(Geometry, UInt8)",
+                lambda tag: [(tag([(13.0, 23.0)], "LineString"), 1), (None, 2), (tag((31.0, 41.0), "Point"), 3)],
+                [([(13.0, 23.0)], 1), (None, 2), ((31.0, 41.0), 3)],
+            ),
+            (
+                "Array(Tuple(Geometry, UInt8))",
+                lambda tag: [[(tag((13.0, 23.0), "Point"), 1)], [], [(tag([(31.0, 41.0)], "Ring"), 2)]],
+                [[((13.0, 23.0), 1)], [], [([(31.0, 41.0)], 2)]],
+            ),
+            (
+                "Map(String, Geometry)",
+                lambda tag: [{"point": tag((13.0, 23.0), "Point")}, {}, {"ring": tag([(31.0, 41.0)], "Ring")}],
+                [{"point": (13.0, 23.0)}, {}, {"ring": [(31.0, 41.0)]}],
+            ),
+        ],
+    )
+    def test_container_matrix(self, type_name, tagged_rows, expected_rows):
+        from clickhouse_connect.datatypes.dynamic import typed_variant
+
+        rows = tagged_rows(typed_variant)
+        encoded = _ch_core.encode_native_block(["g"], [type_name], [rows], len(rows))
+        batch = _ch_core.ColBatch.decode_native(encoded)
+        assert list(batch.column_data(0)) == expected_rows
+        assert list(batch.to_python_columns()[0]) == expected_rows
+        assert [row[0] for row in batch.to_python_rows()] == expected_rows
+
+    @pytest.mark.parametrize(
+        "type_name",
+        ["geometry", "Nullable(Geometry)", "Variant(Geometry, String)", "LowCardinality(Geometry)"],
+    )
+    def test_invalid_type_shapes_are_rejected(self, type_name):
+        with pytest.raises(NotImplementedError, match="unsupported"):
+            _ch_core.encode_native_block(["g"], [type_name], [[]], 0)
+
+    def test_zero_rows_and_multiple_blocks(self):
+        empty = _ch_core.encode_native_block(["g"], ["Geometry"], [[]], 0)
+        assert empty == build_native_block([("g", "Geometry", [])])
+        batch = _ch_core.ColBatch.decode_native(empty + _geometry_block())
+        assert list(batch.column_data(0)) == self.expected
+
+    def test_invalid_discriminator_is_value_error(self):
+        body = struct.pack("<Q", 0) + b"\x06"
+        block = build_native_block_from_bodies([("g", "Geometry", body)], 1)
+        with pytest.raises(ValueError, match="Invalid Variant layout"):
+            _ch_core.ColBatch.decode_native(block)
+
+
+# ---------------------------------------------------------------------------
 # Dynamic
 # ---------------------------------------------------------------------------
 

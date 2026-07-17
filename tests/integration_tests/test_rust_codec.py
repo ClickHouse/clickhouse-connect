@@ -5,7 +5,13 @@ from datetime import date, timedelta
 import pytest
 
 from clickhouse_connect.datatypes.dynamic import typed_variant
-from clickhouse_connect.driver.exceptions import DataError, NotSupportedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.driver.exceptions import (
+    DatabaseError,
+    DataError,
+    NotSupportedError,
+    ProgrammingError,
+    StreamFailureError,
+)
 from tests.integration_tests.conftest import type_available
 
 pytest.importorskip("_ch_core")
@@ -1416,6 +1422,70 @@ def test_rust_codec_geo_insert_parity(client_factory, call, client_mode):
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_geometry_round_trip_parity(client_factory, call, client_mode):
+    probe = client_factory(native_codec="python")
+    try:
+        resolved_type = call(probe.command, "SELECT toTypeName(CAST(NULL, 'Geometry'))")
+    except DatabaseError as ex:
+        if ex.name != "UNKNOWN_TYPE":
+            raise
+        pytest.skip(f"Geometry is not supported by server {probe.server_version}")
+    if resolved_type != "Geometry":
+        pytest.skip(f"Geometry is not supported by server {probe.server_version}")
+
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    rust_table = f"rc_geometry_rust_{client_mode}"
+    python_table = f"rc_geometry_python_{client_mode}"
+    tagged = [
+        typed_variant([(13.0, 23.0), (14.0, 24.0)], "LineString"),
+        typed_variant([[(31.0, 41.0), (32.0, 42.0)]], "MultiLineString"),
+        typed_variant([[[(51.0, 61.0)]]], "MultiPolygon"),
+        typed_variant((71.0, 81.0), "Point"),
+        typed_variant([[(91.0, 101.0), (92.0, 102.0)]], "Polygon"),
+        typed_variant([(111.0, 121.0)], "Ring"),
+        None,
+    ]
+    rows = [[index, value] for index, value in enumerate(tagged)]
+    expected = [(index, value.value if value is not None else None) for index, value in enumerate(tagged)]
+    expanded_geometry = "Variant(LineString, MultiLineString, MultiPolygon, Point, Polygon, Ring)"
+    expected_variant_types = [
+        ("LineString",),
+        ("MultiLineString",),
+        ("MultiPolygon",),
+        ("Point",),
+        ("Polygon",),
+        ("Ring",),
+        ("None",),
+    ]
+
+    def create_and_insert(client, table):
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} (id UInt8, g Geometry) ENGINE MergeTree ORDER BY id")
+        call(client.insert, table, rows, column_names=["id", "g"])
+
+    try:
+        create_and_insert(rust_client, rust_table)
+        assert call(rust_client.query, f"SELECT * FROM {rust_table} ORDER BY id").result_rows == expected
+        assert call(python_client.query, f"SELECT * FROM {rust_table} ORDER BY id").result_rows == expected
+        assert call(rust_client.query, f"SELECT variantType(g) FROM {rust_table} ORDER BY id").result_rows == expected_variant_types
+        expanded_result = call(
+            rust_client.query,
+            f"SELECT CAST(g, '{expanded_geometry}') FROM {rust_table} ORDER BY id",
+            settings={"allow_suspicious_variant_types": 1},
+        )
+        assert expanded_result.column_types[0].name == expanded_geometry
+        assert expanded_result.result_rows == [(value,) for _, value in expected]
+
+        create_and_insert(python_client, python_table)
+        assert call(python_client.query, f"SELECT * FROM {python_table} ORDER BY id").result_rows == expected
+        assert call(rust_client.query, f"SELECT * FROM {python_table} ORDER BY id").result_rows == expected
+        assert call(python_client.query, f"SELECT variantType(g) FROM {python_table} ORDER BY id").result_rows == expected_variant_types
+    finally:
+        call(rust_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
 
 
 def test_rust_codec_nested_insert_parity(client_factory, call, client_mode):

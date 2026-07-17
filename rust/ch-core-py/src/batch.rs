@@ -2498,6 +2498,73 @@ unsafe fn fill_map<'py>(
     Ok(())
 }
 
+/// The two flat Float64 runs of an unnamed non-nullable
+/// `Tuple(Float64, Float64)` element column (the geo point shape), when the
+/// tight point-list loop applies.
+fn point_pair_slices<'a>(
+    values: &'a Column,
+    ctx: &ColumnCtx<'_>,
+) -> Option<(&'a [f64], &'a [f64])> {
+    let Column::Tuple(t) = values else {
+        return None;
+    };
+    if t.validity.is_some() || ctx.tuple_names.is_some() || t.fields.len() != 2 {
+        return None;
+    }
+    let (Column::Float64(x), Column::Float64(y)) = (&t.fields[0], &t.fields[1]) else {
+        return None;
+    };
+    if x.validity.is_some() || y.validity.is_some() {
+        return None;
+    }
+    Some((&x.values, &y.values))
+}
+
+/// Build one Array row's point list from the flat coordinate runs: one
+/// presized list, one 2-tuple and two floats per point, with no per-element
+/// column dispatch. Allocation stays row-major (tuple, then its floats), the
+/// same order as the generic per-cell path; a column-major variant measured
+/// faster to fill but slower overall because deallocation and GC traversal of
+/// the interleaved result lose locality.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference the caller takes over.
+/// `start..end` must be in range for both slices.
+unsafe fn point_list_owned_ptr(
+    py: Python<'_>,
+    xs: &[f64],
+    ys: &[f64],
+    start: usize,
+    end: usize,
+) -> PyResult<*mut ffi::PyObject> {
+    let count = end - start;
+    let list_ptr = ffi::PyList_New(count as ffi::Py_ssize_t);
+    if list_ptr.is_null() {
+        return Err(PyErr::fetch(py));
+    }
+    // Safety: list_ptr came from PyList_New, so it is a list and this is the
+    // sole owned reference. Binding it makes the error path drop the
+    // partially-filled list; list_dealloc tolerates the NULL slots.
+    let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+    for (slot, k) in (start..end).enumerate() {
+        let tuple_ptr = ffi::PyTuple_New(2);
+        if tuple_ptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        // Safety: slot < count, the list's allocated length; the list takes
+        // over the owned tuple, so an error below drops it through the list
+        // (tuple_dealloc tolerates its NULL slots).
+        ffi::PyList_SET_ITEM(list.as_ptr(), slot as ffi::Py_ssize_t, tuple_ptr);
+        let x = ptr_to_result(py, ffi::PyFloat_FromDouble(xs[k]))?;
+        // Safety: the fresh 2-tuple takes over each owned float.
+        ffi::PyTuple_SET_ITEM(tuple_ptr, 0, x);
+        let y = ptr_to_result(py, ffi::PyFloat_FromDouble(ys[k]))?;
+        ffi::PyTuple_SET_ITEM(tuple_ptr, 1, y);
+    }
+    Ok(list.into_ptr())
+}
+
 /// Materialize the first `rows` cells of `col` into owned objects through the
 /// bulk fill machinery. The indexed slots accept Variant and Dynamic's
 /// child-major scatter while preserving logical row order for Map key/value
@@ -2766,6 +2833,13 @@ unsafe fn column_value_nonnull_ptr<'py>(
                 .ok_or_else(array_bounds_err)?;
             if start > end || end > c.values.len() {
                 return Err(array_bounds_err());
+            }
+            // Geo point rows: build the list straight from the two flat
+            // Float64 runs, skipping the per-element dispatch below.
+            if let Some((xs, ys)) = point_pair_slices(&c.values, ectx) {
+                if end <= xs.len().min(ys.len()) {
+                    return point_list_owned_ptr(py, xs, ys, start, end);
+                }
             }
             let count = end - start;
             let list_ptr = ffi::PyList_New(count as ffi::Py_ssize_t);

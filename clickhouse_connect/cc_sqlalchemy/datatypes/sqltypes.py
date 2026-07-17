@@ -251,6 +251,10 @@ class MultiLineString(ChSqlaType, UserDefinedType):
     python_type = list
 
 
+class Geometry(ChSqlaType, UserDefinedType):
+    python_type = object
+
+
 class Date(ChSqlaType, SqlaDate):
     pass
 
