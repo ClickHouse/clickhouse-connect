@@ -69,19 +69,28 @@ class TestWideIntegers:
         encoded = _ch_core.encode_native_block(["v"], [type_name], [generic], len(values))
         assert encoded == build_native_block([("v", type_name, values)])
 
-    @pytest.mark.parametrize(("type_name", "values"), _WIDE_CASES)
-    @pytest.mark.parametrize(
-        "wrapper", ["{}", "Nullable({})", "LowCardinality(Nullable({}))"]
-    )
-    def test_numeric_strings_match_integer_values(self, type_name, values, wrapper):
-        type_name = wrapper.format(type_name)
-        integer_values = values if wrapper == "{}" else [None, *values, None]
-        string_values = [None if value is None else str(value) for value in integer_values]
-        encoded = _ch_core.encode_native_block(
-            ["v"], [type_name], [string_values], len(string_values)
-        )
-        assert encoded == build_native_block([("v", type_name, integer_values)])
-        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == integer_values
+    @pytest.mark.parametrize("type_name", [type_name for type_name, _ in _WIDE_CASES])
+    @pytest.mark.parametrize("wrapper", ["{}", "Nullable({})", "LowCardinality(Nullable({}))"])
+    def test_numeric_strings_are_rejected(self, type_name, wrapper):
+        wrapped = wrapper.format(type_name)
+        values = ["13"] if wrapper == "{}" else [None, "13"]
+        with pytest.raises(ValueError, match="strings are not accepted; pass an int instead"):
+            _ch_core.encode_native_block(["v"], [wrapped], [values], len(values))
+
+    @pytest.mark.parametrize("type_name", [type_name for type_name, _ in _WIDE_CASES])
+    def test_integral_float_and_decimal_values(self, type_name):
+        from decimal import Decimal
+
+        values = [13.0, Decimal("79.000")]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        assert encoded == build_native_block([("v", type_name, [13, 79])])
+
+    @pytest.mark.parametrize("type_name", [type_name for type_name, _ in _WIDE_CASES])
+    @pytest.mark.parametrize("value", [13.5, pytest.param(float("nan"), id="nan")])
+    def test_lossy_float_is_rejected(self, type_name, value):
+        detail = "is not finite" if value != value else "would lose fractional data"
+        with pytest.raises(ValueError, match=detail):
+            _ch_core.encode_native_block(["v"], [type_name], [[value]], 1)
 
     @pytest.mark.parametrize(("type_name", "values"), _WIDE_CASES)
     @pytest.mark.parametrize("wrapper", ["Nullable({})", "LowCardinality(Nullable({}))"])
@@ -123,46 +132,17 @@ class TestWideIntegers:
         assert [list(column) for column in batch.to_python_columns()] == values
         assert list(batch.to_python_rows()) == list(zip(*values))
 
-    def test_numeric_strings_in_array_and_tuple(self):
-        string_columns = [
-            ("a", "Array(Int128)", [[str(-(2**127)), "13"], [], [str(2**127 - 1)]]),
-            (
-                "t",
-                "Tuple(UInt128, Int256)",
-                [
-                    (str(2**128 - 1), str(-(2**255))),
-                    ("13", str(2**255 - 1)),
-                    ("0", "-1"),
-                ],
-            ),
-        ]
-        integer_values = [
-            [[-(2**127), 13], [], [2**127 - 1]],
-            [(2**128 - 1, -(2**255)), (13, 2**255 - 1), (0, -1)],
-        ]
-        encoded = _ch_core.encode_native_block(
-            [name for name, _, _ in string_columns],
-            [type_name for _, type_name, _ in string_columns],
-            [values for _, _, values in string_columns],
-            3,
-        )
-        expected_columns = [
-            (name, type_name, values)
-            for (name, type_name, _), values in zip(string_columns, integer_values)
-        ]
-        assert encoded == build_native_block(expected_columns)
-        batch = _ch_core.ColBatch.decode_native(encoded)
-        assert [list(column) for column in batch.to_python_columns()] == integer_values
-
-    def test_numeric_strings_in_array_low_cardinality_wide(self):
-        type_name = "Array(LowCardinality(Int256))"
-        string_rows = [[str(-(2**255)), "13", str(-(2**255))], [], [str(2**255 - 1)]]
-        integer_rows = [[-(2**255), 13, -(2**255)], [], [2**255 - 1]]
-        encoded = _ch_core.encode_native_block(
-            ["v"], [type_name], [string_rows], len(string_rows)
-        )
-        assert encoded == build_native_block([("v", type_name, integer_rows)])
-        assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == integer_rows
+    @pytest.mark.parametrize(
+        "type_name,rows",
+        [
+            ("Array(Int128)", [[13.0, "79"]]),
+            ("Tuple(UInt128, Int256)", [(13.0, "79")]),
+            ("Array(LowCardinality(Int256))", [[13.0, "79"]]),
+        ],
+    )
+    def test_numeric_strings_in_containers_are_rejected(self, type_name, rows):
+        with pytest.raises(ValueError, match="strings are not accepted; pass an int instead"):
+            _ch_core.encode_native_block(["v"], [type_name], [rows], 1)
 
     @pytest.mark.parametrize("bad_index", ["raises", "non_int"])
     def test_bad_index_protocol_has_context(self, bad_index):

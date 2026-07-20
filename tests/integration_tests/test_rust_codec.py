@@ -1,10 +1,13 @@
+import array
 import threading
 import time
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
 from clickhouse_connect.datatypes.dynamic import typed_variant
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     DataError,
@@ -12,6 +15,7 @@ from clickhouse_connect.driver.exceptions import (
     ProgrammingError,
     StreamFailureError,
 )
+from clickhouse_connect.driver.insert import InsertContext
 from tests.integration_tests.conftest import type_available
 
 pytest.importorskip("_ch_core")
@@ -820,6 +824,41 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
     assert rust_totals == (5000, 5000)
 
 
+def test_rust_codec_numeric_column_blocks_keep_typed_arrays(client_factory, call, consume_stream):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    expressions = [
+        "toInt8(number) AS i8",
+        "toInt16(number) AS i16",
+        "toInt32(number) AS i32",
+        "toInt64(number) AS i64",
+        "toUInt8(number) AS u8",
+        "toUInt16(number) AS u16",
+        "toUInt32(number) AS u32",
+        "toUInt64(number) AS u64",
+        "toFloat32(number / 2) AS f32",
+        "toFloat64(number) / 2 AS f64",
+        "CAST(if(number = 1, NULL, number), 'Nullable(Int32)') AS nullable_i32",
+    ]
+    query = f"SELECT {', '.join(expressions)} FROM numbers(3)"
+
+    def blocks(client):
+        output = []
+        consume_stream(call(client.query_column_block_stream, query), output.append)
+        return output
+
+    rust_blocks = blocks(rust_client)
+    python_blocks = blocks(python_client)
+    assert len(rust_blocks) == len(python_blocks) == 1
+    expected_typecodes = ["b", "h", "i", "q", "B", "H", "I", "Q", "f", "d"]
+    for rust_column, python_column, typecode in zip(rust_blocks[0][:-1], python_blocks[0][:-1], expected_typecodes):
+        assert isinstance(rust_column, array.array)
+        assert rust_column.typecode == python_column.typecode == typecode
+        assert list(rust_column) == list(python_column)
+    assert isinstance(rust_blocks[0][-1], list)
+    assert rust_blocks[0][-1] == python_blocks[0][-1]
+
+
 @pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
 def test_rust_codec_aggregate_function_decode(client_factory, call, native_codec):
     client = client_factory(native_codec=native_codec)
@@ -939,6 +978,20 @@ def test_rust_codec_eligibility_routing(client_factory, call):
     # Timezone contexts remain a Python fallback until type/tz coverage lands.
     with pytest.raises(NotSupportedError):
         call(strict_client.query, "SELECT toDateTime(number) FROM numbers(3)", query_tz="America/New_York")
+
+
+def test_rust_codec_insert_refusal_surfaces_directly(client_factory, call):
+    client = client_factory(native_codec="rust_strict")
+    context = InsertContext(
+        "unused_table",
+        ["v"],
+        [get_from_name("UInt8")],
+        [(13,)],
+        query_formats={"UInt8": "string"},
+    )
+
+    with pytest.raises(NotSupportedError, match="per-column or per-type write formats"):
+        call(client.data_insert, context)
 
 
 def test_rust_codec_midstream_error_parity(client_factory, call, consume_stream):
@@ -1178,6 +1231,18 @@ def test_rust_codec_nested_named_tz_df_parity(client_factory, call, expr):
     pd.testing.assert_frame_equal(rust_df, python_df)
 
 
+@pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
+def test_rust_codec_nullable_named_tz_df_parity(client_factory, call, type_name):
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = f"SELECT CAST(if(number = 0, NULL, number) AS Nullable({type_name})) AS c FROM numbers(3)"
+
+    rust_df = call(rust_client.query_df, query)
+    python_df = call(python_client.query_df, query)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+
+
 def test_rust_codec_np_df_stream_parity(client_factory, call, consume_stream):
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
@@ -1324,6 +1389,82 @@ def test_rust_codec_insert_df_nullable_parity(client_factory, call, client_mode)
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
 
 
+@pytest.mark.parametrize("native_codec", ["python", "rust_strict"])
+def test_native_codec_insert_df_enum_nan(client_factory, call, client_mode, native_codec):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    client = client_factory(native_codec=native_codec)
+    table = f"rc_ins_enum_nan_{native_codec}_{client_mode}"
+    df = pd.DataFrame({"id": [0, 1, 2], "e": [1, np.nan, 2]})
+
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            client.command,
+            f"CREATE TABLE {table} (id UInt8, e Enum8('missing' = 0, 'one' = 1, 'two' = 2)) ENGINE Memory",
+        )
+        call(client.insert_df, table, df)
+        assert call(client.query, f"SELECT * FROM {table} ORDER BY id").result_rows == [
+            (0, "one"),
+            (1, "missing"),
+            (2, "two"),
+        ]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rust_codec_integer_coercion_matrix(client_factory, call, client_mode):
+    client = client_factory(native_codec="rust_strict")
+    table = f"rc_ins_integer_coercion_{client_mode}"
+    schema = (
+        "id UInt8, scalar Int32, nullable Nullable(Int32), array Array(Int32), "
+        "tuple Tuple(Int32, Int32), array_tuple Array(Tuple(Int32, Int32))"
+    )
+    rows = [
+        [0, 13.0, None, [13.0, Decimal("79.000")], (13.0, Decimal("79.000")), [(13.0, Decimal("79.000"))]],
+        [1, Decimal("-13.000"), 79.0, [], (Decimal("-13.000"), 79.0), []],
+    ]
+    expected = [
+        (0, 13, None, [13, 79], (13, 79), [(13, 79)]),
+        (1, -13, 79, [], (-13, 79), []),
+    ]
+
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(
+            client.insert,
+            table,
+            rows,
+            column_names=["id", "scalar", "nullable", "array", "tuple", "array_tuple"],
+        )
+        assert call(client.query, f"SELECT * FROM {table} ORDER BY id").result_rows == expected
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    "value,message",
+    [
+        (13.5, "would lose fractional data; pass an integer value"),
+        (Decimal("79.5"), "would lose fractional data; pass an integer value"),
+        ("13", "strings are not accepted; pass an int instead"),
+    ],
+)
+def test_rust_codec_integer_coercion_errors(client_factory, call, client_mode, value, message):
+    client = client_factory(native_codec="rust_strict")
+    table = f"rc_ins_integer_coercion_error_{client_mode}"
+
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(client.command, f"CREATE TABLE {table} (v Int32) ENGINE Memory")
+        with pytest.raises(DataError, match=message):
+            call(client.insert, table, [[value]], column_names=["v"])
+        assert call(client.query, f"SELECT count() FROM {table}").result_rows == [(0,)]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
 def test_rust_codec_wide_integer_insert_parity(client_factory, call, client_mode):
     rust_client = client_factory(native_codec="rust_strict")
     python_client = client_factory(native_codec="python")
@@ -1380,43 +1521,18 @@ def test_rust_codec_wide_integer_insert_parity(client_factory, call, client_mode
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
 
 
-def test_rust_codec_wide_integer_string_insert_parity(client_factory, call, client_mode):
-    rust_client = client_factory(native_codec="rust_strict")
-    python_client = client_factory(native_codec="python")
-    schema = (
-        "id UInt8, i128 Int128, u128 UInt128, i256 Int256, u256 UInt256, "
-        "ni Nullable(Int256), a Array(UInt128), t Tuple(Int128, UInt256), "
-        "m Map(UInt128, Int256)"
-    )
-    rows = [
-        [
-            0,
-            str(-13),
-            str(2**128 - 1),
-            str(-(2**255)),
-            str(2**256 - 1),
-            str(-79),
-            [str(0), str(2**128 - 1)],
-            (str(-1), str(2**256 - 1)),
-            {str(2**127): str(-(2**255))},
-        ],
-        [1, str(13), str(0), str(79), str(0), None, [], (str(13), str(79)), {}],
-    ]
-    names = ["id", "i128", "u128", "i256", "u256", "ni", "a", "t", "m"]
-    rust_table = f"rc_ins_wide_str_rust_{client_mode}"
-    py_table = f"rc_ins_wide_str_py_{client_mode}"
+def test_rust_codec_wide_integer_string_insert_rejected(client_factory, call, client_mode):
+    client = client_factory(native_codec="rust_strict")
+    table = f"rc_ins_wide_str_{client_mode}"
 
-    def roundtrip(client, table):
-        call(client.command, f"DROP TABLE IF EXISTS {table}")
-        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
-        call(client.insert, table, rows, column_names=names)
-        return call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
-
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
     try:
-        assert roundtrip(rust_client, rust_table) == roundtrip(python_client, py_table)
+        call(client.command, f"CREATE TABLE {table} (v Int256) ENGINE Memory")
+        with pytest.raises(DataError, match="strings are not accepted; pass an int instead"):
+            call(client.insert, table, [["79"]], column_names=["v"])
+        assert call(client.query, f"SELECT count() FROM {table}").result_rows == [(0,)]
     finally:
-        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
-        call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
 
 
 def test_rust_codec_tuple_map_insert_parity(client_factory, call, client_mode):

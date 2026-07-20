@@ -341,43 +341,37 @@ pub(super) fn convert_scalar(
     column: &str,
     row: usize,
 ) -> PyResult<Scalar> {
+    macro_rules! integer_scalar {
+        ($ty:ty, $variant:ident, $type_name:literal) => {{
+            let integer = integer_object(
+                py,
+                value,
+                column,
+                row,
+                $type_name,
+                "pass an integer value",
+                false,
+            )?;
+            integer
+                .extract::<$ty>()
+                .map(Scalar::$variant)
+                .map_err(|_| integer_range_error(value, column, row, $type_name))
+        }};
+    }
+
     match ch_type {
         ChType::Bool => value
             .extract::<bool>()
             .map(Scalar::Bool)
             .map_err(|_| conversion_error(column, row, "Bool")),
-        ChType::Int8 => value
-            .extract::<i8>()
-            .map(Scalar::Int8)
-            .map_err(|_| conversion_error(column, row, "Int8")),
-        ChType::Int16 => value
-            .extract::<i16>()
-            .map(Scalar::Int16)
-            .map_err(|_| conversion_error(column, row, "Int16")),
-        ChType::Int32 => value
-            .extract::<i32>()
-            .map(Scalar::Int32)
-            .map_err(|_| conversion_error(column, row, "Int32")),
-        ChType::Int64 => value
-            .extract::<i64>()
-            .map(Scalar::Int64)
-            .map_err(|_| conversion_error(column, row, "Int64")),
-        ChType::UInt8 => value
-            .extract::<u8>()
-            .map(Scalar::UInt8)
-            .map_err(|_| conversion_error(column, row, "UInt8")),
-        ChType::UInt16 => value
-            .extract::<u16>()
-            .map(Scalar::UInt16)
-            .map_err(|_| conversion_error(column, row, "UInt16")),
-        ChType::UInt32 => value
-            .extract::<u32>()
-            .map(Scalar::UInt32)
-            .map_err(|_| conversion_error(column, row, "UInt32")),
-        ChType::UInt64 => value
-            .extract::<u64>()
-            .map(Scalar::UInt64)
-            .map_err(|_| conversion_error(column, row, "UInt64")),
+        ChType::Int8 => integer_scalar!(i8, Int8, "Int8"),
+        ChType::Int16 => integer_scalar!(i16, Int16, "Int16"),
+        ChType::Int32 => integer_scalar!(i32, Int32, "Int32"),
+        ChType::Int64 => integer_scalar!(i64, Int64, "Int64"),
+        ChType::UInt8 => integer_scalar!(u8, UInt8, "UInt8"),
+        ChType::UInt16 => integer_scalar!(u16, UInt16, "UInt16"),
+        ChType::UInt32 => integer_scalar!(u32, UInt32, "UInt32"),
+        ChType::UInt64 => integer_scalar!(u64, UInt64, "UInt64"),
         ChType::Int128 => {
             wide_int_bytes(py, value, 16, true, column, row, "Int128").map(Scalar::WideInt)
         }
@@ -576,7 +570,200 @@ pub(super) fn conversion_error(column: &str, row: usize, type_name: &str) -> PyE
     ))
 }
 
-/// Convert a Python integer/index object or numeric string to an owned
+fn value_repr(value: &Bound<'_, PyAny>) -> String {
+    value
+        .repr()
+        .and_then(|repr| repr.to_str().map(str::to_owned))
+        .unwrap_or_else(|_| {
+            let type_name = value
+                .get_type()
+                .name()
+                .ok()
+                .and_then(|name| name.to_str().ok().map(str::to_owned))
+                .unwrap_or_else(|| "value".to_string());
+            format!("<{type_name}>")
+        })
+}
+
+fn conversion_error_detail(
+    value: &Bound<'_, PyAny>,
+    column: &str,
+    row: usize,
+    type_name: &str,
+    detail: &str,
+) -> PyErr {
+    PyValueError::new_err(format!(
+        "column {column:?} row {row} cannot be converted to {type_name}: {} {detail}",
+        value_repr(value)
+    ))
+}
+
+fn integer_range_error(
+    value: &Bound<'_, PyAny>,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyErr {
+    conversion_error_detail(
+        value,
+        column,
+        row,
+        type_name,
+        "is outside the target range; use a value within the column's range",
+    )
+}
+
+fn is_decimal(value: &Bound<'_, PyAny>) -> bool {
+    let value_type = value.get_type();
+    let Ok(name) = value_type.name() else {
+        return false;
+    };
+    let Ok(module) = value_type.module() else {
+        return false;
+    };
+    matches!(name.to_str(), Ok("Decimal")) && matches!(module.to_str(), Ok("decimal"))
+}
+
+fn is_numpy_float(value: &Bound<'_, PyAny>) -> bool {
+    let value_type = value.get_type();
+    let Ok(name) = value_type.name() else {
+        return false;
+    };
+    let Ok(module) = value_type.module() else {
+        return false;
+    };
+    name.to_str().is_ok_and(|name| name.starts_with("float"))
+        && module
+            .to_str()
+            .is_ok_and(|module| module == "numpy" || module.starts_with("numpy."))
+}
+
+fn long_from_float<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+    number: f64,
+    column: &str,
+    row: usize,
+    type_name: &str,
+    guidance: &str,
+    nan_as_zero: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    if number.is_nan() && nan_as_zero {
+        // Pandas represents a numeric enum column with missing values as float64.
+        // The Python Enum serializer uses zero as its non-nullable missing sentinel.
+        return unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyLong_FromLong(0)) };
+    }
+    if !number.is_finite() {
+        return Err(conversion_error_detail(
+            value,
+            column,
+            row,
+            type_name,
+            &format!("is not finite; {guidance}"),
+        ));
+    }
+    if number.fract() != 0.0 {
+        return Err(conversion_error_detail(
+            value,
+            column,
+            row,
+            type_name,
+            &format!("would lose fractional data; {guidance}"),
+        ));
+    }
+    unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyNumber_Long(value.as_ptr())) }
+        .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))
+}
+
+/// Return a Python integer while preserving exactness. Integral floats and
+/// decimal.Decimal values are accepted; strings are deliberately rejected.
+fn integer_object<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+    column: &str,
+    row: usize,
+    type_name: &str,
+    guidance: &str,
+    nan_as_zero: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
+        return Ok(value.clone());
+    }
+    if value.downcast::<PyString>().is_ok() {
+        return Err(conversion_error_detail(
+            value,
+            column,
+            row,
+            type_name,
+            "strings are not accepted; pass an int instead",
+        ));
+    }
+    if unsafe { ffi::PyFloat_Check(value.as_ptr()) } != 0 {
+        // SAFETY: PyFloat_Check above guarantees PyFloat_AsDouble succeeds.
+        let number = unsafe { ffi::PyFloat_AsDouble(value.as_ptr()) };
+        return long_from_float(
+            py,
+            value,
+            number,
+            column,
+            row,
+            type_name,
+            guidance,
+            nan_as_zero,
+        );
+    }
+    if is_numpy_float(value) {
+        let number = value
+            .extract::<f64>()
+            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?;
+        return long_from_float(
+            py,
+            value,
+            number,
+            column,
+            row,
+            type_name,
+            guidance,
+            nan_as_zero,
+        );
+    }
+    if is_decimal(value) {
+        let finite = value
+            .call_method0(intern!(py, "is_finite"))
+            .and_then(|result| result.is_truthy())
+            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?;
+        if !finite {
+            return Err(conversion_error_detail(
+                value,
+                column,
+                row,
+                type_name,
+                &format!("is not finite; {guidance}"),
+            ));
+        }
+        let integral = value
+            .call_method0(intern!(py, "to_integral_value"))
+            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?;
+        if !integral
+            .eq(value)
+            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?
+        {
+            return Err(conversion_error_detail(
+                value,
+                column,
+                row,
+                type_name,
+                &format!("would lose fractional data; {guidance}"),
+            ));
+        }
+        return unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyNumber_Long(value.as_ptr())) }
+            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance));
+    }
+    unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyNumber_Index(value.as_ptr())) }
+        .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))
+}
+
+/// Convert a Python integer/index object to an owned
 /// fixed-width Native representation. LowCardinality retains these bytes per
 /// distinct dictionary value; ordinary columns use `wide_int_into` directly.
 fn wide_int_bytes(
@@ -646,10 +833,8 @@ pub(super) unsafe fn wide_int_fast_into(
     Ok(WideFast::Done)
 }
 
-/// Write one Python integer/index object or numeric string into its final
-/// fixed-width little-endian slice. Non-string values use the index protocol,
-/// so floats remain errors rather than being truncated; strings use Python's
-/// `int` conversion to preserve the binding's existing BigInt behavior.
+/// Write one Python integer-compatible object into its final fixed-width
+/// little-endian slice, preserving the exactness rules used by narrow integers.
 pub(super) fn wide_int_into(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -677,8 +862,8 @@ pub(super) fn wide_int_into(
 
 /// Slow-path completion after a fast-probe miss; `is_exact_int` carries the
 /// probe's type check so it is not repeated. An exact int beyond i64 is
-/// already its own index result; anything else routes through the index
-/// protocol or `int()`.
+/// already its own index result; anything else routes through the shared
+/// exact integer coercion policy.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wide_int_slow_into(
     py: Python<'_>,
@@ -694,15 +879,15 @@ pub(super) fn wide_int_slow_into(
     let integer_ptr = if is_exact_int {
         value.as_ptr()
     } else {
-        let converted = unsafe {
-            if value.downcast::<PyString>().is_ok() {
-                ffi::PyNumber_Long(value.as_ptr())
-            } else {
-                ffi::PyNumber_Index(value.as_ptr())
-            }
-        };
-        owned = unsafe { Bound::from_owned_ptr_or_err(py, converted) }
-            .map_err(|_| conversion_error(column, row, type_name))?;
+        owned = integer_object(
+            py,
+            value,
+            column,
+            row,
+            type_name,
+            "pass an integer value",
+            false,
+        )?;
         owned.as_ptr()
     };
     #[cfg(not(Py_3_13))]
@@ -934,21 +1119,29 @@ fn enum8_value(
     column: &str,
     row: usize,
 ) -> PyResult<i8> {
-    if let Ok(v) = value.extract::<i8>() {
-        return Ok(v);
+    if let Ok(name) = value.downcast::<PyString>() {
+        let name = name.to_str()?;
+        return variants
+            .iter()
+            .find_map(|(variant, code)| (variant == name).then_some(*code))
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "column {column:?} row {row} Enum8 label {name:?} is not defined"
+                ))
+            });
     }
-    let name = value
-        .downcast::<PyString>()
-        .map_err(|_| conversion_error(column, row, "Enum8"))?
-        .to_str()?;
-    variants
-        .iter()
-        .find_map(|(variant, code)| (variant == name).then_some(*code))
-        .ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "column {column:?} row {row} Enum8 label {name:?} is not defined"
-            ))
-        })
+    let integer = integer_object(
+        value.py(),
+        value,
+        column,
+        row,
+        "Enum8",
+        "pass a valid enum label or integral code",
+        true,
+    )?;
+    integer
+        .extract::<i8>()
+        .map_err(|_| integer_range_error(value, column, row, "Enum8"))
 }
 
 fn enum16_value(
@@ -957,21 +1150,29 @@ fn enum16_value(
     column: &str,
     row: usize,
 ) -> PyResult<i16> {
-    if let Ok(v) = value.extract::<i16>() {
-        return Ok(v);
+    if let Ok(name) = value.downcast::<PyString>() {
+        let name = name.to_str()?;
+        return variants
+            .iter()
+            .find_map(|(variant, code)| (variant == name).then_some(*code))
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "column {column:?} row {row} Enum16 label {name:?} is not defined"
+                ))
+            });
     }
-    let name = value
-        .downcast::<PyString>()
-        .map_err(|_| conversion_error(column, row, "Enum16"))?
-        .to_str()?;
-    variants
-        .iter()
-        .find_map(|(variant, code)| (variant == name).then_some(*code))
-        .ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "column {column:?} row {row} Enum16 label {name:?} is not defined"
-            ))
-        })
+    let integer = integer_object(
+        value.py(),
+        value,
+        column,
+        row,
+        "Enum16",
+        "pass a valid enum label or integral code",
+        true,
+    )?;
+    integer
+        .extract::<i16>()
+        .map_err(|_| integer_range_error(value, column, row, "Enum16"))
 }
 
 fn decimal_width(precision: u8) -> PyResult<usize> {

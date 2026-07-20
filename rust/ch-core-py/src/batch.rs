@@ -4,9 +4,10 @@ use std::sync::Arc;
 use pyo3::exceptions::PyValueError;
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyList};
+use pyo3::types::{PyAny, PyBytes, PyCapsule, PyList, PyModule};
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
+use ch_core_rs::column::Column;
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::decode::decode_all_bytes;
 
@@ -263,15 +264,88 @@ impl ColBatch {
         }
     }
 
-    /// Get all columns as Python lists, each concatenated across chunks.
-    fn to_python_columns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let cols: Vec<Bound<'py, PyList>> = (0..self.inner.num_columns())
+    /// Get all columns as Python containers, each concatenated across chunks.
+    ///
+    /// With `typed_numeric`, top-level non-nullable fixed-width numeric columns
+    /// use `array.array`, matching clickhouse-connect's Python Native decoder.
+    #[pyo3(signature = (typed_numeric = false))]
+    fn to_python_columns<'py>(
+        &self,
+        py: Python<'py>,
+        typed_numeric: bool,
+    ) -> PyResult<Bound<'py, PyList>> {
+        for chunk in &self.inner.chunks {
+            check_chunk_shape(chunk, self.inner.num_columns())?;
+        }
+        let array_ctor = if typed_numeric {
+            Some(PyModule::import(py, "array")?.getattr("array")?)
+        } else {
+            None
+        };
+        let cols: Vec<Bound<'py, PyAny>> = (0..self.inner.num_columns())
             .map(|ci| {
+                if let Some(ctor) = &array_ctor {
+                    if let Some(column) = typed_numeric_column(py, &self.inner.chunks, ci, ctor)? {
+                        return Ok(column);
+                    }
+                }
                 let ctx = prepare_column_ctx(py, &self.inner.schema.fields[ci].ch_type, false)?;
-                column_to_pylist(py, &self.inner.chunks, ci, &ctx)
+                Ok(column_to_pylist(py, &self.inner.chunks, ci, &ctx)?.into_any())
             })
             .collect::<PyResult<_>>()?;
         PyList::new(py, &cols)
+    }
+}
+
+/// Build a Python `array.array` directly from native primitive buffers.
+///
+/// The Rust vectors and `array.array` both use host-native byte order. The
+/// binding only ships on the mainstream CPython platforms where the selected
+/// typecodes have the same widths as their Rust primitives.
+fn typed_numeric_column<'py>(
+    py: Python<'py>,
+    chunks: &[Arc<RustColBatch>],
+    col_idx: usize,
+    array_ctor: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let Some(first) = chunks.first() else {
+        return Ok(None);
+    };
+
+    macro_rules! build_array {
+        ($variant:ident, $typecode:literal) => {{
+            let output = array_ctor.call1(($typecode,))?;
+            for chunk in chunks {
+                let Column::$variant(column) = &chunk.columns[col_idx] else {
+                    return Ok(None);
+                };
+                if column.validity.is_some() {
+                    return Ok(None);
+                }
+                let byte_len = std::mem::size_of_val(column.values.as_slice());
+                // Safety: primitive Vec storage is contiguous and live for this
+                // call. Reinterpreting it as bytes preserves its native layout.
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(column.values.as_ptr().cast::<u8>(), byte_len)
+                };
+                output.call_method1("frombytes", (PyBytes::new(py, bytes),))?;
+            }
+            Ok(Some(output))
+        }};
+    }
+
+    match &first.columns[col_idx] {
+        Column::Int8(column) if column.validity.is_none() => build_array!(Int8, "b"),
+        Column::Int16(column) if column.validity.is_none() => build_array!(Int16, "h"),
+        Column::Int32(column) if column.validity.is_none() => build_array!(Int32, "i"),
+        Column::Int64(column) if column.validity.is_none() => build_array!(Int64, "q"),
+        Column::UInt8(column) if column.validity.is_none() => build_array!(UInt8, "B"),
+        Column::UInt16(column) if column.validity.is_none() => build_array!(UInt16, "H"),
+        Column::UInt32(column) if column.validity.is_none() => build_array!(UInt32, "I"),
+        Column::UInt64(column) if column.validity.is_none() => build_array!(UInt64, "Q"),
+        Column::Float32(column) if column.validity.is_none() => build_array!(Float32, "f"),
+        Column::Float64(column) if column.validity.is_none() => build_array!(Float64, "d"),
+        _ => Ok(None),
     }
 }
 

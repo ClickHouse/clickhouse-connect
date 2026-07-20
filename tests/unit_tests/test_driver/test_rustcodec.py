@@ -122,18 +122,11 @@ def test_resolve_native_codec_invalid_kwarg():
 # --- Availability ------------------------------------------------------------
 
 
-def test_resolve_rust_falls_back_when_module_missing(monkeypatch, caplog):
+@pytest.mark.parametrize("codec", ["rust", "rust_strict"])
+def test_resolve_rust_requires_extra_when_module_missing(monkeypatch, codec):
     monkeypatch.setitem(sys.modules, "_ch_core", None)
-    monkeypatch.setattr(rustcodec, "_rust_unavailable_warned", False)
-    with caplog.at_level(logging.WARNING):
-        assert resolve_native_codec("rust") == "python"
-    assert any("_ch_core" in record.getMessage() for record in caplog.records)
-
-
-def test_resolve_rust_strict_raises_when_module_missing(monkeypatch):
-    monkeypatch.setitem(sys.modules, "_ch_core", None)
-    with pytest.raises(NotSupportedError):
-        resolve_native_codec("rust_strict")
+    with pytest.raises(NotSupportedError, match=r'pip install.*clickhouse-connect\[rust\]'):
+        resolve_native_codec(codec)
 
 
 @pytest.mark.parametrize(("codec", "strict"), [("rust", False), ("rust_strict", True)])
@@ -161,22 +154,26 @@ def _ctx_response_tz():
 
 
 @pytest.mark.parametrize(
-    "builder",
+    ("builder", "reason"),
     [
-        pytest.param(lambda: eligible_ctx(query_formats={"Int*": "string"}), id="query_formats"),
-        pytest.param(lambda: eligible_ctx(column_formats={"x": "string"}), id="column_formats"),
-        pytest.param(lambda: eligible_ctx(use_none=False), id="use_none"),
-        pytest.param(lambda: eligible_ctx(encoding="latin-1"), id="encoding"),
-        pytest.param(lambda: eligible_ctx(query_tz="America/New_York"), id="query_tz"),
-        pytest.param(lambda: eligible_ctx(column_tzs={"x": "America/New_York"}), id="column_tzs"),
-        pytest.param(lambda: eligible_ctx(tz_mode="aware"), id="tz_mode_aware"),
-        pytest.param(lambda: eligible_ctx(tz_mode="schema"), id="tz_mode_schema"),
-        pytest.param(_ctx_response_tz, id="response_tz"),
-        pytest.param(lambda: QueryContext(apply_server_tz=True, server_tz=ZoneInfo("America/New_York")), id="non_utc_server"),
+        pytest.param(lambda: eligible_ctx(query_formats={"Int*": "string"}), "query_formats", id="query_formats"),
+        pytest.param(lambda: eligible_ctx(column_formats={"x": "string"}), "column_formats", id="column_formats"),
+        pytest.param(lambda: eligible_ctx(use_none=False), "use_none=False", id="use_none"),
+        pytest.param(lambda: eligible_ctx(encoding="latin-1"), "custom encoding", id="encoding"),
+        pytest.param(lambda: eligible_ctx(query_tz="America/New_York"), "query_tz", id="query_tz"),
+        pytest.param(lambda: eligible_ctx(column_tzs={"x": "America/New_York"}), "column_tzs", id="column_tzs"),
+        pytest.param(lambda: eligible_ctx(tz_mode="aware"), "tz_mode", id="tz_mode_aware"),
+        pytest.param(lambda: eligible_ctx(tz_mode="schema"), "tz_mode", id="tz_mode_schema"),
+        pytest.param(_ctx_response_tz, "server timezone header", id="response_tz"),
+        pytest.param(
+            lambda: QueryContext(apply_server_tz=True, server_tz=ZoneInfo("America/New_York")),
+            "ambient timezone",
+            id="non_utc_server",
+        ),
     ],
 )
-def test_rust_query_ineligible(builder):
-    assert rust_query_ineligible_reason(builder()) is not None
+def test_rust_query_ineligible(builder, reason):
+    assert rust_query_ineligible_reason(builder()) == reason
 
 
 @pytest.mark.parametrize(
@@ -228,13 +225,15 @@ def test_strict_global_read_format_raises_and_closes_source(clean_formats):
     assert src.closed is True
 
 
-def test_non_strict_ineligible_delegates_to_python(monkeypatch):
+def test_non_strict_ineligible_delegates_to_python_and_logs_reason(monkeypatch, caplog):
     sentinel = object()
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
     src = FakeSource([])
-    result = RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
+    with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
+        result = RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
     assert result is sentinel
     assert src.closed is False
+    assert "fallback to Python for query: use_none=False" in caplog.text
 
 
 # --- Insert build (FakeCore) -------------------------------------------------
@@ -496,7 +495,19 @@ class _FakeBatch:
         self._columns = columns
         self._error = error
 
-    def to_python_columns(self):
+    @staticmethod
+    def from_batches(batches):
+        first = batches[0]
+        error = next((batch._error for batch in batches if batch._error is not None), None)
+        columns = [list(column) for column in first._columns]
+        for batch in batches[1:]:
+            if batch._columns is not None:
+                for base, added in zip(columns, batch._columns):
+                    base.extend(added)
+        return _FakeBatch(first.column_names, first.column_type_names, columns, error)
+
+    def to_python_columns(self, typed_numeric=False):
+        del typed_numeric
         if self._error is not None:
             raise self._error
         return self._columns
@@ -522,6 +533,7 @@ def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
 
     class _FakeCore:
         StreamDecoder = _FakeStreamDecoder
+        ColBatch = _FakeBatch
 
     return _FakeCore
 
@@ -613,8 +625,9 @@ def test_decode_buffered_unsupported_raises(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _ = result.result_rows
     assert src.closed is True
 
 
@@ -623,8 +636,9 @@ def test_decode_buffered_malformed_fill_raises_data_error(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=ValueError("Malformed payload: bad cell"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
+    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     with pytest.raises(DataError, match="Malformed payload: bad cell"):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _ = result.result_rows
     assert src.closed is True
 
 
@@ -660,6 +674,19 @@ def test_decode_buffered_column_oriented(monkeypatch):
     result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(column_oriented=True))
     assert result.result_columns == [[13, 79], [1, 2]]
     assert result.result_rows == [(13, 1), (79, 2)]
+
+
+def test_decode_buffered_result_columns_uses_direct_column_exit(monkeypatch):
+    class ColumnsOnlyBatch(_FakeBatch):
+        def to_python_rows(self):
+            raise AssertionError("row exit must not run for first result_columns access")
+
+    batch = ColumnsOnlyBatch(["a", "b"], ["Int32", "Int32"], columns=[[13, 79], [1, 2]])
+    monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch]))
+
+    result = RustNativeTransform(strict=True).parse_response(FakeSource([b"chunk"]), eligible_ctx())
+
+    assert result.result_columns == [[13, 79], [1, 2]]
 
 
 # --- Decode against real _ch_core --------------------------------------------
@@ -720,8 +747,9 @@ def _dynamic_shared_block(cells: list) -> bytes:
 def test_decode_malformed_shared_cell_raises_data_error(ch_core):
     # Int32 descriptor with a truncated payload fails the fill, not the prefix parse.
     corrupt = _dynamic_shared_block([b"\x09\x01\x02"])
+    result = RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
     with pytest.raises(DataError, match="SharedVariant"):
-        RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
+        _ = result.result_rows
 
 
 def test_decode_malformed_shared_cell_streaming_raises_data_error(ch_core):

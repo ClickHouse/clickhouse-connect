@@ -1,3 +1,5 @@
+import array
+
 from helpers import (
     _bfloat16_bytes,
     _bfloat16_value,
@@ -104,6 +106,50 @@ class TestDecodeFloat64:
         assert vals[0] == pytest.approx(1.5)
         assert vals[1] == pytest.approx(2.7)
         assert vals[2] == pytest.approx(-0.1)
+
+
+def test_typed_numeric_columns_match_python_array_contract_across_chunks():
+    columns = [
+        ("i8", "Int8", "b", [-13, 0, 79]),
+        ("i16", "Int16", "h", [-1300, 0, 7900]),
+        ("i32", "Int32", "i", [-130_000, 0, 790_000]),
+        ("i64", "Int64", "q", [-13_000_000_000, 0, 79_000_000_000]),
+        ("u8", "UInt8", "B", [0, 13, 79]),
+        ("u16", "UInt16", "H", [0, 1300, 7900]),
+        ("u32", "UInt32", "I", [0, 130_000, 790_000]),
+        ("u64", "UInt64", "Q", [0, 13_000_000_000, 79_000_000_000]),
+        ("f32", "Float32", "f", [-1.25, 0.0, 79.5]),
+        ("f64", "Float64", "d", [-1.25, 0.0, 79.5]),
+    ]
+    batches = []
+    for indexes in ([0, 1], [2]):
+        payload = build_native_block(
+            [(name, type_name, [values[index] for index in indexes]) for name, type_name, _, values in columns]
+        )
+        batches.append(_ch_core.ColBatch.decode_native(payload))
+
+    merged = _ch_core.ColBatch.from_batches(batches)
+    typed = merged.to_python_columns(typed_numeric=True)
+    for output, (_, _, typecode, values) in zip(typed, columns):
+        assert isinstance(output, array.array)
+        assert output.typecode == typecode
+        assert list(output) == pytest.approx(values)
+
+    assert all(isinstance(output, list) for output in merged.to_python_columns())
+
+
+def test_typed_numeric_columns_leave_nullable_and_non_numeric_columns_as_lists():
+    data = build_native_block(
+        [
+            ("nullable", "Nullable(Int32)", [13, None, 79]),
+            ("enum", "Enum8('user_1'=1, 'user_2'=2)", [1, 2, 1]),
+            ("date", "Date", [13, 79, 101]),
+        ]
+    )
+
+    columns = _ch_core.ColBatch.decode_native(data).to_python_columns(typed_numeric=True)
+
+    assert all(isinstance(output, list) for output in columns)
 
 
 class TestBFloat16:

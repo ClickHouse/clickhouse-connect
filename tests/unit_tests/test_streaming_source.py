@@ -416,6 +416,8 @@ async def test_streaming_insert_error_propagation():
 
     # Should have received first chunk before error
     assert chunks == [b"chunk1"]
+    assert isinstance(context.insert_exception, ValueError)
+    assert str(context.insert_exception) == "Serialization error"
 
 
 def test_sync_streaming_insert_error_propagation():
@@ -430,6 +432,8 @@ def test_sync_streaming_insert_error_propagation():
     with pytest.raises(ValueError, match="Serialization error"):
         for chunk in source.gen:
             chunks.append(chunk)
+
+    assert isinstance(context.insert_exception, ValueError)
 
     assert chunks == [b"chunk1"]
 

@@ -17,14 +17,11 @@ from clickhouse_connect.driver.streaming import ReadAheadSource
 from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
 from clickhouse_connect.driver.types import ByteSource, Closable
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("clickhouse_connect")
 
 NativeCodec = Literal["python", "rust", "rust_strict"]
 
 _VALID_CODECS = ("python", "rust", "rust_strict")
-_rust_unavailable_warned = False
-
-
 def _ch_core_module() -> Any:
     """Return the imported _ch_core module, or None if it is not available."""
     try:
@@ -35,7 +32,7 @@ def _ch_core_module() -> Any:
 
 
 def resolve_native_codec(native_codec: str | None) -> str:
-    """Resolve the effective codec name, applying availability fallback rules."""
+    """Resolve the effective codec name and verify that its optional extra is installed."""
     if native_codec is None:
         resolved = common.get_setting("native_codec")
     else:
@@ -46,16 +43,10 @@ def resolve_native_codec(native_codec: str | None) -> str:
         return resolved
     if _ch_core_module() is not None:
         return resolved
-    if resolved == "rust_strict":
-        raise NotSupportedError(
-            'native_codec="rust_strict" requires the compiled _ch_core module, which is not installed. '
-            'Install a build that includes it (maturin build) or use native_codec="python".'
-        )
-    global _rust_unavailable_warned
-    if not _rust_unavailable_warned:
-        _rust_unavailable_warned = True
-        logger.warning('native_codec="rust" requested but _ch_core is not available; using the Python codec')
-    return "python"
+    raise NotSupportedError(
+        f'native_codec="{resolved}" requires the compiled _ch_core module. '
+        'Run `pip install "clickhouse-connect[rust]"` or use native_codec="python".'
+    )
 
 
 def make_native_transform(native_codec: NativeCodec | None = None) -> Transform:
@@ -76,16 +67,20 @@ def rust_query_ineligible_reason(context: QueryContext) -> str | None:
     if context.use_numpy and options.arrow is None:
         # numpy and pandas output route through the zero-copy Arrow exit, which needs pyarrow.
         return "pyarrow not installed"
-    if context.query_formats or context.column_formats:
-        return "query/column formats"
+    if context.query_formats:
+        return "query_formats"
+    if context.column_formats:
+        return "column_formats"
     if ch_read_formats:
         return "global read format override"
     if not context.use_none:
         return "use_none=False"
     if context.encoding:
         return "custom encoding"
-    if context.query_tz is not None or context.column_tzs:
-        return "query_tz/column_tzs"
+    if context.query_tz is not None:
+        return "query_tz"
+    if context.column_tzs:
+        return "column_tzs"
     if context.response_tz is not None:
         return "server timezone header"
     if context.tz_mode != "naive_utc":
@@ -168,25 +163,49 @@ def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
 
 
 class _BufferedQueryResult(QueryResult):
-    """QueryResult over data materialized at parse time in the requested orientation.
+    """QueryResult over decoded batches retained until the caller chooses an orientation.
 
-    The stream is fully consumed and closed at parse time; stream accessors raise StreamClosedError and
-    the other orientation accessed transposes from the first.
+    The stream is fully consumed and closed at parse time. The first result_rows or result_columns access
+    materializes directly from the columnar core batch, and only a later request for the other orientation
+    transposes the already materialized Python values.
     """
 
-    def __init__(self, matrix: Any, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
+    def __init__(self, batch: Any, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
         super().__init__(None, None, names, col_types, column_oriented, source)
         self._block_gen = None
-        if column_oriented:
-            self._result_columns = matrix
-        else:
-            self._result_rows = matrix
+        self._batch = batch
+
+    def _materialize(self, column_oriented: bool) -> Any:
+        batch = self._batch
+        try:
+            matrix = batch.to_python_columns() if column_oriented else batch.to_python_rows()
+        except NotImplementedError as ex:
+            raise _unsupported_decode_error(ex) from ex
+        except ValueError as ex:
+            raise _binding_value_error(ex) from ex
+        finally:
+            self._batch = None
+        return matrix
 
     @property
     def result_rows(self) -> Any:
-        if self._result_rows is None and self._result_columns is not None:
-            self._result_rows = list(zip(*self._result_columns))
-        return QueryResult.result_rows.fget(self)
+        if self._result_rows is None:
+            if self._result_columns is None:
+                self._result_rows = self._materialize(False)
+            else:
+                self._result_rows = list(zip(*self._result_columns))
+        return self._result_rows
+
+    @property
+    def result_columns(self) -> Any:
+        if self._result_columns is None:
+            if self._result_rows is None:
+                self._result_columns = self._materialize(True)
+            elif self._result_rows:
+                self._result_columns = list(map(list, zip(*self._result_rows)))
+            else:
+                self._result_columns = [[] for _ in range(len(self.column_names))]
+        return self._result_columns
 
 
 class RustNativeTransform:
@@ -203,7 +222,7 @@ class RustNativeTransform:
             if self.strict:
                 source.close()
                 raise NotSupportedError(f'native_codec="rust_strict" does not support {reason}; use native_codec="python" or "rust"')
-            logger.debug("Rust native decoder ineligible (%s); using the Python codec", reason)
+            logger.info("Native codec fallback to Python for query: %s", reason)
             return NativeTransform.parse_response(source, context)
 
         core = _ch_core_module()
@@ -275,19 +294,12 @@ class RustNativeTransform:
             raise
 
         if not context.use_numpy and not context.streaming:
-            # Buffered query: materialize each batch as it arrives so object building on the consumer
-            # thread overlaps the producer's transport drain. raw_blocks closes the source before
-            # raising, so consuming it needs no extra guard.
+            # Buffered query: retain the decoded columnar chunks until result_rows or result_columns is
+            # requested. This keeps the row exit fast while allowing result_columns to avoid building and
+            # transposing millions of temporary row tuples.
             try:
-                if context.column_oriented:
-                    matrix: Any = first.to_python_columns()
-                    for batch in blocks:
-                        for base, added in zip(matrix, batch.to_python_columns()):
-                            base.extend(added)
-                else:
-                    matrix = first.to_python_rows()
-                    for batch in blocks:
-                        matrix.extend(batch.to_python_rows())
+                decoded_batches = [first, *blocks]
+                batch = first if len(decoded_batches) == 1 else core.ColBatch.from_batches(decoded_batches)
             except NotImplementedError as ex:
                 read_source.close()
                 raise _unsupported_decode_error(ex) from ex
@@ -298,14 +310,14 @@ class RustNativeTransform:
                 read_source.close()
                 raise
             read_source.close()
-            return _BufferedQueryResult(matrix, names, col_types, context.column_oriented, read_source)
+            return _BufferedQueryResult(batch, names, col_types, context.column_oriented, read_source)
 
         try:
             if context.use_numpy:
                 converters = build_converters(col_types, context)
                 first_columns = convert_block(first, converters)
             else:
-                first_columns = first.to_python_columns()
+                first_columns = first.to_python_columns(typed_numeric=True)
         except NotImplementedError as ex:
             read_source.close()
             raise _unsupported_decode_error(ex) from ex
@@ -341,7 +353,7 @@ class RustNativeTransform:
             yield first_columns
             for batch in blocks:
                 try:
-                    columns = batch.to_python_columns()
+                    columns = batch.to_python_columns(typed_numeric=True)
                 except NotImplementedError as ex:
                     read_source.close()
                     raise _unsupported_decode_error(ex) from ex
@@ -369,7 +381,7 @@ class RustNativeTransform:
                     'native_codec="rust_strict" does not support JSON inserts while the legacy JSON serialization '
                     'format is active. Use native_codec="python" or "rust"'
                 )
-            logger.debug("Legacy JSON serialization required; using the Python codec")
+            logger.info("Native codec fallback to Python for insert: legacy JSON serialization")
             return NativeTransform.build_insert(context)
 
         if ch_write_formats:
@@ -379,7 +391,7 @@ class RustNativeTransform:
                 raise NotSupportedError(
                     'native_codec="rust_strict" does not support global write format overrides; use native_codec="python" or "rust"'
                 )
-            logger.debug("Global write format override set; using the Python codec")
+            logger.info("Native codec fallback to Python for insert: global write format override")
             return NativeTransform.build_insert(context)
 
         if context.col_simple_formats or context.col_type_formats or context.type_formats:
@@ -390,7 +402,7 @@ class RustNativeTransform:
                 raise NotSupportedError(
                     'native_codec="rust_strict" does not support per-column or per-type write formats; use native_codec="python" or "rust"'
                 )
-            logger.debug("Per-column or per-type write format set; using the Python codec")
+            logger.info("Native codec fallback to Python for insert: column/type write format")
             return NativeTransform.build_insert(context)
 
         column_names = list(context.column_names)
@@ -402,7 +414,7 @@ class RustNativeTransform:
                 raise NotSupportedError(
                     f'native_codec="rust_strict" cannot insert unsupported column type: {ex}; use native_codec="python" or "rust"'
                 ) from ex
-            logger.debug("Rust native encoder cannot serialize this insert (%s); using the Python codec", ex)
+            logger.info("Native codec fallback to Python for insert: unsupported type (%s)", ex)
             return NativeTransform.build_insert(context)
 
         compressor = get_compressor(context.compression)

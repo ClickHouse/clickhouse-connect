@@ -292,6 +292,8 @@ class StreamingInsertSource:
 
             except Exception as e:
                 logger.error("Insert producer error: %s", e, exc_info=True)
+                if getattr(self.context, "insert_exception", None) is None:
+                    self.context.insert_exception = e
                 if not self._stop_event.is_set():
                     self._put(e)
             finally:
@@ -494,6 +496,8 @@ class SyncStreamingInsertSource:
                     return
         except Exception as ex:
             logger.error("Insert producer error: %s", ex, exc_info=True)
+            if getattr(self.context, "insert_exception", None) is None:
+                self.context.insert_exception = ex
             if not self._stop_event.is_set():
                 self._put(ex)
 

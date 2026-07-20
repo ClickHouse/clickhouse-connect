@@ -26,6 +26,7 @@ dependencies = [
 [[package]]
 name = "ch-core-rs"
 version = "0.1.0"
+source = "git+https://github.com/ClickHouse/ch-core-rs?tag=core-dev-20260720#836e8e641098c31766d06649d45f8af1b578d8dd"
 
 [[package]]
 name = "heck"

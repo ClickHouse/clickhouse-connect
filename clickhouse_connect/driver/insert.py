@@ -150,6 +150,27 @@ class InsertContext(BaseQueryContext):
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
             df_col = df[df_col_name]
             d_type_kind = df_col.dtype.kind
+            if ch_type.base_type in ("Enum8", "Enum16"):
+                enum_values = []
+                for row, value in enumerate(df_col):
+                    if options.pd.isna(value):
+                        enum_values.append(None if ch_type.nullable else 0)
+                    elif isinstance(value, (float, options.np.floating)):
+                        if not options.np.isfinite(value):
+                            raise DataError(
+                                f"Column {col_name!r} row {row} has non-finite enum code {value!r}; "
+                                "use a valid enum label or finite integral code"
+                            )
+                        if not float(value).is_integer():
+                            raise DataError(
+                                f"Column {col_name!r} row {row} has enum code {value!r} that would lose fractional data; "
+                                "use a valid enum label or integral code"
+                            )
+                        enum_values.append(int(value))
+                    else:
+                        enum_values.append(value)
+                data.append(enum_values)
+                continue
             if ch_type.python_type is int:
                 if d_type_kind == "f":
                     df_col = df_col.round().astype(ch_type.base_type)

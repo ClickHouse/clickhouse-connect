@@ -74,17 +74,43 @@ class TestEncodeFastPaths:
         assert encoded == build_native_block([("v", "Nullable(Int64)", values)])
 
     def test_fallback_types_still_accepted(self):
+        from decimal import Decimal
         import enum
 
         class IntLike(enum.IntEnum):
             SEVEN = 7
 
-        values = [True, IntLike.SEVEN, 3]
-        assert self._encode("Int64", values) == build_native_block([("v", "Int64", [1, 7, 3])])
+        values = [True, IntLike.SEVEN, 13.0, Decimal("79.000")]
+        assert self._encode("Int64", values) == build_native_block([("v", "Int64", [1, 7, 13, 79])])
         # Exact ints take the fast path into floats; bool goes through the fallback.
         assert self._encode("Float64", [1, True, 2.5]) == build_native_block(
             [("v", "Float64", [1.0, 1.0, 2.5])]
         )
+
+    @pytest.mark.parametrize(
+        "value,detail",
+        [
+            (13.5, "would lose fractional data; pass an integer value"),
+            (float("nan"), "is not finite; pass an integer value"),
+            (float("inf"), "is not finite; pass an integer value"),
+        ],
+    )
+    def test_float_to_integer_rejection_is_actionable(self, value, detail):
+        with pytest.raises(ValueError, match=detail):
+            self._encode("Int32", [value])
+
+    @pytest.mark.parametrize("value", ["13", "-79"])
+    def test_numeric_string_to_integer_rejection_is_actionable(self, value):
+        with pytest.raises(ValueError, match="strings are not accepted; pass an int instead"):
+            self._encode("Int32", [value])
+
+    def test_decimal_to_integer_rejection_is_actionable(self):
+        from decimal import Decimal
+
+        with pytest.raises(ValueError, match="would lose fractional data; pass an integer value"):
+            self._encode("Int32", [Decimal("13.5")])
+        with pytest.raises(ValueError, match="is not finite; pass an integer value"):
+            self._encode("Int32", [Decimal("NaN")])
 
     def test_float32_overflow_becomes_inf(self):
         encoded = self._encode("Float32", [1e300])
@@ -268,6 +294,16 @@ class TestScalarObjectInsertFastPath:
         assert fast == self._encode(f"Nullable({self._E8})", tuple(vals), len(vals))
         assert fast == self._encode(f"Nullable({self._E8})", _NdarrayLikeColumn(vals), len(vals))
         assert self._decode(fast) == vals
+
+    @pytest.mark.parametrize("type_name", [_E8, _E16])
+    def test_enum_accepts_integral_float_and_pandas_nan(self, type_name):
+        vals = [1.0, float("nan"), 2.0]
+        encoded = self._encode(type_name, vals)
+        assert encoded == build_native_block([("v", type_name, [1, 0, 2])])
+
+    def test_enum_rejects_lossy_float_with_actionable_error(self):
+        with pytest.raises(ValueError, match="would lose fractional data; pass a valid enum label or integral code"):
+            self._encode(self._E8, [1.5])
 
     @pytest.mark.parametrize("type_name,enum_name", [(_E8, "Enum8"), (_E16, "Enum16")])
     def test_enum_unknown_label_raises(self, type_name, enum_name):

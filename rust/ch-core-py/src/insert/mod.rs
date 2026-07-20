@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use pyo3::types::{
     PyAnyMethods, PyBool, PyByteArray, PyByteArrayMethods, PyBytes, PyDate, PyDateTime, PyDelta,
     PyDeltaAccess, PyDict, PyFloat, PyFrozenSet, PyList, PySet, PyString, PyStringMethods, PyTime,
-    PyTimeAccess, PyTuple,
+    PyTimeAccess, PyTuple, PyTypeMethods,
 };
 
 use ch_core_rs::batch::ColBatch as RustColBatch;

@@ -415,6 +415,11 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
             ) from ex
         if leaf_predicate is not None:
             column = _refinalize_leaves(ch_type, column, context, leaf_predicate)
+        if isinstance(ch_type, DateTimeBase) and getattr(first_value(column), "tzinfo", None) is not None:
+            # DateTimeBase._finalize_column recognizes timezone-aware pandas values by their `.tz`
+            # attribute. The rust object exit produces stdlib datetime values, whose equivalent attribute
+            # is `.tzinfo`, so wrap them before nullable pandas finalization selects a naive dtype.
+            column = [None if value is None else options.pd.Timestamp(value) for value in column]
         return ch_type._finalize_column(column, context)
 
     return convert

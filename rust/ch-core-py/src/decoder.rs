@@ -56,17 +56,25 @@ pub(crate) fn decode_err(e: DecodeError) -> PyErr {
         DecodeError::InvalidJson { column, reason } => PyValueError::new_err(format!(
             "Invalid JSON layout for column '{column}': {reason}"
         )),
+        DecodeError::ResourceLimit {
+            limit,
+            requested,
+            what,
+        } => PyValueError::new_err(format!(
+            "Resource limit exceeded for {what}: requested {requested} bytes cumulatively, limit is {limit} bytes"
+        )),
         DecodeError::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
             PyEOFError::new_err(format!("Truncated Native data: {e}"))
         }
         DecodeError::Io(e) => PyRuntimeError::new_err(format!("Decode error: {e}")),
+        _ => PyRuntimeError::new_err(format!("Decode error: {e}")),
     }
 }
 
 pub(crate) fn decode_options(has_block_info: bool) -> DecodeOptions {
-    DecodeOptions {
-        protocol_revision: if has_block_info { 1 } else { 0 },
-    }
+    let mut options = DecodeOptions::default();
+    options.protocol_revision = if has_block_info { 1 } else { 0 };
+    options
 }
 
 /// Copy the bytes out of any u8 buffer object (bytes, bytearray, memoryview).
