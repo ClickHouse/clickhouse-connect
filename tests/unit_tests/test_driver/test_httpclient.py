@@ -749,6 +749,36 @@ class TestQuery:
         assert not fields
 
     @patch.object(HttpSyncBackend, "request")
+    def test_raw_query_with_map_setting(self, mock_raw_request):
+        """A dict-valued setting (e.g. `additional_table_filters`) must be rendered as a
+        properly quoted/escaped ClickHouse map literal, not Python's own str()/repr of the
+        dict. Python's repr uses double quotes for values containing a single quote, which
+        the server rejects with "Cannot parse quoted string: expected opening quote ''', got
+        '"'." (see GH issue #501)."""
+        self.client.form_encode_query_params = False
+
+        mock_response = Mock()
+        mock_response.data = b"result_with_map_setting"
+        mock_raw_request.return_value = mock_response
+
+        query = "SELECT * FROM table"
+        settings = {"additional_table_filters": {"a": "'some_value'"}}
+
+        result = self.client.raw_query(query, settings=settings)
+
+        assert result == b"result_with_map_setting"
+
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+
+        assert "additional_table_filters" in params
+        rendered = params["additional_table_filters"]
+        assert isinstance(rendered, str)
+        # Must be a single-quoted ClickHouse map literal with the embedded quotes escaped,
+        # never Python's dict repr (which mixes double and single quotes).
+        assert rendered == "{'a': '\\'some_value\\''}"
+        assert '"' not in rendered
+
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_format(self, mock_raw_request):
         """Test raw_query properly appends FORMAT clause"""
         self.client.form_encode_query_params = False

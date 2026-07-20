@@ -27,7 +27,7 @@ from clickhouse_connect.driver._backend.orchestration import (
     insert_context_sequence,
     run_sync,
 )
-from clickhouse_connect.driver.binding import bind_query
+from clickhouse_connect.driver.binding import bind_query, str_query_value
 from clickhouse_connect.driver.common import (
     StreamContext,
     coerce_bool,
@@ -255,11 +255,24 @@ class Client(ABC):
         for key, value in settings.items():
             str_value = self._validate_setting(key, value, invalid_action)
             if str_value is not None:
-                validated[key] = value
+                # Container values (e.g. `additional_table_filters`) must be sent as a properly
+                # quoted/escaped ClickHouse literal (str_value); Python's own str()/repr of a dict
+                # or list is not valid ClickHouse syntax and would otherwise be mangled by urlencode.
+                # Scalar values are passed through as-is to preserve their original type.
+                validated[key] = str_value if isinstance(value, (dict, list, tuple)) else value
         return validated
 
     def _validate_setting(self, key: str, value: Any, invalid_action: str) -> str | None:
-        str_value = str(value)
+        if isinstance(value, dict):
+            # Settings of Map type (e.g. `additional_table_filters`) must be sent as a ClickHouse
+            # map literal, always with single-quoted/escaped keys and values -- regardless of the
+            # unrelated `dict_parameter_format` setting, which only governs bound query parameters.
+            pairs = (f"{str_query_value(k)}: {str_query_value(v)}" for k, v in value.items())
+            str_value = f"{{{', '.join(pairs)}}}"
+        elif isinstance(value, (list, tuple)):
+            str_value = str_query_value(value)
+        else:
+            str_value = str(value)
         if value is True:
             str_value = "1"
         elif value is False:
