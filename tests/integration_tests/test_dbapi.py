@@ -49,3 +49,20 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         )
         cursor.execute("SELECT id, name FROM dbapi_executemany_dicts ORDER BY id")
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+def test_description_precision_and_scale(dbapi_connection, table_context: Callable):
+    """Cursor.description exposes precision and scale for DateTime64 and Decimal
+    columns queried from a real server, and leaves them None for other types.
+    https://github.com/ClickHouse/clickhouse-connect/issues/881
+    """
+    columns = ["dt DateTime64(3)", "d Decimal(18, 4)", "n UInt64", "s String"]
+    with table_context("dbapi_description_precision", columns):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SELECT dt, d, n, s FROM dbapi_description_precision")
+        assert cursor.description == [
+            ("dt", "DateTime64(3)", None, None, 3, 3, True),
+            ("d", "Decimal(18, 4)", None, None, 18, 4, True),
+            ("n", "UInt64", None, None, None, None, True),
+            ("s", "String", None, None, None, None, True),
+        ]

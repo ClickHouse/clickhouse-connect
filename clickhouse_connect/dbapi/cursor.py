@@ -3,7 +3,9 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from clickhouse_connect.datatypes.numeric import Decimal
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.datatypes.temporal import DateTime64
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -17,6 +19,21 @@ str_type = get_from_name("String")
 int_type = get_from_name("Int32")
 
 
+def _precision_and_scale(col_type: Any) -> tuple[int | None, int | None]:
+    """Return the PEP 249 (precision, scale) for a column type, or (None, None).
+
+    DateTime64 has a single fractional-seconds scale, reported as both precision and
+    scale. Decimal types carry an independent precision (total digits) and scale. The
+    check works through Nullable/LowCardinality wrappers because those are flags on the
+    type instance, not separate classes.
+    """
+    if isinstance(col_type, DateTime64):
+        return col_type.scale, col_type.scale
+    if isinstance(col_type, Decimal):
+        return col_type.prec, col_type.scale
+    return None, None
+
+
 class Cursor:
     """
     See :ref:`https://peps.python.org/pep-0249/`
@@ -28,6 +45,7 @@ class Cursor:
         self.data: Sequence | None = None
         self.names: Sequence[str] = []
         self.types: Sequence[Any] = []
+        self._col_types: Sequence[Any] = []
         self._rowcount: int = 0
         self._summary: list[dict[str, Any]] = []
         self._ix: int = 0
@@ -37,8 +55,14 @@ class Cursor:
             raise ProgrammingError("Cursor is not valid")
 
     @property
-    def description(self) -> list[tuple[str, Any, None, None, None, None, bool]]:
-        return [(n, t, None, None, None, None, True) for n, t in zip(self.names, self.types)]
+    def description(self) -> list[tuple[str, Any, None, None, int | None, int | None, bool]]:
+        col_types = self._col_types
+        result: list[tuple[str, Any, None, None, int | None, int | None, bool]] = []
+        for ix, (name, type_code) in enumerate(zip(self.names, self.types)):
+            col_type = col_types[ix] if ix < len(col_types) else None
+            precision, scale = _precision_and_scale(col_type)
+            result.append((name, type_code, None, None, precision, scale, True))
+        return result
 
     @property
     def rowcount(self) -> int:
@@ -70,9 +94,11 @@ class Cursor:
         if query_result.column_names:
             self.names = query_result.column_names
             self.types = [x.name for x in query_result.column_types]
+            self._col_types = list(query_result.column_types)
         elif self.data:
             self.names = [f"col_{x}" for x in range(len(self.data[0]))]
             self.types = [x.__class__ for x in self.data[0]]
+            self._col_types = [None] * len(self.data[0])
         else:
             stripped = operation.strip().rstrip(";").strip()
             if stripped.upper().startswith(("SELECT", "WITH")):
@@ -81,6 +107,7 @@ class Cursor:
                 if meta_result.column_names:
                     self.names = meta_result.column_names
                     self.types = [x.name for x in meta_result.column_types]
+                    self._col_types = list(meta_result.column_types)
 
     def _try_bulk_insert(self, operation: str, data: Any, settings: dict[str, Any] | None = None) -> bool:
         match = insert_re.match(remove_sql_comments(operation))
@@ -139,6 +166,7 @@ class Cursor:
                 else:
                     self.names = query_result.column_names
                     self.types = query_result.column_types
+                    self._col_types = list(query_result.column_types)
                 self._summary.append(query_result.summary)
         except TypeError as ex:
             raise ProgrammingError(f"Invalid parameters {parameters} passed to cursor executemany") from ex

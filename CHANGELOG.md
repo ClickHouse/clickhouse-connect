@@ -3,6 +3,7 @@
 ## UNRELEASED
 
 ### Bug Fixes
+- DB API `Cursor.description` now reports precision and scale for `DateTime64` and `Decimal` columns instead of always `None`. The cursor kept only the type name strings, discarding the type instances that carry this information. It now retains the column type instances and fills the PEP 249 precision and scale fields: `DateTime64(3)` reports precision 3 and scale 3, `Decimal(18, 4)` reports precision 18 and scale 4, and all other types keep both `None`. The `type_code` field is unchanged. Closes [#881](https://github.com/ClickHouse/clickhouse-connect/issues/881).
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
 
 ## 1.5.0, 2026-07-15

@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
@@ -349,6 +350,39 @@ def test_execute_unescapes_multiple_percents():
 
     actual_query = client.query.call_args[0][0]
     assert actual_query == "SELECT formatDateTime(now(), '%Y-%m-%d %H:%M:%S')"
+
+
+def test_description_reports_precision_and_scale():
+    """Cursor.description surfaces precision and scale for the types that carry them.
+
+    DateTime64 reports its fractional-seconds scale as both precision and scale, Decimal
+    reports its own precision and scale (through Nullable), and every other type keeps
+    both None. See https://github.com/ClickHouse/clickhouse-connect/issues/881
+    """
+    column_names = ["dt3", "dt9", "dec", "big_dec", "nullable_dec", "s", "n"]
+    column_types = [
+        get_from_name("DateTime64(3)"),
+        get_from_name("DateTime64(9, 'UTC')"),
+        get_from_name("Decimal(18, 4)"),
+        get_from_name("Decimal(76, 10)"),
+        get_from_name("Nullable(Decimal(9, 2))"),
+        get_from_name("String"),
+        get_from_name("UInt64"),
+    ]
+    client = Mock()
+    client.query.return_value = create_mock_query_result([], column_names=column_names, column_types=column_types)
+    cursor = Cursor(client)
+    cursor.execute("SELECT dt3, dt9, dec, big_dec, nullable_dec, s, n FROM test_table")
+
+    assert cursor.description == [
+        ("dt3", "DateTime64(3)", None, None, 3, 3, True),
+        ("dt9", "DateTime64(9, 'UTC')", None, None, 9, 9, True),
+        ("dec", "Decimal(18, 4)", None, None, 18, 4, True),
+        ("big_dec", "Decimal(76, 10)", None, None, 76, 10, True),
+        ("nullable_dec", "Nullable(Decimal(9, 2))", None, None, 9, 2, True),
+        ("s", "String", None, None, None, None, True),
+        ("n", "UInt64", None, None, None, None, True),
+    ]
 
 
 def test_execute_empty_result_fetches_metadata_with_parameters():
