@@ -86,7 +86,7 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent consumer_smoke.py
       - name: Public type completeness ratchet
-        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1129 --python "$RUNNER_TEMP/consumer/bin/python"
+        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1116 --python "$RUNNER_TEMP/consumer/bin/python"
       - name: SQLAlchemy Select typing smoke test
         run: |
           "$RUNNER_TEMP/consumer/bin/pip" install "sqlalchemy>=2.0,<3.0"
