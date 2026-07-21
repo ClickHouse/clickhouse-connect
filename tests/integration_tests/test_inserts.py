@@ -64,7 +64,7 @@ def test_fixed_string_empty_bytes(param_client: Client, call, table_context: Cal
         empty = b"\x00" * 6
         data = [
             [79, b"needle", b"abcdef"],  # exact length: unchanged
-            [13, b"", b""],              # empty bytes: non-nullable (the fix) and nullable sibling
+            [13, b"", b""],  # empty bytes: non-nullable (the fix) and nullable sibling
         ]
         call(param_client.insert, "test_fs_empty_bytes", data)
         result = call(param_client.query, "SELECT key, fs, nfs FROM test_fs_empty_bytes ORDER BY key").result_set
