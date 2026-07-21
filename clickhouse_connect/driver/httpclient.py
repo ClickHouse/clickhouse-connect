@@ -32,6 +32,7 @@ from clickhouse_connect.driver.httputil import (
     get_pool_manager,
     get_proxy_manager,
 )
+from clickhouse_connect.driver.kerberos import check_kerberos
 from clickhouse_connect.driver.query import TzMode, TzSource
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -70,6 +71,8 @@ class HttpClient(SyncBackendClient):
         database: str | None,
         access_token: str | None = None,
         token_provider: Callable[[], str] | None = None,
+        use_kerberos: bool | str = False,
+        kerberos_hostname_override: str | None = None,
         compress: bool | str = True,
         query_limit: int = 0,
         query_retries: int = 2,
@@ -143,7 +146,14 @@ class HttpClient(SyncBackendClient):
 
         if token_provider:
             access_token = token_provider()
-        if access_token:
+        use_kerberos = coerce_bool(use_kerberos)
+        kerberos_hostname: str | None = None
+        if use_kerberos:
+            if access_token or token_provider or username or client_cert:
+                raise ProgrammingError("Cannot combine use_kerberos with access_token, token_provider, username/password, or client_cert")
+            check_kerberos()
+            kerberos_hostname = kerberos_hostname_override or host
+        elif access_token:
             client_headers["Authorization"] = f"Bearer {access_token}"
         elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
             client_headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
@@ -187,6 +197,8 @@ class HttpClient(SyncBackendClient):
             timeout=Timeout(connect=connect_timeout, read=send_receive_timeout),
             server_host_name=server_host_name,
             token_provider=token_provider,
+            use_kerberos=use_kerberos,
+            kerberos_hostname=kerberos_hostname,
             # allow to override the global autogenerate_query_id setting via the constructor params
             autogenerate_query_id=(common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id),
             read_format="Native",

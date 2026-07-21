@@ -33,7 +33,7 @@ ignore = [
 
 [tool.mypy]
 files = ["clickhouse_connect"]
-python_version = "3.10"
+python_version = "3.12"
 
 [[tool.mypy.overrides]]
 # Optional dependencies without type stubs and the compiled Cython modules.
@@ -44,6 +44,7 @@ module = [
     "orjson.*",
     "pandas.*",
     "pyarrow.*",
+    "spnego.*",
     "tzlocal.*",
     "ujson.*",
     "clickhouse_connect.driverc.*",

@@ -38,6 +38,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
 from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
+from clickhouse_connect.driver.kerberos import negotiate_auth_header
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
@@ -159,6 +160,8 @@ class HttpAsyncBackend:
         server_host_name: str | None,
         token_provider: Callable[[], str | Awaitable[str]] | None,
         autogenerate_query_id: bool,
+        use_kerberos: bool = False,
+        kerberos_hostname: str | None = None,
         read_format: str = "Native",
         form_encode_query_params: bool = False,
     ):
@@ -171,6 +174,8 @@ class HttpAsyncBackend:
         self.proxy_url = proxy_url
         self.server_host_name = server_host_name
         self.token_provider = token_provider
+        self.use_kerberos = use_kerberos
+        self.kerberos_hostname = kerberos_hostname
         self.autogenerate_query_id = autogenerate_query_id
         self.read_format = read_format
         self.form_encode_query_params = form_encode_query_params
@@ -443,6 +448,9 @@ class HttpAsyncBackend:
             final_params["query_id"] = str(uuid.uuid4())
 
         req_headers = dict_copy(self.headers, headers)
+        if self.use_kerberos:
+            assert self.kerberos_hostname is not None
+            req_headers["Authorization"] = negotiate_auth_header(self.kerberos_hostname)
         if self.server_host_name:
             req_headers["Host"] = self.server_host_name
         query_session = final_params.get("session_id")
