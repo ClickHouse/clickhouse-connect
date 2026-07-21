@@ -51,6 +51,7 @@ from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.kerberos import check_kerberos
 from clickhouse_connect.driver.options import check_arrow, check_numpy, check_pandas, check_polars
 from clickhouse_connect.driver.query import (
     QueryContext,
@@ -118,6 +119,8 @@ class AsyncClient(Client):
         database: str | None = None,
         access_token: str | None = None,
         token_provider: Callable[[], str | Awaitable[str]] | None = None,
+        use_kerberos: bool | str = False,
+        kerberos_hostname_override: str | None = None,
         compress: bool | str = True,
         connect_timeout: int = 10,
         send_receive_timeout: int = 300,
@@ -166,9 +169,18 @@ class AsyncClient(Client):
 
         # The initial token from token_provider is resolved in _initialize()
 
+        use_kerberos = coerce_bool(use_kerberos)
+        kerberos_hostname: str | None = None
+
+        # Priority: kerberos > access_token > mutual TLS > basic auth
         # Auth headers follow the sync client: mutual TLS headers are set
         # independently, and a bearer token wins over basic auth.
-        if client_cert and (tls_mode is None or tls_mode == "mutual"):
+        if use_kerberos:
+            if access_token or token_provider or username or client_cert:
+                raise ProgrammingError("Cannot combine use_kerberos with access_token, token_provider, username/password, or client_cert")
+            check_kerberos()
+            kerberos_hostname = kerberos_hostname_override or host
+        elif client_cert and (tls_mode is None or tls_mode == "mutual"):
             if not username:
                 raise ProgrammingError("username parameter is required for Mutual TLS authentication")
             self.headers["X-ClickHouse-User"] = username
@@ -268,6 +280,8 @@ class AsyncClient(Client):
             proxy_url=proxy_url,
             server_host_name=server_host_name,
             token_provider=token_provider,
+            use_kerberos=use_kerberos,
+            kerberos_hostname=kerberos_hostname,
             autogenerate_query_id=(common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id),
             read_format="Native",
             form_encode_query_params=form_encode_query_params,

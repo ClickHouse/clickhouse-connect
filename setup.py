@@ -83,6 +83,11 @@ def run_setup(try_c: bool = True):
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.9.0"],
             "chdb": ["chdb>=4.1.7"],
+            "kerberos": [
+                "pyspnego>=0.10",
+                'gssapi>=1.6.0; sys_platform != "win32"',
+                'krb5>=0.3.0; sys_platform != "win32"',
+            ],
         },
         tests_require=["pytest"],
         entry_points={

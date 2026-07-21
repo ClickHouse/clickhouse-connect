@@ -287,9 +287,39 @@ jobs:
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
+  kerberos-integration-test:
+    runs-on: ubuntu-latest
+    needs: bare-import-test
+    name: Kerberos Integration Tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pip
+        run: python -m pip install --upgrade pip
+      - name: Install system Kerberos packages
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc python3-dev libkrb5-dev krb5-user
+      - name: Add Kerberos ClickHouse instance to /etc/hosts
+        run: sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
+      - name: Install Test Dependencies
+        run: pip install -r tests/test_requirements.txt
+      - name: Build cython extensions
+        run: python setup.py build_ext --inplace
+      - name: "Add distribution info"
+        run: python setup.py develop
+      - name: Run tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_KERBEROS: '1'
+        run: pytest tests/integration_tests/test_kerberos.py
+
   check-secret:
     runs-on: ubuntu-latest
-    needs: [bare-import-test, tests, pandas-3x-compat-test, sqlalchemy-1x-compat-test]
+    needs: [bare-import-test, tests, pandas-3x-compat-test, sqlalchemy-1x-compat-test, kerberos-integration-test]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:

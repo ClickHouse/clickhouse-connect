@@ -1,11 +1,11 @@
 from clickhouse_connect.driver.exceptions import NotSupportedError
 
 # Attributes resolved lazily by __getattr__ / _resolve_* functions:
-#   np, pd, arrow, pl, pd_time_test
+#   np, pd, arrow, pl, pd_time_test, spnego
 
 
 _PANDAS_ATTRS = frozenset({"pd", "pd_time_test"})
-_ALL_LAZY = frozenset({"np", "arrow", "pl"}) | _PANDAS_ATTRS
+_ALL_LAZY = frozenset({"np", "arrow", "pl", "spnego"}) | _PANDAS_ATTRS
 
 
 def _pd_time_test(arr_or_dtype):
@@ -67,6 +67,17 @@ def _resolve_polars():
         globals()["pl"] = None
 
 
+def _resolve_spnego():
+    if "spnego" in globals():
+        return
+    try:
+        import spnego
+
+        globals()["spnego"] = spnego
+    except ImportError:
+        globals()["spnego"] = None
+
+
 def __getattr__(name):
     if name in _PANDAS_ATTRS:
         _resolve_pandas()
@@ -76,6 +87,8 @@ def __getattr__(name):
         _resolve_arrow()
     elif name == "pl":
         _resolve_polars()
+    elif name == "spnego":
+        _resolve_spnego()
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     return globals()[name]
@@ -115,3 +128,11 @@ def check_polars():
     if pl:
         return pl
     raise NotSupportedError("Polars package is not installed")
+
+
+def check_spnego():
+    _resolve_spnego()
+    spnego = globals()["spnego"]
+    if spnego:
+        return spnego
+    raise NotSupportedError("Kerberos authentication support is not installed. Install with: pip install clickhouse-connect[kerberos]")

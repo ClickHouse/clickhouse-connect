@@ -38,6 +38,7 @@ from clickhouse_connect.driver._backend.models import Capabilities, CommandExecu
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.httputil import ResponseSource, all_managers, check_conn_expiration, get_response_data
+from clickhouse_connect.driver.kerberos import negotiate_auth_header
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver._backend.contracts import SyncBackend
@@ -78,6 +79,8 @@ class HttpSyncBackend:
         server_host_name: str | None,
         token_provider: Callable[[], str] | None,
         autogenerate_query_id: bool,
+        use_kerberos: bool = False,
+        kerberos_hostname: str | None = None,
         http_retries: int = 1,
         read_format: str = "Native",
         form_encode_query_params: bool = False,
@@ -90,6 +93,8 @@ class HttpSyncBackend:
         self.timeout = timeout
         self.server_host_name = server_host_name
         self.token_provider = token_provider
+        self.use_kerberos = use_kerberos
+        self.kerberos_hostname = kerberos_hostname
         self.autogenerate_query_id = autogenerate_query_id
         self.http_retries = http_retries
         self.read_format = read_format
@@ -282,6 +287,9 @@ class HttpSyncBackend:
         if isinstance(data, str):
             data = data.encode()
         headers = dict_copy(self.headers, headers)
+        if self.use_kerberos:
+            assert self.kerberos_hostname is not None
+            headers["Authorization"] = negotiate_auth_header(self.kerberos_hostname)
         attempts = 0
         auth_retried = False
         final_params = {}

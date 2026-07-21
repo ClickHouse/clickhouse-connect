@@ -89,6 +89,43 @@ pip install clickhouse-connect[async]
 Then create a client with `clickhouse_connect.get_async_client()`. See the
 [run_async example](./examples/run_async.py) for more details.
 
+### Kerberos Authentication
+
+ClickHouse Connect supports Kerberos/SPNEGO ("Negotiate") authentication against a ClickHouse server configured for
+Kerberos.
+
+Install the system Kerberos client and development packages first (needed to build the `gssapi`/`krb5` Python
+packages):
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install gcc python3-dev libkrb5-dev krb5-user
+
+# CentOS/RHEL/Fedora
+sudo dnf install gcc python3-devel krb5-devel krb5-workstation
+
+# Arch Linux
+sudo pacman -S gcc krb5
+```
+
+Then install the optional dependency:
+
+```
+pip install clickhouse-connect[kerberos]
+```
+
+Create a client with `use_kerberos=True` instead of a username/password:
+
+```python
+import clickhouse_connect
+
+client = clickhouse_connect.get_client(host='localhost', use_kerberos=True)
+```
+
+If the hostname you connect through doesn't match the server's Kerberos service principal name (for example,
+connecting via an IP address or load balancer), pass `kerberos_hostname_override` with the principal's actual
+hostname.
+
 ### Complete Documentation
 
 The documentation for ClickHouse Connect has moved to
