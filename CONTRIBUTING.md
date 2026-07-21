@@ -56,9 +56,9 @@ python setup.py develop
 
 ### Add /etc/hosts entry
 
-Required for TLS tests.
+Required for TLS and Kerberos tests.
 The generated certificates assume TLS requests use `server1.clickhouse.test` as the hostname.
-See [test_tls.py](tests/integration_tests/test_tls.py) for more details.
+See [test_tls.py](tests/integration_tests/test_tls.py) and [test_kerberos.py](tests/integration_tests/test_kerberos.py) for more details.
 
 ```bash
 sudo -- sh -c "echo 127.0.0.1 server1.clickhouse.test >> /etc/hosts"
@@ -118,6 +118,50 @@ Additionally, the TLS ClickHouse instance should be running (see [docker-compose
 
 ```bash
 CLICKHOUSE_CONNECT_TEST_TLS=1 pytest tests/integration_tests/test_tls.py
+```
+
+### Run the Kerberos integration tests
+
+These tests require the `CLICKHOUSE_CONNECT_TEST_KERBEROS` environment variable to be set to `1`; otherwise, they will be skipped.
+Unlike the other test instances, the Kerberos KDC and ClickHouse instance (the `kerberos_kdc` and `kerberos_clickhouse` services in
+[docker-compose.yml](docker-compose.yml)) are behind a `kerberos` Compose profile rather than started by a plain `docker compose up -d`,
+since they also need an extra host-side step (obtaining a real Kerberos ticket) that Docker Compose cannot do for you. This walks
+through setting them up from scratch.
+
+Install the system Kerberos client and development packages (needed to build the `gssapi`/`krb5` Python packages):
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install gcc python3-dev libkrb5-dev krb5-user
+
+# CentOS/RHEL/Fedora
+sudo dnf install gcc python3-devel krb5-devel krb5-workstation
+
+# Arch Linux
+sudo pacman -S gcc krb5
+```
+
+Make sure you've added the `server1.clickhouse.test` `/etc/hosts` entry from
+["Add /etc/hosts entry"](#add-etchosts-entry) above.
+
+The rest (starting a KDC and a Kerberos-configured ClickHouse instance, obtaining a ticket, and tearing it all
+back down afterward) is handled automatically by a fixture in
+[`test_kerberos.py`](tests/integration_tests/test_kerberos.py), via
+[`kerberos_manage.py`](tests/integration_tests/kerberos_manage.py), which uses the fixtures vendored under
+[`tests/integration_tests/kerberos_conf`](tests/integration_tests/kerberos_conf).
+
+Run from the repo root:
+
+```bash
+CLICKHOUSE_CONNECT_TEST_KERBEROS=1 pytest tests/integration_tests/test_kerberos.py
+```
+
+To stand up (or tear down) the same environment by hand, outside of pytest -- for example, to poke at it manually
+with `curl --negotiate` -- run:
+
+```bash
+python -m tests.integration_tests.kerberos_manage setup
+python -m tests.integration_tests.kerberos_manage teardown
 ```
 
 ### Running the integration tests with ClickHouse Cloud

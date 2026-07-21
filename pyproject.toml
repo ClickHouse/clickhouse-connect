@@ -66,4 +66,4 @@ log_cli = true
 log_cli_level = "INFO"
 env_files = ["test.env"]
 asyncio_default_fixture_loop_scope = "session"
-addopts = "-n 4"
+addopts = "-n 4 --dist=loadgroup"

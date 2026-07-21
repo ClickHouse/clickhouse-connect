@@ -34,3 +34,45 @@ services:
       - './.docker/clickhouse/single_node_tls/config.xml:/etc/clickhouse-server/config.xml'
       - './.docker/clickhouse/single_node_tls/users.xml:/etc/clickhouse-server/users.xml'
       - './.docker/clickhouse/single_node_tls/docker_related_config.xml:/etc/clickhouse-server/config.d/docker_related_config.xml'
+
+  # Both kerberos services are opt-in (profiles: [kerberos]), started only by
+  # tests/integration_tests/kerberos_manage.py (see test_kerberos.py's kerberos_env fixture),
+  # since they need an extra host-side step (obtaining a real Kerberos ticket) that Docker Compose
+  # cannot do for you. See "Run the Kerberos integration tests" in CONTRIBUTING.md.
+  kerberos_kdc:
+    build:
+      context: ./
+      dockerfile: .docker/kerberos-kdc/Dockerfile
+    container_name: 'clickhouse-connect-kerberos-kdc'
+    profiles: ['kerberos']
+    ports:
+      - '8088:88/udp'
+      - '8088:88/tcp'
+    volumes:
+      - './tests/integration_tests/kerberos_conf/kerberos_image_config.sh:/config.sh:ro'
+      - 'kerberos_kdc_keytabs:/tmp/keytab'
+      - 'kerberos_kdc_data:/var/kerberos/krb5kdc'
+
+  kerberos_clickhouse:
+    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.6-alpine}'
+    container_name: 'clickhouse-connect-kerberos-clickhouse-server'
+    profiles: ['kerberos']
+    depends_on:
+      - kerberos_kdc
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: 1
+    ports:
+      - '8124:8123'
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - 'kerberos_kdc_keytabs:/tmp/keytab:ro'
+      - './tests/integration_tests/kerberos_conf/kerberos_config.xml:/etc/clickhouse-server/config.d/kerberos_config.xml:ro'
+      - './tests/integration_tests/kerberos_conf/kerberos_users.xml:/etc/clickhouse-server/users.d/kerberos_users.xml:ro'
+      - './tests/integration_tests/kerberos_conf/kerberos_server_krb5.conf:/etc/krb5.conf:ro'
+
+volumes:
+  kerberos_kdc_keytabs:
+  kerberos_kdc_data:
