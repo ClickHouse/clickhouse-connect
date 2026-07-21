@@ -99,3 +99,29 @@ def test_datetime_64_params(param_client: Client, call):
 
     result = call(param_client.query, "SELECT {a1:Array(DateTime64(6))}", parameters={"a1": dt_values}).first_row
     assert result[0] == dt_values
+
+
+def test_null_in_containers(param_client: Client, call):
+    # A None nested inside an Array or Tuple server-side bind parameter must render as the NULL
+    # keyword so the server accepts the container literal, rather than the top-level \N sentinel
+    # that only parses for a scalar parameter.
+    result = call(
+        param_client.query,
+        "SELECT {t:Tuple(String, Nullable(String), Int32)}",
+        parameters={"t": ("user_1", None, 79)},
+    ).first_row
+    assert result[0] == ("user_1", None, 79)
+
+    result = call(
+        param_client.query,
+        "SELECT {a:Array(Nullable(String))}",
+        parameters={"a": ["user_1", None]},
+    ).first_row
+    assert result[0] == ["user_1", None]
+
+    result = call(
+        param_client.query,
+        "SELECT {a:Array(Tuple(String, Nullable(String)))}",
+        parameters={"a": [("user_1", None)]},
+    ).first_row
+    assert result[0] == [("user_1", None)]

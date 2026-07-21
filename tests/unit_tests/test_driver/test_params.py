@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import (
     DT64Param,
@@ -58,10 +59,26 @@ def test_finalize():
         ([ipaddress.IPv4Address("10.13.79.1")], "['10.13.79.1']"),
         (ipaddress.IPv6Address("2001:db8::79"), "2001:db8::79"),
         ([ipaddress.IPv6Address("2001:db8::79")], "['2001:db8::79']"),
+        (None, "\\N"),
+        (["user_1", None], "['user_1', NULL]"),
+        (("user_1", None, 79), "('user_1', NULL, 79)"),
+        ([("user_1", None)], "[('user_1', NULL)]"),
     ],
 )
 def test_format_bind_value(value, expected):
     assert format_bind_value(value) == expected
+
+
+def test_format_bind_value_map_null():
+    # A None inside a `map`-formatted dict parameter renders as the NULL keyword, not the
+    # top-level escaped-text sentinel \N. Non-null map values are unaffected.
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        assert format_bind_value({"user_1": None}) == "{'user_1':NULL}"
+        assert format_bind_value({"user_1": "user_2", "user_3": None}) == "{'user_1':'user_2', 'user_3':NULL}"
+    finally:
+        common.set_setting("dict_parameter_format", original)
 
 
 @pytest.mark.parametrize(

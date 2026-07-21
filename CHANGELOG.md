@@ -4,6 +4,7 @@
 
 ### Bug Fixes
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
+- `None` nested inside an `Array`, `Tuple`, or `Map` server-side bind parameter now renders as the SQL `NULL` keyword instead of the `\N` escaped-text sentinel. `\N` is only valid for a top-level scalar parameter; inside a container literal the server parses a SQL expression, so `{tup:Tuple(String, Nullable(String))}` bound to `("user_1", None)` was rejected with `Code: 26 ... Cannot parse quoted string ... (CANNOT_PARSE_QUOTED_STRING)`. This also fixes `Map` values when `dict_parameter_format` is `map`. Top-level scalar `None` binds are unchanged. Closes [#879](https://github.com/ClickHouse/clickhouse-connect/issues/879).
 
 ## 1.5.0, 2026-07-15
 
