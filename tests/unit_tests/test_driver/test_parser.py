@@ -1,7 +1,7 @@
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import unescape_identifier
-from clickhouse_connect.driver.parser import parse_callable, parse_enum
+from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 from clickhouse_connect.driver.query import remove_sql_comments
 
 
@@ -20,6 +20,38 @@ def test_parse_callable():
 def test_parse_enum():
     assert parse_enum("Enum8('one' = 1)") == (("one",), (1,))
     assert parse_enum("Enum16('**\\'5' = 5, '578' = 7)") == (("**'5", "578"), (5, 7))
+
+
+def test_parse_columns_escaped_quote_in_enum():
+    # An escaped single quote in a nested Enum name must survive parse_columns verbatim so
+    # the element type can be re-parsed. Previously the escape was reversed (\' became '\),
+    # corrupting the Enum element and raising ValueError (clickhouse-connect#878).
+    assert parse_columns("(Enum8('user\\'1' = 1, 'user_2' = 2), String)") == (
+        (),
+        ("Enum8('user\\'1' = 1, 'user_2' = 2)", "String"),
+    )
+    # Round-trips through the registry for every container that routes through parse_columns,
+    # covering an escape in a non-first key, two escaped keys, repeated escapes in one key,
+    # and nested containers.
+    for name in [
+        "Variant(Enum8('user\\'1' = 1, 'user_2' = 2), String)",
+        "Tuple(Enum8('user\\'1' = 1), UInt32)",
+        "Tuple(Enum8('user_2' = 1, 'user\\'1' = 2), UInt32)",
+        "Tuple(Enum8('user\\'1' = 1, 'user\\'2' = 2), UInt32)",
+        "Variant(Enum16('user\\'1\\'2' = 1), String)",
+        "Nested(x Enum8('user\\'1' = 1), y UInt32)",
+        "Tuple(Variant(Enum8('user\\'1' = 1), String), UInt32)",
+    ]:
+        assert get_from_name(name).name == name
+    # A typed JSON sub-column also routes through parse_columns. Its path name is normalized
+    # with backticks, but the escaped Enum value is preserved.
+    assert get_from_name("JSON(status Enum8('user\\'1' = 1, 'user_2' = 2))").name == "JSON(`status` Enum8('user\\'1' = 1, 'user_2' = 2))"
+    # Contrast: a nested Enum with no escaped quote uses the same path but not the escape
+    # branch, and keeps its exact prior output.
+    assert parse_columns("(Enum8('user_1' = 1, 'user_2' = 2), String)") == (
+        (),
+        ("Enum8('user_1' = 1, 'user_2' = 2)", "String"),
+    )
 
 
 def test_unescape_identifier():

@@ -3,6 +3,7 @@
 ## UNRELEASED
 
 ### Bug Fixes
+- Parsing a `Variant` or `Tuple` column type whose element is an `Enum` with an escaped single quote in a value name, such as `Variant(Enum8('a\'b' = 1), String)`, no longer raises `ValueError: invalid literal for int() with base 10`. The nested type parser reversed the escape sequence while re-accumulating the element type, so `\'` became `'\` and the re-parsed `Enum` saw a truncated name. Bare `Enum` columns were already correct; `Nested` and typed `JSON` sub-columns took the same broken path and are fixed as well. Closes [#878](https://github.com/ClickHouse/clickhouse-connect/issues/878).
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
 
 ## 1.5.0, 2026-07-15
