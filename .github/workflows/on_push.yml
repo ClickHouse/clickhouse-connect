@@ -44,9 +44,59 @@ jobs:
       - name: Ruff lint check
         run: ruff check clickhouse_connect tests examples setup.py
 
+  typecheck:
+    runs-on: ubuntu-latest
+    name: Mypy
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/test_requirements.txt
+      - name: Mypy check
+        run: mypy
+
+  public-api-types:
+    runs-on: ubuntu-latest
+    name: Public API Type Surface
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install into a clean consumer environment
+        run: |
+          python -m venv "$RUNNER_TEMP/consumer"
+          pip install build
+          CLICKHOUSE_CONNECT_SKIP_CYTHON=1 python -m build --sdist --outdir "$RUNNER_TEMP/dist"
+          CLICKHOUSE_CONNECT_SKIP_CYTHON=1 "$RUNNER_TEMP/consumer/bin/pip" install "$RUNNER_TEMP"/dist/*.tar.gz
+          # Stub packages are intentionally unpinned. If the ratchet count shifts without a repo change, pin them here.
+          "$RUNNER_TEMP/consumer/bin/pip" install numpy pandas pandas-stubs pyarrow polars
+          "$RUNNER_TEMP/consumer/bin/pip" install "mypy==2.1.0" "pyright==1.1.408"
+      - name: Confirm py.typed shipped with the install
+        run: test -f "$RUNNER_TEMP"/consumer/lib/python*/site-packages/clickhouse_connect/py.typed
+      - name: Consumer smoke test (mypy --strict against installed wheel)
+        run: |
+          cp tests/type_check/consumer_smoke.py "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent consumer_smoke.py
+      - name: Public type completeness ratchet
+        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1116 --python "$RUNNER_TEMP/consumer/bin/python"
+      - name: SQLAlchemy Select typing smoke test
+        run: |
+          "$RUNNER_TEMP/consumer/bin/pip" install "sqlalchemy>=2.0,<3.0"
+          cp tests/type_check/sqlalchemy_select_smoke.py "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent sqlalchemy_select_smoke.py
+
   bare-import-test:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [lint, typecheck, public-api-types]
     name: Bare Install Test (no extras)
     steps:
       - name: Checkout
@@ -86,19 +136,27 @@ jobs:
           - '3.14'
         clickhouse-version:
           - '25.8' # LTS
-          - '26.2' # Stable
           - '26.3' # LTS
           - '26.4' # Stable
+          - '26.5' # Stable
         use-c:
           - '1'
         include:
           - python-version: '3.10'
-            clickhouse-version: '25.8'
+            clickhouse-version: '26.3'
             use-c: '0'
           - python-version: '3.14'
-            clickhouse-version: '26.4'
+            clickhouse-version: '26.3'
             use-c: '0'
+          # Free-threaded build (experimental). PYTHON_GIL=0 keeps the GIL off when
+          # dependencies that have not declared free-threading compatibility are imported.
+          - python-version: '3.14t'
+            clickhouse-version: '26.3'
+            use-c: '1'
+            python-gil: '0'
 
+    # The free-threaded job is non-blocking while support is experimental
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
@@ -115,7 +173,15 @@ jobs:
       - name: Install pip
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
-        run: pip install -r tests/test_requirements.txt
+        # polars ships no free-threaded wheels and its sdist needs a long Rust nightly
+        # build, so it is excluded on 3.14t and its tests skip
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.14t" ]; then
+            grep -v '^polars' tests/test_requirements.txt > /tmp/test_requirements.txt
+            pip install -r /tmp/test_requirements.txt
+          else
+            pip install -r tests/test_requirements.txt
+          fi
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
@@ -130,6 +196,8 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           CLICKHOUSE_CONNECT_TEST_FUZZ: 50
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
+          # Empty for non-free-threaded entries, CPython ignores an empty value
+          PYTHON_GIL: ${{ matrix.python-gil }}
         run: pytest -n 4 tests
       - name: Stop ClickHouse
         if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
@@ -212,7 +280,7 @@ jobs:
           CLICKHOUSE_CONNECT_TEST_TLS: 1
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
           SQLALCHEMY_SILENCE_UBER_WARNING: 1
-        run: pytest -n 4 tests/integration_tests/test_sqlalchemy
+        run: pytest -n 4 tests/integration_tests/test_sqlalchemy tests/unit_tests/test_sqlalchemy/test_ch_select.py
       - name: Stop ClickHouse
         if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
         env:

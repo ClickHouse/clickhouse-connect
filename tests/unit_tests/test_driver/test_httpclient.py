@@ -1,4 +1,6 @@
 import logging
+import zoneinfo
+from datetime import timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -6,6 +8,8 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
+from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver._backend.httpcommon import plan_data_insert_request
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
@@ -213,21 +217,20 @@ class TestHttpClientInsert:
             def close(self, timeout=1.0):
                 close_events.append((self.index, timeout, self.context.current_row, self.context.current_block))
 
+        class FakeBackend:
+            def execute_data_insert(self, context, runtime, body, retry_body):
+                rebuilt = retry_body()
+                assert list(rebuilt) == [b"rust"]
+                return {}
+
         client = object.__new__(HttpClient)
         client.database = None
         client.write_compression = None
         client._transform = _FakeInsertTransform()
         client._validate_settings = Mock(return_value={})
-        client._summary = Mock(return_value={})
+        client._backend = FakeBackend()
 
-        def raw_request(data, params, headers, **kwargs):
-            rebuilt = kwargs["retry_body"]()
-            assert list(rebuilt) == [b"rust"]
-            return create_mock_response(status=200)
-
-        client._raw_request = raw_request
-
-        with patch("clickhouse_connect.driver.httpclient.SyncStreamingInsertSource", TrackingSource):
+        with patch("clickhouse_connect.driver._backendclient.SyncStreamingInsertSource", TrackingSource):
             client.data_insert(context)
 
         assert init_events == [(1, 0, 0), (2, 0, 0)]
@@ -251,25 +254,73 @@ class TestAsyncClientInsert:
         context = _MockInsertContext({"X-Trace": "user_1"})
         captured = {}
 
-        async def raw_request(data, params, headers=None, **kwargs):
-            body = bytearray()
-            async for chunk in data:
-                body += chunk
-            captured["body"] = bytes(body)
-            captured["headers"] = headers
-            response = Mock()
-            response.status = 200
-            response.headers = {}
-            response.close = Mock()
-            return response
+        async def execute_data_insert(context, runtime, body, retry_body):
+            plan = plan_data_insert_request(context, runtime)
+            data = bytearray()
+            async for chunk in body:
+                data += chunk
+            captured["body"] = bytes(data)
+            captured["headers"] = plan.headers
+            return {}
 
-        client._raw_request = raw_request
+        client._backend = Mock()
+        client._backend.execute_data_insert = execute_data_insert
 
         await client.data_insert(context)
 
         assert captured["body"] == b"body"
         assert captured["headers"]["X-Trace"] == "user_1"
         assert context.data is None
+
+
+class TestConstructorAuthHeaders:
+    """Mutual TLS headers and a bearer token coexist (the sync convention,
+    converged): cert headers are set independently, the token wins over basic."""
+
+    def test_sync_mutual_tls_with_access_token_sends_both(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="https",
+                host="localhost",
+                port=8443,
+                username="cert_user",
+                password="",
+                database="default",
+                access_token="tok",
+                client_cert="client.pem",
+                pool_mgr=Mock(),
+            )
+        assert client.headers["X-ClickHouse-User"] == "cert_user"
+        assert client.headers["X-ClickHouse-SSL-Certificate-Auth"] == "on"
+        assert client.headers["Authorization"] == "Bearer tok"
+
+    def test_async_mutual_tls_with_access_token_sends_both(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="cert_user",
+            password="",
+            database="default",
+            access_token="tok",
+            client_cert="client.pem",
+        )
+        assert client.headers["X-ClickHouse-User"] == "cert_user"
+        assert client.headers["X-ClickHouse-SSL-Certificate-Auth"] == "on"
+        assert client.headers["Authorization"] == "Bearer tok"
+
+    def test_async_mutual_tls_without_token_sends_no_authorization(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="cert_user",
+            password="secret",
+            database="default",
+            client_cert="client.pem",
+        )
+        assert client.headers["X-ClickHouse-SSL-Certificate-Auth"] == "on"
+        assert "Authorization" not in client.headers
 
 
 class TestAsyncClientErrorHandler:
@@ -509,7 +560,7 @@ class TestHttpClientErrorHandler:
         assert isinstance(excinfo.value, OperationalError)
         response.close.assert_called_once()
 
-    @patch("clickhouse_connect.driver.httpclient.get_response_data")
+    @patch("clickhouse_connect.driver._backend.http_sync.get_response_data")
     def test_error_handler_with_body_reading_exception(self, mock_get_response_data, caplog):
         """Test error handling when reading the response body throws an exception"""
         # Set up the mock to raise an exception when reading the response body
@@ -600,7 +651,7 @@ class TestQuery:
 
         return body, params, fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query(self, mock_raw_request):
         """Test raw_query with neither form_encode_query_params nor external_data"""
         self.client.form_encode_query_params = False
@@ -628,7 +679,7 @@ class TestQuery:
         assert "param_id" in params
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_form_encode(self, mock_raw_request):
         """Test raw_query with form_encode_query_params=True"""
         self.client.form_encode_query_params = True
@@ -658,7 +709,7 @@ class TestQuery:
         assert "param_id" in fields
         assert "param_id" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_auto_form_encode_large_params(self, mock_raw_request):
         """Large bind params auto-promote to form data even with form_encode_query_params=False"""
         self.client.form_encode_query_params = False
@@ -677,7 +728,7 @@ class TestQuery:
         assert "param_name" in fields
         assert "param_name" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_external_data_only(self, mock_raw_request):
         """Test raw_query with external_data only (no form_encode)"""
         self.client.form_encode_query_params = False
@@ -707,7 +758,7 @@ class TestQuery:
         assert "_file1_format" in params
         assert "_file1" in fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_form_encode_and_external_data(self, mock_raw_request):
         """Test raw_query with both form_encode_query_params and external_data"""
         self.client.form_encode_query_params = True
@@ -739,7 +790,7 @@ class TestQuery:
         assert "_file1" in fields
         assert "param_min_val" in fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_form_encode_without_external_data(self, mock_raw_request):
         """Test that query goes to fields when form_encode is True but no external_data"""
         self.client.form_encode_query_params = True
@@ -767,7 +818,7 @@ class TestQuery:
         assert isinstance(fields["query"], str)
         assert fields["query"] == query
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_settings(self, mock_raw_request):
         """Test raw_query properly handles settings parameter"""
         self.client.form_encode_query_params = False
@@ -796,7 +847,37 @@ class TestQuery:
         assert params["max_memory_usage"] == 1000000
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
+    def test_raw_query_with_map_setting(self, mock_raw_request):
+        """A dict-valued setting (e.g. `additional_table_filters`) must be rendered as a
+        properly quoted/escaped ClickHouse map literal, not Python's own str()/repr of the
+        dict. Python's repr uses double quotes for values containing a single quote, which
+        the server rejects with "Cannot parse quoted string: expected opening quote ''', got
+        '"'." (see GH issue #501)."""
+        self.client.form_encode_query_params = False
+
+        mock_response = Mock()
+        mock_response.data = b"result_with_map_setting"
+        mock_raw_request.return_value = mock_response
+
+        query = "SELECT * FROM table"
+        settings = {"additional_table_filters": {"a": "'some_value'"}}
+
+        result = self.client.raw_query(query, settings=settings)
+
+        assert result == b"result_with_map_setting"
+
+        body, params, fields = self.extract_raw_request_params(mock_raw_request)
+
+        assert "additional_table_filters" in params
+        rendered = params["additional_table_filters"]
+        assert isinstance(rendered, str)
+        # Must be a single-quoted ClickHouse map literal with the embedded quotes escaped,
+        # never Python's dict repr (which mixes double and single quotes).
+        assert rendered == "{'a': '\\'some_value\\''}"
+        assert '"' not in rendered
+
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_with_format(self, mock_raw_request):
         """Test raw_query properly appends FORMAT clause"""
         self.client.form_encode_query_params = False
@@ -823,7 +904,7 @@ class TestQuery:
         assert params is not None
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_raw_query_database_handling(self, mock_raw_request):
         """Test raw_query properly handles database parameter"""
         self.client.form_encode_query_params = False
@@ -859,7 +940,7 @@ class TestQuery:
         assert "database" not in params
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context(self, mock_raw_request):
         """Test _query_with_context with neither form_encode_query_params nor external_data"""
         self.client.form_encode_query_params = False
@@ -883,7 +964,7 @@ class TestQuery:
         assert "param_id" in params
         assert not fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_form_encode(self, mock_raw_request):
         """Test _query_with_context with form_encode_query_params=True"""
         self.client.form_encode_query_params = True
@@ -908,7 +989,7 @@ class TestQuery:
         assert "param_id" in fields
         assert "param_id" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_auto_form_encode_large_params(self, mock_raw_request):
         """Large bind params auto-promote to form data even with form_encode_query_params=False"""
         self.client.form_encode_query_params = False
@@ -926,7 +1007,7 @@ class TestQuery:
         assert "param_name" in fields
         assert "param_name" not in params
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_external_data(self, mock_raw_request):
         """Test _query_with_context with external_data only"""
         self.client.form_encode_query_params = False
@@ -953,7 +1034,7 @@ class TestQuery:
         assert "_file1_format" in params
         assert "_file1" in fields
 
-    @patch.object(HttpClient, "_raw_request")
+    @patch.object(HttpSyncBackend, "request")
     def test_query_with_context_with_form_encode_and_external_data(self, mock_raw_request):
         """Test _query_with_context with both form_encode_query_params and external_data"""
         self.client.form_encode_query_params = True
@@ -984,8 +1065,8 @@ class TestQuery:
         assert "_file1" in fields
         assert "param_min_val" in fields
 
-    @patch.object(HttpClient, "_raw_request")
-    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    @patch.object(HttpSyncBackend, "request")
+    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_form_encode(self, mock_columns_re, mock_raw_request):
         """Test that schema-probe queries (LIMIT 0) work correctly with form_encode_query_params"""
         self.client.form_encode_query_params = True
@@ -1031,8 +1112,8 @@ class TestQuery:
         assert "query" not in params
         assert "param_id" not in params
 
-    @patch.object(HttpClient, "_raw_request")
-    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    @patch.object(HttpSyncBackend, "request")
+    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_external_data(self, mock_columns_re, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with external data but no form encoding"""
         self.client.form_encode_query_params = False
@@ -1072,8 +1153,8 @@ class TestQuery:
         assert "_file1_format" in params  # External data query params
         assert "_file1" in fields  # External data form fields
 
-    @patch.object(HttpClient, "_raw_request")
-    @patch("clickhouse_connect.driver.httpclient.columns_only_re")
+    @patch.object(HttpSyncBackend, "request")
+    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
     def test_query_with_context_schema_probe_form_encode_external_data(self, mock_columns_re, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with both form encoding and external data"""
         self.client.form_encode_query_params = True
@@ -1118,3 +1199,148 @@ class TestQuery:
         assert "_file1_format" in params  # External data query params
         assert "_file1" in fields  # External data form fields
         assert "query" not in params  # Query should not be in params when form encoding
+
+
+class TestResponseTimezone:
+    """set_response_tz is called only when the server reports a timezone different from server_tz."""
+
+    def setup_method(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        self.client.server_tz = timezone.utc
+        self.client._dst_safe = True
+
+    @staticmethod
+    def _make_context() -> Mock:
+        context = Mock(spec=QueryContext)
+        context.final_query = "SELECT 1"
+        context.uncommented_query = "SELECT 1"
+        context.bind_params = {}
+        context.external_data = None
+        context.is_insert = False
+        context.settings = {}
+        context.transport_settings = {}
+        context.streaming = False
+        context.block_info = False
+        return context
+
+    def _run(self, tz_header: str | None) -> Mock:
+        """Invoke _query_with_context with a mocked response and return the context Mock."""
+        mock_response = Mock()
+        mock_response.headers = {} if tz_header is None else {"X-ClickHouse-Timezone": tz_header}
+        context = self._make_context()
+
+        with (
+            patch.object(HttpSyncBackend, "request", return_value=mock_response),
+            patch("clickhouse_connect.driver._backendclient.RespBuffCls"),
+            patch("clickhouse_connect.driver._backend.http_sync.ResponseSource"),
+            patch.object(self.client._transform, "parse_response", return_value=Mock()),
+        ):
+            self.client._query_with_context(context)
+
+        return context
+
+    def test_set_response_tz_not_called_when_header_absent(self):
+        """set_response_tz is not called when X-ClickHouse-Timezone header is missing."""
+        context = self._run(tz_header=None)
+        context.set_response_tz.assert_not_called()
+
+    def test_set_response_tz_not_called_when_timezone_matches_server(self):
+        """set_response_tz is not called when the response timezone matches server_tz."""
+        context = self._run(tz_header="UTC")
+        context.set_response_tz.assert_not_called()
+
+    def test_set_response_tz_called_with_correct_tzinfo_when_timezone_differs(self):
+        """set_response_tz is called with the resolved tzinfo when the response timezone differs."""
+        context = self._run(tz_header="America/New_York")
+        context.set_response_tz.assert_called_once()
+        called_tz = context.set_response_tz.call_args[0][0]
+        assert called_tz == zoneinfo.ZoneInfo("America/New_York")
+
+
+class TestCommandBinaryBindGuard:
+    """command() rejects binary parameter binds that cannot share the request body."""
+
+    def setup_method(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        self.client.server_tz = timezone.utc
+
+    def test_command_binary_bind_with_data_raises(self):
+        with pytest.raises(ProgrammingError, match="Binary parameter bind"):
+            self.client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+    @pytest.mark.asyncio
+    async def test_async_command_binary_bind_with_data_raises(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        with pytest.raises(ProgrammingError, match="Binary parameter bind"):
+            await client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+
+class TestInsertArrowTransportSettings:
+    """insert_arrow forwards transport_settings rather than passing them as compression."""
+
+    def test_insert_arrow_forwards_transport_settings(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        client.write_compression = None
+        transport = {"X-Test-Header": "1"}
+        with (
+            patch("clickhouse_connect.driver.client.check_arrow"),
+            patch("clickhouse_connect.driver.client.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", return_value=Mock()) as raw_insert,
+        ):
+            client.insert_arrow("some_table", Mock(), transport_settings=transport)
+        assert raw_insert.call_args.kwargs.get("transport_settings") == transport
+        assert transport not in raw_insert.call_args.args
+
+    @pytest.mark.asyncio
+    async def test_async_insert_arrow_forwards_transport_settings(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.write_compression = None
+        transport = {"X-Test-Header": "1"}
+        with (
+            patch("clickhouse_connect.driver.asyncclient.check_arrow"),
+            patch("clickhouse_connect.driver.asyncclient.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", new=AsyncMock(return_value=Mock())) as raw_insert,
+        ):
+            await client.insert_arrow("some_table", Mock(), transport_settings=transport)
+        assert raw_insert.call_args.kwargs.get("transport_settings") == transport
+        assert transport not in raw_insert.call_args.args

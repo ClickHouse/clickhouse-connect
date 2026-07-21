@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Generator
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import dynamic as dynamic_module
@@ -235,6 +235,9 @@ class RustNativeTransform:
         self.strict = strict
 
     def parse_response(self, source: ByteSource, context: QueryContext) -> NumpyResult | QueryResult:
+        if context.internal:
+            # Driver-internal metadata queries pin read formats and always use the Python codec, even under strict.
+            return NativeTransform.parse_response(source, context)
         reason = rust_query_ineligible_reason(context)
         if reason is not None:
             if self.strict:
@@ -268,7 +271,9 @@ class RustNativeTransform:
                         hit = scanner.push(chunk)
                         if hit is not None:
                             read_source.close()
-                            raise StreamFailureError(extract_exception_with_tag(hit, exception_tag) or extract_error_message(hit))
+                            raise StreamFailureError(
+                                extract_exception_with_tag(hit, cast(str, exception_tag)) or extract_error_message(hit)
+                            )
                     yield from decoder.feed(chunk)
                 yield from decoder.finish()
             except StreamFailureError:
@@ -442,9 +447,10 @@ class RustNativeTransform:
             logger.info("Native codec fallback to Python for insert: unsupported type (%s)", ex)
             return NativeTransform.build_insert(context)
 
-        compressor = get_compressor(context.compression)
+        compression = context.compression if isinstance(context.compression, str) else None
+        compressor = get_compressor(compression)
 
-        def chunk_gen() -> Generator[bytes, None, None]:
+        def chunk_gen():
             for block in context.next_block():
                 try:
                     output = core.encode_native_block(

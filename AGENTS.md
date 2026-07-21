@@ -36,10 +36,20 @@ Act like an experienced maintainer of a public Python database driver.
 
 - Use `uv` for pip-style package management, for example `uv pip install pandas`.
 - Run formatting and linting with `ruff`.
-- Run Pylance on every Python file you edit and address real issues it finds.
-- Ignore Pyright. Do not distort code just to satisfy static analysis when runtime behavior is already correct.
+- Type-check with `mypy`. It is the authoritative static type checker for this repo and runs in CI. See `Type Checking` below.
 - Prefer `rg` over slower text search tools when inspecting the repo.
 - `gh` is available for GitHub inspection when needed.
+
+## Type Checking
+
+This is a typed library. It ships PEP 561 type information: `clickhouse_connect/py.typed` is published so downstream type checkers consume our annotations, and CI type-checks the package with `mypy`. The annotations are part of the public contract, so a wrong or missing annotation on the public surface is a bug.
+
+- `mypy` is the authority. Run it from the repo root with no arguments (`mypy`). Configuration lives in `[tool.mypy]` in `pyproject.toml` and targets the `clickhouse_connect` package on Python 3.10.
+- New and changed code must pass `mypy` cleanly. Do not introduce type errors.
+- Public-facing API must carry correct, complete type annotations. That includes the top-level entry points (`get_client`, `get_async_client`, `create_client`), public `clickhouse_connect.driver.*` names, `Client` and `AsyncClient` method signatures, the DB-API layer, and the SQLAlchemy dialect. Downstream users type-check against these, so treat their signatures with the same care as their runtime behavior.
+- A per-module baseline in `pyproject.toml` (`ignore_errors = true`, issue #692) still exempts a shrinking set of modules that predate the typing work. This list only shrinks. Do not add modules to it. When you clean up a baselined module so it passes, remove its entry in the same change.
+- The `ignore_missing_imports` overrides for some optional dependencies and the compiled Cython modules are expected. Do not "fix" them by adding stubs unless that is the actual task.
+- Stay practical. Prefer accurate annotations over contortions. If runtime-correct code cannot satisfy the checker without distortion, use a narrow, commented `# type: ignore[code]` and flag it, rather than reshaping the code. The default expectation is that `mypy` passes.
 
 ## Repo Workflow
 
@@ -47,6 +57,7 @@ Act like an experienced maintainer of a public Python database driver.
 - Assume a local ClickHouse server is available on `localhost`. If it is needed and unavailable, tell the user rather than guessing around it.
 - For client-level behavior changes, use the shared sync and async integration fixtures in `tests/integration_tests/conftest.py` (`client_mode`, `call`, `param_client`, `client_factory`, `consume_stream`) so tests run against both clients. See `.agents/architecture.md` for when this applies.
 - Reuse existing fixtures and patterns instead of inventing new ones.
+- Update `CHANGELOG.md` in the same PR for any user-facing change (a bug fix users can observe, a new feature, or a behavior change). Do not defer it to release time or leave it only in the PR description. Add the entry under the top-most unreleased version, following the existing format.
 
 ## Server Behavior Is Authoritative
 
@@ -113,8 +124,17 @@ When you reconcile the sub-agent's findings into your reply to the user, preserv
 - Limit parentheses.
 - Use single spaces between sentences.
 
-## Test Data
+## Writing Tests
 
+- A bug fix needs a regression test. Write tests that FAIL on the unpatched code and PASS with your fix, and confirm both directions before claiming the fix works.
+- If existing tests break due to your changes, do not edit the tests to make them pass, unless the tests were asserting fundamentally incorrect behavior. If that was the case, call it out explicitly. If you cannot justify the new expected value from the issue or from `Server Behavior Is Authoritative`, your code is wrong, not the test.
+- Derive expected values from the spec and from empirically testing against the server.
+- Inspect existing tests covering similar areas to make sure you are writing tests in the right style and with the right coverage.
+- Make sure to test both the happy path as well as sad paths. Make sure to cover all relevant edge cases.
+- When testing types, cover the full type matrix: ClickHouse type hints compose and formatting is recursive, so a change to how a value is formatted must be tested across all the shapes it can take: scalar, Array(T), Tuple(...), Array(Tuple(...)),  Nullable(T), and spelling and case variants of the type name.
+- Aim to be complete, but also terse. Don't use two tests to cover what could be done in one.
+- When possible, use parametrized tests. Express a matrix of cases with `@pytest.mark.parametrize` instead of using near-duplicate test bodies. This is the right place for the type-shape and case-variant coverage above.
+- Client behavior must hold for both the sync and async clients. For integration tests use the `param_client` and call fixtures from `tests/integration_tests/conftest.py`, which run one test body against both transports via the client_mode parameter. See `tests/integration_tests/test_temporal.py` for the pattern. Do not write a sync-only test for a change that touches shared client code.
 - Do not use `42` as the generic representative integer in tests.
 - Do not use names like `alice` or `bob` as generic placeholders.
 - Prefer values like `13`, `79`, `user_1`, and `user_2`, or similarly neutral domain-appropriate values.

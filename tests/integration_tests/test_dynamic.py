@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from clickhouse_connect.datatypes.dynamic import typed_variant
+from clickhouse_connect.datatypes.dynamic import TypedVariant, typed_variant
 from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
@@ -369,6 +369,51 @@ def test_typed_variant_name_normalization(param_client: Client, call, table_cont
         call(param_client.insert, "variant_norm", data)
         result = call(param_client.query, "SELECT * FROM variant_norm ORDER BY key").result_set
         assert result[0][1] == decimal.Decimal("1.50")
+
+
+@pytest.mark.parametrize(
+    "variant_type, rows",
+    [
+        ("Variant(Float32, Float64)", [("Float32", 13.5), ("Float64", 79.25)]),
+        ("Variant(Int32, Int64)", [("Int32", 13), ("Int64", 79)]),
+        ("Variant(Array(UInt32), Array(String))", [("Array(UInt32)", [13, 79]), ("Array(String)", ["user_1", "user_2"])]),
+    ],
+)
+def test_variant_read_typed_format(param_client: Client, call, table_context: Callable, variant_type, rows):
+    type_available(param_client, "variant")
+    with table_context("variant_read_typed", ["key Int32", f"v1 {variant_type}"], settings={"allow_suspicious_variant_types": 1}):
+        null_key = len(rows) + 1
+        data = [[ix + 1, typed_variant(value, type_name)] for ix, (type_name, value) in enumerate(rows)]
+        data.append([null_key, None])
+        call(param_client.insert, "variant_read_typed", data)
+
+        # typed format recovers the per-row alternative identity
+        typed = call(param_client.query, "SELECT * FROM variant_read_typed ORDER BY key", query_formats={"Variant": "typed"}).result_set
+        for ix, (type_name, value) in enumerate(rows):
+            tv = typed[ix][1]
+            assert isinstance(tv, TypedVariant)
+            assert tv.type_name == type_name
+            assert tv.value == value
+        assert typed[null_key - 1][1] is None
+
+        # default (native) format is unchanged: bare values, no wrapper
+        native = call(param_client.query, "SELECT * FROM variant_read_typed ORDER BY key").result_set
+        for ix, (_type_name, value) in enumerate(rows):
+            assert not isinstance(native[ix][1], TypedVariant)
+            assert native[ix][1] == value
+        assert native[null_key - 1][1] is None
+
+        # round-trip: re-insert the typed values, dispatch by type_name
+        roundtrip = [[100 + ix, typed[ix][1]] for ix in range(len(rows))]
+        call(param_client.insert, "variant_read_typed", roundtrip)
+        rt = call(
+            param_client.query,
+            "SELECT * FROM variant_read_typed WHERE key >= 100 ORDER BY key",
+            query_formats={"Variant": "typed"},
+        ).result_set
+        for ix, (type_name, value) in enumerate(rows):
+            assert rt[ix][1].type_name == type_name
+            assert rt[ix][1].value == value
 
 
 def test_json_with_many_paths(param_client: Client, call, table_context: Callable):

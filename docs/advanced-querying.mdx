@@ -45,8 +45,8 @@ Each of these methods returns a `ContextStream` object that must be opened via a
 ### Data blocks {#data-blocks}
 ClickHouse Connect processes all data from the primary `query` method as a stream of blocks received from the ClickHouse server. These blocks are transmitted in the custom "Native" format to and from ClickHouse. A "block" is simply a sequence of columns of binary data, where each column contains an equal number of data values of the specified data type. (As a columnar database, ClickHouse stores this data in a similar form.) The size of a block returned from a query is governed by two user settings that can be set at several levels (user profile, user, session, or query). They're:
 
-- [max_block_size](/core/reference/settings/session-settings#max_block_size) -- Limit on the size of the block in rows. Default 65536.
-- [preferred_block_size_bytes](/core/reference/settings/session-settings#preferred_block_size_bytes) -- Soft limit on the size of the block in bytes. Default 1,000,0000.
+- [max_block_size](/reference/settings/session-settings#max_block_size) -- Limit on the size of the block in rows. Default 65536.
+- [preferred_block_size_bytes](/reference/settings/session-settings#preferred_block_size_bytes) -- Soft limit on the size of the block in bytes. Default 1,000,0000.
 
 Regardless of the `preferred_block_size_setting`, each block will never be more than `max_block_size` rows. Depending on the type of query, the actual blocks returned can be of any size. For example, queries to a distributed table covering many shards may contain smaller blocks retrieved directly from each shard.
 
@@ -408,14 +408,14 @@ client.query('SELECT device_id, dev_address, gw_address from devices', column_fo
 
 ## External data {#external-data}
 
-ClickHouse queries can accept external data in any ClickHouse format. This binary data is sent along with the query string to be used to process the data. Details of the External Data feature are [here](/core/reference/engines/table-engines/special/external-data). The client `query*` methods accept an optional `external_data` parameter to take advantage of this feature. The value for the `external_data` parameter should be a `clickhouse_connect.driver.external.ExternalData` object. The constructor for that object accepts the following arguments:
+ClickHouse queries can accept external data in any ClickHouse format. This binary data is sent along with the query string to be used to process the data. Details of the External Data feature are [here](/reference/engines/table-engines/special/external-data). The client `query*` methods accept an optional `external_data` parameter to take advantage of this feature. The value for the `external_data` parameter should be a `clickhouse_connect.driver.external.ExternalData` object. The constructor for that object accepts the following arguments:
 
 | Name      | Type              | Description                                                                                                                                   |
 |-----------|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
 | file_path | str               | Path to a file on the local system path to read the external data from. Either `file_path` or `data` is required                              |
 | file_name | str               | The name of the external data "file". If not provided, will be determined from the `file_path` (without extensions)                           |
 | data      | bytes             | The external data in binary form (instead of being read from a file). Either `data` or `file_path` is required                                |
-| fmt       | str               | The ClickHouse [Input Format](/core/reference/formats) of the data. Defaults to `TSV`                                                      |
+| fmt       | str               | The ClickHouse [Input Format](/reference/formats) of the data. Defaults to `TSV`                                                      |
 | types     | str or seq of str | A list of column data types in the external data. If a string, types should be separated by commas. Either `types` or `structure` is required |
 | structure | str or seq of str | A list of column name + data type in the data (see examples). Either `structure` or `types` is required                                       |
 | mime_type | str               | Optional MIME type of the file data. Currently ClickHouse ignores this HTTP subheader                                                         |

@@ -36,6 +36,28 @@ def test_read_ints():
             pass
 
 
+def _encode_leb128(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+@pytest.mark.parametrize("value", [2**31, 2**32, 2**35, 2**63])
+def test_read_leb128_large_values(value):
+    data = _encode_leb128(value)
+    c_result = bytes_source(data, cls=CResponseBuffer).read_leb128()
+    py_result = bytes_source(data, cls=PyResponseBuffer).read_leb128()
+    assert c_result == value
+    assert py_result == value
+    assert c_result == py_result
+
+
 def test_read_strings():
     for cls in CResponseBuffer, PyResponseBuffer:
         buff = bytes_source("04 43 44 4d 41", cls=cls)

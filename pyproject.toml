@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "cython>=3.0.11,<4"]
+requires = ["setuptools", "cython>=3.1,<4"]
 
 build-backend = "setuptools.build_meta"
 
@@ -30,6 +30,36 @@ ignore = [
     "E501",
     "B905",
 ]
+
+[tool.mypy]
+files = ["clickhouse_connect"]
+python_version = "3.10"
+
+[[tool.mypy.overrides]]
+# Optional dependencies without type stubs and the compiled Cython modules.
+module = [
+    "brotli.*",
+    "chdb.*",
+    "lz4.*",
+    "orjson.*",
+    "pandas.*",
+    "pyarrow.*",
+    "tzlocal.*",
+    "ujson.*",
+    "_ch_core",
+    "clickhouse_connect.driverc.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Baseline of modules that do not yet pass type checking (issue #692).
+# Remove entries as modules are annotated and pass cleanly.
+module = [
+    "clickhouse_connect.json_impl",
+    "clickhouse_connect.tools.datagen",
+    "clickhouse_connect.tools.testing",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 log_cli = true

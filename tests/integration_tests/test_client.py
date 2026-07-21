@@ -6,9 +6,11 @@ from time import sleep
 import pytest
 
 from clickhouse_connect import create_client, datatypes
+from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
 CSV_CONTENT = """abc,1,1
@@ -45,6 +47,30 @@ def test_command(param_client, call):
     assert int(version.split(".")[0]) >= 19
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "SELECT 13 WHERE 0",
+        "SELECT number FROM numbers(0)",
+    ],
+)
+def test_command_empty_read_returns_empty_string(param_client, call, cmd):
+    # A read that produces zero rows returns an empty value, not a truthy QuerySummary (issue #865).
+    assert call(param_client.command, cmd) == ""
+
+
+def test_command_show_policies_returns_value(param_client, call):
+    # SHOW POLICIES produces a result set, so an empty policy list returns a value, not a QuerySummary (issue #761).
+    result = call(param_client.command, "SHOW POLICIES")
+    assert not isinstance(result, QuerySummary)
+
+
+def test_command_control_statement_returns_summary(param_client, call):
+    # A control statement produces no result set, so it still returns a QuerySummary.
+    result = call(param_client.command, "DROP TABLE IF EXISTS ch_connect_missing_865")
+    assert isinstance(result, QuerySummary)
+
+
 def test_query_error_exposes_structured_code(param_client, call):
     with pytest.raises(DatabaseError) as excinfo:
         call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
@@ -65,6 +91,22 @@ def test_transport_settings(param_client, call):
     assert len(result.result_set) > 0
 
 
+def test_initial_settings_override_generated_defaults(client_factory):
+    client = client_factory(settings={"date_time_input_format": "basic"})
+    assert client.get_client_setting("date_time_input_format") == "basic"
+
+    default_client = client_factory()
+    assert default_client.get_client_setting("date_time_input_format") == "best_effort"
+
+
+def test_client_init_unaffected_by_global_read_formats(client_factory, call):
+    set_default_formats("String", "bytes")
+    client = client_factory()
+    assert isinstance(client.server_version, str)
+    assert client.get_client_setting("date_time_input_format") == "best_effort"
+    assert call(client.command, "SELECT 79") == 79
+
+
 def test_client_headers(client_factory, call):
     client = client_factory(
         headers={
@@ -76,6 +118,13 @@ def test_client_headers(client_factory, call):
     assert client.headers["CF-Access-Client-Id"] == "test_client_id"
     assert client.headers["CF-Access-Client-Secret"] == "test_client_secret"
     assert call(client.command, "SELECT 79") == 79
+
+
+def test_legacy_default_database_sentinel(client_factory, call):
+    # "__default__" was the old default value for database and must still mean "not specified".
+    client = client_factory(database="__default__")
+    assert client.database is None
+    assert call(client.command, "SELECT 13") == 13
 
 
 def test_none_database(param_client, call):

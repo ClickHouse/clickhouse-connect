@@ -53,7 +53,7 @@ class InsertContext(BaseQueryContext):
         self.req_block_size = block_size
         self.block_row_count = DEFAULT_BLOCK_BYTES
         self.data = data
-        self.insert_exception = None
+        self.insert_exception: Exception | None = None
 
     @property
     def empty(self) -> bool:
@@ -97,6 +97,7 @@ class InsertContext(BaseQueryContext):
             self.block_row_count = self._calc_block_size()
 
     def _calc_block_size(self) -> int:
+        assert self._data is not None
         if self.req_block_size:
             return self.req_block_size
         row_size = 0

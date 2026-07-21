@@ -94,7 +94,7 @@ class MultiLineString(Polygon):
 class Geometry(ClickHouseType):
     """ClickHouse Geometry, a fixed Variant over the six geo types."""
 
-    def data_size(self, sample: Sequence) -> int:
+    def data_size(self, sample: Collection[Any]) -> int:
         return GEOMETRY_DATA_TYPE.data_size(sample)
 
     def write_column_prefix(self, dest: bytearray):

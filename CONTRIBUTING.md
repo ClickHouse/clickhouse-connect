@@ -155,6 +155,14 @@ ruff format clickhouse_connect tests examples setup.py
 ruff check --fix clickhouse_connect tests examples setup.py
 ```
 
+The project also uses [mypy](https://mypy-lang.org/) for type checking:
+
+```bash
+mypy
+```
+
+If you ran `pre-commit install` during setup, both `ruff` and `mypy` run automatically on `git commit`.
+
 ### Git blame
 
 Bulk formatting commits are listed in `.git-blame-ignore-revs`. To configure git blame to skip them:

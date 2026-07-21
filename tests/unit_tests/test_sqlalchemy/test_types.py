@@ -1,23 +1,31 @@
 import pytest
-from sqlalchemy import DateTime, Integer
+from sqlalchemy import DateTime, Integer, TypeDecorator
 from sqlalchemy.exc import ArgumentError
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name, sqla_type_map
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     UUID,
+    Array,
     Bool,
+    Date,
     DateTime64,
+    Decimal,
+    Enum,
+    Float64,
     Geometry,
     Int64,
     LowCardinality,
     Nullable,
     QBit,
     String,
+    Time,
+    Time64,
     Tuple,
     UInt32,
     UInt64,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime as ChDateTime
+from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
 
 def test_mapping():
@@ -53,6 +61,11 @@ def test_low_cardinality():
     lc_str = LowCardinality(Nullable(String))
     assert lc_str.__class__ == String
     assert lc_str.name == "LowCardinality(Nullable(String))"
+
+
+def test_compound_accepts_wrapped_element():
+    assert Array(LowCardinality(String)).name == "Array(LowCardinality(String))"
+    assert Array(Nullable(String)).name == "Array(Nullable(String))"
 
 
 def test_bool_accepts_schema_kwargs():
@@ -136,3 +149,37 @@ def test_tuple_adapt_preserves_type_def():
     adapted = source.adapt(type(source))
     assert adapted.type_def == source.type_def
     assert adapted.name == source.name
+
+
+# One representative per SQLAlchemy base family; Float and Interval bases return a live
+# result_processor that ChSqlaType must shadow to None via the MRO (issue #847).
+_PASSTHROUGH_TYPES = [
+    Int64(),
+    Float64(),
+    Decimal(18, 4),
+    Bool(),
+    Date(),
+    ChDateTime(),
+    Time(),
+    Time64(),
+    Array(String),
+    Enum(keys=["a", "b"], values=[1, 2]),
+    String(),
+]
+
+
+@pytest.mark.parametrize("ch_type", _PASSTHROUGH_TYPES, ids=lambda t: type(t).__name__)
+def test_result_processor_returns_none(ch_type):
+    """result_processor honors the TypeEngine(self, dialect, coltype) contract and returns None."""
+    assert ch_type.result_processor(ClickHouseDialect(), None) is None
+
+
+@pytest.mark.parametrize("ch_type", _PASSTHROUGH_TYPES, ids=lambda t: type(t).__name__)
+def test_type_decorator_result_processor(ch_type):
+    """Wrapping a ClickHouse type in a TypeDecorator must not crash on result_processor (issue #847)."""
+
+    class Wrapped(TypeDecorator):
+        impl = ch_type
+        cache_ok = True
+
+    assert Wrapped().result_processor(ClickHouseDialect(), None) is None

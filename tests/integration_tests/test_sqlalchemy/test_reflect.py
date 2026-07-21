@@ -27,7 +27,7 @@ def test_full_table_reflection(test_engine: Engine, test_db: str):
             text(
                 f"CREATE TABLE {test_db}.reflect_test (key UInt32, value FixedString(20),"
                 + "agg SimpleAggregateFunction(anyLast, String))"
-                + "ENGINE AggregatingMergeTree ORDER BY key"
+                + "ENGINE AggregatingMergeTree ORDER BY (key, value)"
             )
         )
         metadata = db.MetaData(schema=test_db)
