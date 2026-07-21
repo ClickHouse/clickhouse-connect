@@ -3,6 +3,7 @@
 ## UNRELEASED
 
 ### Bug Fixes
+- Inserting empty bytes `b""` into a non-nullable `FixedString(N)` column no longer raises `DataError: Fixed String binary value does not match column size`. The binary writer already zero-padded empty and short values on the string path and on nullable `FixedString`, but the non-nullable bytes branch only accepted values of the exact column size, so `b""` was rejected. Empty bytes now zero-pad to N bytes, consistent with the other write paths and with how the server stores short `FixedString` values. Closes [#880](https://github.com/ClickHouse/clickhouse-connect/issues/880).
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
 
 ## 1.5.0, 2026-07-15

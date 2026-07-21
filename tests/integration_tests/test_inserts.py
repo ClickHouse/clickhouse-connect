@@ -55,6 +55,34 @@ def test_bad_strings(param_client: Client, call, table_context: Callable):
             assert "encoded" in str(ex)
 
 
+def test_fixed_string_empty_bytes(param_client: Client, call, table_context: Callable):
+    # Empty bytes b"" into a non-nullable FixedString(N) must zero-pad, consistent with
+    # the string path and the nullable-bytes path, matching how the server pads short
+    # FixedString values. The empty value is placed after a non-empty one so branch
+    # selection is driven by the non-empty first value yet the empty is still padded.
+    with table_context("test_fs_empty_bytes", "key Int32, fs FixedString(6), nfs Nullable(FixedString(6))"):
+        empty = b"\x00" * 6
+        data = [
+            [79, b"needle", b"abcdef"],  # exact length: unchanged
+            [13, b"", b""],              # empty bytes: non-nullable (the fix) and nullable sibling
+        ]
+        call(param_client.insert, "test_fs_empty_bytes", data)
+        result = call(param_client.query, "SELECT key, fs, nfs FROM test_fs_empty_bytes ORDER BY key").result_set
+        assert result == [
+            (13, empty, empty),
+            (79, b"needle", b"abcdef"),
+        ]
+        # A non-empty value whose length does not match N must still raise.
+        with pytest.raises(DataError, match="match"):
+            call(param_client.insert, "test_fs_empty_bytes", [[102, b"abc", None]])
+
+    # LowCardinality(FixedString) writes its dictionary through the same binary path.
+    with table_context("test_lc_fs_empty_bytes", "key Int32, lc LowCardinality(FixedString(6))"):
+        call(param_client.insert, "test_lc_fs_empty_bytes", [[79, b"needle"], [13, b""]])
+        result = call(param_client.query, "SELECT key, lc FROM test_lc_fs_empty_bytes ORDER BY key").result_set
+        assert result == [(13, b"\x00" * 6), (79, b"needle")]
+
+
 def test_low_card_dictionary_size(param_client: Client, call, table_context: Callable):
     with table_context("test_low_card_dict", "key Int32, lc LowCardinality(String)", settings={"index_granularity": 65536}):
         data = [[x, str(x)] for x in range(30000)]
