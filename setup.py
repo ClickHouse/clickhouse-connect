@@ -82,6 +82,7 @@ def run_setup(try_c: bool = True):
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.9.0"],
+            "chdb": ["chdb>=4.1.7"],
         },
         tests_require=["pytest"],
         entry_points={

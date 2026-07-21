@@ -39,6 +39,7 @@ python_version = "3.10"
 # Optional dependencies without type stubs and the compiled Cython modules.
 module = [
     "brotli.*",
+    "chdb.*",
     "lz4.*",
     "orjson.*",
     "pandas.*",
