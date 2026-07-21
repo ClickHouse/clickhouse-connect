@@ -3,8 +3,15 @@
 ## UNRELEASED
 
 ### Bug Fixes
+- `AsyncClient` initialization no longer overwrites user-supplied session settings with generated defaults. A client created with `settings={'date_time_input_format': 'basic'}` previously had that value replaced by the generated `best_effort` default. User settings now always win, matching the sync client.
+- An `AsyncClient` created with both client certificates and an access token now sends the mutual TLS authentication headers and the `Authorization: Bearer` header together, matching the sync client. The certificates previously suppressed the token at construction, while the `token_provider` option re-added its token right after initialization, so the two async token paths disagreed with each other. The server resolves the credential precedence.
 - Inserting empty bytes `b""` into a non-nullable `FixedString(N)` column no longer raises `DataError: Fixed String binary value does not match column size`. The binary writer already zero-padded empty and short values on the string path and on nullable `FixedString`, but the non-nullable bytes branch only accepted values of the exact column size, so `b""` was rejected. Empty bytes now zero-pad to N bytes, consistent with the other write paths and with how the server stores short `FixedString` values. Closes [#880](https://github.com/ClickHouse/clickhouse-connect/issues/880).
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
+
+### Improvements
+- Async clients now emit URL query parameters in the same order as the sync client on every request. The parameter names and values are unchanged, so this is only visible to systems that match or sign the exact request URL.
+- Client creation no longer fails when the `client_protocol_version` capability probe errors on the sync client. The client falls back to running without the newer native protocol features and logs the probe failure at debug level, matching the async client.
+- Added an experimental in-process chDB backend. `get_client(interface='chdb')` or a `chdb://` DSN returns a standard client that runs queries against an embedded chDB engine instead of a ClickHouse server, supporting the full query, insert, streaming, and Arrow client surface. Use the `path` argument or a `chdb:///on/disk/path` DSN for a persistent database. Requires the `chdb` package, installable with `pip install clickhouse-connect[chdb]`. chDB allows one engine per process, has no async client, and does not support external data.
 
 ## 1.5.0, 2026-07-15
 
