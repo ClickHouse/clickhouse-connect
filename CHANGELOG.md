@@ -4,6 +4,7 @@
 
 ### Bug Fixes
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
+- DB API `Cursor.description` now reports the column type name string in the `type_code` field after an `executemany` that returns rows, matching `execute`. The row-by-row `executemany` path stored the raw `ClickHouseType` instances in `Cursor.types` while `execute` stored their type name strings, so `description[i][1]` was a type object or a name string depending on which method had populated the cursor. Using `executemany` for a statement that returns a result set is undefined under PEP 249, but the two entry points are now consistent.
 
 ## 1.5.0, 2026-07-15
 

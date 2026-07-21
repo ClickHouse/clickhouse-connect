@@ -446,3 +446,32 @@ def test_executemany_generator_falls_through_to_row_by_row():
 
     client.insert.assert_not_called()
     assert client.query.call_count == 2
+
+
+def test_executemany_description_type_code_matches_execute():
+    """A statement that returns rows is PEP 249 undefined for executemany, but when
+    executemany does surface a result set its Cursor.description must match execute:
+    type_code is the ClickHouse type name string, not a raw ClickHouseType instance.
+    """
+    column_names = ["value_1", "value_2"]
+    column_types = [SimpleNamespace(name="UInt64"), SimpleNamespace(name="String")]
+    expected = [
+        ("value_1", "UInt64", None, None, None, None, True),
+        ("value_2", "String", None, None, None, None, True),
+    ]
+
+    execute_client = Mock()
+    execute_client.query.return_value = create_mock_query_result([(13, "user_1")], column_names=column_names, column_types=column_types)
+    execute_cursor = Cursor(execute_client)
+    execute_cursor.execute("SELECT value_1, value_2 FROM test_table")
+    assert execute_cursor.description == expected
+
+    executemany_client = Mock()
+    executemany_client.query.return_value = create_mock_query_result([(13, "user_1")], column_names=column_names, column_types=column_types)
+    executemany_cursor = Cursor(executemany_client)
+    executemany_cursor.executemany(
+        "SELECT value_1, value_2 FROM test_table WHERE value_1 = %(value_1)s",
+        [{"value_1": 13}],
+    )
+    assert executemany_cursor.description == expected
+    assert executemany_cursor.description == execute_cursor.description

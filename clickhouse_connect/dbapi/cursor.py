@@ -138,7 +138,7 @@ class Cursor:
                         )
                 else:
                     self.names = query_result.column_names
-                    self.types = query_result.column_types
+                    self.types = [x.name for x in query_result.column_types]
                 self._summary.append(query_result.summary)
         except TypeError as ex:
             raise ProgrammingError(f"Invalid parameters {parameters} passed to cursor executemany") from ex
