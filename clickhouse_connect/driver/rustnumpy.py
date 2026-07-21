@@ -404,6 +404,7 @@ def _refinalize_leaves(
 
 def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
     leaf_predicate = _refinalize_predicate(ch_type, context)
+    extended_pandas = context.as_pandas and context.use_extended_dtypes
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         try:
@@ -415,10 +416,11 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
             ) from ex
         if leaf_predicate is not None:
             column = _refinalize_leaves(ch_type, column, context, leaf_predicate)
-        if isinstance(ch_type, DateTimeBase) and getattr(first_value(column), "tzinfo", None) is not None:
-            # DateTimeBase._finalize_column recognizes timezone-aware pandas values by their `.tz`
-            # attribute. The rust object exit produces stdlib datetime values, whose equivalent attribute
-            # is `.tzinfo`, so wrap them before nullable pandas finalization selects a naive dtype.
+        if extended_pandas and isinstance(ch_type, DateTimeBase) and getattr(first_value(column), "tzinfo", None) is not None:
+            # DateTimeBase._finalize_column's extended-dtype path recognizes timezone-aware pandas values
+            # by their `.tz` attribute. The rust object exit produces stdlib datetime values, whose
+            # equivalent attribute is `.tzinfo`, so wrap them before nullable pandas finalization selects
+            # a naive dtype. Non-pandas output keeps the stdlib datetimes the Python codec returns.
             column = [None if value is None else options.pd.Timestamp(value) for value in column]
         return ch_type._finalize_column(column, context)
 

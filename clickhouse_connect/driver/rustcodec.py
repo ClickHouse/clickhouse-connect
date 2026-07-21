@@ -6,6 +6,11 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType, ch_read_formats, ch_write_formats
+from clickhouse_connect.datatypes.container import Tuple
+from clickhouse_connect.datatypes.network import IPv4
+from clickhouse_connect.datatypes.special import UUID, SimpleAggregateFunction
+from clickhouse_connect.datatypes.string import FixedString, String
+from clickhouse_connect.datatypes.temporal import Date, DateTimeBase
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedError, ProgrammingError, StreamFailureError
@@ -17,11 +22,13 @@ from clickhouse_connect.driver.streaming import ReadAheadSource
 from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
 from clickhouse_connect.driver.types import ByteSource, Closable
 
-logger = logging.getLogger("clickhouse_connect")
+logger = logging.getLogger(__name__)
 
 NativeCodec = Literal["python", "rust", "rust_strict"]
 
 _VALID_CODECS = ("python", "rust", "rust_strict")
+
+
 def _ch_core_module() -> Any:
     """Return the imported _ch_core module, or None if it is not available."""
     try:
@@ -32,7 +39,7 @@ def _ch_core_module() -> Any:
 
 
 def resolve_native_codec(native_codec: str | None) -> str:
-    """Resolve the effective codec name and verify that its optional extra is installed."""
+    """Resolve the effective codec name and verify the compiled _ch_core module is available."""
     if native_codec is None:
         resolved = common.get_setting("native_codec")
     else:
@@ -44,8 +51,9 @@ def resolve_native_codec(native_codec: str | None) -> str:
     if _ch_core_module() is not None:
         return resolved
     raise NotSupportedError(
-        f'native_codec="{resolved}" requires the compiled _ch_core module. '
-        'Run `pip install "clickhouse-connect[rust]"` or use native_codec="python".'
+        f'native_codec="{resolved}" requires the compiled _ch_core extension module, which is '
+        "distributed separately and is not installed in this environment. "
+        'Use native_codec="python" to run without it.'
     )
 
 
@@ -151,6 +159,26 @@ def _contains_json_type(ch_type: object) -> bool:
     return any(_contains_json_type(child) for child in getattr(ch_type, "element_types", ()))
 
 
+def _python_codec_tuple_container(ch_type: ClickHouseType) -> bool:
+    """Whether the Python codec's C-accelerated column readers return this column as a tuple.
+
+    Streamed column blocks match those containers exactly: read_str_col renders String (nullable
+    included) and FixedString as tuples, the dataconv date/datetime/uuid/ipv4 readers render their
+    non-nullable columns as tuples, and unnamed Tuple columns are tuples of row tuples.
+    """
+    if isinstance(ch_type, SimpleAggregateFunction):
+        ch_type = ch_type.element_type
+    if ch_type.low_card:
+        return False
+    if isinstance(ch_type, String):
+        return True
+    if isinstance(ch_type, Tuple):
+        return not ch_type.element_names
+    if ch_type.nullable:
+        return False
+    return isinstance(ch_type, (FixedString, Date, DateTimeBase, UUID, IPv4))
+
+
 def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
     if not chunk:
         return False
@@ -163,48 +191,38 @@ def _chunk_has_server_error(chunk: bytes, exception_tag: str | None) -> bool:
 
 
 class _BufferedQueryResult(QueryResult):
-    """QueryResult over decoded batches retained until the caller chooses an orientation.
+    """QueryResult over per-batch Python column lists materialized at parse time.
 
-    The stream is fully consumed and closed at parse time. The first result_rows or result_columns access
-    materializes directly from the columnar core batch, and only a later request for the other orientation
-    transposes the already materialized Python values.
+    The stream is fully consumed, decoded, and closed inside parse_response, so decode errors raise from
+    the query call itself. result_rows chains zip(*batch) per batch, exactly how the Python codec generates
+    rows from its column blocks, and result_columns concatenates per column across batches.
     """
 
-    def __init__(self, batch: Any, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
+    def __init__(self, batch_columns: list, names: tuple, col_types: tuple, column_oriented: bool, source: Closable):
         super().__init__(None, None, names, col_types, column_oriented, source)
         self._block_gen = None
-        self._batch = batch
-
-    def _materialize(self, column_oriented: bool) -> Any:
-        batch = self._batch
-        try:
-            matrix = batch.to_python_columns() if column_oriented else batch.to_python_rows()
-        except NotImplementedError as ex:
-            raise _unsupported_decode_error(ex) from ex
-        except ValueError as ex:
-            raise _binding_value_error(ex) from ex
-        finally:
-            self._batch = None
-        return matrix
+        self._batch_columns = batch_columns
 
     @property
     def result_rows(self) -> Any:
         if self._result_rows is None:
-            if self._result_columns is None:
-                self._result_rows = self._materialize(False)
-            else:
-                self._result_rows = list(zip(*self._result_columns))
+            rows: list = []
+            for columns in self._batch_columns:
+                rows.extend(zip(*columns))
+            self._result_rows = rows
         return self._result_rows
 
     @property
     def result_columns(self) -> Any:
         if self._result_columns is None:
-            if self._result_rows is None:
-                self._result_columns = self._materialize(True)
-            elif self._result_rows:
-                self._result_columns = list(map(list, zip(*self._result_rows)))
-            else:
-                self._result_columns = [[] for _ in range(len(self.column_names))]
+            columns = self._batch_columns[0]
+            for batch in self._batch_columns[1:]:
+                for base, added in zip(columns, batch):
+                    base.extend(added)
+            # The first batch now holds the concatenated columns; collapse so a later
+            # result_rows access does not see the trailing batches twice.
+            self._batch_columns = [columns]
+            self._result_columns = columns
         return self._result_columns
 
 
@@ -294,12 +312,13 @@ class RustNativeTransform:
             raise
 
         if not context.use_numpy and not context.streaming:
-            # Buffered query: retain the decoded columnar chunks until result_rows or result_columns is
-            # requested. This keeps the row exit fast while allowing result_columns to avoid building and
-            # transposing millions of temporary row tuples.
+            # Buffered query: materialize each batch to Python columns as it arrives so object building
+            # on this thread overlaps the producer's transport drain, and any decode error surfaces here
+            # rather than on a later result access.
             try:
-                decoded_batches = [first, *blocks]
-                batch = first if len(decoded_batches) == 1 else core.ColBatch.from_batches(decoded_batches)
+                batch_columns = [first.to_python_columns()]
+                for batch in blocks:
+                    batch_columns.append(batch.to_python_columns())
             except NotImplementedError as ex:
                 read_source.close()
                 raise _unsupported_decode_error(ex) from ex
@@ -310,14 +329,20 @@ class RustNativeTransform:
                 read_source.close()
                 raise
             read_source.close()
-            return _BufferedQueryResult(batch, names, col_types, context.column_oriented, read_source)
+            return _BufferedQueryResult(batch_columns, names, col_types, context.column_oriented, read_source)
+
+        tuple_flags = [_python_codec_tuple_container(col_type) for col_type in col_types]
+
+        def match_containers(columns: list) -> list:
+            # Streamed blocks match the Python codec's per-column containers.
+            return [tuple(column) if flag else column for flag, column in zip(tuple_flags, columns)]
 
         try:
             if context.use_numpy:
                 converters = build_converters(col_types, context)
                 first_columns = convert_block(first, converters)
             else:
-                first_columns = first.to_python_columns(typed_numeric=True)
+                first_columns = match_containers(first.to_python_columns(typed_numeric=True))
         except NotImplementedError as ex:
             read_source.close()
             raise _unsupported_decode_error(ex) from ex
@@ -353,7 +378,7 @@ class RustNativeTransform:
             yield first_columns
             for batch in blocks:
                 try:
-                    columns = batch.to_python_columns(typed_numeric=True)
+                    columns = match_containers(batch.to_python_columns(typed_numeric=True))
                 except NotImplementedError as ex:
                     read_source.close()
                     raise _unsupported_decode_error(ex) from ex

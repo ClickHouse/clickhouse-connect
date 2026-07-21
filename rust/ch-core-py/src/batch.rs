@@ -10,6 +10,7 @@ use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::column::Column;
 use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::decode::decode_all_bytes;
+use ch_core_rs::schema::ChType;
 
 use crate::decoder::{buffer_to_vec, decode_err, decode_options};
 use crate::pyval::{fill_column, prepare_column_ctx, ColumnCtx};
@@ -268,7 +269,7 @@ impl ColBatch {
     ///
     /// With `typed_numeric`, top-level non-nullable fixed-width numeric columns
     /// use `array.array`, matching clickhouse-connect's Python Native decoder.
-    #[pyo3(signature = (typed_numeric = false))]
+    #[pyo3(signature = (*, typed_numeric = false))]
     fn to_python_columns<'py>(
         &self,
         py: Python<'py>,
@@ -284,12 +285,15 @@ impl ColBatch {
         };
         let cols: Vec<Bound<'py, PyAny>> = (0..self.inner.num_columns())
             .map(|ci| {
+                let ch_type = &self.inner.schema.fields[ci].ch_type;
                 if let Some(ctor) = &array_ctor {
-                    if let Some(column) = typed_numeric_column(py, &self.inner.chunks, ci, ctor)? {
+                    if let Some(column) =
+                        typed_numeric_column(py, &self.inner.chunks, ci, ch_type, ctor)?
+                    {
                         return Ok(column);
                     }
                 }
-                let ctx = prepare_column_ctx(py, &self.inner.schema.fields[ci].ch_type, false)?;
+                let ctx = prepare_column_ctx(py, ch_type, false)?;
                 Ok(column_to_pylist(py, &self.inner.chunks, ci, &ctx)?.into_any())
             })
             .collect::<PyResult<_>>()?;
@@ -306,15 +310,45 @@ fn typed_numeric_column<'py>(
     py: Python<'py>,
     chunks: &[Arc<RustColBatch>],
     col_idx: usize,
+    ch_type: &ChType,
     array_ctor: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let Some(first) = chunks.first() else {
-        return Ok(None);
+        // Zero-row result: no chunks, so the schema type picks the typecode.
+        // Aliases (SimpleAggregateFunction) resolve to the physical type the
+        // non-empty case would have matched on.
+        let resolved;
+        let ch_type = match ch_type.physical_delegate() {
+            Some(delegate) => {
+                resolved = delegate;
+                &resolved
+            }
+            None => ch_type,
+        };
+        let typecode = match ch_type {
+            ChType::Int8 => "b",
+            ChType::Int16 => "h",
+            ChType::Int32 => "i",
+            ChType::Int64 => "q",
+            ChType::UInt8 => "B",
+            ChType::UInt16 => "H",
+            ChType::UInt32 => "I",
+            ChType::UInt64 => "Q",
+            ChType::Float32 => "f",
+            ChType::Float64 => "d",
+            _ => return Ok(None),
+        };
+        return Ok(Some(array_ctor.call1((typecode,))?));
     };
 
     macro_rules! build_array {
-        ($variant:ident, $typecode:literal) => {{
+        ($variant:ident, $typecode:literal, $ty:ty) => {{
             let output = array_ctor.call1(($typecode,))?;
+            debug_assert_eq!(
+                output.getattr("itemsize")?.extract::<usize>()?,
+                std::mem::size_of::<$ty>(),
+                "array.array typecode width differs from the Rust primitive"
+            );
             for chunk in chunks {
                 let Column::$variant(column) = &chunk.columns[col_idx] else {
                     return Ok(None);
@@ -335,16 +369,16 @@ fn typed_numeric_column<'py>(
     }
 
     match &first.columns[col_idx] {
-        Column::Int8(column) if column.validity.is_none() => build_array!(Int8, "b"),
-        Column::Int16(column) if column.validity.is_none() => build_array!(Int16, "h"),
-        Column::Int32(column) if column.validity.is_none() => build_array!(Int32, "i"),
-        Column::Int64(column) if column.validity.is_none() => build_array!(Int64, "q"),
-        Column::UInt8(column) if column.validity.is_none() => build_array!(UInt8, "B"),
-        Column::UInt16(column) if column.validity.is_none() => build_array!(UInt16, "H"),
-        Column::UInt32(column) if column.validity.is_none() => build_array!(UInt32, "I"),
-        Column::UInt64(column) if column.validity.is_none() => build_array!(UInt64, "Q"),
-        Column::Float32(column) if column.validity.is_none() => build_array!(Float32, "f"),
-        Column::Float64(column) if column.validity.is_none() => build_array!(Float64, "d"),
+        Column::Int8(column) if column.validity.is_none() => build_array!(Int8, "b", i8),
+        Column::Int16(column) if column.validity.is_none() => build_array!(Int16, "h", i16),
+        Column::Int32(column) if column.validity.is_none() => build_array!(Int32, "i", i32),
+        Column::Int64(column) if column.validity.is_none() => build_array!(Int64, "q", i64),
+        Column::UInt8(column) if column.validity.is_none() => build_array!(UInt8, "B", u8),
+        Column::UInt16(column) if column.validity.is_none() => build_array!(UInt16, "H", u16),
+        Column::UInt32(column) if column.validity.is_none() => build_array!(UInt32, "I", u32),
+        Column::UInt64(column) if column.validity.is_none() => build_array!(UInt64, "Q", u64),
+        Column::Float32(column) if column.validity.is_none() => build_array!(Float32, "f", f32),
+        Column::Float64(column) if column.validity.is_none() => build_array!(Float64, "d", f64),
         _ => Ok(None),
     }
 }

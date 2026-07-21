@@ -1,3 +1,6 @@
+use pyo3::sync::GILOnceCell;
+use pyo3::types::PyType;
+
 use super::*;
 
 #[derive(Debug)]
@@ -387,14 +390,14 @@ pub(super) fn convert_scalar(
         ChType::Float32 => value
             .extract::<f32>()
             .map(Scalar::Float32)
-            .map_err(|_| conversion_error(column, row, "Float32")),
+            .map_err(|_| float_conversion_error(value, column, row, "Float32")),
         ChType::Float64 => value
             .extract::<f64>()
             .map(Scalar::Float64)
-            .map_err(|_| conversion_error(column, row, "Float64")),
+            .map_err(|_| float_conversion_error(value, column, row, "Float64")),
         ChType::BFloat16 => value
             .extract::<f64>()
-            .map_err(|_| conversion_error(column, row, "BFloat16"))
+            .map_err(|_| float_conversion_error(value, column, row, "BFloat16"))
             .and_then(|value| {
                 checked_f64_to_bfloat16(value)
                     .map(Scalar::BFloat16)
@@ -570,8 +573,10 @@ pub(super) fn conversion_error(column: &str, row: usize, type_name: &str) -> PyE
     ))
 }
 
+const VALUE_REPR_MAX_CHARS: usize = 100;
+
 fn value_repr(value: &Bound<'_, PyAny>) -> String {
-    value
+    let repr = value
         .repr()
         .and_then(|repr| repr.to_str().map(str::to_owned))
         .unwrap_or_else(|_| {
@@ -582,7 +587,11 @@ fn value_repr(value: &Bound<'_, PyAny>) -> String {
                 .and_then(|name| name.to_str().ok().map(str::to_owned))
                 .unwrap_or_else(|| "value".to_string());
             format!("<{type_name}>")
-        })
+        });
+    match repr.char_indices().nth(VALUE_REPR_MAX_CHARS) {
+        Some((cut, _)) => format!("{}...", &repr[..cut]),
+        None => repr,
+    }
 }
 
 fn conversion_error_detail(
@@ -596,6 +605,24 @@ fn conversion_error_detail(
         "column {column:?} row {row} cannot be converted to {type_name}: {} {detail}",
         value_repr(value)
     ))
+}
+
+fn float_conversion_error(
+    value: &Bound<'_, PyAny>,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyErr {
+    if value.downcast::<PyString>().is_ok() {
+        return conversion_error_detail(
+            value,
+            column,
+            row,
+            type_name,
+            "strings are not accepted; pass a float instead",
+        );
+    }
+    conversion_error(column, row, type_name)
 }
 
 fn integer_range_error(
@@ -613,15 +640,22 @@ fn integer_range_error(
     )
 }
 
+static DECIMAL_TYPE: GILOnceCell<Py<PyType>> = GILOnceCell::new();
+
+/// isinstance check against decimal.Decimal (imported once), so Decimal
+/// subclasses are accepted like the python codec accepts them.
 fn is_decimal(value: &Bound<'_, PyAny>) -> bool {
-    let value_type = value.get_type();
-    let Ok(name) = value_type.name() else {
-        return false;
-    };
-    let Ok(module) = value_type.module() else {
-        return false;
-    };
-    matches!(name.to_str(), Ok("Decimal")) && matches!(module.to_str(), Ok("decimal"))
+    let py = value.py();
+    DECIMAL_TYPE
+        .get_or_try_init(py, || {
+            py.import("decimal")?
+                .getattr("Decimal")?
+                .downcast_into::<PyType>()
+                .map(Bound::unbind)
+                .map_err(PyErr::from)
+        })
+        .and_then(|ty| value.is_instance(ty.bind(py)))
+        .unwrap_or(false)
 }
 
 fn is_numpy_float(value: &Bound<'_, PyAny>) -> bool {
@@ -632,20 +666,53 @@ fn is_numpy_float(value: &Bound<'_, PyAny>) -> bool {
     let Ok(module) = value_type.module() else {
         return false;
     };
-    name.to_str().is_ok_and(|name| name.starts_with("float"))
+    // Only widths an f64 holds exactly. longdouble/float128 (x86 80/128-bit)
+    // is excluded: extracting it through f64 can silently round a fraction
+    // away and accept a value the exactness rules should reject.
+    name.to_str()
+        .is_ok_and(|name| matches!(name, "float16" | "float32" | "float64"))
         && module
             .to_str()
             .is_ok_and(|module| module == "numpy" || module.starts_with("numpy."))
+}
+
+/// Pandas ships missing values in a numeric enum column as float NaN; a
+/// Nullable enum maps those to NULL. The non-nullable path keeps its code-0
+/// sentinel via `nan_as_zero`.
+pub(super) fn is_enum_nan(ch_type: &ChType, value: &Bound<'_, PyAny>) -> bool {
+    if !matches!(ch_type, ChType::Enum8 { .. } | ChType::Enum16 { .. }) {
+        return false;
+    }
+    if unsafe { ffi::PyFloat_Check(value.as_ptr()) } != 0 {
+        // SAFETY: PyFloat_Check above guarantees PyFloat_AsDouble succeeds.
+        return unsafe { ffi::PyFloat_AsDouble(value.as_ptr()) }.is_nan();
+    }
+    is_numpy_float(value) && value.extract::<f64>().is_ok_and(f64::is_nan)
+}
+
+/// Error context for the integer coercion helpers.
+struct IntConvCtx<'a> {
+    column: &'a str,
+    row: usize,
+    type_name: &'a str,
+    guidance: &'a str,
+}
+
+impl IntConvCtx<'_> {
+    fn detail_err(&self, value: &Bound<'_, PyAny>, detail: &str) -> PyErr {
+        conversion_error_detail(value, self.column, self.row, self.type_name, detail)
+    }
+
+    fn fallback_err(&self, value: &Bound<'_, PyAny>) -> PyErr {
+        self.detail_err(value, &format!("is not an integer; {}", self.guidance))
+    }
 }
 
 fn long_from_float<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
     number: f64,
-    column: &str,
-    row: usize,
-    type_name: &str,
-    guidance: &str,
+    ctx: &IntConvCtx<'_>,
     nan_as_zero: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     if number.is_nan() && nan_as_zero {
@@ -654,25 +721,16 @@ fn long_from_float<'py>(
         return unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyLong_FromLong(0)) };
     }
     if !number.is_finite() {
-        return Err(conversion_error_detail(
-            value,
-            column,
-            row,
-            type_name,
-            &format!("is not finite; {guidance}"),
-        ));
+        return Err(ctx.detail_err(value, &format!("is not finite; {}", ctx.guidance)));
     }
     if number.fract() != 0.0 {
-        return Err(conversion_error_detail(
+        return Err(ctx.detail_err(
             value,
-            column,
-            row,
-            type_name,
-            &format!("would lose fractional data; {guidance}"),
+            &format!("would lose fractional data; {}", ctx.guidance),
         ));
     }
     unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyNumber_Long(value.as_ptr())) }
-        .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))
+        .map_err(|_| ctx.fallback_err(value))
 }
 
 /// Return a Python integer while preserving exactness. Integral floats and
@@ -686,81 +744,48 @@ fn integer_object<'py>(
     guidance: &str,
     nan_as_zero: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let ctx = IntConvCtx {
+        column,
+        row,
+        type_name,
+        guidance,
+    };
     if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
         return Ok(value.clone());
     }
     if value.downcast::<PyString>().is_ok() {
-        return Err(conversion_error_detail(
-            value,
-            column,
-            row,
-            type_name,
-            "strings are not accepted; pass an int instead",
-        ));
+        return Err(ctx.detail_err(value, "strings are not accepted; pass an int instead"));
     }
     if unsafe { ffi::PyFloat_Check(value.as_ptr()) } != 0 {
         // SAFETY: PyFloat_Check above guarantees PyFloat_AsDouble succeeds.
         let number = unsafe { ffi::PyFloat_AsDouble(value.as_ptr()) };
-        return long_from_float(
-            py,
-            value,
-            number,
-            column,
-            row,
-            type_name,
-            guidance,
-            nan_as_zero,
-        );
+        return long_from_float(py, value, number, &ctx, nan_as_zero);
     }
     if is_numpy_float(value) {
         let number = value
             .extract::<f64>()
-            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?;
-        return long_from_float(
-            py,
-            value,
-            number,
-            column,
-            row,
-            type_name,
-            guidance,
-            nan_as_zero,
-        );
+            .map_err(|_| ctx.fallback_err(value))?;
+        return long_from_float(py, value, number, &ctx, nan_as_zero);
     }
     if is_decimal(value) {
         let finite = value
             .call_method0(intern!(py, "is_finite"))
             .and_then(|result| result.is_truthy())
-            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?;
+            .map_err(|_| ctx.fallback_err(value))?;
         if !finite {
-            return Err(conversion_error_detail(
-                value,
-                column,
-                row,
-                type_name,
-                &format!("is not finite; {guidance}"),
-            ));
+            return Err(ctx.detail_err(value, &format!("is not finite; {guidance}")));
         }
         let integral = value
             .call_method0(intern!(py, "to_integral_value"))
-            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?;
-        if !integral
-            .eq(value)
-            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))?
-        {
-            return Err(conversion_error_detail(
-                value,
-                column,
-                row,
-                type_name,
-                &format!("would lose fractional data; {guidance}"),
-            ));
+            .map_err(|_| ctx.fallback_err(value))?;
+        if !integral.eq(value).map_err(|_| ctx.fallback_err(value))? {
+            return Err(ctx.detail_err(value, &format!("would lose fractional data; {guidance}")));
         }
         return unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyNumber_Long(value.as_ptr())) }
-            .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance));
+            .map_err(|_| ctx.fallback_err(value));
     }
     unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyNumber_Index(value.as_ptr())) }
-        .map_err(|_| conversion_error_detail(value, column, row, type_name, guidance))
+        .map_err(|_| ctx.fallback_err(value))
 }
 
 /// Convert a Python integer/index object to an owned

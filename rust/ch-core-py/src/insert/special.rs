@@ -881,6 +881,17 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
         // SAFETY: ptr is valid here; the strong reference keeps the item
         // alive across any Python code the fallback runs.
         let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        if null_map.is_some() && is_enum_nan(ch_type, &obj) {
+            if let Some(entry) = null_map.as_mut().and_then(|nulls| nulls.last_mut()) {
+                *entry = 1;
+            }
+            codes.push(C::default());
+            if S::MUTABLE {
+                check_not_resized(seq, name, row_count)?;
+                ptr_codes.clear();
+            }
+            continue;
+        }
         let scalar = convert_scalar(py, ch_type, &obj, name, row)?;
         codes.push(C::from_enum_scalar(scalar)?);
         if S::MUTABLE {

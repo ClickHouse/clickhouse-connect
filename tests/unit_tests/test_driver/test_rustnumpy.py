@@ -339,6 +339,40 @@ def test_refinalize_skips_unaffected_sibling_leaves(monkeypatch, type_name, colu
     assert leaf is pd.NA
 
 
+class _ObjectExitBatch:
+    def __init__(self, column):
+        self._column = column
+
+    def column_data(self, _index):
+        return list(self._column)
+
+
+@pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
+def test_object_convert_numpy_keeps_stdlib_aware_datetimes(type_name):
+    pytest.importorskip("numpy")
+    tz = ZoneInfo("America/Denver")
+    values = [None, datetime.fromtimestamp(13, tz), datetime.fromtimestamp(79, tz)]
+
+    converter = rustnumpy._build_converter(get_from_name(f"Nullable({type_name})"), QueryContext(use_numpy=True))
+    result = converter(None, _ObjectExitBatch(values), 0)
+
+    assert list(result) == values
+    assert type(result[1]) is datetime
+
+
+@pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
+def test_object_convert_numpy_aware_datetimes_without_pandas(monkeypatch, type_name):
+    pytest.importorskip("numpy")
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    tz = ZoneInfo("America/Denver")
+    values = [None, datetime.fromtimestamp(13, tz)]
+
+    converter = rustnumpy._build_converter(get_from_name(f"Nullable({type_name})"), QueryContext(use_numpy=True))
+    result = converter(None, _ObjectExitBatch(values), 0)
+
+    assert list(result) == values
+
+
 @pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
 def test_refinalize_nullable_named_timezone_datetimes(type_name):
     pd = pytest.importorskip("pandas")

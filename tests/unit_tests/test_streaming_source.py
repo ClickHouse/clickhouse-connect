@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import logging
 import time
 import zlib
 from unittest.mock import Mock
@@ -8,7 +9,7 @@ import lz4.frame
 import pytest
 import zstandard
 
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import NotSupportedError, OperationalError
 from clickhouse_connect.driver.streaming import (
     ReadAheadSource,
     StreamingInsertSource,
@@ -436,6 +437,54 @@ def test_sync_streaming_insert_error_propagation():
     assert isinstance(context.insert_exception, ValueError)
 
     assert chunks == [b"chunk1"]
+
+
+class RefusingTransform:
+    """Mock transform whose build_insert raises a deterministic driver refusal at call time."""
+
+    @staticmethod
+    def build_insert(context):
+        raise NotSupportedError("strict refusal")
+
+
+def _streaming_error_records(caplog):
+    records = [r for r in caplog.records if r.name == "clickhouse_connect.driver.streaming"]
+    return [r for r in records if r.levelno >= logging.ERROR]
+
+
+@pytest.mark.asyncio
+async def test_streaming_insert_driver_error_logs_debug(caplog):
+    """Deterministic driver refusals propagate without ERROR-level noise."""
+    context = MockContext()
+    loop = asyncio.get_running_loop()
+
+    source = StreamingInsertSource(RefusingTransform(), context, loop)
+    with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.driver.streaming"):
+        source.start_producer()
+        with pytest.raises(NotSupportedError, match="strict refusal"):
+            async for _chunk in source.async_generator():
+                pass
+    await source.close()
+
+    assert isinstance(context.insert_exception, NotSupportedError)
+    assert not _streaming_error_records(caplog)
+    assert any("Insert producer error" in r.getMessage() for r in caplog.records)
+
+
+def test_sync_streaming_insert_driver_error_logs_debug(caplog):
+    """Deterministic driver refusals propagate without ERROR-level noise."""
+    context = MockContext()
+
+    source = SyncStreamingInsertSource(RefusingTransform(), context)
+    with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.driver.streaming"):
+        source.start_producer()
+        with pytest.raises(NotSupportedError, match="strict refusal"):
+            for _chunk in source.gen:
+                pass
+
+    assert isinstance(context.insert_exception, NotSupportedError)
+    assert not _streaming_error_records(caplog)
+    assert any("Insert producer error" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio

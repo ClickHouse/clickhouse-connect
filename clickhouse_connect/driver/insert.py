@@ -150,7 +150,8 @@ class InsertContext(BaseQueryContext):
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
             df_col = df[df_col_name]
             d_type_kind = df_col.dtype.kind
-            if ch_type.base_type in ("Enum8", "Enum16"):
+            if ch_type.base_type in ("Enum8", "Enum16") and (d_type_kind in ("f", "O") or df_col.hasnans):
+                # Only dtypes that can hold missing values need the per-row NA and float-code handling.
                 enum_values = []
                 for row, value in enumerate(df_col):
                     if options.pd.isna(value):

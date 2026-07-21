@@ -135,17 +135,11 @@ pub(crate) fn encode_native_block(
     }
 
     let batch = RustColBatch::new(Schema::new(fields), columns, row_count);
+    // Defaults: protocol_revision 0 (HTTP INSERT body) and flattened_dynamic
+    // false (V1/V2 Dynamic layout: pre-25.6 servers reject FLATTENED).
+    let options = EncodeOptions::default();
     let mut encoded = py
-        .allow_threads(|| {
-            encode_block(
-                &batch,
-                &EncodeOptions {
-                    protocol_revision: 0,
-                    // V1/V2 Dynamic layout: pre-25.6 servers reject FLATTENED.
-                    flattened_dynamic: false,
-                },
-            )
-        })
+        .allow_threads(|| encode_block(&batch, &options))
         .map_err(encode_err)?;
 
     if !prefix.is_empty() {
@@ -163,6 +157,7 @@ fn encode_err(err: EncodeError) -> PyErr {
             format!("unsupported ClickHouse type {ch_type} for column {column:?}"),
         ),
         EncodeError::InconsistentBatch { detail } => PyValueError::new_err(detail),
+        _ => PyRuntimeError::new_err(format!("Encode error: {err}")),
     }
 }
 

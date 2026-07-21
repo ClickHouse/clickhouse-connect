@@ -12,7 +12,7 @@ import zstandard
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
 from clickhouse_connect.driver.asyncqueue import Full as AsyncQueueFull
 from clickhouse_connect.driver.compression import available_compression
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import Error, OperationalError
 from clickhouse_connect.driver.transform import Transform
 from clickhouse_connect.driver.types import ByteSource, Closable
 
@@ -291,7 +291,11 @@ class StreamingInsertSource:
                         return
 
             except Exception as e:
-                logger.error("Insert producer error: %s", e, exc_info=True)
+                # Driver errors are deterministic client-side refusals, not operational failures.
+                if isinstance(e, Error):
+                    logger.debug("Insert producer error: %s", e)
+                else:
+                    logger.error("Insert producer error: %s", e, exc_info=True)
                 if getattr(self.context, "insert_exception", None) is None:
                     self.context.insert_exception = e
                 if not self._stop_event.is_set():
@@ -319,7 +323,10 @@ class StreamingInsertSource:
                 yield chunk
 
         except Exception as e:
-            logger.error("Insert consumer error: %s", e, exc_info=True)
+            if isinstance(e, Error):
+                logger.debug("Insert consumer error: %s", e)
+            else:
+                logger.error("Insert consumer error: %s", e, exc_info=True)
             raise
         finally:
             self._stop_event.set()
@@ -495,7 +502,11 @@ class SyncStreamingInsertSource:
                 if not self._put(block):
                     return
         except Exception as ex:
-            logger.error("Insert producer error: %s", ex, exc_info=True)
+            # Driver errors are deterministic client-side refusals, not operational failures.
+            if isinstance(ex, Error):
+                logger.debug("Insert producer error: %s", ex)
+            else:
+                logger.error("Insert producer error: %s", ex, exc_info=True)
             if getattr(self.context, "insert_exception", None) is None:
                 self.context.insert_exception = ex
             if not self._stop_event.is_set():

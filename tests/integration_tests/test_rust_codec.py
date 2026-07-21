@@ -1,7 +1,8 @@
 import array
+import logging
 import threading
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -859,6 +860,46 @@ def test_rust_codec_numeric_column_blocks_keep_typed_arrays(client_factory, call
     assert rust_blocks[0][-1] == python_blocks[0][-1]
 
 
+def test_rust_codec_column_block_container_parity(client_factory, call, consume_stream):
+    from clickhouse_connect.driver.ctypes import data_conv
+
+    if "driverc" not in data_conv.__name__:
+        pytest.skip("container parity targets the C-accelerated python readers")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    expressions = [
+        "toString(number) AS s",
+        "CAST(if(number % 2 = 0, NULL, toString(number)) AS Nullable(String)) AS ns",
+        "CAST(leftPad(toString(number), 6, '0') AS FixedString(6)) AS fs",
+        "toDate(number) AS d",
+        "toDateTime(number) AS dt",
+        "toDateTime64(number, 3, 'UTC') AS dt64",
+        "CAST(if(number % 2 = 0, NULL, number) AS Nullable(UInt64)) AS n",
+        "CAST(if(number % 2 = 0, NULL, toDateTime(number)) AS Nullable(DateTime)) AS ndt",
+        "CAST(toString(number % 3) AS LowCardinality(String)) AS lc",
+        "CAST(if(number % 2 = 0, NULL, toString(number)) AS LowCardinality(Nullable(String))) AS lcn",
+        "toUUID(concat(leftPad(lower(hex(number)), 8, '0'), '-1122-3344-5566-778899aabbcc')) AS u",
+        "toIPv4(toUInt32(number)) AS ip",
+        "tuple(number, toString(number)) AS tup",
+        "CAST((toInt64(number), toString(number)), 'Tuple(a Int64, b String)') AS ntup",
+        "range(number % 4) AS arr",
+        "number AS num",
+    ]
+    query = f"SELECT {', '.join(expressions)} FROM numbers(10)"
+
+    def blocks(client):
+        output = []
+        consume_stream(call(client.query_column_block_stream, query), output.append)
+        return output
+
+    rust_blocks = blocks(rust_client)
+    python_blocks = blocks(python_client)
+    assert len(rust_blocks) == len(python_blocks) == 1
+    for rust_column, python_column in zip(rust_blocks[0], python_blocks[0]):
+        assert type(rust_column) is type(python_column)
+        assert list(rust_column) == list(python_column)
+
+
 @pytest.mark.parametrize("native_codec", ["rust", "rust_strict"])
 def test_rust_codec_aggregate_function_decode(client_factory, call, native_codec):
     client = client_factory(native_codec=native_codec)
@@ -980,7 +1021,7 @@ def test_rust_codec_eligibility_routing(client_factory, call):
         call(strict_client.query, "SELECT toDateTime(number) FROM numbers(3)", query_tz="America/New_York")
 
 
-def test_rust_codec_insert_refusal_surfaces_directly(client_factory, call):
+def test_rust_codec_insert_refusal_surfaces_directly(client_factory, call, caplog):
     client = client_factory(native_codec="rust_strict")
     context = InsertContext(
         "unused_table",
@@ -990,8 +1031,14 @@ def test_rust_codec_insert_refusal_surfaces_directly(client_factory, call):
         query_formats={"UInt8": "string"},
     )
 
-    with pytest.raises(NotSupportedError, match="per-column or per-type write formats"):
-        call(client.data_insert, context)
+    with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.driver.streaming"):
+        with pytest.raises(NotSupportedError, match="per-column or per-type write formats"):
+            call(client.data_insert, context)
+
+    # An expected refusal is quiet: no ERROR-level records and no rebuilt second attempt.
+    streaming_records = [r for r in caplog.records if r.name == "clickhouse_connect.driver.streaming"]
+    assert not [r for r in streaming_records if r.levelno >= logging.ERROR]
+    assert sum("Insert producer error" in r.getMessage() for r in streaming_records) == 1
 
 
 def test_rust_codec_midstream_error_parity(client_factory, call, consume_stream):
@@ -1243,6 +1290,26 @@ def test_rust_codec_nullable_named_tz_df_parity(client_factory, call, type_name)
     pd.testing.assert_frame_equal(rust_df, python_df)
 
 
+@pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
+def test_rust_codec_nullable_named_tz_np_object_cells(client_factory, call, type_name):
+    # query_np object columns keep stdlib datetime cells; the pd.Timestamp wrap is pandas-only.
+    # The python codec renders these cells as naive-UTC np.datetime64, a pre-existing scalar-type
+    # divergence, so parity here is on the UTC instants.
+    np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = f"SELECT CAST(if(number = 0, NULL, number) AS Nullable({type_name})) AS c FROM numbers(3)"
+
+    rust_values = call(rust_client.query_np, query).flatten().tolist()
+    python_values = call(python_client.query_np, query).flatten().tolist()
+
+    assert rust_values[0] is None and python_values[0] is None
+    for rust_value, python_value in zip(rust_values[1:], python_values[1:]):
+        assert type(rust_value) is datetime
+        assert isinstance(python_value, np.datetime64)
+        assert np.datetime64(rust_value.astimezone(timezone.utc).replace(tzinfo=None)) == python_value
+
+
 def test_rust_codec_np_df_stream_parity(client_factory, call, consume_stream):
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
@@ -1408,6 +1475,29 @@ def test_native_codec_insert_df_enum_nan(client_factory, call, client_mode, nati
             (0, "one"),
             (1, "missing"),
             (2, "two"),
+        ]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("native_codec", ["python", "rust_strict"])
+def test_native_codec_insert_df_enum_int_dtype(client_factory, call, client_mode, native_codec):
+    pd = pytest.importorskip("pandas")
+    client = client_factory(native_codec=native_codec)
+    table = f"fixa_ins_enum_int_{native_codec}_{client_mode}"
+    df = pd.DataFrame({"id": [0, 1, 2], "e": pd.Series([1, 2, 1], dtype="int64")})
+
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            client.command,
+            f"CREATE TABLE {table} (id UInt8, e Enum8('missing' = 0, 'one' = 1, 'two' = 2)) ENGINE Memory",
+        )
+        call(client.insert_df, table, df)
+        assert call(client.query, f"SELECT * FROM {table} ORDER BY id").result_rows == [
+            (0, "one"),
+            (1, "two"),
+            (2, "one"),
         ]
     finally:
         call(client.command, f"DROP TABLE IF EXISTS {table}")

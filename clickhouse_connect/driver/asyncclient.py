@@ -44,6 +44,7 @@ from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     DataError,
+    Error,
     OperationalError,
     ProgrammingError,
     error_code_from_header,
@@ -1722,6 +1723,13 @@ class AsyncClient(Client):
 
         async def rebuild_body():
             nonlocal active_source
+            recorded = context.insert_exception
+            if isinstance(recorded, Error):
+                # Deterministic client-side refusal; a rebuilt insert would fail identically.
+                context.insert_exception = None
+                raise recorded
+            # Reset so a failure on the rebuilt attempt is not masked by the first attempt's error.
+            context.insert_exception = None
             await active_source.close(timeout=None)
             context.current_row = 0
             context.current_block = 0

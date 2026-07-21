@@ -152,6 +152,26 @@ def test_typed_numeric_columns_leave_nullable_and_non_numeric_columns_as_lists()
     assert all(isinstance(output, list) for output in columns)
 
 
+def test_typed_numeric_zero_row_columns_are_empty_typed_arrays():
+    data = build_native_block(
+        [
+            ("i64", "Int64", []),
+            ("f32", "Float32", []),
+            ("nullable", "Nullable(Int32)", []),
+            ("s", "String", []),
+        ]
+    )
+
+    typed, f32, nullable, s = _ch_core.ColBatch.decode_native(data).to_python_columns(
+        typed_numeric=True
+    )
+
+    assert isinstance(typed, array.array) and typed.typecode == "q" and len(typed) == 0
+    assert isinstance(f32, array.array) and f32.typecode == "f" and len(f32) == 0
+    assert isinstance(nullable, list) and nullable == []
+    assert isinstance(s, list) and s == []
+
+
 class TestBFloat16:
     def test_encode_decode_type_matrix_and_all_object_exits(self):
         columns = [

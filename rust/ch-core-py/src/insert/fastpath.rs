@@ -162,6 +162,11 @@ pub(super) fn nullable_scalar_column<'py, R: RowAccess<'py>>(
                 None => {}
             }
         }
+        if is_enum_nan(inner, &value) {
+            null_map.push(1);
+            scalars.push(default_scalar(inner)?);
+            continue;
+        }
         null_map.push(0);
         scalars.push(convert_scalar(py, inner, &value, name, row)?);
     }

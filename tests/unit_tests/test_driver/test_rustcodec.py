@@ -8,6 +8,7 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.common import _native_codec_env_default
+from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import rustcodec
 from clickhouse_connect.driver.exceptions import (
@@ -71,6 +72,16 @@ def restore_native_codec_fixture():
     common.set_setting("native_codec", original)
 
 
+@pytest.fixture(name="clean_type_cache")
+def clean_type_cache_fixture():
+    # Container types bake element insert names at construction and the registry caches instances by
+    # name, so types built under a monkeypatched json_serialization_format must not outlive the test.
+    snapshot = dict(registry.type_cache)
+    yield
+    registry.type_cache.clear()
+    registry.type_cache.update(snapshot)
+
+
 @pytest.fixture(name="clean_formats")
 def clean_formats_fixture():
     from clickhouse_connect.datatypes.base import ch_read_formats, ch_write_formats
@@ -123,9 +134,9 @@ def test_resolve_native_codec_invalid_kwarg():
 
 
 @pytest.mark.parametrize("codec", ["rust", "rust_strict"])
-def test_resolve_rust_requires_extra_when_module_missing(monkeypatch, codec):
+def test_resolve_rust_raises_when_module_missing(monkeypatch, codec):
     monkeypatch.setitem(sys.modules, "_ch_core", None)
-    with pytest.raises(NotSupportedError, match=r'pip install.*clickhouse-connect\[rust\]'):
+    with pytest.raises(NotSupportedError, match=r"compiled _ch_core extension module"):
         resolve_native_codec(codec)
 
 
@@ -340,7 +351,7 @@ def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, cle
         "Nested(x JSON)",
     ],
 )
-def test_build_insert_legacy_json_strict_raises(monkeypatch, type_name):
+def test_build_insert_legacy_json_strict_raises(monkeypatch, clean_type_cache, type_name):
     class FakeCore:
         @staticmethod
         def encode_native_block(*args):
@@ -495,17 +506,6 @@ class _FakeBatch:
         self._columns = columns
         self._error = error
 
-    @staticmethod
-    def from_batches(batches):
-        first = batches[0]
-        error = next((batch._error for batch in batches if batch._error is not None), None)
-        columns = [list(column) for column in first._columns]
-        for batch in batches[1:]:
-            if batch._columns is not None:
-                for base, added in zip(columns, batch._columns):
-                    base.extend(added)
-        return _FakeBatch(first.column_names, first.column_type_names, columns, error)
-
     def to_python_columns(self, typed_numeric=False):
         del typed_numeric
         if self._error is not None:
@@ -533,7 +533,6 @@ def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
 
     class _FakeCore:
         StreamDecoder = _FakeStreamDecoder
-        ColBatch = _FakeBatch
 
     return _FakeCore
 
@@ -625,9 +624,8 @@ def test_decode_buffered_unsupported_raises(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     with pytest.raises(NotSupportedError):
-        _ = result.result_rows
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
 
@@ -636,9 +634,8 @@ def test_decode_buffered_malformed_fill_raises_data_error(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=ValueError("Malformed payload: bad cell"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     with pytest.raises(DataError, match="Malformed payload: bad cell"):
-        _ = result.result_rows
+        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
 
@@ -672,6 +669,9 @@ def test_decode_buffered_column_oriented(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
     result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(column_oriented=True))
+    assert result.result_columns == [[13, 79], [1, 2]]
+    assert result.result_rows == [(13, 1), (79, 2)]
+    # Repeated access in either order stays stable across the multi-batch buffers.
     assert result.result_columns == [[13, 79], [1, 2]]
     assert result.result_rows == [(13, 1), (79, 2)]
 
@@ -747,9 +747,8 @@ def _dynamic_shared_block(cells: list) -> bytes:
 def test_decode_malformed_shared_cell_raises_data_error(ch_core):
     # Int32 descriptor with a truncated payload fails the fill, not the prefix parse.
     corrupt = _dynamic_shared_block([b"\x09\x01\x02"])
-    result = RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
     with pytest.raises(DataError, match="SharedVariant"):
-        _ = result.result_rows
+        RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
 
 
 def test_decode_malformed_shared_cell_streaming_raises_data_error(ch_core):

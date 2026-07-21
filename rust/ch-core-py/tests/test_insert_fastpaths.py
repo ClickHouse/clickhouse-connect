@@ -112,6 +112,45 @@ class TestEncodeFastPaths:
         with pytest.raises(ValueError, match="is not finite; pass an integer value"):
             self._encode("Int32", [Decimal("NaN")])
 
+    def test_decimal_subclass_accepted_like_decimal(self):
+        from decimal import Decimal
+
+        class D(Decimal):
+            pass
+
+        assert self._encode("Int64", [D("79"), Decimal("7")]) == build_native_block(
+            [("v", "Int64", [79, 7])]
+        )
+        with pytest.raises(ValueError, match="would lose fractional data; pass an integer value"):
+            self._encode("Int64", [D("13.5")])
+
+    @pytest.mark.parametrize("type_name", ["Float32", "Float64", "BFloat16"])
+    def test_string_to_float_rejection_is_actionable(self, type_name):
+        with pytest.raises(ValueError, match="strings are not accepted; pass a float instead"):
+            self._encode(type_name, ["1.5"])
+
+    def test_non_integer_object_rejection_has_connector(self):
+        with pytest.raises(ValueError, match="is not an integer; pass an integer value"):
+            self._encode("Int32", [object()])
+
+    def test_error_value_repr_is_truncated(self):
+        with pytest.raises(ValueError) as exc:
+            self._encode("Int32", ["x" * 500])
+        message = str(exc.value)
+        assert "..." in message
+        assert len(message) < 250
+
+    def test_numpy_longdouble_rejected_for_integer_targets(self):
+        np = pytest.importorskip("numpy")
+        # On arm64 macOS longdouble is f64, so the fraction in
+        # 2**64 + 0.5 vanishes at construction; on x86 it survives and must
+        # not be silently truncated through the f64 extraction.
+        fractional = np.longdouble(2**64) + np.longdouble(0.5)
+        with pytest.raises(ValueError, match="pass an integer value"):
+            self._encode("UInt64", [fractional])
+        with pytest.raises(ValueError, match="pass an integer value"):
+            self._encode("UInt64", [np.longdouble(7.0)])
+
     def test_float32_overflow_becomes_inf(self):
         encoded = self._encode("Float32", [1e300])
         batch = _ch_core.ColBatch.decode_native(encoded)
@@ -300,6 +339,23 @@ class TestScalarObjectInsertFastPath:
         vals = [1.0, float("nan"), 2.0]
         encoded = self._encode(type_name, vals)
         assert encoded == build_native_block([("v", type_name, [1, 0, 2])])
+
+    @pytest.mark.parametrize("type_name", [_E8, _E16])
+    def test_nullable_enum_nan_becomes_null(self, type_name):
+        vals = [1.0, float("nan"), 2.0]
+        expected = build_native_block([("v", f"Nullable({type_name})", [1, None, 2])])
+        assert self._encode(f"Nullable({type_name})", vals) == expected
+        assert self._encode(f"Nullable({type_name})", tuple(vals), len(vals)) == expected
+        assert (
+            self._encode(f"Nullable({type_name})", _NdarrayLikeColumn(vals), len(vals))
+            == expected
+        )
+
+    def test_nullable_enum_numpy_nan_becomes_null(self):
+        np = pytest.importorskip("numpy")
+        vals = [np.float32(1.0), np.float32("nan"), np.float64("nan")]
+        expected = build_native_block([("v", f"Nullable({self._E8})", [1, None, None])])
+        assert self._encode(f"Nullable({self._E8})", vals) == expected
 
     def test_enum_rejects_lossy_float_with_actionable_error(self):
         with pytest.raises(ValueError, match="would lose fractional data; pass a valid enum label or integral code"):
