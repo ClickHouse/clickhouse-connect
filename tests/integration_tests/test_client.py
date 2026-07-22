@@ -604,3 +604,18 @@ def test_compression_gzip(client_factory, call, table_context):
 
         result = call(client.query, "SELECT COUNT(*) FROM test_gzip")
         assert result.result_rows[0][0] == 50
+
+
+def test_compression_zstd(client_factory, call, table_context):
+    """Test that zstd compression works."""
+    client = client_factory(compress="zstd")
+
+    assert client.compression == "zstd"
+    assert client.write_compression == "zstd"
+
+    with table_context("test_zstd", ["id", "data"], ["UInt32", "String"]):
+        data = [[i, f"data_{i}" * 10] for i in range(50)]
+        call(client.insert, "test_zstd", data)
+
+        result = call(client.query, "SELECT COUNT(*) FROM test_zstd")
+        assert result.result_rows[0][0] == 50

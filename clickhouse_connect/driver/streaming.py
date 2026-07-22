@@ -5,10 +5,9 @@ import zlib
 from collections.abc import Callable, Iterable, Iterator
 
 import lz4.frame
-import zstandard
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
-from clickhouse_connect.driver.compression import available_compression
+from clickhouse_connect.driver.compression import _zstd_decompressor, available_compression
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.types import Closable
 
@@ -167,7 +166,7 @@ class StreamingResponseSource(Closable):
             raise ImportError("brotli compression requires 'brotli' package. Install with: pip install brotli")
 
         if encoding == "zstd":
-            return zstandard.ZstdDecompressor().decompressobj()
+            return _zstd_decompressor()
 
         if encoding == "lz4":
             return lz4.frame.LZ4FrameDecompressor()
