@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from clickhouse_connect.driver.compression import zstd_compress
+from clickhouse_connect.driver.compression import _zstd_compress
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.httputil import ResponseSource
 
@@ -10,7 +10,7 @@ from clickhouse_connect.driver.httputil import ResponseSource
 class TestResponseSourceZstd:
     def test_zstd_response_decompressed_correctly(self):
         original = b"clickhouse row data " * 200
-        compressed = zstd_compress(original)
+        compressed = _zstd_compress(original)
         chunk_size = len(compressed) // 3
         raw_chunks = [compressed[i : i + chunk_size] for i in range(0, len(compressed), chunk_size)]
 

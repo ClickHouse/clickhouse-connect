@@ -4,10 +4,14 @@ import zlib
 import lz4
 import lz4.frame
 
-if sys.version_info >= (3, 14):
-    from compression import zstd as _zstd
-else:
-    from backports import zstd as _zstd
+try:
+    if sys.version_info >= (3, 14):
+        from compression import zstd as _zstd
+    else:
+        from backports import zstd as _zstd
+except ImportError:
+    # Python 3.14+ may be built without zstd support (PEP 784)
+    _zstd = None  # type: ignore[assignment]
 
 try:
     import brotli
@@ -15,26 +19,40 @@ except ImportError:
     brotli = None
 
 
-ZstdError = _zstd.ZstdError
+class _ZstdUnavailableError(Exception):
+    """Never raised. Keeps zstd except clauses valid when zstd support is missing."""
 
 
-def zstd_compress(data: bytes) -> bytes:
+_ZstdError: type[Exception] = _zstd.ZstdError if _zstd is not None else _ZstdUnavailableError
+
+
+def _require_zstd():
+    if _zstd is None:
+        raise ImportError(
+            "zstd support is unavailable. Python 3.14+ requires a CPython build with the "
+            "compression.zstd module. Earlier versions require the backports.zstd package."
+        )
+    return _zstd
+
+
+def _zstd_compress(data: bytes) -> bytes:
     """One-shot compression."""
-    return _zstd.compress(data)
+    return _require_zstd().compress(data)
 
 
-def zstd_decompress(data: bytes) -> bytes:
+def _zstd_decompress(data: bytes) -> bytes:
     """One-shot decompression."""
-    return _zstd.decompress(data)
+    return _require_zstd().decompress(data)
 
 
-def zstd_decompressor():
+def _zstd_decompressor():
     """Returns a ZstdDecompressor for incremental decompression."""
-    return _zstd.ZstdDecompressor()
+    return _require_zstd().ZstdDecompressor()
 
 
-available_compression = ["lz4", "zstd"]
-
+available_compression = ["lz4"]
+if _zstd is not None:
+    available_compression.append("zstd")
 if brotli:
     available_compression.append("br")
 available_compression.extend(["gzip", "deflate"])
@@ -76,7 +94,7 @@ class Lz4Compressor(Compressor, tag="lz4", thread_safe=False):
 
 class ZstdCompressor(Compressor, tag="zstd"):
     def compress_block(self, block):
-        return zstd_compress(block)
+        return _zstd_compress(block)
 
 
 class BrotliCompressor(Compressor, tag="br"):

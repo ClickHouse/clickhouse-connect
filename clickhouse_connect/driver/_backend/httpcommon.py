@@ -30,7 +30,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier, use_form_encoding
 from clickhouse_connect.driver.common import coerce_bool, dict_copy
-from clickhouse_connect.driver.compression import available_compression, zstd_decompress
+from clickhouse_connect.driver.compression import _zstd_decompress, available_compression
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     OperationalError,
@@ -132,7 +132,7 @@ def decompress_response(data: bytes, encoding: str | None) -> bytes:
         lz4_decom = lz4.frame.LZ4FrameDecompressor()
         return lz4_decom.decompress(data, len(data))
     if encoding == "zstd":
-        return zstd_decompress(data)
+        return _zstd_decompress(data)
     if encoding == "br":
         if brotli is not None:
             return brotli.decompress(data)
