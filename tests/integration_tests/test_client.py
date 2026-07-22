@@ -495,6 +495,75 @@ def test_role_setting_works(param_client: Client, test_config: TestConfig, clien
     assert res.result_rows == [([role_limited],)]
 
 
+def test_changeable_in_readonly_custom_setting(param_client: Client, test_config: TestConfig, client_factory: Callable, call):
+    """Readonly user can set CHANGEABLE_IN_READONLY custom settings via settings= (issue #530)."""
+    if test_config.cloud:
+        pytest.skip("Skipping role test in cloud mode - cannot create custom users")
+
+    # Docker test servers set custom_settings_prefixes=SQL_; skip otherwise.
+    try:
+        call(param_client.command, "SELECT 1 SETTINGS SQL_RO_probe_530='ok'")
+    except Exception:
+        pytest.skip("Server does not allow SQL_ custom settings (need custom_settings_prefixes)")
+
+    db = test_config.test_database
+    table = f"{db}.rls_table_530"
+    role = "ch_connect_ro_role_530"
+    user = "ch_connect_ro_user_530"
+    password = "R7m!pZt9qL#x"
+    setting = "SQL_RO_my_rls_key"
+
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    call(param_client.command, f"CREATE TABLE {table} (a String) ENGINE MergeTree ORDER BY tuple()")
+    call(param_client.command, f"INSERT INTO {table} (a) VALUES ('tenant_1'), ('tenant_2')")
+
+    call(param_client.command, f"DROP ROW POLICY IF EXISTS rls_policy_530 ON {table}")
+    call(param_client.command, f"DROP USER IF EXISTS {user}")
+    call(param_client.command, f"DROP ROLE IF EXISTS {role}")
+
+    call(param_client.command, f"CREATE ROLE {role}")
+    call(param_client.command, f"ALTER ROLE {role} SETTINGS {setting} CHANGEABLE_IN_READONLY")
+    call(param_client.command, f"GRANT SELECT ON {table} TO {role}")
+    call(
+        param_client.command,
+        f"CREATE ROW POLICY rls_policy_530 ON {table} USING a = getSetting('{setting}') TO {role}",
+    )
+    call(
+        param_client.command,
+        f"CREATE USER {user} IDENTIFIED BY '{password}' DEFAULT ROLE {role} SETTINGS readonly = 1",
+    )
+
+    client = client_factory(
+        host=test_config.host,
+        port=test_config.port,
+        username=user,
+        password=password,
+        database=db,
+    )
+
+    # Inline SETTINGS clause already works; the settings= path must match.
+    inline = call(
+        client.query,
+        f"SELECT a FROM {table} WHERE a = 'tenant_1' SETTINGS {setting}='tenant_1'",
+    )
+    assert inline.result_rows == [("tenant_1",)]
+
+    via_param = call(
+        client.query,
+        f"SELECT a FROM {table} WHERE a = 'tenant_1'",
+        settings={setting: "tenant_1"},
+    )
+    assert via_param.result_rows == [("tenant_1",)]
+
+    # Different tenant key must yield no rows under the row policy.
+    empty = call(
+        client.query,
+        f"SELECT a FROM {table}",
+        settings={setting: "tenant_other"},
+    )
+    assert empty.result_rows == []
+
+
 def test_query_id_autogeneration(param_client: Client, test_table_engine: str, call):
     """Test that query_id is auto-generated for query(), command(), and insert() methods"""
     result = call(param_client.query, "SELECT 1")
