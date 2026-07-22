@@ -244,7 +244,13 @@ class Client(ABC):
 
     def _validate_settings(self, settings: dict[str, Any] | None) -> dict[str, str]:
         """
-        This strips any ClickHouse settings that are not recognized or are read only.
+        Filter and normalize ClickHouse settings before they are sent to the server.
+
+        Settings known to be readonly on this server are handled according to the
+        common ``invalid_setting_action`` option. Settings that do not appear in
+        ``system.settings`` for the current user (for example custom settings made
+        ``CHANGEABLE_IN_READONLY`` on a role) are forwarded to ClickHouse so the
+        server can accept or reject them.
         :param settings:  Dictionary of setting name and values
         :return: A filtered dictionary of settings with values rendered as strings
         """
@@ -285,16 +291,25 @@ class Client(ABC):
             if setting_def and setting_def.value == str_value:
                 if setting_def.readonly or (current_setting is not None and current_setting == setting_def.value):
                     return None
-            if setting_def is None or setting_def.readonly:
+            if setting_def is None:
+                # Not present in system.settings for this user. May be a custom setting
+                # (including CHANGEABLE_IN_READONLY role constraints). The client cannot
+                # reliably discover those without extra privileges, so forward the setting
+                # and let ClickHouse accept or reject it. Optional transport settings that
+                # older servers may not support are still dropped silently.
+                if key in self.optional_transport_settings:
+                    return None
+                return str_value
+            if setting_def.readonly:
                 if key in self.optional_transport_settings:
                     return None
                 if invalid_action == "send":
-                    logger.warning("Attempting to send unrecognized or readonly setting %s", key)
+                    logger.warning("Attempting to send readonly setting %s", key)
                 elif invalid_action == "drop":
-                    logger.warning("Dropping unrecognized or readonly settings %s", key)
+                    logger.warning("Dropping readonly setting %s", key)
                     return None
                 else:
-                    raise ProgrammingError(f"Setting {key} is unknown or readonly") from None
+                    raise ProgrammingError(f"Setting {key} is readonly") from None
         return str_value
 
     def _setting_status(self, key: str) -> SettingStatus:
