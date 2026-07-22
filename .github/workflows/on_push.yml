@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
       - name: Install Ruff
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -66,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.12"
       - name: Install into a clean consumer environment
@@ -100,14 +100,14 @@ jobs:
     name: Bare Install Test (no extras)
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Start ClickHouse (latest) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
       - name: Install only core dependencies (no extras)
@@ -160,14 +160,14 @@ jobs:
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Start ClickHouse (version - ${{ matrix.clickhouse-version }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ matrix.clickhouse-version }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install pip
@@ -211,14 +211,14 @@ jobs:
     name: Pandas 3.x Compatibility Tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Start ClickHouse (version - latest) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
       - name: Install pip
@@ -252,14 +252,14 @@ jobs:
     name: SQLAlchemy 1.x Compatibility Tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Start ClickHouse (version - latest) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.11'
       - name: Install pip
@@ -307,9 +307,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
       - name: Install dependencies
