@@ -2,8 +2,29 @@ from unittest.mock import Mock
 
 import pytest
 
+from clickhouse_connect.driver.compression import _zstd_compress
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.httputil import ResponseSource
+
+
+class TestResponseSourceZstd:
+    def test_zstd_response_decompressed_correctly(self):
+        original = b"clickhouse row data " * 200
+        compressed = _zstd_compress(original)
+        chunk_size = len(compressed) // 3
+        raw_chunks = [compressed[i : i + chunk_size] for i in range(0, len(compressed), chunk_size)]
+
+        mock_response = Mock()
+        mock_response.headers = {"content-encoding": "zstd"}
+
+        def zstd_stream(chunk_size, decompress):
+            yield from raw_chunks
+
+        mock_response.stream = zstd_stream
+        source = ResponseSource(mock_response, chunk_size=1024 * 1024)
+
+        result = b"".join(source.gen)
+        assert result == original
 
 
 class TestResponseSourceNetworkError:

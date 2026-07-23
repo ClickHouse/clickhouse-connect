@@ -228,7 +228,7 @@ def create_client(
     :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
-      compression method (lz4).  A str of 'lz4', 'zstd', 'brotli', or 'gzip' can be used to use a specific compression type
+      compression method (lz4).  A str of 'lz4', 'zstd', 'br', or 'gzip' can be used to use a specific compression type
     :param query_limit: Default LIMIT on returned rows.  0 means no limit
     :param connect_timeout:  Timeout in seconds for the http connection
     :param send_receive_timeout: Read timeout in seconds for http connection
@@ -392,7 +392,7 @@ async def create_async_client(
     :param kwargs -- Recognized keyword arguments (used by the async HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
-      compression method (lz4).  A str of 'lz4', 'zstd', 'brotli', or 'gzip' can be used to use a specific compression type
+      compression method (lz4).  A str of 'lz4', 'zstd', 'br', or 'gzip' can be used to use a specific compression type
     :param query_limit: Default LIMIT on returned rows.  0 means no limit
     :param connect_timeout:  Timeout in seconds for the http connection
     :param send_receive_timeout: Read timeout in seconds for http connection

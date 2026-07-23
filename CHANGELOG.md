@@ -2,6 +2,11 @@
 
 ## UNRELEASED
 
+### Improvements
+- Added an experimental native_codec client option that selects the codec for client-managed FORMAT Native query decode and insert encode. python is the default and uses the existing Python and Cython codec. rust prefers the compiled _ch_core codec and routes unsupported query options or insert types to the Python codec. rust_strict raises instead of routing. A matching common setting and the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable seed the default, with precedence kwarg over common setting over environment variable. The codec covers query, query_np, query_df, their block and row stream variants, and inserts including insert_df, with dtypes matching the Python codec. The Arrow methods stay on FORMAT Arrow and are unaffected. Malformed Native payloads detected by the Rust codec raise DataError. The codec module ships as the separate clickhouse-connect-core wheel installed with `pip install clickhouse-connect[rust]`. This is early access for benchmarking and is not yet a supported path.
+
+## 1.6.0, 2026-07-23
+
 ### Bug Fixes
 - `AsyncClient` initialization no longer overwrites user-supplied session settings with generated defaults. A client created with `settings={'date_time_input_format': 'basic'}` previously had that value replaced by the generated `best_effort` default. User settings now always win, matching the sync client.
 - An `AsyncClient` created with both client certificates and an access token now sends the mutual TLS authentication headers and the `Authorization: Bearer` header together, matching the sync client. The certificates previously suppressed the token at construction, while the `token_provider` option re-added its token right after initialization, so the two async token paths disagreed with each other. The server resolves the credential precedence.
@@ -13,7 +18,11 @@
 - Async clients now emit URL query parameters in the same order as the sync client on every request. The parameter names and values are unchanged, so this is only visible to systems that match or sign the exact request URL.
 - Client creation no longer fails when the `client_protocol_version` capability probe errors on the sync client. The client falls back to running without the newer native protocol features and logs the probe failure at debug level, matching the async client.
 - Added an experimental in-process chDB backend. `get_client(interface='chdb')` or a `chdb://` DSN returns a standard client that runs queries against an embedded chDB engine instead of a ClickHouse server, supporting the full query, insert, streaming, and Arrow client surface. Use the `path` argument or a `chdb:///on/disk/path` DSN for a persistent database. Requires the `chdb` package, installable with `pip install clickhouse-connect[chdb]`. chDB allows one engine per process, has no async client, and does not support external data.
+<<<<<<< HEAD
 - Added an experimental native_codec client option that selects the codec for client-managed FORMAT Native query decode and insert encode. python is the default and uses the existing Python and Cython codec. rust prefers the compiled _ch_core codec and routes unsupported query options or insert types to the Python codec. rust_strict raises instead of routing. A matching common setting and the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable seed the default, with precedence kwarg over common setting over environment variable. The codec covers query, query_np, query_df, their block and row stream variants, and inserts including insert_df, with dtypes matching the Python codec. The Arrow methods stay on FORMAT Arrow and are unaffected. Malformed Native payloads detected by the Rust codec raise DataError. The codec module ships as the separate clickhouse-connect-core wheel installed with `pip install clickhouse-connect[rust]`. This is early access for benchmarking and is not yet a supported path.
+=======
+- Replaced the `zstandard` dependency with the stdlib `compression.zstd` module (Python 3.14+) and `backports.zstd` (Python 3.10-3.13), which provides the same API as the stdlib module. This gives a single consistent call surface across all supported Python versions and removes a dependency that diverges from the standard library. zstd compression remains fully supported on all standard Python installs. In the rare case of a custom CPython 3.14+ interpreter compiled without zstd support, the driver now still imports, drops zstd from the advertised compression methods, and raises a clear error only if zstd is explicitly requested. Closes [#577](https://github.com/ClickHouse/clickhouse-connect/issues/577).
+>>>>>>> origin/main
 
 ## 1.5.0, 2026-07-15
 
