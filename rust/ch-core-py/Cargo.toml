@@ -2,6 +2,9 @@
 name = "ch-core-py"
 version = "0.1.0"
 edition = "2021"
+description = "PyO3 binding crate for the clickhouse-connect-core wheel"
+license = "Apache-2.0"
+repository = "https://github.com/ClickHouse/clickhouse-connect"
 
 [lib]
 name = "_ch_core"
