@@ -44,23 +44,6 @@ result.arrow_table()
 result.to_pandas()
 ```
 
-## Results at a glance
-
-Start-to-finish query vs query on the same client, localhost, medians of 7
-runs, uncompressed transport. Full data, methodology, and caveats in
-`RESULTS.md`:
-
-| destination | speedup vs v1 |
-|---|---|
-| Python rows | 1.3x to 2.7x |
-| Python columns | 1.7x to 3.1x |
-| NumPy | 3.6x to 5.8x |
-| pandas | 1.4x to 7.2x |
-| Arrow vs `query_arrow` | 2.7x to 7.7x |
-
-The Arrow path also used 25 to 42 percent less peak memory. Localhost
-numbers, with scope notes in `RESULTS.md` that matter before quoting them.
-
 ## Supported types
 
 Nothing, Bool, Int8 through Int64 plus Int128/256, UInt8 through UInt64 plus
@@ -164,10 +147,8 @@ the one on `PATH`, maturin installs into the exported one. Set
 | `temporal_e2e_check.py`         | cell-by-cell temporal value policy check incl. named timezones            |
 | `bench_native_decode_strict.py` | decode-isolated benchmark, value-parity gated                             |
 | `bench_query_e2e.py`            | start-to-finish query vs query benchmark                                  |
-| `results_*.txt`                 | raw benchmark outputs cited by `RESULTS.md`                               |
 | `streaming_demo.py`             | sync and async streaming overlap demonstration                            |
 | `BINDING_ARCHITECTURE.md`       | how the binding works and how to use it for best performance              |
-| `RESULTS.md`                    | measured results, type coverage, caveats, known limitations               |
 
 The live-server scripts expect ClickHouse on `localhost:8123` and a
 clickhouse-connect checkout with compiled C extensions for the comparison
@@ -177,8 +158,6 @@ side, configurable via `CHC_BASELINE_PATH`.
 
 - `BINDING_ARCHITECTURE.md`: the layered design, the intake and exit paths,
   GIL rules, the streaming pattern, and the practical performance guidance.
-- `RESULTS.md`: every measured number with methodology and the honest
-  caveats, including the compression story and protocol-revision limits.
 - The `ch-core-rs` repository: the core's own README, `ARCHITECTURE.md`,
   and `DECODER_CONTRACT.md`, the per-type wire and Arrow contract.
 
