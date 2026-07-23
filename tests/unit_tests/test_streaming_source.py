@@ -14,7 +14,7 @@ from clickhouse_connect.driver.streaming import (
     ReadAheadSource,
     StreamingInsertSource,
     StreamingResponseSource,
-    SyncStreamingInsertSource,
+    _SyncStreamingInsertSource,
 )
 
 
@@ -425,7 +425,7 @@ def test_sync_streaming_insert_error_propagation():
     transform = FailingTransform()
     context = MockContext()
 
-    source = SyncStreamingInsertSource(transform, context)
+    source = _SyncStreamingInsertSource(transform, context)
     source.start_producer()
 
     chunks = []
@@ -474,7 +474,7 @@ def test_sync_streaming_insert_driver_error_logs_debug(caplog):
     """Deterministic driver refusals propagate without ERROR-level noise."""
     context = MockContext()
 
-    source = SyncStreamingInsertSource(RefusingTransform(), context)
+    source = _SyncStreamingInsertSource(RefusingTransform(), context)
     with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.driver.streaming"):
         source.start_producer()
         with pytest.raises(NotSupportedError, match="strict refusal"):

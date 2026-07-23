@@ -15,13 +15,12 @@ from clickhouse_connect.driver.exceptions import Error, OperationalError
 from clickhouse_connect.driver.transform import Transform
 from clickhouse_connect.driver.types import ByteSource, Closable
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 __all__ = [
     "StreamingResponseSource",
     "StreamingFileAdapter",
     "StreamingInsertSource",
-    "SyncStreamingInsertSource",
     "ReadAheadSource",
     "QueuedStreamSource",
     "start_streaming_response",
@@ -440,7 +439,7 @@ class ReadAheadSource(Closable):
 
     def __init__(self, source: ByteSource, maxsize: int = 16):
         self.source: ByteSource | None = source
-        self.exception_tag = getattr(source, "exception_tag", None)
+        self.exception_tag: str | None = getattr(source, "exception_tag", None)
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
         self._gen_cache: Iterator[bytes] | None = None
@@ -488,7 +487,7 @@ class ReadAheadSource(Closable):
         if source is not None:
             source.close()
 
-    def close(self):
+    def close(self) -> None:
         # Join the producer before closing the source. A _put-blocked producer returns within one _put
         # timeout of the stop event; a read-blocked producer exits after its in-flight read returns. Closing
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
@@ -499,7 +498,7 @@ class ReadAheadSource(Closable):
         self._drain()
         self._release_source()
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         self._stop_event.set()
         if self._thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
@@ -519,7 +518,7 @@ class ReadAheadSource(Closable):
         return False
 
 
-class SyncStreamingInsertSource:
+class _SyncStreamingInsertSource:
     """Bounded producer/consumer source for sync inserts."""
 
     def __init__(self, transform: Transform, context, maxsize: int = 10):

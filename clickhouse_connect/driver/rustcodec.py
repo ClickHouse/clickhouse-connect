@@ -17,12 +17,12 @@ from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedE
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
-from clickhouse_connect.driver.rustnumpy import build_converters, convert_block
+from clickhouse_connect.driver.rustnumpy import _build_converters, _convert_block
 from clickhouse_connect.driver.streaming import ReadAheadSource
 from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
 from clickhouse_connect.driver.types import ByteSource, Closable
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 NativeCodec = Literal["python", "rust", "rust_strict"]
 
@@ -84,15 +84,15 @@ def resolve_native_codec(native_codec: str | None) -> str:
     return resolved
 
 
-def make_native_transform(native_codec: NativeCodec | None = None) -> Transform:
+def _make_native_transform(native_codec: NativeCodec | None = None) -> Transform:
     """Build the Transform for the resolved codec."""
     resolved = resolve_native_codec(native_codec)
     if resolved == "python":
         return NativeTransform()
-    return RustNativeTransform(strict=(resolved == "rust_strict"))
+    return _RustNativeTransform(strict=(resolved == "rust_strict"))
 
 
-def rust_query_ineligible_reason(context: QueryContext) -> str | None:
+def _rust_query_ineligible_reason(context: QueryContext) -> str | None:
     """Return a short reason the rust decoder cannot serve this query, or None if it can.
 
     column_oriented, streaming, block_info, column_renamer, numpy/pandas output, and
@@ -253,7 +253,7 @@ class _BufferedQueryResult(QueryResult):
         return self._result_columns
 
 
-class RustNativeTransform:
+class _RustNativeTransform:
     """FORMAT Native codec backed by the compiled _ch_core module."""
 
     threaded_insert = True
@@ -265,7 +265,7 @@ class RustNativeTransform:
         if context.internal:
             # Driver-internal metadata queries pin read formats and always use the Python codec, even under strict.
             return NativeTransform.parse_response(source, context)
-        reason = rust_query_ineligible_reason(context)
+        reason = _rust_query_ineligible_reason(context)
         if reason is not None:
             if self.strict:
                 source.close()
@@ -371,8 +371,8 @@ class RustNativeTransform:
 
         try:
             if context.use_numpy:
-                converters = build_converters(col_types, context)
-                first_columns = convert_block(first, converters)
+                converters = _build_converters(col_types, context)
+                first_columns = _convert_block(first, converters)
             else:
                 first_columns = match_containers(first.to_python_columns(typed_numeric=True))
         except NotImplementedError as ex:
@@ -392,7 +392,7 @@ class RustNativeTransform:
                 yield first_columns
                 for batch in blocks:
                     try:
-                        columns = convert_block(batch, converters)
+                        columns = _convert_block(batch, converters)
                     except NotImplementedError as ex:
                         read_source.close()
                         raise _unsupported_decode_error(ex) from ex

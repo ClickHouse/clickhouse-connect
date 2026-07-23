@@ -21,10 +21,10 @@ from clickhouse_connect.driver.exceptions import (
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.rustcodec import (
-    RustNativeTransform,
-    make_native_transform,
+    _make_native_transform,
+    _rust_query_ineligible_reason,
+    _RustNativeTransform,
     resolve_native_codec,
-    rust_query_ineligible_reason,
 )
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG
@@ -197,16 +197,16 @@ def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log)
 
 
 @pytest.mark.parametrize(("codec", "strict"), [("rust", False), ("rust_strict", True)])
-def test_make_native_transform_rust_variants(monkeypatch, codec, strict):
+def test__make_native_transform_rust_variants(monkeypatch, codec, strict):
     monkeypatch.setitem(sys.modules, "_ch_core", _PresentCore)
-    transform = make_native_transform(codec)
-    assert isinstance(transform, RustNativeTransform)
+    transform = _make_native_transform(codec)
+    assert isinstance(transform, _RustNativeTransform)
     assert transform.strict is strict
     assert transform.threaded_insert is True
 
 
-def test_make_native_transform_python():
-    transform = make_native_transform("python")
+def test__make_native_transform_python():
+    transform = _make_native_transform("python")
     assert isinstance(transform, NativeTransform)
     assert transform.threaded_insert is False
 
@@ -240,7 +240,7 @@ def _ctx_response_tz():
     ],
 )
 def test_rust_query_ineligible(builder, reason):
-    assert rust_query_ineligible_reason(builder()) == reason
+    assert _rust_query_ineligible_reason(builder()) == reason
 
 
 @pytest.mark.parametrize(
@@ -255,21 +255,21 @@ def test_rust_query_ineligible(builder, reason):
     ],
 )
 def test_rust_query_eligible(builder):
-    assert rust_query_ineligible_reason(builder()) is None
+    assert _rust_query_ineligible_reason(builder()) is None
 
 
 def test_rust_query_ineligible_pyarrow_missing(monkeypatch):
     monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
-    assert rust_query_ineligible_reason(eligible_ctx(use_numpy=True)) == "pyarrow not installed"
+    assert _rust_query_ineligible_reason(eligible_ctx(use_numpy=True)) == "pyarrow not installed"
     # Non-numpy queries never touch the Arrow exit, so a missing pyarrow is irrelevant.
-    assert rust_query_ineligible_reason(eligible_ctx()) is None
+    assert _rust_query_ineligible_reason(eligible_ctx()) is None
 
 
 def test_rust_query_ineligible_global_read_format(clean_formats):
     from clickhouse_connect.datatypes.format import set_read_format
 
     set_read_format("IPv4", "string")
-    assert rust_query_ineligible_reason(eligible_ctx()) == "global read format override"
+    assert _rust_query_ineligible_reason(eligible_ctx()) == "global read format override"
 
 
 # --- Routing -----------------------------------------------------------------
@@ -278,7 +278,7 @@ def test_rust_query_ineligible_global_read_format(clean_formats):
 def test_strict_ineligible_raises_and_closes_source():
     src = FakeSource([])
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx(use_none=False))
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx(use_none=False))
     assert src.closed is True
 
 
@@ -288,7 +288,7 @@ def test_strict_global_read_format_raises_and_closes_source(clean_formats):
     set_read_format("IPv4", "string")
     src = FakeSource([])
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
 
@@ -297,7 +297,7 @@ def test_non_strict_ineligible_delegates_to_python_and_logs_reason(monkeypatch, 
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
     src = FakeSource([])
     with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
-        result = RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
+        result = _RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
     assert result is sentinel
     assert src.closed is False
     assert "fallback to Python for query: use_none=False" in caplog.text
@@ -319,7 +319,7 @@ def test_build_insert_probe_not_implemented_non_strict(monkeypatch):
     rust_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
     python_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
 
-    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(rust_ctx))
+    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(rust_ctx))
     python_out = b"".join(NativeTransform.build_insert(python_ctx))
 
     assert rust_out == python_out
@@ -335,7 +335,7 @@ def test_build_insert_probe_not_implemented_strict(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
+        _RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
 
 
 def test_build_insert_mid_block_failure(monkeypatch):
@@ -354,7 +354,7 @@ def test_build_insert_mid_block_failure(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     ctx = _uint64_ctx([(13,), (79,)], block_size=1)
 
-    chunks = list(RustNativeTransform(strict=False).build_insert(ctx))
+    chunks = list(_RustNativeTransform(strict=False).build_insert(ctx))
 
     assert chunks == [b"rust_block", b"INTERNAL EXCEPTION WHILE SERIALIZING"]
     # Binding ValueErrors surface as DataError with the binding's message.
@@ -374,7 +374,7 @@ def test_build_insert_global_write_format_strict_raises(monkeypatch, clean_forma
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     set_write_format("IPv4", "string")
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
+        _RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
 
 
 def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, clean_formats):
@@ -390,7 +390,7 @@ def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, cle
     rust_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
     python_ctx = _uint64_ctx([(13,), (79,)], block_size=1)
 
-    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(rust_ctx))
+    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(rust_ctx))
     python_out = b"".join(NativeTransform.build_insert(python_ctx))
     assert rust_out == python_out
 
@@ -416,7 +416,7 @@ def test_build_insert_legacy_json_strict_raises(monkeypatch, clean_type_cache, t
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
     with pytest.raises(NotSupportedError, match="legacy JSON serialization"):
-        RustNativeTransform(strict=True).build_insert(_json_ctx([], type_name))
+        _RustNativeTransform(strict=True).build_insert(_json_ctx([], type_name))
 
 
 def test_build_insert_legacy_json_non_strict_falls_back(monkeypatch):
@@ -428,7 +428,7 @@ def test_build_insert_legacy_json_non_strict_falls_back(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
     rows = [({"id": 13},), ({"name": "user_1"},)]
-    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_json_ctx(rows)))
+    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(_json_ctx(rows)))
     python_out = b"".join(NativeTransform.build_insert(_json_ctx(rows)))
     assert rust_out == python_out
 
@@ -447,7 +447,7 @@ def test_build_insert_modern_json_uses_rust(monkeypatch, strict):
     monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 1)
     rows = [({"id": 13},), ({"name": "user_1"},)]
 
-    chunks = list(RustNativeTransform(strict=strict).build_insert(_json_ctx(rows)))
+    chunks = list(_RustNativeTransform(strict=strict).build_insert(_json_ctx(rows)))
 
     assert chunks == [b"rust_block"]
     assert calls == [0, 2]  # probe then one block
@@ -470,12 +470,12 @@ def test_build_insert_legacy_json_flag_qbit(monkeypatch, type_name):
     value = vector if type_name.startswith("QBit") else [vector]
     rows = [(value,), (value,)]
 
-    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_qbit_ctx(rows, type_name)))
+    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(_qbit_ctx(rows, type_name)))
     python_out = b"".join(NativeTransform.build_insert(_qbit_ctx(rows, type_name)))
     assert rust_out == python_out
 
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).build_insert(_qbit_ctx(rows, type_name))
+        _RustNativeTransform(strict=True).build_insert(_qbit_ctx(rows, type_name))
 
 
 _USER_FORMATS = [
@@ -493,7 +493,7 @@ def test_build_insert_user_format_strict_raises(monkeypatch, fmt):
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)], **fmt))
+        _RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)], **fmt))
 
 
 @pytest.mark.parametrize("fmt", _USER_FORMATS)
@@ -504,7 +504,7 @@ def test_build_insert_user_format_non_strict_falls_back(monkeypatch, fmt):
             raise AssertionError("encoder must not run when a user format is set")
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
-    rust_out = b"".join(RustNativeTransform(strict=False).build_insert(_uint64_ctx([(13,), (79,)], block_size=1, **fmt)))
+    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(_uint64_ctx([(13,), (79,)], block_size=1, **fmt)))
     python_out = b"".join(NativeTransform.build_insert(_uint64_ctx([(13,), (79,)], block_size=1, **fmt)))
     assert rust_out == python_out
 
@@ -523,7 +523,7 @@ def test_build_insert_datetime_dataframe_routes_rust(monkeypatch):
     df = pd.DataFrame({"ts": pd.to_datetime(["2020-01-01 00:00:13", "2020-01-01 00:01:19"])})
     ctx = InsertContext("fake_table", ["ts"], [get_from_name("DateTime")], df)
 
-    chunks = list(RustNativeTransform(strict=True).build_insert(ctx))
+    chunks = list(_RustNativeTransform(strict=True).build_insert(ctx))
 
     # _convert_pandas injects the "int" hint into column_formats, but the compiled dicts stay empty,
     # so rust_strict still serves the insert instead of raising.
@@ -545,7 +545,7 @@ def test_build_insert_success(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     ctx = _uint64_ctx([(13,), (79,)])
 
-    chunks = list(RustNativeTransform(strict=False).build_insert(ctx))
+    chunks = list(_RustNativeTransform(strict=False).build_insert(ctx))
 
     assert calls[0][3] == 0  # probe carries row_count 0
     assert chunks == [b"rust_block"]
@@ -637,7 +637,7 @@ def test_decode_feed_error_disambiguation(monkeypatch, error, exception_tag, chu
     monkeypatch.setitem(sys.modules, "_ch_core", core)
     src = FakeSource([chunk], exception_tag=exception_tag)
     with pytest.raises(expected) as excinfo:
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     if expected is DataError:
         assert str(excinfo.value) == str(error)
     assert src.closed is True
@@ -648,7 +648,7 @@ def test_decode_feed_not_implemented_maps_to_not_supported(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", core)
     src = FakeSource([b"random block bytes"])
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
 
@@ -657,7 +657,7 @@ def test_decode_later_block_unsupported_closes_source(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=NotImplementedError("python object exit"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
     with pytest.raises(NotSupportedError), result.column_block_stream as stream:
         list(stream)
     assert src.closed is True
@@ -668,7 +668,7 @@ def test_decode_early_abandonment_closes_source(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], columns=[[79]])
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
     with result.column_block_stream as stream:
         for _ in stream:
             break
@@ -681,7 +681,7 @@ def test_decode_buffered_unsupported_raises(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
 
@@ -691,7 +691,7 @@ def test_decode_buffered_malformed_fill_raises_data_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
     with pytest.raises(DataError, match="Malformed payload: bad cell"):
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
 
 
@@ -700,7 +700,7 @@ def test_decode_streaming_malformed_fill_raises_data_error(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], error=ValueError("Malformed payload: bad cell"))
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx(streaming=True))
     with pytest.raises(DataError, match="Malformed payload: bad cell"), result.column_block_stream as stream:
         list(stream)
     assert src.closed is True
@@ -711,7 +711,7 @@ def test_decode_buffered_result_is_materialized(monkeypatch):
     batch1 = _FakeBatch(["a"], ["Int32"], columns=[[79]])
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert src.closed is True
     assert result.result_rows == [(13,), (79,)]
     assert result.result_columns == [[13, 79]]
@@ -724,7 +724,7 @@ def test_decode_buffered_column_oriented(monkeypatch):
     batch1 = _FakeBatch(["a", "b"], ["Int32", "Int32"], columns=[[79], [2]])
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch0, batch1]))
     src = FakeSource([b"chunk"])
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx(column_oriented=True))
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx(column_oriented=True))
     assert result.result_columns == [[13, 79], [1, 2]]
     assert result.result_rows == [(13, 1), (79, 2)]
     # Repeated access in either order stays stable across the multi-batch buffers.
@@ -740,7 +740,7 @@ def test_decode_buffered_result_columns_uses_direct_column_exit(monkeypatch):
     batch = ColumnsOnlyBatch(["a", "b"], ["Int32", "Int32"], columns=[[13, 79], [1, 2]])
     monkeypatch.setitem(sys.modules, "_ch_core", _fake_decoder_core(feed_batches=[batch]))
 
-    result = RustNativeTransform(strict=True).parse_response(FakeSource([b"chunk"]), eligible_ctx())
+    result = _RustNativeTransform(strict=True).parse_response(FakeSource([b"chunk"]), eligible_ctx())
 
     assert result.result_columns == [[13, 79], [1, 2]]
 
@@ -758,7 +758,7 @@ def test_decode_basic(ch_core):
     chunks = [data[i : i + 8] for i in range(0, len(data), 8)]
     src = FakeSource(chunks)
 
-    result = RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
 
     assert result.result_rows == [(13, "user_1"), (79, "user_2")]
     assert result.column_names == ("a", "b")
@@ -766,20 +766,20 @@ def test_decode_basic(ch_core):
 
 
 def test_decode_empty_stream(ch_core):
-    result = RustNativeTransform(strict=True).parse_response(FakeSource([]), eligible_ctx())
+    result = _RustNativeTransform(strict=True).parse_response(FakeSource([]), eligible_ctx())
     assert result.result_rows == []
 
 
 def test_decode_truncated(ch_core):
     data = ch_core.encode_native_block(["a", "b"], ["Int32", "String"], [[13, 79], ["user_1", "user_2"]], 2, None)
     with pytest.raises(StreamFailureError):
-        RustNativeTransform(strict=True).parse_response(FakeSource([data[:-4]]), eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(FakeSource([data[:-4]]), eligible_ctx())
 
 
 def test_decode_tagged_exception(ch_core):
     src = FakeSource([TAGGED_EXCEPTION_BODY], exception_tag=TAGGED_EXCEPTION_TAG)
     with pytest.raises(StreamFailureError) as excinfo:
-        RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     assert str(excinfo.value) == "Big bam occurred right while reading the data"
 
 
@@ -804,14 +804,14 @@ def test_decode_malformed_shared_cell_raises_data_error(ch_core):
     # Int32 descriptor with a truncated payload fails the fill, not the prefix parse.
     corrupt = _dynamic_shared_block([b"\x09\x01\x02"])
     with pytest.raises(DataError, match="SharedVariant"):
-        RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
 
 
 def test_decode_malformed_shared_cell_streaming_raises_data_error(ch_core):
     # The corrupt cell is in the second block; the first converts eagerly in parse_response.
     valid = _dynamic_shared_block([b"\x15\x01a"])
     corrupt = _dynamic_shared_block([b"\x09\x01\x02"])
-    result = RustNativeTransform(strict=True).parse_response(FakeSource([valid + corrupt]), eligible_ctx(streaming=True))
+    result = _RustNativeTransform(strict=True).parse_response(FakeSource([valid + corrupt]), eligible_ctx(streaming=True))
     with pytest.raises(DataError, match="SharedVariant"), result.column_block_stream as stream:
         list(stream)
 
@@ -821,10 +821,10 @@ def test_decode_malformed_prefix_raises_data_error(ch_core):
     body = struct.pack("<Q", 2) + b"\x00" + struct.pack("<Q", 7) + b"\x00"
     corrupt = b"\x01\x01" + _varint_str("v") + _varint_str("Dynamic") + body
     with pytest.raises(DataError, match="Invalid Dynamic layout"):
-        RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(FakeSource([corrupt]), eligible_ctx())
 
 
 def test_decode_unsupported_type_raises_not_supported(ch_core):
     block = b"\x01\x01" + _varint_str("v") + _varint_str("AggregateFunction(avg, UInt64)") + b"\x00" * 8
     with pytest.raises(NotSupportedError):
-        RustNativeTransform(strict=True).parse_response(FakeSource([block]), eligible_ctx())
+        _RustNativeTransform(strict=True).parse_response(FakeSource([block]), eligible_ctx())

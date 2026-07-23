@@ -127,25 +127,25 @@ class Client(ABC):
 
     compression: str | None = None
     write_compression: str | None = None
-    protocol_version = 0
+    protocol_version: int = 0
     # User-supplied initial ClickHouse settings, set by subclasses before
     # initialization so generated setting defaults never overwrite them
     _initial_settings: dict[str, Any] | None = None
     valid_transport_settings: set[str] = set()
     optional_transport_settings: set[str] = set()
-    database = None
-    max_error_message = 0
+    database: str | None = None
+    max_error_message: int = 0
     _tz_source: TzSource = "auto"
     _apply_server_tz = False
     tz_mode: TzMode = "naive_utc"
-    show_clickhouse_errors = True
+    show_clickhouse_errors: bool = True
 
     @property
     def tz_source(self) -> TzSource:
         return self._tz_source
 
     @tz_source.setter
-    def tz_source(self, value: TzSource):
+    def tz_source(self, value: TzSource) -> None:
         if value not in _VALID_TZ_SOURCES:
             raise ProgrammingError(f'tz_source must be "auto", "server", or "local", got "{value}"')
         self._tz_source = value

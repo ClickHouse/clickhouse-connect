@@ -13,7 +13,7 @@ from clickhouse_connect.driver.types import ByteSource
 
 _EMPTY_CTX = QueryContext()
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class Transform(Protocol):

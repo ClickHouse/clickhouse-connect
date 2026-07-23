@@ -230,7 +230,7 @@ class TestHttpClientInsert:
         client._validate_settings = Mock(return_value={})
         client._backend = FakeBackend()
 
-        with patch("clickhouse_connect.driver._backendclient.SyncStreamingInsertSource", TrackingSource):
+        with patch("clickhouse_connect.driver._backendclient._SyncStreamingInsertSource", TrackingSource):
             client.data_insert(context)
 
         assert init_events == [(1, 0, 0), (2, 0, 0)]

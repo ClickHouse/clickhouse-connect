@@ -9,7 +9,7 @@ from typing import Any
 from clickhouse_connect._version import version as _version_string
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _NATIVE_CODEC_OPTIONS = ("python", "rust", "rust_strict")
 

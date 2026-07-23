@@ -23,7 +23,7 @@ from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.exceptions import NotSupportedError
 from clickhouse_connect.driver.query import QueryContext
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 BlockConverter = Callable[[Any, Any, int], Any]
 
@@ -501,12 +501,12 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     return _Converter(False, _make_object_convert(ch_type, context))
 
 
-def build_converters(column_types: Sequence[ClickHouseType], context: QueryContext) -> list[_Converter]:
+def _build_converters(column_types: Sequence[ClickHouseType], context: QueryContext) -> list[_Converter]:
     """Resolve one converter per column from the driver's own ClickHouseType metadata."""
     return [_build_converter(ch_type, context) for ch_type in column_types]
 
 
-def convert_block(col_batch: Any, converters: Sequence[_Converter]) -> list:
+def _convert_block(col_batch: Any, converters: Sequence[_Converter]) -> list:
     """Convert one decoded ColBatch into a list of numpy arrays, pandas arrays, or object lists."""
     arrow_table = None
     if any(conv.needs_arrow for conv in converters):

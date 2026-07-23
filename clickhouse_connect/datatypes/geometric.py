@@ -97,7 +97,7 @@ class Geometry(ClickHouseType):
     def data_size(self, sample: Collection[Any]) -> int:
         return GEOMETRY_DATA_TYPE.data_size(sample)
 
-    def write_column_prefix(self, dest: bytearray):
+    def write_column_prefix(self, dest: bytearray) -> None:
         return GEOMETRY_DATA_TYPE.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):

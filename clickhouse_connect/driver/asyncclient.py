@@ -59,7 +59,7 @@ from clickhouse_connect.driver.query import (
     TzSource,
     arrow_buffer,
 )
-from clickhouse_connect.driver.rustcodec import NativeCodec, make_native_transform
+from clickhouse_connect.driver.rustcodec import NativeCodec, _make_native_transform
 from clickhouse_connect.driver.streaming import (
     QueuedStreamSource,
     ReadAheadSource,
@@ -245,7 +245,7 @@ class AsyncClient(Client):
             connector_kwargs["enable_cleanup_closed"] = True
 
         self._write_format = "Native"
-        self._transform: Transform = make_native_transform(native_codec)
+        self._transform: Transform = _make_native_transform(native_codec)
         self._client_settings: dict[str, str] = {}
         self._initialized = False
         self._reported_libs: set[str] = set()

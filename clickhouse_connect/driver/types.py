@@ -7,7 +7,7 @@ Matrix = Sequence[Sequence[Any]]
 
 class Closable(ABC):
     @abstractmethod
-    def close(self):
+    def close(self) -> None:
         pass
 
 
@@ -33,19 +33,19 @@ class ByteSource(Closable):
         pass
 
     @abstractmethod
-    def read_str_col(self, num_rows: int, encoding: str | None, nullable: bool = False, null_obj: Any = None):
+    def read_str_col(self, num_rows: int, encoding: str | None, nullable: bool = False, null_obj: Any = None) -> Any:
         pass
 
     @abstractmethod
-    def read_bytes_col(self, sz: int, num_rows: int):
+    def read_bytes_col(self, sz: int, num_rows: int) -> Any:
         pass
 
     @abstractmethod
-    def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str):
+    def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str) -> Any:
         pass
 
     @abstractmethod
-    def read_array(self, array_type: str, num_rows: int):
+    def read_array(self, array_type: str, num_rows: int) -> Any:
         pass
 
     @abstractmethod

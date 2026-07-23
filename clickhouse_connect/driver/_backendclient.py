@@ -22,7 +22,7 @@ from clickhouse_connect.driver.exceptions import Error
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
-from clickhouse_connect.driver.streaming import SyncStreamingInsertSource
+from clickhouse_connect.driver.streaming import _SyncStreamingInsertSource
 from clickhouse_connect.driver.summary import QuerySummary
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ class SyncBackendClient(Client):
         threaded = self._transform.threaded_insert
         active_source = None
         if threaded:
-            active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10)
+            active_source = _SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10)
             active_source.start_producer()
             block_gen = active_source.gen
         else:
@@ -92,7 +92,7 @@ class SyncBackendClient(Client):
             context.current_row = 0
             context.current_block = 0
             if threaded:
-                active_source = SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10)
+                active_source = _SyncStreamingInsertSource(transform=self._transform, context=context, maxsize=10)
                 active_source.start_producer()
                 return active_source.gen
             return self._transform.build_insert(context)
