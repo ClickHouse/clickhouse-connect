@@ -169,7 +169,7 @@ where
         let item = if validity.is_some_and(|bitmap| !bitmap.is_valid(row)) {
             none_owned_ptr()
         } else {
-            ptr_to_result(py, ffi::_PyDict_NewPresized(estimated_keys))?
+            ptr_to_result(py, dict_new_presized(estimated_keys))?
         };
         containers.push(item);
         sink(row, item);
@@ -361,7 +361,7 @@ pub(super) unsafe fn json_value_owned_ptr<'py>(
                 Some(slot) => *slot.get_or_insert_with(|| json_estimated_keys(structured)),
                 None => json_estimated_keys(structured),
             };
-            let root = ptr_to_result(py, ffi::_PyDict_NewPresized(estimated))?;
+            let root = ptr_to_result(py, dict_new_presized(estimated))?;
             // Own the dict until the row is complete, so every error path drops
             // partially inserted values.
             let root = Bound::from_owned_ptr(py, root).downcast_into_unchecked::<PyDict>();

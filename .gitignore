@@ -37,3 +37,5 @@ test.env
 rust/target/
 *.so
 *.dylib
+/.cargo/config.toml
+.claude

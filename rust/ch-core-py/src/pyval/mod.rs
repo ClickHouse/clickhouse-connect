@@ -48,6 +48,25 @@ use scalar::{
 use temporal::{dt64_secs_micros, make_date, make_datetime, make_time64};
 use variant_dynamic::{dynamic_value_owned_ptr, fill_dynamic, fill_variant, shared_cell_owned_ptr};
 
+/// Allocate a dict presized for `len` entries via `_PyDict_NewPresized` where
+/// pyo3-ffi declares it; otherwise a plain `PyDict_New`, costing only the
+/// presize.
+///
+/// # Safety
+///
+/// Requires the GIL. Returns an owned reference, or null with an error set.
+unsafe fn dict_new_presized(len: ffi::Py_ssize_t) -> *mut ffi::PyObject {
+    #[cfg(all(not(Py_LIMITED_API), not(PyPy)))]
+    {
+        ffi::_PyDict_NewPresized(len)
+    }
+    #[cfg(any(Py_LIMITED_API, PyPy))]
+    {
+        let _ = len;
+        ffi::PyDict_New()
+    }
+}
+
 /// Type-erased sink. The Tuple/Map fills recurse through `fill_column` with
 /// fresh closure types per nesting level; erasing at the container boundary
 /// keeps monomorphization finite while top-level fills stay static.

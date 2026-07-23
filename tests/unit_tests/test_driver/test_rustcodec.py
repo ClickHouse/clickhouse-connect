@@ -41,7 +41,10 @@ class FakeSource:
 
 
 class _PresentCore:
-    """Stand-in for the compiled module; only its presence matters."""
+    """Stand-in for the compiled module with a compatible binding API."""
+
+    __version__ = "0.1.0"
+    BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
 
 
 def eligible_ctx(**kwargs) -> QueryContext:
@@ -133,11 +136,64 @@ def test_resolve_native_codec_invalid_kwarg():
 # --- Availability ------------------------------------------------------------
 
 
+@pytest.fixture(name="reset_version_log")
+def reset_version_log_fixture(monkeypatch):
+    monkeypatch.setattr(rustcodec, "_versions_logged", False)
+
+
 @pytest.mark.parametrize("codec", ["rust", "rust_strict"])
 def test_resolve_rust_raises_when_module_missing(monkeypatch, codec):
     monkeypatch.setitem(sys.modules, "_ch_core", None)
-    with pytest.raises(NotSupportedError, match=r"compiled _ch_core extension module"):
+    with pytest.raises(NotSupportedError) as excinfo:
         resolve_native_codec(codec)
+    message = str(excinfo.value)
+    assert "compiled _ch_core extension module" in message
+    assert 'pip install "clickhouse-connect[rust]"' in message
+
+
+class _StaleCore:
+    __version__ = "0.0.9"
+    BINDING_API_VERSION = 0
+
+
+class _NoApiVersionCore:
+    __version__ = "0.0.5"
+
+
+@pytest.mark.parametrize("core", [_StaleCore, _NoApiVersionCore], ids=["api_zero", "api_missing"])
+@pytest.mark.parametrize("codec", ["rust", "rust_strict"])
+def test_resolve_rust_raises_when_binding_api_too_old(monkeypatch, codec, core):
+    monkeypatch.setitem(sys.modules, "_ch_core", core)
+    with pytest.raises(NotSupportedError) as excinfo:
+        resolve_native_codec(codec)
+    message = str(excinfo.value)
+    assert f"clickhouse-connect-core version {core.__version__}" in message
+    assert "pip install --upgrade clickhouse-connect-core" in message
+
+
+@pytest.mark.parametrize("api_version", [1, 2])
+def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_log, api_version):
+    class _Core:
+        __version__ = "0.1.0"
+        BINDING_API_VERSION = api_version
+
+    monkeypatch.setitem(sys.modules, "_ch_core", _Core)
+    assert resolve_native_codec("rust") == "rust"
+    assert resolve_native_codec("rust_strict") == "rust_strict"
+
+
+def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log):
+    monkeypatch.setitem(sys.modules, "_ch_core", _PresentCore)
+    with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
+        resolve_native_codec("rust")
+        resolve_native_codec("rust_strict")
+    records = [r for r in caplog.records if "clickhouse-connect-core" in r.getMessage()]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "native_codec=rust" in message
+    assert _PresentCore.__version__ in message
+    assert f"binding API {_PresentCore.BINDING_API_VERSION}" in message
+    assert common.version() in message
 
 
 @pytest.mark.parametrize(("codec", "strict"), [("rust", False), ("rust_strict", True)])

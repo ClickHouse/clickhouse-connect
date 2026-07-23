@@ -104,49 +104,55 @@ the core's zero-copy FixedSizeList representation.
 
 ## Prerequisite: the core crate
 
-The binding depends on `ch-core-rs`, a separate repository that is private
-for now. Ask internally for access. Two ways to consume it, per the core's
-own README:
-
-Local path, what this branch declares. Clone the core as a **sibling of
-this repository's checkout**:
-
-```
-parent/
-  clickhouse-connect/   this repo
-  ch-core-rs/           the core
-```
-
-matching the declared dependency in `ch-core-py/Cargo.toml`:
+The binding depends on `ch-core-rs`, pinned by release tag in
+`ch-core-py/Cargo.toml`:
 
 ```toml
-ch-core-rs = { path = "../../../ch-core-rs" }
+ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.1.0" }
 ```
 
-Or switch the dependency to a pinned git revision if you have repo access
-over ssh:
+Release and CI builds resolve the tag directly, so the repository must be
+reachable from the build environment. See `DISTRIBUTION_PLAN.md` at the repo
+root for how the binding ships as the `clickhouse-connect-core` wheel.
+
+To develop against a local core checkout, add an untracked
+`.cargo/config.toml` at this repository's root that patches the git source to
+your working tree:
 
 ```toml
-ch-core-rs = { git = "ssh://git@github.com/ClickHouse/ch-core-rs.git", rev = "<commit>" }
+[patch."https://github.com/ClickHouse/ch-core-rs"]
+ch-core-rs = { path = "/path/to/ch-core-rs" }
 ```
 
-with a local `[patch]` in `.cargo/config.toml` to override back to a local
-checkout during development. Without one of these, `cargo` and `maturin`
-builds of `rust/ch-core-py` fail to resolve the dependency. Proper
-packaging, sdist-safe and registry-published, is future work and out of
-POC scope.
+With the patch in place, builds compile the core working tree as-is, which is
+the intended inner loop for core changes. Remove or ignore the patch to build
+what the tag pins.
+
+The committed `Cargo.lock` must record the git source and revision for
+`ch-core-rs`. Any cargo resolution while the patch is active rewrites that
+entry to the path form in your working tree. Discard those lock changes and
+never commit them. To regenerate the lock legitimately, for example after a
+repin, move the patch aside first:
+
+```sh
+mv .cargo/config.toml .cargo/config.toml.disabled
+cd rust && CARGO_NET_GIT_FETCH_WITH_CLI=true cargo fetch
+mv ../.cargo/config.toml.disabled ../.cargo/config.toml
+```
 
 ## Build and test
 
 ```sh
 pip install maturin
-cd rust/ch-core-py
-maturin develop --release
-cd ../..
+maturin develop --release -m rust/ch-core-py/Cargo.toml
 python -m pytest rust/ch-core-py/tests/
 ```
 
 Test extras: `pytest`, and `pyarrow` for the Arrow round-trip tests.
+
+If the shell exports `VIRTUAL_ENV` pointing at a different environment than
+the one on `PATH`, maturin installs into the exported one. Set
+`VIRTUAL_ENV=/path/to/repo/.venv` explicitly when in doubt.
 
 ## What is here
 

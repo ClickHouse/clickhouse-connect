@@ -33,7 +33,7 @@ pub(super) unsafe fn fill_tuple<'py>(
         let ptr = if validity.is_some_and(|bm| !bm.is_valid(i)) {
             none_owned_ptr()
         } else if names.is_some() {
-            ptr_to_result(py, ffi::_PyDict_NewPresized(num_fields))?
+            ptr_to_result(py, dict_new_presized(num_fields))?
         } else {
             ptr_to_result(py, ffi::PyTuple_New(num_fields))?
         };
@@ -140,11 +140,11 @@ pub(super) unsafe fn fill_map<'py>(
 
     for (i, pair) in offsets.windows(2).enumerate() {
         let (start, end) = (pair[0] as usize, pair[1] as usize);
-        let dict_ptr = ffi::_PyDict_NewPresized((end - start) as ffi::Py_ssize_t);
+        let dict_ptr = dict_new_presized((end - start) as ffi::Py_ssize_t);
         if dict_ptr.is_null() {
             return Err(PyErr::fetch(py));
         }
-        // Safety: dict_ptr came from _PyDict_NewPresized; binding it drops the
+        // Safety: dict_ptr is an owned dict; binding it drops the
         // partially-filled dict on the error path.
         let dict = Bound::from_owned_ptr(py, dict_ptr);
         for slot in start..end {

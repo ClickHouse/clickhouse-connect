@@ -1,0 +1,90 @@
+name: 'Rust Binding CI'
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'rust/**'
+      - 'clickhouse_connect/driver/rustcodec.py'
+      - 'clickhouse_connect/driver/rustnumpy.py'
+      - 'tests/integration_tests/test_rust_codec.py'
+      - '.github/workflows/binding_ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'rust/**'
+      - 'clickhouse_connect/driver/rustcodec.py'
+      - 'clickhouse_connect/driver/rustnumpy.py'
+      - 'tests/integration_tests/test_rust_codec.py'
+      - '.github/workflows/binding_ci.yml'
+  workflow_dispatch:
+
+jobs:
+  rust-checks:
+    runs-on: ubuntu-latest
+    name: Cargo fmt + clippy
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Format check
+        working-directory: rust
+        run: cargo fmt --all -- --check
+      - name: Clippy (deny warnings)
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+
+  binding-tests:
+    runs-on: ubuntu-latest
+    name: Build binding and run codec tests
+    needs: rust-checks
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Start ClickHouse (latest) in Docker
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
+          COMPOSE_PROJECT_NAME: clickhouse-connect-binding-ci
+        run: docker compose -f docker-compose.yml up -d --wait clickhouse
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/test_requirements.txt
+          pip install maturin
+      - name: Build cython extensions
+        run: python setup.py build_ext --inplace
+      - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
+        run: python setup.py develop
+      - name: Build and install the clickhouse-connect-core wheel
+        run: |
+          maturin build --release -m rust/ch-core-py/Cargo.toml -o core-wheelhouse
+          pip install core-wheelhouse/*.whl
+      - name: Extension smoke check
+        run: python -c "import _ch_core; print(_ch_core.__version__, _ch_core.BINDING_API_VERSION)"
+      - name: Run binding tests
+        run: pytest rust/ch-core-py/tests -n 4
+      - name: Run unit tests
+        run: pytest tests/unit_tests -n 4
+      - name: Run rust codec integration tests
+        env:
+          CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
+        run: pytest tests/integration_tests/test_rust_codec.py -n 4
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-binding-ci
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans

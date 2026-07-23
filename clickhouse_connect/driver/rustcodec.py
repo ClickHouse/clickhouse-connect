@@ -28,6 +28,10 @@ NativeCodec = Literal["python", "rust", "rust_strict"]
 
 _VALID_CODECS = ("python", "rust", "rust_strict")
 
+REQUIRED_BINDING_API_VERSION = 1
+
+_versions_logged = False
+
 
 def _ch_core_module() -> Any:
     """Return the imported _ch_core module, or None if it is not available."""
@@ -38,8 +42,22 @@ def _ch_core_module() -> Any:
     return _ch_core
 
 
+def _log_versions_once(resolved: str, core: Any) -> None:
+    global _versions_logged
+    if _versions_logged:
+        return
+    _versions_logged = True
+    logger.info(
+        "native_codec=%s using clickhouse-connect-core %s (binding API %s), clickhouse-connect %s",
+        resolved,
+        getattr(core, "__version__", "unknown"),
+        getattr(core, "BINDING_API_VERSION", 0),
+        common.version(),
+    )
+
+
 def resolve_native_codec(native_codec: str | None) -> str:
-    """Resolve the effective codec name and verify the compiled _ch_core module is available."""
+    """Resolve the effective codec name and verify a compatible compiled _ch_core module is available."""
     if native_codec is None:
         resolved = common.get_setting("native_codec")
     else:
@@ -48,13 +66,22 @@ def resolve_native_codec(native_codec: str | None) -> str:
         raise ProgrammingError(f"Invalid native_codec {native_codec!r}; expected one of {', '.join(_VALID_CODECS)}")
     if resolved == "python":
         return resolved
-    if _ch_core_module() is not None:
-        return resolved
-    raise NotSupportedError(
-        f'native_codec="{resolved}" requires the compiled _ch_core extension module, which is '
-        "distributed separately and is not installed in this environment. "
-        'Use native_codec="python" to run without it.'
-    )
+    core = _ch_core_module()
+    if core is None:
+        raise NotSupportedError(
+            f'native_codec="{resolved}" requires the compiled _ch_core extension module, which ships separately as '
+            "the clickhouse-connect-core wheel and is not installed in this environment. Install it with "
+            'pip install "clickhouse-connect[rust]", or use native_codec="python" to run without it.'
+        )
+    api_version = getattr(core, "BINDING_API_VERSION", 0)
+    if api_version < REQUIRED_BINDING_API_VERSION:
+        raise NotSupportedError(
+            f"The installed clickhouse-connect-core version {getattr(core, '__version__', 'unknown')} provides "
+            f"binding API {api_version}, but this version of clickhouse-connect requires binding API "
+            f"{REQUIRED_BINDING_API_VERSION} or newer. Upgrade it with pip install --upgrade clickhouse-connect-core."
+        )
+    _log_versions_once(resolved, core)
+    return resolved
 
 
 def make_native_transform(native_codec: NativeCodec | None = None) -> Transform:

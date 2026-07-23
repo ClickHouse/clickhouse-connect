@@ -3,9 +3,23 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "ch-core-py"
-version = "0.1.0"
+name = "clickhouse-connect-core"
+dynamic = ["version"]
+description = "Compiled Rust native-format codec for clickhouse-connect"
+license = "Apache-2.0"
 requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://github.com/ClickHouse/clickhouse-connect"
+Repository = "https://github.com/ClickHouse/clickhouse-connect"
 
 [tool.maturin]
 module-name = "_ch_core"

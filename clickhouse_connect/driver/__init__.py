@@ -270,7 +270,9 @@ def create_client(
       to Python. 'rust_strict' raises instead of routing. It covers query, query_np, query_df, their block and row
       stream variants, and inserts including insert_df. Falls back to the common setting 'native_codec', which can be
       seeded by the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable. Does not affect the Arrow methods
-      (query_arrow, query_df_arrow, insert_arrow), raw, JSON, or caller-provided byte streams.
+      (query_arrow, query_df_arrow, insert_arrow), raw, JSON, or caller-provided byte streams. The rust codecs
+      require the separate clickhouse-connect-core wheel, installed via the rust extra:
+      pip install clickhouse-connect[rust]. Ignored for interface="chdb".
     :return: ClickHouse Connect Client instance
     """
     if _is_chdb_target(interface, dsn):
@@ -429,7 +431,9 @@ async def create_async_client(
       to Python. 'rust_strict' raises instead of routing. It covers query, query_np, query_df, their block and row
       stream variants, and inserts including insert_df. Falls back to the common setting 'native_codec', which can be
       seeded by the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable. Does not affect the Arrow methods
-      (query_arrow, query_df_arrow, insert_arrow), raw, JSON, or caller-provided byte streams.
+      (query_arrow, query_df_arrow, insert_arrow), raw, JSON, or caller-provided byte streams. The rust codecs
+      require the separate clickhouse-connect-core wheel, installed via the rust extra:
+      pip install clickhouse-connect[rust].
     :return: ClickHouse Connect AsyncClient instance
     """
     if _is_chdb_target(interface, dsn):

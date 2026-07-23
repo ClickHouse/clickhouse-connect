@@ -83,6 +83,7 @@ def run_setup(try_c: bool = True):
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.9.0"],
             "chdb": ["chdb>=4.1.7"],
+            "rust": ["clickhouse-connect-core>=0.1.0,<0.2"],
         },
         tests_require=["pytest"],
         entry_points={
