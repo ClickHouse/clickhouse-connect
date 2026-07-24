@@ -101,7 +101,8 @@ def clean_formats_fixture():
 # --- Resolution --------------------------------------------------------------
 
 
-def test_resolve_native_codec_kwarg_beats_common_setting(restore_native_codec):
+def test_resolve_native_codec_kwarg_beats_common_setting(monkeypatch, restore_native_codec):
+    monkeypatch.setitem(sys.modules, "_ch_core", _PresentCore)
     common.set_setting("native_codec", "rust")
     assert resolve_native_codec("python") == "python"
     assert resolve_native_codec(None) == "rust"
