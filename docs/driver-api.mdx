@@ -291,6 +291,8 @@ ClickHouse Connect Client `query*` and `command` methods accept an optional `par
 
 ClickHouse supports [server-side binding](/concepts/features/interfaces/client#cli-queries-with-parameters) for query values. The bound value is sent separately from the query as an HTTP parameter. ClickHouse Connect uses this mode when it detects an expression of the form `{<name>:<datatype>}`. Pass the values as a Python dictionary.
 
+Use Python `None` for nullable values. Nested `None` values are supported inside `Array` and `Tuple` parameters, and inside `Map` literals when `dict_parameter_format` is set to `"map"`.
+
 - Server-side binding with Python dictionary, DateTime value, and string value
 
 ```python
