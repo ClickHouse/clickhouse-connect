@@ -23,6 +23,7 @@ from clickhouse_connect.driver._backendclient import SyncBackendClient
 from clickhouse_connect.driver.binding import (
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
+from clickhouse_connect.driver.client import HTTP_RESERVED_SETTING_NAMES, HTTP_RESERVED_SETTING_PREFIXES
 from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httputil import (
@@ -56,6 +57,8 @@ class HttpClient(SyncBackendClient):
         "role",
     }
     optional_transport_settings = {"send_progress_in_http_headers", "http_headers_progress_interval_ms", "enable_http_compression"}
+    reserved_setting_names = set(HTTP_RESERVED_SETTING_NAMES)
+    reserved_setting_prefixes = HTTP_RESERVED_SETTING_PREFIXES
     _owns_pool_manager = False
 
     # R0917: too-many-positional-arguments
