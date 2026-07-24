@@ -55,6 +55,35 @@ def test_bad_strings(param_client: Client, call, table_context: Callable):
             assert "encoded" in str(ex)
 
 
+def test_fixed_string_empty_bytes(param_client: Client, call, table_context: Callable):
+    with table_context(
+        "test_fs_empty_bytes",
+        "key Int32, fs FixedString(6), nfs Nullable(FixedString(6)), afs Array(FixedString(6))",
+    ):
+        empty = b"\x00" * 6
+        data = [
+            [79, b"needle", b"abcdef", [b"needle", b""]],
+            [13, b"", b"", [b"", b"abcdef"]],
+        ]
+        call(param_client.insert, "test_fs_empty_bytes", data)
+        result = call(param_client.query, "SELECT key, fs, nfs, afs FROM test_fs_empty_bytes ORDER BY key").result_set
+        assert result == [
+            (13, empty, empty, [empty, b"abcdef"]),
+            (79, b"needle", b"abcdef", [b"needle", empty]),
+        ]
+        with pytest.raises(DataError, match="does not match column size"):
+            call(param_client.insert, "test_fs_empty_bytes", [[102, b"abc", None, []]])
+        # None into a non-nullable FixedString fails with TypeError from len(None).
+        # Current behavior, not a promised contract.
+        with pytest.raises(TypeError):
+            call(param_client.insert, "test_fs_empty_bytes", [[102, None, b"abcdef", []]])
+
+    with table_context("test_lc_fs_empty_bytes", "key Int32, lc LowCardinality(FixedString(6))"):
+        call(param_client.insert, "test_lc_fs_empty_bytes", [[79, b"needle"], [13, b""]])
+        result = call(param_client.query, "SELECT key, lc FROM test_lc_fs_empty_bytes ORDER BY key").result_set
+        assert result == [(13, b"\x00" * 6), (79, b"needle")]
+
+
 def test_low_card_dictionary_size(param_client: Client, call, table_context: Callable):
     with table_context("test_low_card_dict", "key Int32, lc LowCardinality(String)", settings={"index_granularity": 65536}):
         data = [[x, str(x)] for x in range(30000)]

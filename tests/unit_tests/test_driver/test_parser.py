@@ -1,7 +1,9 @@
+import pytest
+
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import unescape_identifier
-from clickhouse_connect.driver.parser import parse_callable, parse_enum
+from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 from clickhouse_connect.driver.query import remove_sql_comments
 
 
@@ -20,6 +22,41 @@ def test_parse_callable():
 def test_parse_enum():
     assert parse_enum("Enum8('one' = 1)") == (("one",), (1,))
     assert parse_enum("Enum16('**\\'5' = 5, '578' = 7)") == (("**'5", "578"), (5, 7))
+
+
+ESCAPED_ENUM = "Enum8('user\\'1' = 1, 'user_2' = 2)"
+REPEATED_NON_FIRST_ENUM = "Enum16('user_1' = 1, 'user\\'2\\'3' = 2)"
+# Server-emitted enum names escape a backslash as \\ (v26.6.1.1193, DataTypeEnum
+# generateName -> writeQuotedString).
+BACKSLASH_ENUM = "Enum8('a\\\\b' = 1, 'user_2' = 2)"
+TRAILING_BACKSLASH_ENUM = "Enum8('user\\\\' = 1, 'user_2' = 2)"
+
+
+def test_parse_columns_escaped_quote_in_scalar_enum():
+    assert parse_columns(f"({ESCAPED_ENUM}, String)") == (
+        (),
+        (ESCAPED_ENUM, "String"),
+    )
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_name",
+    [
+        (ESCAPED_ENUM, ESCAPED_ENUM),
+        (f"Array({ESCAPED_ENUM})", f"Array({ESCAPED_ENUM})"),
+        (f"Tuple({ESCAPED_ENUM}, UInt32)", f"Tuple({ESCAPED_ENUM}, UInt32)"),
+        (f"Array(Tuple({ESCAPED_ENUM}, UInt32))", f"Array(Tuple({ESCAPED_ENUM}, UInt32))"),
+        (f"Nullable({ESCAPED_ENUM})", f"Nullable({ESCAPED_ENUM})"),
+        (f"Variant({ESCAPED_ENUM}, String)", f"Variant({ESCAPED_ENUM}, String)"),
+        (f"Nested(status {ESCAPED_ENUM}, value UInt32)", f"Nested(status {ESCAPED_ENUM}, value UInt32)"),
+        (f"JSON(status {ESCAPED_ENUM})", f"JSON(`status` {ESCAPED_ENUM})"),
+        (f"Tuple({REPEATED_NON_FIRST_ENUM}, UInt32)", f"Tuple({REPEATED_NON_FIRST_ENUM}, UInt32)"),
+        (BACKSLASH_ENUM, BACKSLASH_ENUM),
+        (f"Tuple({TRAILING_BACKSLASH_ENUM}, UInt32)", f"Tuple({TRAILING_BACKSLASH_ENUM}, UInt32)"),
+    ],
+)
+def test_get_from_name_preserves_escaped_quote_in_enum(type_name, expected_name):
+    assert get_from_name(type_name).name == expected_name
 
 
 def test_unescape_identifier():

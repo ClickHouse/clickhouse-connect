@@ -36,8 +36,9 @@ files = ["clickhouse_connect"]
 python_version = "3.10"
 
 [[tool.mypy.overrides]]
-# Optional dependencies without type stubs and the compiled Cython modules.
+# Dependencies that may be absent from the checking environment or lack type stubs, and the compiled Cython modules.
 module = [
+    "backports.*",
     "brotli.*",
     "chdb.*",
     "lz4.*",

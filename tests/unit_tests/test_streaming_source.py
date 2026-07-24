@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 import lz4.frame
 import pytest
-import zstandard
 
+from clickhouse_connect.driver.compression import _zstd_compress
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.streaming import (
     StreamingInsertSource,
@@ -139,8 +139,7 @@ async def test_streaming_with_deflate_compression():
 async def test_streaming_with_zstd_compression():
     """Test streaming with zstd decompression."""
     original_data = b"zstd test data " * 500
-    compressor = zstandard.ZstdCompressor()
-    compressed = compressor.compress(original_data)
+    compressed = _zstd_compress(original_data)
 
     chunks = [compressed[i : i + 50] for i in range(0, len(compressed), 50)]
 

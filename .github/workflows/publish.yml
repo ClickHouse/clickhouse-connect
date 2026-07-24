@@ -142,7 +142,7 @@ jobs:
           name: build-windows-arm64
           path: ./wheelhouse/*.whl
 
-  publish:
+  assemble_dist:
     needs:
       - build_macos_wheels
       - build_windows_wheels
@@ -152,7 +152,7 @@ jobs:
       - build_aarch64_musllinux_wheels
       - build_aarch64_manylinux_wheels
       - build_aarch64_pypy_wheels
-    name: Publish to PyPI
+    name: Assemble sdist and wheels
     runs-on: ubuntu-latest
     if: ${{ inputs.publish_type != 'build' }}
     steps:
@@ -162,12 +162,10 @@ jobs:
         with:
           python-version: 3.12
       - name: Install Dependencies
-        run: |
-          pip install twine
-          pip install -U setuptools
+        run: pip install -U setuptools
       - name: Build source distribution
         run: |
-          rm -rf dist 
+          rm -rf dist
           python setup.py sdist
       - name: Retrieve wheels
         uses: actions/download-artifact@v8
@@ -179,15 +177,48 @@ jobs:
         run: |
           cp -R wheelhouse/*.whl dist
           ls -R dist
-      - name: Publish (Release)
-        if: ${{ inputs.publish_type == 'release' }}
-        env:
-          TWINE_USERNAME: '__token__'
-          TWINE_PASSWORD:  ${{ secrets.PYPI_TOKEN }}
-        run: twine upload dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+
+  publish_test:
+    needs: assemble_dist
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    if: ${{ inputs.publish_type == 'test' }}
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/clickhouse-connect
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve dist
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
       - name: Publish (Test)
-        if: ${{ inputs.publish_type == 'test' }}
-        env:
-          TWINE_USERNAME: '__token__'
-          TWINE_PASSWORD: ${{ secrets.PYPI_TEST_TOKEN }}
-        run: twine upload --repository testpypi dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish_release:
+    needs: assemble_dist
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    if: ${{ inputs.publish_type == 'release' }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/clickhouse-connect
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve dist
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: Publish (Release)
+        uses: pypa/gh-action-pypi-publish@release/v1
