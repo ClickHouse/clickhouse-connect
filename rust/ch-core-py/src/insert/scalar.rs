@@ -536,11 +536,7 @@ pub(super) fn default_scalar(ch_type: &ChType) -> PyResult<Scalar> {
         ChType::Ipv6 => Ok(Scalar::Bytes(vec![0; 16])),
         ChType::Enum8 { .. } => Ok(Scalar::Enum8(0)),
         ChType::Enum16 { .. } => Ok(Scalar::Enum16(0)),
-        ChType::Decimal {
-            precision,
-            scale: _,
-            ..
-        } => Ok(Scalar::Bytes(vec![0; decimal_width(*precision)?])),
+        ChType::Decimal { precision, .. } => Ok(Scalar::Bytes(vec![0; decimal_width(*precision)?])),
         ChType::Array(_) => Err(PyNotImplementedError::new_err(
             "Array columns are built by build_array_column, not the scalar path",
         )),
