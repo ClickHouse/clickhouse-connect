@@ -31,7 +31,7 @@ The following global settings are currently defined:
 |--------------|---------|---------|-------------|
 | `autogenerate_session_id` | `True` | `True`, `False` | Generate a UUID session ID for each synchronous client unless a session ID is supplied. The async factory overrides this to `False` by default. |
 | `autogenerate_query_id` | `True` | `True`, `False` | Generate a UUID query ID for each request unless one is supplied. |
-| `dict_parameter_format` | `"json"` | `"json"`, `"map"` | Format Python dictionaries used in client-side parameter binding as JSON or ClickHouse map literals. |
+| `dict_parameter_format` | `"json"` | `"json"`, `"map"` | Format Python dictionaries used in parameter binding as JSON or ClickHouse map literals. |
 | `invalid_setting_action` | `"error"` | `"drop"`, `"send"`, `"error"` | Drop, send, or reject a setting that is unrecognized by the server or is readonly. `"error"` raises `ProgrammingError`. |
 | `max_connection_age` | `600` | Any number of seconds | Maximum age for a reused HTTP keep-alive connection. Rotation helps distribute connections across nodes behind a load balancer. |
 | `product_name` | `""` | Any string | Product identifier added to client information. Use a value such as `"my-product/1.0"`. |

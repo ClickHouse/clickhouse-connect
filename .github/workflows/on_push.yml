@@ -137,8 +137,9 @@ jobs:
         clickhouse-version:
           - '25.8' # LTS
           - '26.3' # LTS
-          - '26.4' # Stable
           - '26.5' # Stable
+          - '26.6' # Stable
+          - '26.7' # Stable
         use-c:
           - '1'
         include:

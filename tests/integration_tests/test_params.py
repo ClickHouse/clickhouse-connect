@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from datetime import date, datetime
 
+from clickhouse_connect import common
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.binding import DT64Param
 
@@ -99,3 +100,38 @@ def test_datetime_64_params(param_client: Client, call):
 
     result = call(param_client.query, "SELECT {a1:Array(DateTime64(6))}", parameters={"a1": dt_values}).first_row
     assert result[0] == dt_values
+
+
+def test_null_in_containers(param_client: Client, call):
+    result = call(
+        param_client.query,
+        "SELECT {t:Tuple(String, Nullable(String), Int32)}",
+        parameters={"t": ("user_1", None, 79)},
+    ).first_row
+    assert result[0] == ("user_1", None, 79)
+
+    result = call(
+        param_client.query,
+        "SELECT {a:Array(Nullable(String))}",
+        parameters={"a": ["user_1", None]},
+    ).first_row
+    assert result[0] == ["user_1", None]
+
+    result = call(
+        param_client.query,
+        "SELECT {a:Array(Tuple(String, Nullable(String)))}",
+        parameters={"a": [("user_1", None)]},
+    ).first_row
+    assert result[0] == [("user_1", None)]
+
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        result = call(
+            param_client.query,
+            "SELECT {m:Map(String, Nullable(String))}",
+            parameters={"m": {"user_1": None}},
+        ).first_row
+        assert result[0] == {"user_1": None}
+    finally:
+        common.set_setting("dict_parameter_format", original)

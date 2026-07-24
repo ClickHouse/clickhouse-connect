@@ -288,7 +288,9 @@ def format_bind_value(value: Any, server_tz: tzinfo | None = timezone.utc, top_l
         return format_bind_value(x, server_tz, False)
 
     if value is None:
-        return "\\N"
+        # Top-level NULL bind parameters use the escaped-text sentinel. Nested
+        # container elements are parsed as SQL literals and must use NULL.
+        return "\\N" if top_level else "NULL"
     if isinstance(value, str):
         if top_level:
             # At the top levels, strings must not be surrounded by quotes
