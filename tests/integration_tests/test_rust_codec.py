@@ -1710,7 +1710,7 @@ def test_rust_codec_geo_insert_parity(client_factory, call, client_mode):
 def test_rust_codec_geometry_round_trip_parity(client_factory, call, client_mode):
     probe = client_factory(native_codec="python")
     try:
-        resolved_type = call(probe.command, "SELECT toTypeName(CAST(NULL, 'Geometry'))")
+        resolved_type = call(probe.command, "SELECT toTypeName(defaultValueOfTypeName('Geometry'))")
     except DatabaseError as ex:
         if ex.name != "UNKNOWN_TYPE":
             raise

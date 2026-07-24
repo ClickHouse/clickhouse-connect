@@ -9,7 +9,7 @@ from clickhouse_connect.driver.exceptions import DatabaseError, DataError
 
 def _require_geometry(client: Client, call) -> None:
     try:
-        resolved_type = call(client.command, "SELECT toTypeName(CAST(NULL, 'Geometry'))")
+        resolved_type = call(client.command, "SELECT toTypeName(defaultValueOfTypeName('Geometry'))")
     except DatabaseError as ex:
         if ex.name != "UNKNOWN_TYPE":
             raise

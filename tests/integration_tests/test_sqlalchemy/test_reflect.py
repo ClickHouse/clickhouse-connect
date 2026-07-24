@@ -51,7 +51,7 @@ def test_types_reflection(test_engine: Engine, test_db: str):
 
 def test_geometry_reflection(test_engine: Engine, test_db: str, test_client):
     try:
-        resolved_type = test_client.command("SELECT toTypeName(CAST(NULL, 'Geometry'))")
+        resolved_type = test_client.command("SELECT toTypeName(defaultValueOfTypeName('Geometry'))")
     except DatabaseError as ex:
         if ex.name != "UNKNOWN_TYPE":
             raise
