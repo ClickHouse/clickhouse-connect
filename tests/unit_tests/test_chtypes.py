@@ -1,7 +1,24 @@
 from datetime import timedelta, timezone
 
+import pytest
+
 from clickhouse_connect.datatypes.container import Nested
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
+from clickhouse_connect.driver.query import QueryContext
+
+INTERVAL_TYPES = (
+    "IntervalYear",
+    "IntervalQuarter",
+    "IntervalMonth",
+    "IntervalWeek",
+    "IntervalDay",
+    "IntervalHour",
+    "IntervalMinute",
+    "IntervalSecond",
+    "IntervalMillisecond",
+    "IntervalMicrosecond",
+    "IntervalNanosecond",
+)
 
 
 def test_enum_parse():
@@ -58,3 +75,19 @@ def test_datetime_fixed_offset_negative_timezone():
 def test_datetime64_fixed_offset_timezone():
     dt64_type = gfn("DateTime64(3, 'Fixed/UTC+05:30:00')")
     assert dt64_type.tzinfo == timezone(timedelta(hours=5, minutes=30))
+
+
+def test_intervals_use_signed_i64_storage():
+    for type_name in INTERVAL_TYPES:
+        interval_type = gfn(type_name)
+        assert interval_type.byte_size == 8
+        assert interval_type.np_type == "<i8"
+
+
+def test_nullable_interval_finalizes_to_pandas_int64():
+    pd = pytest.importorskip("pandas")
+    ctx = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+    for type_name in INTERVAL_TYPES:
+        result = gfn(f"Nullable({type_name})")._finalize_column([-13, None, 79], ctx)
+        assert str(result.dtype) == "Int64"
+        assert list(result) == [-13, pd.NA, 79]

@@ -33,7 +33,7 @@ from clickhouse_connect.driver.httputil import (
     get_proxy_manager,
 )
 from clickhouse_connect.driver.query import TzMode, TzSource
-from clickhouse_connect.driver.transform import NativeTransform
+from clickhouse_connect.driver.rustcodec import NativeCodec, _make_native_transform
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ class HttpClient(SyncBackendClient):
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
+        native_codec: NativeCodec | None = None,
     ):
         """
         Create an HTTP ClickHouse Connect client
@@ -153,7 +154,7 @@ class HttpClient(SyncBackendClient):
         if headers:
             client_headers.update(headers)
         self._write_format = "Native"
-        self._transform = NativeTransform()
+        self._transform = _make_native_transform(native_codec)
 
         # There are use cases when the client needs to disable timeouts.
         if connect_timeout is not None:

@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["ch-core-py"]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

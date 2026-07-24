@@ -1,6 +1,6 @@
 import array
 import unittest
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from clickhouse_connect.datatypes.base import TypeDef
-from clickhouse_connect.datatypes.temporal import Time, Time64
+from clickhouse_connect.datatypes.temporal import DateTime64, Time, Time64
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
@@ -205,6 +205,40 @@ class TestTimeDataType(unittest.TestCase):
         self.assertEqual(dest, array.array("i", expected).tobytes())
 
 
+class TestDateTime64DataType(unittest.TestCase):
+    def setUp(self):
+        self.dt64_type = DateTime64(TypeDef(values=(3,)))
+        self.insert_ctx = SimpleNamespace(column_name="test_datetime64_col")
+
+    def test_write_pre_epoch_fractional_datetime_ticks(self):
+        column = [
+            datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=timezone.utc),
+            datetime(1969, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+            datetime(1970, 1, 1, 0, 0, 0, 999000, tzinfo=timezone.utc),
+        ]
+        expected_ticks = [-500, -1, 999]
+        dest = bytearray()
+
+        with patch.object(self.dt64_type, "write_format", return_value="native"):
+            self.dt64_type._write_column_binary(column, dest, self.insert_ctx)
+
+        self.assertEqual(dest, array.array("q", expected_ticks).tobytes())
+
+    def test_write_pre_epoch_fractional_string_ticks(self):
+        column = [
+            "1969-12-31T23:59:59.500000+00:00",
+            "1969-12-31T23:59:59.999999+00:00",
+            "1970-01-01T00:00:00.999000+00:00",
+        ]
+        expected_ticks = [-500, -1, 999]
+        dest = bytearray()
+
+        with patch.object(self.dt64_type, "write_format", return_value="native"):
+            self.dt64_type._write_column_binary(column, dest, self.insert_ctx)
+
+        self.assertEqual(dest, array.array("q", expected_ticks).tobytes())
+
+
 class TestTime64DataType(unittest.TestCase):
     """Tests for the Time64 type."""
 
@@ -270,9 +304,24 @@ class TestTime64DataType(unittest.TestCase):
         t6 = self.make(6)
         td_neg = -timedelta(seconds=2)
         self.assertEqual(t6._timedelta_to_ticks(td_neg), -2_000_000)
+        self.assertEqual(t6._timedelta_to_ticks(timedelta(seconds=-5, microseconds=-500_000)), -5_500_000)
+        self.assertEqual(self.make(3)._timedelta_to_ticks(timedelta(microseconds=-1)), 0)
+        self.assertEqual(t6._timedelta_to_ticks(timedelta(microseconds=-1)), -1)
+        self.assertEqual(self.make(9)._timedelta_to_ticks(timedelta(microseconds=-1)), -1_000)
         td_big = timedelta(hours=1000)
         with self.assertRaises(ValueError):
             t6._timedelta_to_ticks(td_big)
+
+    def test_numpy_timedelta_rescales_to_ticks(self):
+        self.assertEqual(self.make(3)._timedelta_to_ticks(np.timedelta64(-1, "ns")), 0)
+        self.assertEqual(self.make(6)._timedelta_to_ticks(np.timedelta64(-1, "ns")), 0)
+        self.assertEqual(self.make(9)._timedelta_to_ticks(np.timedelta64(-1, "ns")), -1)
+        self.assertEqual(self.make(9)._timedelta_to_ticks(np.timedelta64(-1, "ps")), 0)
+        self.assertEqual(self.make(6)._timedelta_to_ticks(np.timedelta64(1_000_079, "us")), 1_000_079)
+        with self.assertRaises(ValueError):
+            self.make(9)._timedelta_to_ticks(np.timedelta64(18_446_744_073, "s"))
+        with self.assertRaisesRegex(ValueError, "Unsupported NumPy timedelta64 unit"):
+            self.make(9)._timedelta_to_ticks(np.timedelta64(1, "M"))
 
     # ------------------------------------------------------------------
     # Binary write/read and numpy
@@ -291,6 +340,28 @@ class TestTime64DataType(unittest.TestCase):
         with patch.object(t6, "read_format", return_value="string"):
             res = t6._read_column_binary(mock_source, 2, self.base_read_ctx, None)
         self.assertEqual(res, ["000:00:01.000001", "000:00:00.000000"])
+
+    def test_nullable_numpy_nat_writes_null_map(self):
+        t6 = self.make(6, nullable=True)
+        for column in (
+            np.array([1, "NaT"], dtype="timedelta64[us]"),
+            [pd.Timedelta(microseconds=1), pd.NaT],
+        ):
+            dest = bytearray()
+            with patch(f"{Time64.__module__}.write_array", _dummy_write_array):
+                t6.write_column_data(column, dest, SimpleNamespace(column_name="c"))
+            self.assertEqual(dest, bytes([0, 1]) + array.array("q", [1, 0]).tobytes())
+
+    def test_nullable_timedelta_then_nat_writes_null_map(self):
+        t6 = self.make(6, nullable=True)
+        for column in (
+            [timedelta(microseconds=1), pd.NaT],
+            [timedelta(microseconds=1), np.timedelta64("NaT")],
+        ):
+            dest = bytearray()
+            with patch(f"{Time64.__module__}.write_array", _dummy_write_array):
+                t6.write_column_data(column, dest, SimpleNamespace(column_name="c"))
+            self.assertEqual(dest, bytes([0, 1]) + array.array("q", [1, 0]).tobytes())
 
     def test_read_numpy_format(self):
         t6 = self.make(6)

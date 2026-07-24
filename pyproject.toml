@@ -47,6 +47,7 @@ module = [
     "pyarrow.*",
     "tzlocal.*",
     "ujson.*",
+    "_ch_core",
     "clickhouse_connect.driverc.*",
 ]
 ignore_missing_imports = true

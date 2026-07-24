@@ -1,9 +1,11 @@
+import pytest
 import sqlalchemy as db
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Point, SimpleAggregateFunction, UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Geometry, Point, SimpleAggregateFunction, UInt32
+from clickhouse_connect.driver.exceptions import DatabaseError
 
 
 def test_basic_reflection(test_engine: Engine):
@@ -45,6 +47,31 @@ def test_types_reflection(test_engine: Engine, test_db: str):
         assert table.columns.key.type.__class__ == UInt32
         assert table.columns.pt.type.__class__ == Point
         assert "MergeTree" in table.engine.name
+
+
+def test_geometry_reflection(test_engine: Engine, test_db: str, test_client):
+    try:
+        resolved_type = test_client.command("SELECT toTypeName(defaultValueOfTypeName('Geometry'))")
+    except DatabaseError as ex:
+        if ex.name != "UNKNOWN_TYPE":
+            raise
+        pytest.skip(f"Geometry is not supported by server {test_client.server_version}")
+    if resolved_type != "Geometry":
+        pytest.skip(f"Geometry is not supported by server {test_client.server_version}")
+
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        try:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.sqlalchemy_geometry_test"))
+            conn.execute(
+                text(f"CREATE TABLE {test_db}.sqlalchemy_geometry_test (key UInt32, geometry Geometry) ENGINE MergeTree ORDER BY key")
+            )
+            metadata = db.MetaData(schema=test_db)
+            table = db.Table("sqlalchemy_geometry_test", metadata, autoload_with=test_engine)
+            assert table.columns.geometry.type.__class__ == Geometry
+            assert table.columns.geometry.type.name == "Geometry"
+        finally:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.sqlalchemy_geometry_test"))
 
 
 def test_table_exists(test_engine: Engine):

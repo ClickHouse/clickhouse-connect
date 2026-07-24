@@ -2,6 +2,7 @@ from ipaddress import IPv4Address
 from uuid import UUID
 
 from clickhouse_connect.datatypes import registry
+from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
@@ -104,6 +105,29 @@ def test_point():
     point_type.write_column(points, dest, InsertContext("", [], []))
     python = point_type.read_column_data(bytes_source(bytes(dest)), 3, QueryContext(), [None, None])
     assert tuple(python) == tuple(point for point in points)
+
+
+def test_geometry():
+    tagged = [
+        typed_variant([(13.0, 23.0), (14.0, 24.0)], "LineString"),
+        typed_variant([[(31.0, 41.0), (32.0, 42.0)]], "MultiLineString"),
+        typed_variant([[[(51.0, 61.0)]]], "MultiPolygon"),
+        typed_variant((71.0, 81.0), "Point"),
+        typed_variant([[(91.0, 101.0), (92.0, 102.0)]], "Polygon"),
+        typed_variant([(111.0, 121.0)], "Ring"),
+        None,
+    ]
+    expected = [value.value if value is not None else None for value in tagged]
+    geometry_type = registry.get_from_name("Geometry")
+    dest = bytearray()
+    geometry_type.write_column(tagged, dest, InsertContext("", [], []))
+
+    source = bytes_source(bytes(dest))
+    ctx = QueryContext()
+    read_state = geometry_type.read_column_prefix(source, ctx)
+    assert geometry_type.name == "Geometry"
+    assert registry.get_from_name("GEOMETRY").name == "Geometry"
+    assert geometry_type.read_column_data(source, len(tagged), ctx, read_state) == expected
 
 
 def test_nested():

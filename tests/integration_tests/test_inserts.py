@@ -1,5 +1,8 @@
 from collections.abc import Callable
+from datetime import date, time, timedelta
 from decimal import Decimal
+from ipaddress import IPv4Address, IPv6Address
+from uuid import UUID
 
 import pytest
 
@@ -34,6 +37,302 @@ def test_float_decimal_conv(param_client: Client, call, table_context: Callable)
         call(param_client.insert, "test_float_to_dec_conv", data)
         result = call(param_client.query, "SELECT * FROM test_float_to_dec_conv").result_set
         assert result == [(Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"), Decimal("0.492917"))]
+
+
+def test_rust_codec_insert(client_factory, call, table_context: Callable):
+    pytest.importorskip("_ch_core")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+
+    columns = [
+        "id UInt32",
+        "b Bool",
+        "i Int32",
+        "u UInt64",
+        "f Float64",
+        "s String",
+        "fs FixedString(4)",
+        "n Nullable(Int32)",
+        "d Date",
+        "dt DateTime",
+        "ts DateTime64(3)",
+        "e Enum8('red' = 1, 'green' = 2)",
+        "dec Decimal(18, 4)",
+        "uuid_col UUID",
+        "ip4 IPv4",
+        "ip6 IPv6",
+        "lc LowCardinality(String)",
+        "lcn LowCardinality(Nullable(String))",
+    ]
+    data = [
+        [
+            1,
+            True,
+            -13,
+            79,
+            1.25,
+            "user_1",
+            "abcd",
+            13,
+            date(2024, 1, 15),
+            1705322096,
+            1705322096789,
+            "red",
+            Decimal("123.4567"),
+            UUID("00112233-4455-6677-8899-aabbccddeeff"),
+            "192.0.2.1",
+            IPv6Address("2001:db8::1"),
+            "x",
+            "nx",
+        ],
+        [
+            2,
+            False,
+            -79,
+            500,
+            -2.5,
+            "user_2",
+            "xy",
+            None,
+            19738,
+            1705322097,
+            1705322097790,
+            2,
+            "-1.5",
+            "11111111-2222-3333-4444-555555555555",
+            IPv4Address("198.51.100.7"),
+            "2001:db8::2",
+            "x",
+            None,
+        ],
+    ]
+    expected = [
+        (
+            1,
+            True,
+            -13,
+            79,
+            1.25,
+            "user_1",
+            b"abcd",
+            13,
+            19737,
+            1705322096,
+            1705322096789,
+            "red",
+            Decimal("123.4567"),
+            UUID("00112233-4455-6677-8899-aabbccddeeff"),
+            IPv4Address("192.0.2.1"),
+            IPv6Address("2001:db8::1"),
+            "x",
+            "nx",
+        ),
+        (
+            2,
+            False,
+            -79,
+            500,
+            -2.5,
+            "user_2",
+            b"xy\x00\x00",
+            None,
+            19738,
+            1705322097,
+            1705322097790,
+            "green",
+            Decimal("-1.5000"),
+            UUID("11111111-2222-3333-4444-555555555555"),
+            IPv4Address("198.51.100.7"),
+            IPv6Address("2001:db8::2"),
+            "x",
+            None,
+        ),
+    ]
+
+    with table_context("test_rust_native_insert", columns):
+        call(
+            rust_client.insert,
+            "test_rust_native_insert",
+            data,
+        )
+        result = call(
+            python_client.query,
+            "SELECT * FROM test_rust_native_insert ORDER BY id",
+            query_formats={"Date": "int", "DateTime": "int", "DateTime64": "int"},
+        ).result_rows
+        assert result == expected
+
+
+def test_rust_codec_time_insert(client_factory, call, test_config, test_table_engine: str):
+    pytest.importorskip("_ch_core")
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+
+    version_client = client_factory(native_codec="python")
+    if not version_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+
+    settings = {"enable_time_time64_type": 1}
+    rust_client = client_factory(native_codec="rust_strict", settings=settings)
+    python_client = client_factory(native_codec="python", settings=settings)
+
+    table = "test_rust_native_time_insert"
+    columns = (
+        "id UInt32, t Time, nt Nullable(Time), t64 Time64(6), "
+        "nt64 Nullable(Time64(6)), a Array(Time64(6)), "
+        "pair Tuple(Time, Nullable(Time64(6)))"
+    )
+    rows = [
+        [
+            13,
+            timedelta(seconds=-5),
+            None,
+            timedelta(seconds=-5, microseconds=-500_000),
+            None,
+            [timedelta(microseconds=1), timedelta(hours=1, minutes=2, seconds=3, microseconds=123_456)],
+            (timedelta(seconds=-13), None),
+        ],
+        [
+            79,
+            time(1, 2, 3),
+            "030:00:00",
+            time(1, 2, 3, 123_456),
+            "002:00:00.000079",
+            ["-000:00:05.500000", 79],
+            (79, 79),
+        ],
+    ]
+    expected = [
+        (
+            13,
+            timedelta(seconds=-5),
+            None,
+            timedelta(seconds=-5, microseconds=-500_000),
+            None,
+            [timedelta(microseconds=1), timedelta(hours=1, minutes=2, seconds=3, microseconds=123_456)],
+            (timedelta(seconds=-13), None),
+        ),
+        (
+            79,
+            timedelta(hours=1, minutes=2, seconds=3),
+            timedelta(hours=30),
+            timedelta(hours=1, minutes=2, seconds=3, microseconds=123_456),
+            timedelta(hours=2, microseconds=79),
+            [timedelta(seconds=-5, microseconds=-500_000), timedelta(microseconds=79)],
+            (timedelta(seconds=79), timedelta(microseconds=79)),
+        ),
+    ]
+
+    call(rust_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(rust_client.command, f"CREATE TABLE {table} ({columns}) ENGINE {test_table_engine} ORDER BY id")
+        call(rust_client.insert, table, rows)
+        result = call(python_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+        assert result == expected
+
+        parity_rows = [
+            [13, timedelta(microseconds=-1), timedelta(seconds=-5, microseconds=-500_000)],
+            [79, timedelta(seconds=79), timedelta(microseconds=-1)],
+        ]
+        parity_expected = [
+            (13, timedelta(0), timedelta(seconds=-5, microseconds=-500_000)),
+            (79, timedelta(seconds=79), timedelta(microseconds=-1)),
+        ]
+        results = []
+        for insert_client in (rust_client, python_client):
+            call(rust_client.command, f"TRUNCATE TABLE {table}")
+            call(insert_client.insert, table, parity_rows, column_names=["id", "t", "t64"])
+            results.append(call(python_client.query, f"SELECT id, t, t64 FROM {table} ORDER BY id").result_rows)
+        assert results == [parity_expected, parity_expected]
+
+        np = pytest.importorskip("numpy")
+        numpy_columns = [
+            np.array([13, 79], dtype="uint32"),
+            np.array([13, "NaT"], dtype="timedelta64[s]"),
+            np.array([1, "NaT"], dtype="timedelta64[us]"),
+        ]
+        numpy_expected = [(13, timedelta(seconds=13), timedelta(microseconds=1)), (79, None, None)]
+        results = []
+        for insert_client in (rust_client, python_client):
+            call(rust_client.command, f"TRUNCATE TABLE {table}")
+            call(
+                insert_client.insert,
+                table,
+                numpy_columns,
+                column_names=["id", "nt", "nt64"],
+                column_oriented=True,
+            )
+            results.append(call(python_client.query, f"SELECT id, nt, nt64 FROM {table} ORDER BY id").result_rows)
+        assert results == [numpy_expected, numpy_expected]
+
+        pd = pytest.importorskip("pandas")
+        frame = pd.DataFrame(
+            {
+                "id": [13, 79],
+                "t": [timedelta(seconds=5), timedelta(hours=1)],
+                "t64": [
+                    timedelta(seconds=1, microseconds=79),
+                    timedelta(seconds=-5, microseconds=-500_000),
+                ],
+                "nt": pd.to_timedelta(["13s", None]),
+                "nt64": pd.to_timedelta([None, "0.000079s"]),
+            }
+        )
+        frame_expected = [
+            (13, timedelta(seconds=5), timedelta(seconds=1, microseconds=79), timedelta(seconds=13), None),
+            (79, timedelta(hours=1), timedelta(seconds=-5, microseconds=-500_000), None, timedelta(microseconds=79)),
+        ]
+        results = []
+        for insert_client in (rust_client, python_client):
+            call(rust_client.command, f"TRUNCATE TABLE {table}")
+            call(insert_client.insert_df, table, frame)
+            results.append(call(python_client.query, f"SELECT id, t, t64, nt, nt64 FROM {table} ORDER BY id").result_rows)
+        assert results == [frame_expected, frame_expected]
+    finally:
+        call(rust_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rust_codec_insert_dataframe(client_factory, call, table_context: Callable):
+    pytest.importorskip("_ch_core")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+
+    data = pd.DataFrame(
+        {
+            "id": [13, 79],
+            "name": ["user_1", "user_2"],
+            "score": [Decimal("12.30"), Decimal("45.60")],
+        }
+    )
+
+    with table_context("test_rust_native_insert_df", ["id Int32", "name String", "score Decimal(9, 2)"]):
+        call(
+            rust_client.insert_df,
+            "test_rust_native_insert_df",
+            data,
+        )
+        result = call(python_client.query, "SELECT * FROM test_rust_native_insert_df ORDER BY id").result_rows
+        assert result == [(13, "user_1", Decimal("12.30")), (79, "user_2", Decimal("45.60"))]
+
+
+def test_rust_codec_insert_numpy(client_factory, call, table_context: Callable):
+    pytest.importorskip("_ch_core")
+    np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+
+    data = np.array([(13, 1.25), (79, 2.5)], dtype=[("id", "<i4"), ("value", "<f8")])
+
+    with table_context("test_rust_native_insert_numpy", ["id Int32", "value Float64"]):
+        call(
+            rust_client.insert,
+            "test_rust_native_insert_numpy",
+            data,
+            column_names=["id", "value"],
+        )
+        result = call(python_client.query, "SELECT * FROM test_rust_native_insert_numpy ORDER BY id").result_rows
+        assert result == [(13, 1.25), (79, 2.5)]
 
 
 def test_bad_data_insert(param_client: Client, call, table_context: Callable):

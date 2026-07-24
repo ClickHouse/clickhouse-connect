@@ -32,3 +32,10 @@ test.env
 # Local ClickHouse server source checkout for agent reference (see AGENTS.md)
 /.server-src/
 .server-ref
+
+# Rust build artifacts
+rust/target/
+*.so
+*.dylib
+/.cargo/config.toml
+.claude

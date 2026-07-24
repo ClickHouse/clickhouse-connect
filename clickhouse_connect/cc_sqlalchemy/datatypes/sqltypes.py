@@ -255,6 +255,10 @@ class MultiLineString(ChSqlaType, UserDefinedType):  # type: ignore[misc]
     python_type = list
 
 
+class Geometry(ChSqlaType, UserDefinedType):  # type: ignore[misc]
+    python_type = object
+
+
 class Date(ChSqlaType, SqlaDate):  # type: ignore[misc]
     pass
 

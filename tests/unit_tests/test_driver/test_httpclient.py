@@ -9,6 +9,7 @@ import pytest
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
+from clickhouse_connect.driver._backend.httpcommon import plan_data_insert_request
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
@@ -172,6 +173,104 @@ class TestAsyncClientHeaders:
             )
 
         assert client.headers["X-Gateway"] == "cloudflare"
+
+
+class _MockInsertContext:
+    def __init__(self, transport_settings):
+        self.empty = False
+        self.compression = False
+        self.settings = {}
+        self.transport_settings = transport_settings
+        self.insert_exception = None
+        self.data = [(13,)]
+        self.current_row = 0
+        self.current_block = 0
+
+
+class _FakeInsertTransform:
+    threaded_insert = True
+
+    def build_insert(self, context):
+        yield b"body"
+
+
+class TestHttpClientInsert:
+    def test_rust_retry_closes_active_source_before_rewind(self):
+        context = _MockInsertContext({})
+        close_events = []
+        init_events = []
+
+        class TrackingSource:
+            instances = 0
+
+            def __init__(self, transform, context, maxsize=10):
+                TrackingSource.instances += 1
+                self.index = TrackingSource.instances
+                self.context = context
+                self.gen = iter([b"rust"])
+                init_events.append((self.index, context.current_row, context.current_block))
+
+            def start_producer(self):
+                self.context.current_row = 13
+                self.context.current_block = 1
+
+            def close(self, timeout=1.0):
+                close_events.append((self.index, timeout, self.context.current_row, self.context.current_block))
+
+        class FakeBackend:
+            def execute_data_insert(self, context, runtime, body, retry_body):
+                rebuilt = retry_body()
+                assert list(rebuilt) == [b"rust"]
+                return {}
+
+        client = object.__new__(HttpClient)
+        client.database = None
+        client.write_compression = None
+        client._transform = _FakeInsertTransform()
+        client._validate_settings = Mock(return_value={})
+        client._backend = FakeBackend()
+
+        with patch("clickhouse_connect.driver._backendclient._SyncStreamingInsertSource", TrackingSource):
+            client.data_insert(context)
+
+        assert init_events == [(1, 0, 0), (2, 0, 0)]
+        assert close_events[0] == (1, None, 13, 1)
+        assert close_events[-1] == (2, 1.0, 13, 1)
+        assert context.data is None
+
+
+class TestAsyncClientInsert:
+    @pytest.mark.asyncio
+    async def test_data_insert_passes_transport_settings_as_headers(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client._transform = _FakeInsertTransform()
+        context = _MockInsertContext({"X-Trace": "user_1"})
+        captured = {}
+
+        async def execute_data_insert(context, runtime, body, retry_body):
+            plan = plan_data_insert_request(context, runtime)
+            data = bytearray()
+            async for chunk in body:
+                data += chunk
+            captured["body"] = bytes(data)
+            captured["headers"] = plan.headers
+            return {}
+
+        client._backend = Mock()
+        client._backend.execute_data_insert = execute_data_insert
+
+        await client.data_insert(context)
+
+        assert captured["body"] == b"body"
+        assert captured["headers"]["X-Trace"] == "user_1"
+        assert context.data is None
 
 
 class TestConstructorAuthHeaders:

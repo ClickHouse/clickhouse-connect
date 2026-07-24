@@ -53,7 +53,7 @@ class InsertContext(BaseQueryContext):
         self.req_block_size = block_size
         self.block_row_count = DEFAULT_BLOCK_BYTES
         self.data = data
-        self.insert_exception = None
+        self.insert_exception: Exception | None = None
 
     @property
     def empty(self) -> bool:
@@ -151,6 +151,28 @@ class InsertContext(BaseQueryContext):
         for df_col_name, col_name, ch_type in zip(df.columns, self.column_names, self.column_types):
             df_col = df[df_col_name]
             d_type_kind = df_col.dtype.kind
+            if ch_type.base_type in ("Enum8", "Enum16") and (d_type_kind in ("f", "O") or df_col.hasnans):
+                # Only dtypes that can hold missing values need the per-row NA and float-code handling.
+                enum_values = []
+                for row, value in enumerate(df_col):
+                    if options.pd.isna(value):
+                        enum_values.append(None if ch_type.nullable else 0)
+                    elif isinstance(value, (float, options.np.floating)):
+                        if not options.np.isfinite(value):
+                            raise DataError(
+                                f"Column {col_name!r} row {row} has non-finite enum code {value!r}; "
+                                "use a valid enum label or finite integral code"
+                            )
+                        if not float(value).is_integer():
+                            raise DataError(
+                                f"Column {col_name!r} row {row} has enum code {value!r} that would lose fractional data; "
+                                "use a valid enum label or integral code"
+                            )
+                        enum_values.append(int(value))
+                    else:
+                        enum_values.append(value)
+                data.append(enum_values)
+                continue
             if ch_type.python_type is int:
                 if d_type_kind == "f":
                     df_col = df_col.round().astype(ch_type.base_type)

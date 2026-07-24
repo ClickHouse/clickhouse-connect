@@ -12,6 +12,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     Decimal,
     Enum,
     Float64,
+    Geometry,
     Int64,
     LowCardinality,
     Nullable,
@@ -37,6 +38,15 @@ def test_sqla():
     assert "Int16" == int16._compiler_dispatch(None)
     enum = sqla_type_from_name("Enum8('value1' = 7, 'value2'=5)")
     assert "Enum8('value2' = 5, 'value1' = 7)" == enum._compiler_dispatch(None)
+
+
+def test_geometry():
+    geometry = sqla_type_from_name("Geometry")
+    assert geometry.__class__ == Geometry
+    assert geometry.python_type is object
+    assert geometry.name == "Geometry"
+    assert geometry._compiler_dispatch(None) == "Geometry"
+    assert sqla_type_from_name("GEOMETRY").name == "Geometry"
 
 
 def test_nullable():

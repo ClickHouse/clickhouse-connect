@@ -1,4 +1,6 @@
 import logging
+from collections.abc import Generator
+from typing import Protocol
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
@@ -11,10 +13,22 @@ from clickhouse_connect.driver.types import ByteSource
 
 _EMPTY_CTX = QueryContext()
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+class Transform(Protocol):
+    """Codec contract for FORMAT Native query decode and insert encode."""
+
+    threaded_insert: bool
+
+    def parse_response(self, source: ByteSource, context: QueryContext) -> NumpyResult | QueryResult: ...
+
+    def build_insert(self, context: InsertContext) -> Generator[bytes, None, None]: ...
 
 
 class NativeTransform:
+    threaded_insert: bool = False
+
     @staticmethod
     def parse_response(source: ByteSource, context: QueryContext = _EMPTY_CTX) -> NumpyResult | QueryResult:
         names = []
@@ -107,7 +121,7 @@ class NativeTransform:
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
-    def build_insert(context: InsertContext):
+    def build_insert(context: InsertContext) -> Generator[bytes, None, None]:
         compression = context.compression if isinstance(context.compression, str) else None
         compressor = get_compressor(compression)
 

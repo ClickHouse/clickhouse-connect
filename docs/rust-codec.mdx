@@ -1,0 +1,71 @@
+---
+sidebarTitle: 'Rust codec'
+keywords: ['clickhouse', 'python', 'rust', 'native', 'codec', 'performance']
+description: 'Opt-in compiled Rust codec for ClickHouse Connect'
+slug: /integrations/language-clients/python/rust-codec
+title: 'Rust native codec'
+doc_type: 'reference'
+---
+
+ClickHouse Connect can decode query results and encode inserts with a compiled Rust codec instead of the default Python and Cython implementation. The Rust codec applies only to client-managed `FORMAT Native` traffic, which covers `query`, `query_np`, `query_df`, their block and row streaming variants, and inserts including `insert_df`. The Arrow methods use `FORMAT Arrow` and are unaffected, as are raw queries, raw inserts, and non-Native formats.
+
+The codec is experimental and opt in. The Python codec remains the default.
+
+## Installation {#installation}
+
+The compiled codec ships as a separate wheel named `clickhouse-connect-core`, which provides the `_ch_core` extension module. Install it through the `rust` extra:
+
+```bash
+pip install "clickhouse-connect[rust]"
+```
+
+If a Rust codec is selected and the module is not installed, client creation raises a `NotSupportedError` naming this install command.
+
+## Enabling the codec {#enabling-the-codec}
+
+Select the codec with the `native_codec` client option:
+
+```python
+import clickhouse_connect
+
+client = clickhouse_connect.get_client(host="localhost", native_codec="rust")
+```
+
+Accepted values:
+
+| Value | Behavior |
+|---|---|
+| `python` | Default. The existing Python and Cython codec. |
+| `rust` | Prefer the Rust codec. Queries with unsupported options and inserts with unsupported types route to the Python codec. |
+| `rust_strict` | Require the Rust codec. Unsupported options and types raise instead of routing. |
+
+The default can also be seeded with the `native_codec` common setting or the `CLICKHOUSE_CONNECT_NATIVE_CODEC` environment variable. Precedence is the client keyword argument, then the common setting, then the environment variable.
+
+The option is ignored for `interface="chdb"` clients, which always use the Python codec.
+
+## Fallback rules {#fallback-rules}
+
+Fallback decisions are made before any bytes are read or sent, so there is never a mid-stream codec switch. For queries the choice happens before the response body is consumed. For inserts the Rust encoder is only selected when every column type is supported, otherwise the whole insert runs on the Python codec.
+
+Driver-internal metadata queries always use the Python codec, silently, in every mode.
+
+Malformed Native payloads detected by the Rust codec raise `DataError`.
+
+## Versioning {#versioning}
+
+`clickhouse-connect-core` versions independently of `clickhouse-connect`. The driver declares a compatible range through the `rust` extra, and the module exports a binding API version that the driver checks when a Rust codec is selected. If the installed wheel is too old for the driver, client creation raises a `NotSupportedError` naming the upgrade command:
+
+```bash
+pip install --upgrade clickhouse-connect-core
+```
+
+Codec fixes and performance improvements ship as `clickhouse-connect-core` releases and can be picked up with a wheel upgrade alone, without waiting for a `clickhouse-connect` release.
+
+## Known behavior differences {#known-behavior-differences}
+
+The Rust codec targets cell for cell parity with the Python codec. The deliberate differences:
+
+- `query_np` and `query_df` results for `Variant` columns contain plain Python objects rather than numpy scalar values. The values are equal, the cell types differ.
+- A `LowCardinality` alternative inside a container that materializes per cell, such as `Array(Variant(...))`, produces value-equal cells that do not share the per-dictionary-slot object identity the Python codec exhibits.
+- `Nullable(Tuple)` columns decode correctly on the Rust codec. The Python codec misreads this layout and the Rust result is the reference behavior.
+- `rust_strict` rejects query options the Rust path does not implement, such as custom per-query `query_formats`, rather than silently changing behavior.

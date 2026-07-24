@@ -42,6 +42,9 @@ class QueryContext(BaseQueryContext):
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
 
+    bind_params: dict[str, str]
+    uncommented_query: str
+
     def __init__(
         self,
         query: str | bytes = "",
@@ -108,10 +111,10 @@ class QueryContext(BaseQueryContext):
         )
         self.query = query
         self.parameters = parameters or {}
-        self.use_none = True if use_none is None else use_none
-        self.column_oriented = False if column_oriented is None else column_oriented
-        self.use_numpy = use_numpy if use_numpy is not None else False
-        self.max_str_len = 0 if max_str_len is None else max_str_len
+        self.use_none: bool = True if use_none is None else use_none
+        self.column_oriented: bool = False if column_oriented is None else column_oriented
+        self.use_numpy: bool = use_numpy if use_numpy is not None else False
+        self.max_str_len: int = 0 if max_str_len is None else max_str_len
         self.server_tz = server_tz
         self.apply_server_tz = apply_server_tz
         self.external_data = external_data
@@ -139,6 +142,8 @@ class QueryContext(BaseQueryContext):
         self.column_tz: str | tzinfo | None = None
         self.response_tz: tzinfo | None = None
         self.block_info = False
+        # Marks driver-internal metadata queries, which always decode with the Python codec
+        self.internal = False
         self.as_pandas = as_pandas
         self.streaming = streaming
         self._rename_response_column: str | None = rename_response_column
