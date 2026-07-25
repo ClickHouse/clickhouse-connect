@@ -331,21 +331,22 @@ def test_show_row_policies(param_client, call, table_context: Callable, test_con
     if not param_client.min_version("20"):
         pytest.skip(f"Not supported server version {param_client.server_version}")
 
-    for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
-        result = call(param_client.query, statement)
-        assert result.result_rows == [[""]]
-        result.close()
-
     policy = "test_show_row_policies_policy"
-    with table_context("test_show_row_policies", ["id UInt32"]) as table:
+    table_name = "test_show_row_policies"
+    with table_context(table_name, ["id UInt32"]) as table:
         target = f"{quote_identifier(param_client.database)}.{table.table}"
         call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
         try:
-            assert call(param_client.command, f"SHOW ROW POLICIES ON {target}") == ""
-            assert call(param_client.command, f"SHOW POLICIES ON {target}") == ""
+            for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+                assert call(param_client.command, f"{statement} ON {target}") == ""
 
             call(param_client.command, f"CREATE ROW POLICY {policy} ON {target} USING id = 13 TO ALL")
-            assert policy in call(param_client.command, f"SHOW ROW POLICIES ON {target}")
+            listed = f"{policy} ON {param_client.database}.{table_name}"
+            for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+                assert call(param_client.command, f"{statement} ON {target}") == policy
+                result = call(param_client.query, statement)
+                assert listed in result.result_rows[0][0].splitlines()
+                result.close()
         finally:
             call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
 
