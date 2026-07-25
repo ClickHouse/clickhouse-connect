@@ -42,9 +42,9 @@ from clickhouse_connect.driver.binding import (
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
 from clickhouse_connect.driver.client import (
+    _HTTP_RESERVED_SETTING_NAMES,
+    _HTTP_RESERVED_SETTING_PREFIXES,
     _INTERNAL_QUERY_FORMATS,
-    HTTP_RESERVED_SETTING_NAMES,
-    HTTP_RESERVED_SETTING_PREFIXES,
     Client,
     _apply_arrow_tz_policy,
 )
@@ -113,8 +113,8 @@ class AsyncClient(Client):
         "http_headers_progress_interval_ms",
         "enable_http_compression",
     }
-    reserved_setting_names = set(HTTP_RESERVED_SETTING_NAMES)
-    reserved_setting_prefixes = HTTP_RESERVED_SETTING_PREFIXES
+    _reserved_setting_names = set(_HTTP_RESERVED_SETTING_NAMES)
+    _reserved_setting_prefixes = _HTTP_RESERVED_SETTING_PREFIXES
 
     def __init__(
         self,

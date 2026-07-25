@@ -81,10 +81,10 @@ _INTERNAL_QUERY_FORMATS = {"String": "string"}
 # The subset already carried in valid_transport_settings (database, role, query_id, ...) is
 # forwarded on purpose; these remaining names have no meaning as settings and would corrupt
 # the request if placed in the query string, so they are rejected rather than forwarded.
-HTTP_RESERVED_SETTING_NAMES = frozenset({"query", "user", "password", "default_format", "stacktrace", "close_session"})
+_HTTP_RESERVED_SETTING_NAMES = frozenset({"query", "user", "password", "default_format", "stacktrace", "close_session"})
 # Prefixes the HTTP interface reserves. param_ is the bound-parameter namespace emitted by
 # bind_query, so a setting named param_x would override an actual query parameter value.
-HTTP_RESERVED_SETTING_PREFIXES = ("param_",)
+_HTTP_RESERVED_SETTING_PREFIXES = ("param_",)
 
 
 def _strip_utc_timezone_from_arrow(table: pyarrow.Table) -> pyarrow.Table:
@@ -146,8 +146,8 @@ class Client(ABC):
     # settings. They must never be forwarded as a setting even when unknown to system.settings,
     # because a transport (e.g. HTTP query params) would treat them as something other than a
     # setting and silently corrupt the request.
-    reserved_setting_names: set[str] = set()
-    reserved_setting_prefixes: tuple[str, ...] = ()
+    _reserved_setting_names: set[str] = set()
+    _reserved_setting_prefixes: tuple[str, ...] = ()
     database = None
     max_error_message = 0
     _tz_source: TzSource = "auto"
@@ -313,7 +313,7 @@ class Client(ABC):
                 # reject it.
                 if key in self.optional_transport_settings:
                     return None
-                if key in self.reserved_setting_names or key.startswith(self.reserved_setting_prefixes):
+                if key in self._reserved_setting_names or key.startswith(self._reserved_setting_prefixes):
                     raise ProgrammingError(f"{key} is a reserved transport parameter and cannot be sent as a setting") from None
                 if invalid_action == "drop":
                     # Honor the caller's opt-in to strip settings the client cannot validate,
