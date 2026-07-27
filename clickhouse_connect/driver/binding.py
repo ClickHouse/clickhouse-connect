@@ -25,7 +25,7 @@ class DT64Param:
 
     def format(self, tz: tzinfo | None, top_level: bool) -> str:
         value = self.value
-        if tz:
+        if tz is not None and value.tzinfo is not None:
             value = value.astimezone(tz)
         s = value.strftime("%Y-%m-%d %H:%M:%S.%f")
         if top_level:
@@ -250,7 +250,7 @@ def format_query_value(value: Any, server_tz: tzinfo | None = timezone.utc):
     if isinstance(value, DT64Param):
         return value.format(server_tz, False)
     if isinstance(value, datetime):
-        if value.tzinfo is not None or not tzutil.is_utc_timezone(server_tz):
+        if value.tzinfo is not None:
             value = value.astimezone(server_tz)
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
@@ -303,7 +303,8 @@ def format_bind_value(value: Any, server_tz: tzinfo | None = timezone.utc, top_l
     if isinstance(value, DT64Param):
         return value.format(server_tz, top_level)
     if isinstance(value, datetime):
-        value = value.astimezone(server_tz)
+        if value.tzinfo is not None:
+            value = value.astimezone(server_tz)
         val = value.strftime("%Y-%m-%d %H:%M:%S")
         if top_level:
             return val

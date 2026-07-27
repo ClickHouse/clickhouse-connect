@@ -1,4 +1,6 @@
 import ipaddress
+import os
+import time
 import uuid
 import zoneinfo
 from datetime import date, datetime, timezone
@@ -268,3 +270,30 @@ class TestBindQuerySuffixCollision:
         q, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
         assert q == "SELECT '2026-01-01 12:00:00.250306'"
         assert params == {}
+
+
+def test_naive_datetime_not_shifted_by_server_tz():
+    # A naive datetime carries no source timezone, so it must be written verbatim.
+    # The host tz is forced to a non-server zone so that the previous behaviour
+    # (astimezone(server_tz) on a naive value, assuming host-local time) would
+    # visibly shift the value.
+    original_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    try:
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        naive = datetime(2025, 1, 1, 12, 0, 0)
+
+        assert format_query_value(naive, server_tz=berlin) == "'2025-01-01 12:00:00'"
+        assert format_bind_value(naive, server_tz=berlin) == "2025-01-01 12:00:00"
+        assert format_query_value(DT64Param(naive), server_tz=berlin) == "'2025-01-01 12:00:00.000000'"
+
+        # timezone-aware values are still converted to the server timezone
+        aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        assert format_query_value(aware, server_tz=berlin) == "'2025-01-01 13:00:00'"
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()
