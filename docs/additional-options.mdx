@@ -32,7 +32,7 @@ The following global settings are currently defined:
 | `autogenerate_session_id` | `True` | `True`, `False` | Generate a UUID session ID for each synchronous client unless a session ID is supplied. The async factory overrides this to `False` by default. |
 | `autogenerate_query_id` | `True` | `True`, `False` | Generate a UUID query ID for each request unless one is supplied. |
 | `dict_parameter_format` | `"json"` | `"json"`, `"map"` | Format Python dictionaries used in parameter binding as JSON or ClickHouse map literals. |
-| `invalid_setting_action` | `"error"` | `"drop"`, `"send"`, `"error"` | Drop, send, or reject a setting that is unrecognized by the server or is readonly. `"error"` raises `ProgrammingError`. |
+| `invalid_setting_action` | `"error"` | `"drop"`, `"send"`, `"error"` | Action for a setting the server reports as readonly. `drop` ignores it, `send` forwards it, `error` raises `ProgrammingError`. Settings absent from `system.settings` for the current user, such as one made `CHANGEABLE_IN_READONLY` on a role, are forwarded so the server can accept or reject them, unless the action is `drop`. |
 | `max_connection_age` | `600` | Any number of seconds | Maximum age for a reused HTTP keep-alive connection. Rotation helps distribute connections across nodes behind a load balancer. |
 | `product_name` | `""` | Any string | Product identifier added to client information. Use a value such as `"my-product/1.0"`. |
 | `readonly` | `0` | `0`, `1` | Compatibility hint for the `readonly` setting on very old ClickHouse servers. |
