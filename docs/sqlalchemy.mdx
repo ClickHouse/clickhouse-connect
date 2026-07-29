@@ -123,6 +123,7 @@ The ClickHouse `Select` methods are:
 | `.array_join(...)` | `ARRAY JOIN` |
 | `.left_array_join(...)` | `LEFT ARRAY JOIN` |
 | `.ch_join(...)` | ClickHouse joins with `strictness`, `distribution`, `using`, and `cross` options |
+| `.cte(name, materialized=True)` | `WITH name AS MATERIALIZED (...)` |
 
 For example, a ClickHouse `GLOBAL ANY LEFT JOIN` can be chained without nesting a custom `FromClause`:
 
@@ -156,6 +157,44 @@ stmt = select(
 ```
 
 The standard SQLAlchemy `values()` construct compiles to ClickHouse's `VALUES` table-function syntax, including when used in a common table expression (the CTE form requires SQLAlchemy 2.x, where `Values.cte()` was added).
+
+### Materialized CTEs {#sqlalchemy-materialized-ctes}
+
+By default ClickHouse inlines a common table expression, so a CTE referenced more than once has its body executed once per reference. Pass `materialized=True` to `.cte()` to emit `WITH <name> AS MATERIALIZED (...)`, which computes the body once:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import select
+
+ranked = (
+    select(book.c.book_id, func.row_number().over(order_by=book.c.score.desc()).label("result_rank"))
+    .where(book.c.genre == "sci-fi")
+    .order_by(book.c.score.desc())
+    .limit(100)
+    .cte("ranked", materialized=True)
+)
+
+stmt = (
+    select(book.c.book_id, ranked.c.result_rank)
+    .select_from(book)
+    .ch_join(ranked, book.c.book_id == ranked.c.book_id, strictness="ANY")
+    .where(book.c.book_id.in_(select(ranked.c.book_id)))
+    .execution_options(settings={"enable_materialized_cte": 1})
+)
+```
+
+The server materializes the CTE only when the keyword and the `enable_materialized_cte` setting are both present, so set the setting on the statement, connection, or engine as shown in [Per-query settings](#sqlalchemy-per-query-settings). With the setting off the keyword is ignored silently: the query succeeds and returns the same rows, but the CTE is inlined again, so a forgotten setting costs performance without raising anything. Materialized CTEs require ClickHouse 26.3 or later; older servers reject the keyword as a syntax error.
+
+For a statement built with the standard `sqlalchemy.select`, use the module-level `cte()` instead. It takes the statement as its first argument and otherwise mirrors `Select.cte()`:
+
+```python
+from sqlalchemy import select as sa_select
+
+from clickhouse_connect.cc_sqlalchemy import cte
+
+ranked = cte(sa_select(book.c.book_id), "ranked", materialized=True)
+```
+
+The keyword renders only on the ClickHouse dialect, so a statement shared with another backend compiles unchanged there.
 
 ## DDL and reflection {#sqlalchemy-ddl-reflection}
 
