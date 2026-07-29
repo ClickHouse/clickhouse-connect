@@ -280,6 +280,40 @@ def test_query_with_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 13",
+        "SELECT 13;",
+        "SELECT 13;\n",
+        "SELECT 13; ",
+        "SELECT 13; -- trailing comment",
+        "SELECT 13; /* trailing comment */",
+    ],
+)
+def test_query_trailing_semicolon(param_client, call, query):
+    # A query-final ";" followed by whitespace or a comment must not turn the appended FORMAT
+    # clause into a rejected second statement (server error code 62).
+    result = call(param_client.query, query)
+    assert result.result_rows == [(13,)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 13;",
+        "SELECT 13;\n",
+        "SELECT 13; -- trailing comment",
+        "SELECT 13; /* trailing comment */",
+    ],
+)
+def test_raw_query_trailing_semicolon(param_client, call, query):
+    # raw_query appends the FORMAT clause before binding, so the terminator has to be stripped
+    # on that path too, not only inside bind_query.
+    result = call(param_client.raw_query, query, fmt="TabSeparated")
+    assert result == b"13\n"
+
+
 def test_insert_csv_format(param_client, call, test_table_engine: str):
     call(param_client.command, "DROP TABLE IF EXISTS test_csv")
     call(

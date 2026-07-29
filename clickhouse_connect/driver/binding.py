@@ -60,8 +60,39 @@ def _is_validly_quoted(identifier: str, quote: str) -> bool:
     return True
 
 
+# A run of statement terminators at the very end of a query: one or more semicolons together
+# with any whitespace and SQL comments around them. Used to strip a query-final ";" so an
+# appended "FORMAT ..." or "LIMIT ..." clause stays part of the same statement instead of
+# becoming a rejected second statement.
+_trailing_terminator_re = re.compile(r"(?:\s|;|--[^\n]*|/\*.*?\*/)+\Z", re.DOTALL)
+# Splits that trailing run into tokens so a real ";" can be told apart from a ";" that only
+# appears inside a comment.
+_terminator_token_re = re.compile(r"\s+|--[^\n]*|/\*.*?\*/|;", re.DOTALL)
+
+
+def strip_trailing_semicolon(query: str) -> str:
+    """Remove a query-final ";" statement terminator so an appended FORMAT or LIMIT clause
+    stays part of the same statement.
+
+    The terminator is removed even when whitespace or SQL comments follow it, for example
+    "SELECT 1;\\n", "SELECT 1; -- done", or "SELECT 1; /* done */". Everything from the
+    terminating ";" to the end of the query is dropped, while text before it, including
+    comments, is preserved. A query with no trailing ";", including one that ends only in
+    whitespace or a comment, is returned unchanged so the query sent to the server does not
+    otherwise change. A ";" that appears inside a trailing comment is not a terminator and is
+    left alone.
+    """
+    run = _trailing_terminator_re.search(query)
+    if run is None:
+        return query
+    for token in _terminator_token_re.finditer(query, run.start()):
+        if token.group() == ";":
+            return query[: token.start()]
+    return query
+
+
 def finalize_query(query: str, parameters: Sequence | dict[str, Any] | None, server_tz: tzinfo | None = None) -> str:
-    query = query.rstrip(";")
+    query = strip_trailing_semicolon(query)
     if not parameters:
         return query
     if hasattr(parameters, "items"):
@@ -129,7 +160,7 @@ def bind_query(
     parameters: Sequence | dict[str, Any] | None,
     server_tz: tzinfo | None = None,
 ) -> tuple[str | bytes, dict[str, str]]:
-    query = query.rstrip(";")
+    query = strip_trailing_semicolon(query)
     if not parameters:
         return query, {}
 
