@@ -17,6 +17,36 @@ str_type = get_from_name("String")
 int_type = get_from_name("Int32")
 
 
+def _strip_leading_sql_comments(sql: str) -> str:
+    """Return sql with any leading whitespace and SQL comments removed.
+
+    ClickHouse accepts -- and # line comments and /* */ block comments. A leading
+    comment must not hide the SELECT or WITH keyword when the cursor classifies a
+    statement, otherwise the metadata re-query is skipped and description stays empty.
+    Following ClickHouse, # begins a line comment only as #! or when directly followed
+    by a space, so a bare #token is left in place. Only the leading run is stripped,
+    so there is no quoted-string ambiguity to handle.
+    """
+    i = 0
+    length = len(sql)
+    while i < length:
+        if sql[i].isspace():
+            i += 1
+        elif sql.startswith("--", i) or sql.startswith("#!", i) or sql.startswith("# ", i):
+            newline = sql.find("\n", i)
+            if newline == -1:
+                return ""
+            i = newline + 1
+        elif sql.startswith("/*", i):
+            end = sql.find("*/", i + 2)
+            if end == -1:
+                return ""
+            i = end + 2
+        else:
+            break
+    return sql[i:]
+
+
 class Cursor:
     """
     See :ref:`https://peps.python.org/pep-0249/`
@@ -75,7 +105,8 @@ class Cursor:
             self.types = [x.__class__ for x in self.data[0]]
         else:
             stripped = operation.strip().rstrip(";").strip()
-            if stripped.upper().startswith(("SELECT", "WITH")):
+            # Classify past any leading comment so a header comment does not skip the re-query.
+            if _strip_leading_sql_comments(stripped).upper().startswith(("SELECT", "WITH")):
                 # Introspection re-query carries the same settings so the derived column shape matches.
                 meta_result = self.client.query(f"SELECT * FROM ({stripped}) LIMIT 0", parameters, settings=settings)
                 if meta_result.column_names:

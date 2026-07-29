@@ -398,6 +398,62 @@ def test_execute_empty_with_query_fetches_metadata():
     )
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "-- header\nSELECT value_1 WHERE value_1 = 79",
+        "# header\nSELECT value_1 WHERE value_1 = 79",
+        "#! header\nSELECT value_1 WHERE value_1 = 79",
+        "/* header */ SELECT value_1 WHERE value_1 = 79",
+        "-- header\nWITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79",
+        "/* a */ -- b\n# c\nSELECT value_1 WHERE value_1 = 79",
+    ],
+)
+def test_execute_empty_result_metadata_requery_looks_past_leading_comment(operation):
+    """A leading SQL comment must not hide the SELECT or WITH keyword, or the
+    empty-result metadata re-query is skipped and description is left empty.
+    """
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute(operation)
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    # The comment stays inside the wrapped subquery; only the classification looks past it.
+    assert client.query.call_args_list[1].args == (f"SELECT * FROM ({operation}) LIMIT 0", None)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "#c\nSELECT value_1 WHERE value_1 = 79",
+        "#\nSELECT value_1 WHERE value_1 = 79",
+        "-- header\nSHOW TABLES",
+    ],
+)
+def test_execute_empty_result_no_metadata_requery_for_non_select(operation):
+    """Contrast: the re-query still fires only for SELECT or WITH. A bare # that is
+    not #! or # followed by a space is not a comment in ClickHouse, and a non-SELECT
+    statement must not trigger a second query, so description stays empty.
+    """
+    client = Mock()
+    client.query.side_effect = [create_mock_query_result([])]
+    cursor = Cursor(client)
+
+    cursor.execute(operation)
+
+    assert cursor.description == []
+    assert client.query.call_count == 1
+
+
 def _mock_insert_client(written_rows: int, summary_extra: dict | None = None):
     """Return a mock client whose insert() returns a QuerySummary-like object."""
     summary_dict = {"written_rows": str(written_rows), **(summary_extra or {})}

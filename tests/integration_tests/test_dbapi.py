@@ -1,6 +1,6 @@
 from collections.abc import Callable
 
-from pytest import fixture
+from pytest import fixture, mark
 
 from clickhouse_connect import dbapi
 from tests.integration_tests.conftest import TestConfig
@@ -49,3 +49,23 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         )
         cursor.execute("SELECT id, name FROM dbapi_executemany_dicts ORDER BY id")
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+@mark.parametrize(
+    "operation",
+    [
+        "-- header\nSELECT 13 AS value_1 WHERE 0",
+        "# header\nSELECT 13 AS value_1 WHERE 0",
+        "#! header\nSELECT 13 AS value_1 WHERE 0",
+        "/* header */ SELECT 13 AS value_1 WHERE 0",
+        "-- header\nWITH 13 AS value_1 SELECT value_1 WHERE 0",
+    ],
+)
+def test_cursor_description_populated_with_leading_comment(dbapi_connection, operation):
+    """An empty-result SELECT or WITH prefixed by a SQL comment must still populate
+    cursor.description through the metadata re-query.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute(operation)
+    assert cursor.fetchall() == []
+    assert [column[0] for column in cursor.description] == ["value_1"]
