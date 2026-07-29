@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from clickhouse_connect.dbapi.cursor import Cursor
+from clickhouse_connect.dbapi.cursor import Cursor, _strip_trailing_terminators
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
@@ -394,6 +394,62 @@ def test_execute_empty_with_query_fetches_metadata():
     assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
     assert client.query.call_args_list[1].args == (
         "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "operation, expected",
+    [
+        # nothing trailing to strip
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        # trailing whitespace, statement terminators, and comments are dropped
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13   ", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13;", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13 -- note", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13 # note", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13; -- note", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13;\n-- note", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        ("SELECT value_1 FROM data_table WHERE value_1 = 13 /* note */", "SELECT value_1 FROM data_table WHERE value_1 = 13"),
+        # contrast: comment markers and terminators inside strings / quoted identifiers are kept
+        ("SELECT 'note -- 13' AS value_1", "SELECT 'note -- 13' AS value_1"),
+        ("SELECT 'value;13' AS value_1", "SELECT 'value;13' AS value_1"),
+        ("SELECT 13 AS `col--1`", "SELECT 13 AS `col--1`"),
+        # contrast: a comment in the middle of the query is not stripped
+        ("SELECT value_1 -- pick\n FROM data_table", "SELECT value_1 -- pick\n FROM data_table"),
+        # edge cases: a comment-only operation strips to empty, an unterminated string is left intact
+        ("-- only a comment", ""),
+        ("SELECT 'unterminated", "SELECT 'unterminated"),
+    ],
+)
+def test_strip_trailing_terminators(operation, expected):
+    """The metadata re-query helper drops only trailing terminators and comments, and
+    leaves comment markers or semicolons inside string literals and identifiers intact.
+    """
+    assert _strip_trailing_terminators(operation) == expected
+
+
+def test_execute_empty_result_strips_trailing_comment_before_metadata_requery():
+    """A trailing comment or statement terminator must not leak into the metadata
+    introspection subquery, which would otherwise raise ClickHouse error code 62. See
+    https://github.com/ClickHouse/clickhouse-connect/issues/907
+    """
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt8")],
+        ),
+    ]
+    cursor = Cursor(client)
+
+    cursor.execute("SELECT 13 AS value_1 WHERE value_1 = 79; -- trailing comment")
+
+    assert cursor.description == [("value_1", "UInt8", None, None, None, None, True)]
+    assert client.query.call_args_list[1].args == (
+        "SELECT * FROM (SELECT 13 AS value_1 WHERE value_1 = 79) LIMIT 0",
         None,
     )
 

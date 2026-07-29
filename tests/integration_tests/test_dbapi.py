@@ -1,5 +1,6 @@
 from collections.abc import Callable
 
+import pytest
 from pytest import fixture
 
 from clickhouse_connect import dbapi
@@ -49,3 +50,30 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         )
         cursor.execute("SELECT id, name FROM dbapi_executemany_dicts ORDER BY id")
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "SELECT 13 AS value_1 WHERE 0",  # contrast: no trailing terminators (worked before the fix)
+        "SELECT 13 AS value_1 WHERE 0 -- trailing comment",
+        "SELECT 13 AS value_1 WHERE 0 # trailing comment",
+        "SELECT 13 AS value_1 WHERE 0;",  # contrast: a bare trailing semicolon already worked
+        "SELECT 13 AS value_1 WHERE 0 /* trailing comment */",
+        "SELECT 'note -- 79' AS value_1 WHERE 0",  # contrast: -- inside a string literal is preserved
+    ],
+)
+def test_execute_metadata_requery_survives_trailing_terminators(dbapi_connection, operation):
+    """A SELECT that returns no column metadata triggers the
+    ``SELECT * FROM (...) LIMIT 0`` introspection re-query that populates
+    cursor.description. A trailing comment or statement terminator must not break that
+    wrapped query (previously raised ClickHouse error code 62). See
+    https://github.com/ClickHouse/clickhouse-connect/issues/907
+
+    The trailing-semicolon-then-comment variant additionally trips the separate query
+    FORMAT-append path (issue #903) before this metadata re-query runs, so it is covered
+    by the unit test against the re-query wrapping in isolation rather than end to end.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute(operation)
+    assert [column[0] for column in cursor.description] == ["value_1"]

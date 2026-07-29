@@ -17,6 +17,48 @@ str_type = get_from_name("String")
 int_type = get_from_name("Int32")
 
 
+def _strip_trailing_terminators(sql: str) -> str:
+    """Return sql with any trailing run of whitespace, statement terminators, and SQL
+    comments removed, so the remainder can be safely wrapped in a subquery.
+
+    Cursor.execute wraps the operation in "SELECT * FROM (<sql>) LIMIT 0" to introspect
+    column types when a result carries no column metadata. A trailing ";" would leave a
+    statement terminator inside the subquery and a trailing single line comment ("--" or
+    "#") would comment out the closing parenthesis, both of which make the wrapped query
+    invalid. Semicolons and comment markers inside string literals or quoted identifiers
+    are preserved.
+    """
+    i, n, end = 0, len(sql), 0
+    while i < n:
+        char = sql[i]
+        if char in " \t\r\n;":
+            i += 1
+        elif char == "#" or (char == "-" and sql[i + 1 : i + 2] == "-"):
+            newline = sql.find("\n", i)
+            i = n if newline == -1 else newline + 1
+        elif char == "/" and sql[i + 1 : i + 2] == "*":
+            close = sql.find("*/", i + 2)
+            i = n if close == -1 else close + 2
+        elif char in "'\"`":
+            i += 1
+            while i < n:
+                if sql[i] == "\\" and i + 1 < n:
+                    i += 2
+                elif sql[i] == char:
+                    if sql[i + 1 : i + 2] == char:
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    i += 1
+            end = i
+        else:
+            i += 1
+            end = i
+    return sql[:end]
+
+
 class Cursor:
     """
     See :ref:`https://peps.python.org/pep-0249/`
@@ -74,7 +116,7 @@ class Cursor:
             self.names = [f"col_{x}" for x in range(len(self.data[0]))]
             self.types = [x.__class__ for x in self.data[0]]
         else:
-            stripped = operation.strip().rstrip(";").strip()
+            stripped = _strip_trailing_terminators(operation).strip()
             if stripped.upper().startswith(("SELECT", "WITH")):
                 # Introspection re-query carries the same settings so the derived column shape matches.
                 meta_result = self.client.query(f"SELECT * FROM ({stripped}) LIMIT 0", parameters, settings=settings)
