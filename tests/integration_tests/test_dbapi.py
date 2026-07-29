@@ -49,3 +49,17 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         )
         cursor.execute("SELECT id, name FROM dbapi_executemany_dicts ORDER BY id")
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+def test_description_null_ok_reflects_nullability(dbapi_connection):
+    """Regression for https://github.com/ClickHouse/clickhouse-connect/issues/902:
+    the description null_ok field (7th tuple element) must reflect the column's
+    actual Nullable() wrapper, not a hardcoded True.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("SELECT CAST(13, 'UInt32') AS not_null_col, CAST(NULL, 'Nullable(String)') AS null_col")
+
+    assert cursor.description == [
+        ("not_null_col", "UInt32", None, None, None, None, False),
+        ("null_col", "Nullable(String)", None, None, None, None, True),
+    ]

@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
@@ -359,7 +360,7 @@ def test_execute_empty_result_fetches_metadata_with_parameters():
         create_mock_query_result(
             [],
             column_names=["value_1"],
-            column_types=[SimpleNamespace(name="UInt64")],
+            column_types=[SimpleNamespace(name="UInt64", nullable=False)],
         ),
     ]
     cursor = Cursor(client)
@@ -369,7 +370,7 @@ def test_execute_empty_result_fetches_metadata_with_parameters():
         {"value_1": 13, "param_1": 1},
     )
 
-    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, False)]
     assert client.query.call_args_list[1].args == (
         "SELECT * FROM (SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s) LIMIT 0",
         {"value_1": 13, "param_1": 1},
@@ -384,14 +385,14 @@ def test_execute_empty_with_query_fetches_metadata():
         create_mock_query_result(
             [],
             column_names=["value_1"],
-            column_types=[SimpleNamespace(name="UInt64")],
+            column_types=[SimpleNamespace(name="UInt64", nullable=False)],
         ),
     ]
     cursor = Cursor(client)
 
     cursor.execute("WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79")
 
-    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, False)]
     assert client.query.call_args_list[1].args == (
         "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
         None,
@@ -446,3 +447,77 @@ def test_executemany_generator_falls_through_to_row_by_row():
 
     client.insert.assert_not_called()
     assert client.query.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_null_ok",
+    [
+        ("UInt32", False),
+        ("String", False),
+        ("Nullable(String)", True),
+        ("LowCardinality(String)", False),
+        ("LowCardinality(Nullable(String))", True),
+        ("Array(String)", False),
+        ("Map(String, UInt32)", False),
+    ],
+)
+def test_description_null_ok_reflects_nullable(type_name, expected_null_ok):
+    """The description null_ok field (7th tuple element) reflects the column's
+    actual Nullable() wrapper instead of a hardcoded True.  See
+    https://github.com/ClickHouse/clickhouse-connect/issues/902
+    """
+    col_type = get_from_name(type_name)
+    client = Mock()
+    client.query.return_value = create_mock_query_result([], column_names=["col_1"], column_types=[col_type])
+    cursor = Cursor(client)
+
+    cursor.execute("SELECT col_1 FROM test_table")
+
+    name, type_code, _, _, _, _, null_ok = cursor.description[0]
+    assert name == "col_1"
+    assert type_code == type_name  # type_code stays a type-name string, not the ClickHouseType object
+    assert null_ok is expected_null_ok
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_null_ok",
+    [
+        ("UInt32", False),
+        ("Nullable(UInt32)", True),
+    ],
+)
+def test_executemany_description_reports_nullability(type_name, expected_null_ok):
+    """executemany populates description with the same actual nullability and
+    string type_code as execute().  Regression for
+    https://github.com/ClickHouse/clickhouse-connect/issues/902
+    """
+    col_type = get_from_name(type_name)
+    client = Mock()
+    client.query.return_value = create_mock_query_result([(13,)], column_names=["value_1"], column_types=[col_type])
+    cursor = Cursor(client)
+
+    cursor.executemany("SELECT %(value_1)s AS value_1", [{"value_1": 13}])
+
+    name, type_code, _, _, _, _, null_ok = cursor.description[0]
+    assert name == "value_1"
+    assert type_code == type_name
+    assert isinstance(type_code, str)  # before the fix executemany stored the ClickHouseType object here
+    assert null_ok is expected_null_ok
+
+
+def test_description_fallback_without_column_metadata_is_unchanged():
+    """When the result carries no column names, execute() falls back to Python
+    value classes for the types.  description leaves that path unchanged: the
+    type_code is the value class and null_ok stays True, since no ClickHouseType
+    (and therefore no nullability) is available.
+    """
+    client = Mock()
+    client.query.return_value = create_mock_query_result([(13, "user_1")], column_names=[], column_types=[])
+    cursor = Cursor(client)
+
+    cursor.execute("SELECT 13, 'user_1'")
+
+    assert cursor.description == [
+        ("col_0", int, None, None, None, None, True),
+        ("col_1", str, None, None, None, None, True),
+    ]

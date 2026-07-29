@@ -38,7 +38,7 @@ class Cursor:
 
     @property
     def description(self) -> list[tuple[str, Any, None, None, None, None, bool]]:
-        return [(n, t, None, None, None, None, True) for n, t in zip(self.names, self.types)]
+        return [(n, getattr(t, "name", t), None, None, None, None, getattr(t, "nullable", True)) for n, t in zip(self.names, self.types)]
 
     @property
     def rowcount(self) -> int:
@@ -69,7 +69,7 @@ class Cursor:
 
         if query_result.column_names:
             self.names = query_result.column_names
-            self.types = [x.name for x in query_result.column_types]
+            self.types = query_result.column_types
         elif self.data:
             self.names = [f"col_{x}" for x in range(len(self.data[0]))]
             self.types = [x.__class__ for x in self.data[0]]
@@ -80,7 +80,7 @@ class Cursor:
                 meta_result = self.client.query(f"SELECT * FROM ({stripped}) LIMIT 0", parameters, settings=settings)
                 if meta_result.column_names:
                     self.names = meta_result.column_names
-                    self.types = [x.name for x in meta_result.column_types]
+                    self.types = meta_result.column_types
 
     def _try_bulk_insert(self, operation: str, data: Any, settings: dict[str, Any] | None = None) -> bool:
         match = insert_re.match(remove_sql_comments(operation))
