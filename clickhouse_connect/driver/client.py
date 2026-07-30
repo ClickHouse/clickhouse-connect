@@ -58,10 +58,9 @@ from clickhouse_connect.driver.query import (
     TzSource,
     arrow_buffer,
     to_arrow,
-    to_arrow_batches,
 )
+from clickhouse_connect.driver.streaming import guarded_arrow_stream
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.types import Closable
 
 if TYPE_CHECKING:
     import numpy
@@ -854,17 +853,14 @@ class Client(ABC):
         check_arrow()
         self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
-        return to_arrow_batches(
-            cast(
-                io.IOBase,
-                self.raw_stream(
-                    query,
-                    parameters,
-                    settings,
-                    fmt="ArrowStream",
-                    external_data=external_data,
-                    transport_settings=transport_settings,
-                ),
+        return guarded_arrow_stream(
+            self.raw_stream(
+                query,
+                parameters,
+                settings,
+                fmt="ArrowStream",
+                external_data=external_data,
+                transport_settings=transport_settings,
             )
         )
 
@@ -965,16 +961,10 @@ class Client(ABC):
         else:
             raise ValueError(f"dataframe_library must be 'pandas' or 'polars', got '{dataframe_library}'")
         settings = self._update_arrow_settings(settings, use_strings)
-        raw_stream = self.raw_stream(
+        response = self.raw_stream(
             query, parameters, settings, fmt="ArrowStream", external_data=external_data, transport_settings=transport_settings
         )
-        reader = options.arrow.ipc.open_stream(raw_stream)
-
-        def df_generator():
-            for batch in reader:
-                yield converter(batch)
-
-        return StreamContext(cast(Closable, raw_stream), df_generator())
+        return guarded_arrow_stream(response, converter)
 
     def _update_arrow_settings(self, settings: dict[str, Any] | None, use_strings: bool | None) -> dict[str, Any]:
         settings = dict_copy(settings)

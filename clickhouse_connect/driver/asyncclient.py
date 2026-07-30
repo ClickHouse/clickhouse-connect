@@ -878,6 +878,7 @@ class AsyncClient(Client):
             file_adapter = StreamingFileAdapter(streaming_source)
             reader = options.arrow.ipc.open_stream(file_adapter)
             table = reader.read_all()
+            file_adapter.raise_if_pending()
             return _apply_arrow_tz_policy(table, self.tz_mode)
 
         try:
@@ -927,6 +928,7 @@ class AsyncClient(Client):
             reader = options.arrow.ipc.open_stream(file_adapter)
             for batch in reader:
                 yield converter(batch)
+            file_adapter.raise_if_pending()
 
         queued.pump(batches)
         return StreamContext(queued, queued.items())

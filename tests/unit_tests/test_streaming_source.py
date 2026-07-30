@@ -8,8 +8,10 @@ import lz4.frame
 import pytest
 
 from clickhouse_connect.driver.compression import _zstd_compress
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import OperationalError, StreamFailureError
 from clickhouse_connect.driver.streaming import (
+    StreamExceptionScanner,
+    StreamingFileAdapter,
     StreamingInsertSource,
     StreamingResponseSource,
 )
@@ -437,6 +439,159 @@ async def test_streaming_insert_backpressure():
 
     assert len(received) == 100
     assert received == chunks
+
+
+def _inband_exception(tag: str, message: str, sep: bytes = b"") -> bytes:
+    """Build an in-band exception block. ``sep`` is the separator ClickHouse writes
+    between the ``__exception__`` marker and the tag: older servers write them adjacent
+    (``sep=b""``, the format captured in ``tests.helpers.TAGGED_EXCEPTION_BODY``), while
+    server 26.5 separates them with CRLF (``sep=b"\\r\\n"``). The scanner must detect both.
+    """
+    body = message.encode()
+    tb = tag.encode()
+    return b"\r\n__exception__" + sep + tb + b"\r\n" + body + b"\r\n" + str(len(body)).encode() + b" " + tb + sep + b"__exception__\r\n"
+
+
+def _chunks(data: bytes, size: int) -> list[bytes]:
+    return [data[i : i + size] for i in range(0, len(data), size)] or [b""]
+
+
+@pytest.mark.parametrize("sep", [b"", b"\r\n"], ids=["adjacent-tag", "crlf-tag"])
+@pytest.mark.parametrize("chunk_size", [7, 64, 100000])
+def test_scanner_extracts_and_holds_back_block(chunk_size, sep):
+    """The scanner extracts the tagged server error and never forwards exception-block
+    bytes to the consumer, across both marker layouts and any chunking."""
+    tag = "abcd1234efgh5678"
+    prefix = b"arrow-batch-bytes" * 40
+    message = "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero"
+    stream = prefix + _inband_exception(tag, message, sep)
+
+    scanner = StreamExceptionScanner(tag)
+    forwarded = b"".join(scanner.feed(chunk) for chunk in _chunks(stream, chunk_size))
+    forwarded += scanner.flush()
+
+    assert scanner.armed is True
+    assert scanner.error_message == message
+    # The valid prefix is forwarded, but nothing from the exception block is.
+    assert forwarded.startswith(prefix)
+    assert b"__exception__" not in forwarded
+
+
+def test_scanner_matches_repo_exception_fixture():
+    """The scanner detects the canonical tagged-exception body the native-path tests
+    use, so both paths agree on the wire format."""
+    from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG
+
+    scanner = StreamExceptionScanner(TAGGED_EXCEPTION_TAG)
+    forwarded = b"".join(scanner.feed(c) for c in _chunks(TAGGED_EXCEPTION_BODY, 16)) + scanner.flush()
+
+    assert scanner.armed is True
+    assert scanner.error_message == "Big bam occurred right while reading the data"
+    assert forwarded == b"bodybodybodybody\r\n"
+    assert b"__exception__" not in forwarded
+
+
+def test_scanner_ignores_foreign_tag():
+    """A block tagged with a different (unknown) tag must not be treated as our
+    exception, so legitimate result bytes are forwarded unchanged."""
+    scanner = StreamExceptionScanner("our0tag0our0tag0")
+    data = b"payload-bytes" + _inband_exception("other0tag0other0", "not our error")
+
+    forwarded = b"".join(scanner.feed(c) for c in _chunks(data, 16)) + scanner.flush()
+
+    assert scanner.armed is False
+    assert scanner.error_message is None
+    assert forwarded == data
+
+
+def test_scanner_passthrough_without_exception():
+    """A clean stream (no exception block) is forwarded byte-for-byte."""
+    scanner = StreamExceptionScanner("tag0tag0tag0tag0")
+    data = b"complete arrow stream with no server error" * 10
+
+    forwarded = b"".join(scanner.feed(c) for c in _chunks(data, 13)) + scanner.flush()
+
+    assert scanner.armed is False
+    assert forwarded == data
+
+
+def _read_all(adapter: StreamingFileAdapter, size: int = 32) -> bytes:
+    out = b""
+    while True:
+        piece = adapter.read(size)
+        if not piece:
+            return out
+        out += piece
+
+
+def test_file_adapter_raises_streamfailure_on_inband_exception():
+    """A mid-stream server exception in the byte stream surfaces as a clean
+    StreamFailureError rather than being fed to the consumer as garbled data."""
+    tag = "tag0tag0tag0tag0"
+    payload = b"ARROWDATA" * 200
+    block = _inband_exception(tag, "Code: 241. DB::Exception: Memory limit exceeded")
+    adapter = StreamingFileAdapter(iter([payload[:150], payload[150:] + block]), exception_tag=tag)
+
+    with pytest.raises(StreamFailureError, match="Memory limit exceeded"):
+        _read_all(adapter)
+
+
+def test_file_adapter_passthrough_without_tag():
+    """Without an exception tag the adapter is a plain pass-through (unchanged
+    behavior for servers that do not send the exception-tag header)."""
+    adapter = StreamingFileAdapter(iter([b"abc", b"def", b"ghi"]))
+    assert adapter.read(-1) == b"abcdefghi"
+
+
+def test_file_adapter_clean_stream_with_tag_no_raise():
+    """A clean stream is delivered intact even when exception detection is armed, and
+    raise_if_pending is a no-op when no exception occurred."""
+    tag = "tag0tag0tag0tag0"
+    adapter = StreamingFileAdapter(iter([b"clean", b"arrow", b"data"]), exception_tag=tag)
+    assert _read_all(adapter, 4) == b"cleanarrowdata"
+    adapter.raise_if_pending()
+
+
+def test_file_adapter_raise_if_pending_surfaces_exception():
+    """If the consumer stops reading before reaching the exception block (for example
+    an Arrow reader treating trailing padding as end-of-stream), raise_if_pending still
+    surfaces the server error."""
+    tag = "tag0tag0tag0tag0"
+    block = _inband_exception(tag, "Code: 159. DB::Exception: Timeout exceeded")
+    adapter = StreamingFileAdapter(iter([b"validprefix", block]), exception_tag=tag)
+
+    assert adapter.read(11) == b"validprefix"
+    with pytest.raises(StreamFailureError, match="Timeout exceeded"):
+        adapter.raise_if_pending()
+
+
+def test_file_adapter_transport_abort_prefers_inband_exception():
+    """When the transport aborts after the server wrote an in-band error, the clean
+    server error is preferred over the raw transport error."""
+    tag = "tag1tag1tag1tag1"
+    block = _inband_exception(tag, "Code: 210. DB::Exception: Connection reset")
+
+    def gen():
+        yield b"arrowdata" * 30
+        yield block
+        raise ConnectionError("raw transport failure")
+
+    adapter = StreamingFileAdapter(gen(), exception_tag=tag)
+    with pytest.raises(StreamFailureError, match="Connection reset"):
+        _read_all(adapter)
+
+
+def test_file_adapter_transport_abort_without_inband_reraises():
+    """A transport abort with no in-band error is re-raised as-is (not masked)."""
+    tag = "tag2tag2tag2tag2"
+
+    def gen():
+        yield b"arrowdata" * 30
+        raise ConnectionError("raw transport failure")
+
+    adapter = StreamingFileAdapter(gen(), exception_tag=tag)
+    with pytest.raises(ConnectionError, match="raw transport failure"):
+        _read_all(adapter)
 
 
 if __name__ == "__main__":

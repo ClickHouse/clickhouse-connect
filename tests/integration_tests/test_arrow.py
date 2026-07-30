@@ -5,7 +5,13 @@ from datetime import date
 import pytest
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import DatabaseError, StreamFailureError
 from clickhouse_connect.driver.options import arrow
+
+# A query that streams rows and then fails partway through, so the server appends an
+# in-band exception to an already-committed HTTP 200 response.
+_MID_STREAM_FAIL_QUERY = "SELECT sleepEachRow(0.01), throwIf(number=100) FROM numbers(200)"
+_MID_STREAM_FAIL_SETTINGS = {"max_block_size": 1, "wait_end_of_query": 0}
 
 
 def test_arrow(param_client: Client, call, table_context: Callable):
@@ -90,3 +96,47 @@ def test_arrow_map(param_client: Client, call, table_context: Callable):
         assert isinstance(arrow_table.schema, arrow.Schema)
         call(param_client.insert_arrow, "test_arrow_map", arrow_table, settings={"insert_deduplication_token": "10382"})
         assert 4 == call(param_client.command, "SELECT count() FROM test_arrow_map")
+
+
+def test_arrow_mid_stream_exception(param_client: Client, call):
+    """A server error during an Arrow query surfaces as a clean ClickHouse error, not
+    garbled/truncated Arrow data. The sync client buffers (server-side wait) and raises
+    DatabaseError; the async client streams and raises StreamFailureError."""
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    if not param_client.min_version("21"):
+        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
+    # Small blocks so the failure row is reached mid-result. wait_end_of_query is left at
+    # each method's default so the buffered (sync) and streaming (async) transports are
+    # both exercised on their natural path.
+    with pytest.raises((StreamFailureError, DatabaseError), match="throwIf"):
+        call(param_client.query_arrow, _MID_STREAM_FAIL_QUERY, settings={"max_block_size": 1})
+    assert call(param_client.command, "SELECT 1") == 1
+
+
+def test_arrow_stream_mid_stream_exception(param_client: Client, call, consume_stream):
+    """A server error partway through a streamed Arrow query is raised as a clean
+    StreamFailureError instead of a raw transport error or a truncated stream."""
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    if not param_client.min_version("21"):
+        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
+    with pytest.raises(StreamFailureError, match="throwIf"):
+        stream = call(param_client.query_arrow_stream, _MID_STREAM_FAIL_QUERY, settings=_MID_STREAM_FAIL_SETTINGS)
+        consume_stream(stream)
+    # The connection remains usable after the mid-stream failure.
+    assert call(param_client.command, "SELECT 1") == 1
+
+
+def test_df_arrow_stream_mid_stream_exception(param_client: Client, call, consume_stream):
+    """The DataFrame Arrow streaming variant shares the same guard and must also raise
+    a clean StreamFailureError on a mid-stream server error."""
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    pytest.importorskip("pandas")
+    if not param_client.min_version("21"):
+        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
+    with pytest.raises(StreamFailureError, match="throwIf"):
+        stream = call(param_client.query_df_arrow_stream, _MID_STREAM_FAIL_QUERY, settings=_MID_STREAM_FAIL_SETTINGS)
+        consume_stream(stream)
+    assert call(param_client.command, "SELECT 1") == 1

@@ -7,8 +7,9 @@ from collections.abc import Callable, Iterable, Iterator
 import lz4.frame
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
+from clickhouse_connect.driver.common import StreamContext
 from clickhouse_connect.driver.compression import _zstd_decompressor, available_compression
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import OperationalError, StreamFailureError
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,9 @@ __all__ = [
     "StreamingFileAdapter",
     "StreamingInsertSource",
     "QueuedStreamSource",
+    "StreamExceptionScanner",
     "start_streaming_response",
+    "guarded_arrow_stream",
 ]
 
 if "br" in available_compression:
@@ -271,15 +274,169 @@ class QueuedStreamSource(Closable):
         self.source.close()
 
 
-class StreamingFileAdapter:
-    """File-like adapter for PyArrow streaming."""
+def _extract_exception_with_tag(message: bytes, exception_tag: str) -> str | None:
+    # Imported lazily: transform imports driver.query (and, transitively, driver.client,
+    # which imports this module), so a module-level import would create a cycle.
+    from clickhouse_connect.driver.transform import extract_exception_with_tag
 
-    def __init__(self, streaming_source):
-        self.streaming_source = streaming_source
-        self.gen = streaming_source.gen
+    return extract_exception_with_tag(message, exception_tag)
+
+
+class StreamExceptionScanner:
+    """Detects an in-band ClickHouse exception appended to an HTTP 200 response body.
+
+    When a query fails after the server has already started streaming a 200 response,
+    the server appends a tagged block of the form
+
+        \\r\\n__exception__\\r\\n<tag>\\r\\n<message>\\r\\n<len> <tag>\\r\\n__exception__\\r\\n
+
+    where <tag> is the value of the X-ClickHouse-Exception-Tag response header. The
+    native ResponseBuffer parser detects this while reading columns, but the Arrow
+    paths hand raw bytes straight to pyarrow, which cannot see it. This scanner
+    reproduces the detection for those byte streams: feed it the raw chunks and it
+    holds back any bytes that belong to the exception block, exposing the extracted
+    server error through error_message.
+    """
+
+    _MARKER = b"__exception__"
+
+    def __init__(self, exception_tag: str):
+        self.exception_tag = exception_tag
+        self._tag = exception_tag.encode()
+        self._carry = b""
+        self.armed = False
+        self._block = bytearray()
+        self.error_message: str | None = None
+
+    def feed(self, chunk: bytes) -> bytes:
+        """Feed a raw chunk and return the leading bytes that are safe to forward to
+        the consumer. Once the exception marker has been seen every subsequent byte is
+        retained for extraction, so this returns b"" from that point on."""
+        if self.armed:
+            self._block += chunk
+            self._finalize_if_complete()
+            return b""
+        search = self._carry + chunk
+        idx = self._find_marker(search)
+        if idx is not None:
+            self.armed = True
+            self._block = bytearray(search[idx:])
+            self._carry = b""
+            self._finalize_if_complete()
+            return search[:idx]
+        # No marker yet: hold back a small tail so an opening marker split across a
+        # chunk boundary is still found once the next chunk arrives. The tail must span
+        # the whole opener the matcher needs to confirm (the marker, the tag, and the
+        # CRLF that may separate them), so keep MARKER + tag plus a few bytes of slack.
+        keep = len(self._MARKER) + len(self._tag) + 8
+        if len(search) > keep:
+            self._carry = search[-keep:]
+            return search[:-keep]
+        self._carry = search
+        return b""
+
+    def finish(self) -> None:
+        """Signal end of input, finalizing the message from whatever block bytes
+        arrived. Used when the transport aborts before the closing marker."""
+        if self.armed and self.error_message is None:
+            self.error_message = _extract_exception_with_tag(bytes(self._block), self.exception_tag)
+
+    def flush(self) -> bytes:
+        """Return any bytes held back when the stream ends without an exception."""
+        if self.armed:
+            return b""
+        tail = self._carry
+        self._carry = b""
+        return tail
+
+    def _finalize_if_complete(self) -> None:
+        if self.error_message is None and self._block.count(self._MARKER) >= 2:
+            self.error_message = _extract_exception_with_tag(bytes(self._block), self.exception_tag)
+
+    def _find_marker(self, data: bytes) -> int | None:
+        """Return the index of an opening marker whose tag matches, or None.
+
+        The wire format separates __exception__ from the tag with CRLF, so we look
+        for the literal marker and then require our tag to follow it (after an
+        optional run of CR/LF), which also guards against matching the literal bytes
+        inside legitimate result data.
+        """
+        start = 0
+        while True:
+            pos = data.find(self._MARKER, start)
+            if pos == -1:
+                return None
+            probe = pos + len(self._MARKER)
+            while probe < len(data) and data[probe : probe + 1] in (b"\r", b"\n"):
+                probe += 1
+            candidate = data[probe : probe + len(self._tag)]
+            if candidate == self._tag:
+                return pos
+            if len(candidate) < len(self._tag) and self._tag.startswith(candidate):
+                # The tag may be split across the chunk boundary; wait for more bytes.
+                return None
+            start = pos + 1
+
+
+class StreamingFileAdapter:
+    """File-like adapter for PyArrow streaming.
+
+    When an exception_tag is present the adapter guards the byte stream: a mid-stream
+    server exception is surfaced as a clean StreamFailureError instead of being fed to
+    pyarrow as truncated or garbled Arrow data.
+    """
+
+    def __init__(self, source, exception_tag: str | None = None):
+        raw_gen = source.gen if hasattr(source, "gen") else iter(source)
+        self.exception_tag = exception_tag if exception_tag is not None else getattr(source, "exception_tag", None)
+        self._scanner = StreamExceptionScanner(self.exception_tag) if self.exception_tag else None
+        self.gen = self._guarded_gen(raw_gen) if self._scanner else raw_gen
         self.buffer = b""
         self.closed = False
         self.eof = False
+
+    def _guarded_gen(self, source_gen):
+        """Wrap the raw chunk generator, forwarding data until an in-band exception
+        marker appears, then raising it as a StreamFailureError."""
+        scanner = self._scanner
+        source_gen = iter(source_gen)
+        while True:
+            try:
+                chunk = next(source_gen)
+            except StopIteration:
+                tail = scanner.flush()
+                if tail:
+                    yield tail
+                return
+            except Exception:
+                # Transport aborted mid-stream (ClientPayloadError, ProtocolError,
+                # OperationalError). ClickHouse may have written the real error into the
+                # body before the connection dropped, so prefer that over the raw error.
+                scanner.finish()
+                if scanner.error_message is not None:
+                    raise StreamFailureError(scanner.error_message) from None
+                raise
+            if not chunk:
+                continue
+            safe = scanner.feed(chunk)
+            if safe:
+                yield safe
+            if scanner.armed:
+                break
+        # Marker seen: drain the rest of the input into the scanner (without forwarding
+        # it to the consumer) so the complete exception block is captured, then surface
+        # the server error.
+        while scanner.error_message is None:
+            try:
+                chunk = next(source_gen)
+            except StopIteration:
+                break
+            except Exception:
+                break
+            if chunk:
+                scanner.feed(chunk)
+        scanner.finish()
+        raise StreamFailureError(scanner.error_message or "ClickHouse server reported an error during streaming")
 
     def read(self, size: int = -1) -> bytes:
         """Read up to size bytes from stream"""
@@ -317,8 +474,54 @@ class StreamingFileAdapter:
         self.buffer = full_data[size:]
         return result
 
+    def raise_if_pending(self):
+        """Ensure an in-band server exception is surfaced even if the Arrow reader
+        stopped short of it (for example by treating padding before the exception
+        block as end-of-stream). Safe to call after a clean parse; a no-op when no
+        exception tag is in play."""
+        if self._scanner is None:
+            return
+        while next(self.gen, None) is not None:
+            pass
+
     def close(self):
         self.closed = True
+
+
+def guarded_arrow_stream(response, converter: Callable | None = None) -> StreamContext:
+    """Wrap a synchronous streaming HTTP response as a StreamContext of pyarrow
+    RecordBatches, guarding it so a mid-stream ClickHouse exception surfaces as a
+    clean StreamFailureError instead of a truncated Arrow stream or a raw transport
+    error. Mirrors the in-band detection the async Arrow paths get through
+    StreamingResponseSource. When ``converter`` is provided each RecordBatch is passed
+    through it (used by the DataFrame streaming variants)."""
+    # Imported lazily to avoid an import cycle (httpcommon imports driver.client,
+    # which imports this module) and to keep pyarrow optional at import time.
+    from clickhouse_connect.driver.options import check_arrow
+
+    pyarrow = check_arrow()
+    if hasattr(response, "headers") and hasattr(response, "stream"):
+        from clickhouse_connect.driver._backend.httpcommon import ex_tag_header
+
+        exception_tag = response.headers.get(ex_tag_header)
+        adapter: StreamingFileAdapter | None = StreamingFileAdapter(
+            response.stream(StreamingResponseSource.READ_BUFFER_SIZE, True),
+            exception_tag=exception_tag,
+        )
+        reader = pyarrow.ipc.open_stream(adapter)
+    else:
+        # Not an HTTP streaming response (for example the in-process chdb backend):
+        # there is no in-band exception tag to guard, so parse the response directly.
+        adapter = None
+        reader = pyarrow.ipc.open_stream(response)
+
+    def batches():
+        for batch in reader:
+            yield converter(batch) if converter is not None else batch
+        if adapter is not None:
+            adapter.raise_if_pending()
+
+    return StreamContext(response, batches())
 
 
 class StreamingInsertSource:
