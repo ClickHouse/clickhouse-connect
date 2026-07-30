@@ -515,6 +515,54 @@ def test_scanner_passthrough_without_exception():
     assert forwarded == data
 
 
+def _untagged_inband_exception(message: str) -> bytes:
+    """Build the older (untagged) in-band exception block ClickHouse writes before
+    dropping the connection: the bare ``__exception__`` marker, a CRLF, then the raw
+    ``Code: ...`` error text, with no tag and no closing marker. This is the layout
+    servers before v25.11 use (no X-ClickHouse-Exception-Tag header)."""
+    return b"__exception__\r\n" + message.encode() + b"\n"
+
+
+@pytest.mark.parametrize("chunk_size", [7, 64, 100000])
+def test_scanner_untagged_recovers_error_after_abort(chunk_size):
+    """Without a tag the scanner forwards every byte (it cannot safely hide the bare
+    marker) and recovers the server error from the retained tail only when finish() is
+    called, i.e. after the transport aborts."""
+    prefix = b"arrow-batch-bytes" * 40
+    message = "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero"
+    stream = prefix + _untagged_inband_exception(message)
+
+    scanner = StreamExceptionScanner(None)
+    forwarded = b"".join(scanner.feed(chunk) for chunk in _chunks(stream, chunk_size))
+
+    # Nothing is detected or held back until the stream ends.
+    assert scanner.armed is False
+    assert scanner.error_message is None
+    assert forwarded == stream
+    forwarded += scanner.flush()
+    assert forwarded == stream
+
+    scanner.finish()
+    # The recovered message runs from "Code: " to the end of the block (matching the
+    # native path's extract_error_message), so assert on containment like the native tests.
+    assert scanner.error_message is not None
+    assert message in scanner.error_message
+
+
+def test_scanner_untagged_passthrough_without_exception():
+    """A clean stream with no in-band marker is forwarded byte-for-byte and yields no
+    error even after finish() (so healthy result data is never misreported)."""
+    scanner = StreamExceptionScanner(None)
+    data = b"complete arrow stream with no server error" * 20
+
+    forwarded = b"".join(scanner.feed(c) for c in _chunks(data, 13)) + scanner.flush()
+    scanner.finish()
+
+    assert scanner.armed is False
+    assert scanner.error_message is None
+    assert forwarded == data
+
+
 def _read_all(adapter: StreamingFileAdapter, size: int = 32) -> bytes:
     out = b""
     while True:
@@ -590,6 +638,58 @@ def test_file_adapter_transport_abort_without_inband_reraises():
         raise ConnectionError("raw transport failure")
 
     adapter = StreamingFileAdapter(gen(), exception_tag=tag)
+    with pytest.raises(ConnectionError, match="raw transport failure"):
+        _read_all(adapter)
+
+
+def test_file_adapter_untagged_transport_abort_recovers_inband():
+    """On an older (untagged) server the mid-stream error has no tag, so it is recovered
+    reactively from the stream tail when the transport aborts, and still surfaces as a
+    clean StreamFailureError."""
+    block = _untagged_inband_exception("Code: 241. DB::Exception: Memory limit exceeded")
+
+    def gen():
+        yield b"ARROWDATA" * 200
+        yield block
+        raise ConnectionError("raw transport failure")
+
+    adapter = StreamingFileAdapter(gen())
+    with pytest.raises(StreamFailureError, match="Memory limit exceeded"):
+        _read_all(adapter)
+
+
+def test_file_adapter_untagged_transport_abort_no_marker_reraises():
+    """An untagged transport abort with no in-band marker is re-raised as-is: without the
+    positive __exception__ signal the raw transport error must not be masked."""
+
+    def gen():
+        yield b"ARROWDATA" * 200
+        raise ConnectionError("raw transport failure")
+
+    adapter = StreamingFileAdapter(gen())
+    with pytest.raises(ConnectionError, match="raw transport failure"):
+        _read_all(adapter)
+
+
+def test_file_adapter_untagged_clean_stream_no_raise():
+    """A clean untagged stream is delivered intact and raise_if_pending is a no-op even
+    though the guard is now always active (no false positive on healthy data)."""
+    adapter = StreamingFileAdapter(iter([b"clean", b"arrow", b"data"]))
+    assert _read_all(adapter, 4) == b"cleanarrowdata"
+    adapter.raise_if_pending()
+
+
+def test_file_adapter_untagged_marker_in_data_without_signature_reraises():
+    """If result bytes incidentally contain the __exception__ marker but not the
+    "Code: " server-error signature, an unrelated transport abort is re-raised as-is:
+    the marker alone must not be enough to fabricate a StreamFailureError and mask the
+    real error."""
+
+    def gen():
+        yield b"ARROW__exception__DATA" * 40  # marker present in data, but no "Code: "
+        raise ConnectionError("raw transport failure")
+
+    adapter = StreamingFileAdapter(gen())
     with pytest.raises(ConnectionError, match="raw transport failure"):
         _read_all(adapter)
 

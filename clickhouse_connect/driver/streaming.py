@@ -283,36 +283,73 @@ def _extract_exception_with_tag(message: bytes, exception_tag: str) -> str | Non
     return extract_exception_with_tag(message, exception_tag)
 
 
+def _extract_error_message(message: bytes) -> str:
+    # Lazy import for the same import-cycle reason as above. This is the tag-less
+    # extractor the native read path uses for older servers (it slices from "Code: ").
+    from clickhouse_connect.driver.transform import extract_error_message
+
+    return extract_error_message(message)
+
+
 class StreamExceptionScanner:
     """Detects an in-band ClickHouse exception appended to an HTTP 200 response body.
 
     When a query fails after the server has already started streaming a 200 response,
-    the server appends a tagged block of the form
+    the server appends the error to the body before dropping the connection. There are
+    two wire layouts, and this scanner handles both:
+
+    Tagged (server v25.11+, X-ClickHouse-Exception-Tag header present)::
 
         \\r\\n__exception__\\r\\n<tag>\\r\\n<message>\\r\\n<len> <tag>\\r\\n__exception__\\r\\n
 
-    where <tag> is the value of the X-ClickHouse-Exception-Tag response header. The
-    native ResponseBuffer parser detects this while reading columns, but the Arrow
-    paths hand raw bytes straight to pyarrow, which cannot see it. This scanner
-    reproduces the detection for those byte streams: feed it the raw chunks and it
-    holds back any bytes that belong to the exception block, exposing the extracted
-    server error through error_message.
+    The random per-response tag cannot appear in result data, so the block is
+    identified proactively and its bytes are held back from the consumer.
+
+    Untagged (older servers, no tag header)::
+
+        __exception__\\r\\n<Code: ... DB::Exception: ...>
+
+    with no tag and no closing marker. The bare __exception__ marker cannot be safely
+    told apart from result bytes mid-stream, so untagged detection is reactive: every
+    byte is forwarded and a bounded tail of the stream is retained, and only after the
+    transport aborts is that tail scanned for the marker (see ``finish``).
+
+    The native ResponseBuffer parser detects the same block while reading columns, but
+    the Arrow paths hand raw bytes straight to pyarrow, which cannot see it. This scanner
+    reproduces the detection for those byte streams, exposing the extracted server error
+    through ``error_message``.
     """
 
     _MARKER = b"__exception__"
+    # ClickHouse server errors always render as "Code: N. DB::Exception: ...". In untagged
+    # mode this signature confirms the retained tail really holds a server exception.
+    _CODE_SIGNATURE = b"Code: "
+    # Bytes of trailing stream retained in untagged mode so the in-band error block
+    # (marker + "Code: ..." message, always the last bytes before the connection drops)
+    # can be recovered once the transport aborts.
+    _UNTAGGED_TAIL_KEEP = 16 * 1024
 
-    def __init__(self, exception_tag: str):
-        self.exception_tag = exception_tag
-        self._tag = exception_tag.encode()
+    def __init__(self, exception_tag: str | None):
+        self.exception_tag: str | None = exception_tag
+        self._tagged: bool = bool(exception_tag)
+        self._tag = exception_tag.encode() if exception_tag else b""
         self._carry = b""
         self.armed: bool = False
         self._block = bytearray()
+        self._tail = bytearray()
         self.error_message: str | None = None
 
     def feed(self, chunk: bytes) -> bytes:
         """Feed a raw chunk and return the leading bytes that are safe to forward to
-        the consumer. Once the exception marker has been seen every subsequent byte is
-        retained for extraction, so this returns b"" from that point on."""
+        the consumer. In tagged mode, once the exception marker has been seen every
+        subsequent byte is retained for extraction, so this returns b"" from that point
+        on. In untagged mode every byte is forwarded and a bounded tail is retained for
+        reactive recovery in ``finish``."""
+        if not self._tagged:
+            self._tail += chunk
+            if len(self._tail) > self._UNTAGGED_TAIL_KEEP:
+                del self._tail[: -self._UNTAGGED_TAIL_KEEP]
+            return chunk
         if self.armed:
             self._block += chunk
             self._finalize_if_complete()
@@ -337,21 +374,39 @@ class StreamExceptionScanner:
         return b""
 
     def finish(self) -> None:
-        """Signal end of input, finalizing the message from whatever block bytes
-        arrived. Used when the transport aborts before the closing marker."""
-        if self.armed and self.error_message is None:
-            self.error_message = _extract_exception_with_tag(bytes(self._block), self.exception_tag)
+        """Signal end of input, finalizing the message from whatever bytes arrived.
+        Used when the transport aborts before the stream completed. In untagged mode this
+        is the only place detection happens: the retained tail is scanned for the bare
+        __exception__ marker, and only if it is present is the error recovered (a healthy
+        stream ends cleanly and never reaches here, so result data is never misread)."""
+        if self.error_message is not None:
+            return
+        if self._tagged:
+            if self.armed and self.exception_tag:
+                self.error_message = _extract_exception_with_tag(bytes(self._block), self.exception_tag)
+            return
+        # Untagged: require BOTH the __exception__ marker and the "Code: " server-error
+        # signature that always follows it (the wire format is "__exception__\r\nCode: N.
+        # DB::Exception: ..."). Demanding the signature - not the bare marker - means an
+        # incidental __exception__ byte sequence inside result data does not mask a real
+        # transport error, while every genuine server error is still recovered.
+        marker_pos = self._tail.rfind(self._MARKER)
+        if marker_pos != -1:
+            block = bytes(self._tail[marker_pos:])
+            if self._CODE_SIGNATURE in block:
+                self.error_message = _extract_error_message(block)
 
     def flush(self) -> bytes:
-        """Return any bytes held back when the stream ends without an exception."""
-        if self.armed:
+        """Return any bytes held back when the stream ends without an exception. Untagged
+        mode forwards everything as it arrives, so it holds nothing back."""
+        if not self._tagged or self.armed:
             return b""
         tail = self._carry
         self._carry = b""
         return tail
 
     def _finalize_if_complete(self) -> None:
-        if self.error_message is None and self._block.count(self._MARKER) >= 2:
+        if self.exception_tag and self.error_message is None and self._block.count(self._MARKER) >= 2:
             self.error_message = _extract_exception_with_tag(bytes(self._block), self.exception_tag)
 
     def _find_marker(self, data: bytes) -> int | None:
@@ -382,16 +437,21 @@ class StreamExceptionScanner:
 class StreamingFileAdapter:
     """File-like adapter for PyArrow streaming.
 
-    When an exception_tag is present the adapter guards the byte stream: a mid-stream
-    server exception is surfaced as a clean StreamFailureError instead of being fed to
-    pyarrow as truncated or garbled Arrow data.
+    The adapter always guards the byte stream so a mid-stream server exception is
+    surfaced as a clean StreamFailureError instead of being fed to pyarrow as truncated
+    or garbled Arrow data. On tagged servers (v25.11+) the exception block is detected
+    proactively via its X-ClickHouse-Exception-Tag; on older untagged servers it is
+    recovered reactively from the stream tail once the transport aborts.
     """
 
     def __init__(self, source: Any, exception_tag: str | None = None):
         raw_gen = source.gen if hasattr(source, "gen") else iter(source)
         self.exception_tag: str | None = exception_tag if exception_tag is not None else getattr(source, "exception_tag", None)
-        self._scanner = StreamExceptionScanner(self.exception_tag) if self.exception_tag else None
-        self.gen: Iterator[bytes] = self._guarded_gen(raw_gen) if self._scanner else raw_gen
+        # Always guard: tagged servers (v25.11+) get proactive marker+tag detection,
+        # older untagged servers get reactive recovery of the in-band error from the
+        # stream tail. Both surface a mid-stream server error as a clean StreamFailureError.
+        self._scanner: StreamExceptionScanner = StreamExceptionScanner(self.exception_tag)
+        self.gen: Iterator[bytes] = self._guarded_gen(raw_gen)
         self.buffer = b""
         self.closed = False
         self.eof = False
@@ -478,10 +538,8 @@ class StreamingFileAdapter:
     def raise_if_pending(self) -> None:
         """Ensure an in-band server exception is surfaced even if the Arrow reader
         stopped short of it (for example by treating padding before the exception
-        block as end-of-stream). Safe to call after a clean parse; a no-op when no
-        exception tag is in play."""
-        if self._scanner is None:
-            return
+        block as end-of-stream). Safe to call after a clean parse; draining a healthy
+        stream is a no-op."""
         while next(self.gen, None) is not None:
             pass
 
