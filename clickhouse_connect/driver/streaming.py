@@ -282,8 +282,8 @@ class StreamingFileAdapter:
     def __init__(self, streaming_source):
         self.streaming_source = streaming_source
         self.gen = streaming_source.gen
-        self.buffer = bytearray()
-        self.pos = 0
+        self.buffer: bytearray = bytearray()
+        self.pos: int = 0
         self.closed = False
         self.eof = False
 
