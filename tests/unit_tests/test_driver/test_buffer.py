@@ -88,3 +88,35 @@ def test_tagged_exception_extracts_clean_message():
         with pytest.raises(StreamFailureError) as ex:
             NativeTransform.parse_response(cls(TaggedSource()))
         assert str(ex.value) == "Big bam occurred right while reading the data"
+
+
+@pytest.mark.parametrize("split_point", ["closing_marker", "opening_marker"])
+def test_tagged_exception_split_across_chunks(split_point):
+    # The server can split the in-band exception block across transport chunks. Chunk it so that no
+    # single chunk holds the whole block, which defeats the last-chunk fallback in
+    # NativeTransform.parse_response: a clean error can only come from the cross-chunk scan in
+    # ResponseBuffer._check_for_exception, which must reassemble the block from both chunks.
+    body = TAGGED_EXCEPTION_BODY
+    if split_point == "closing_marker":
+        # Opening marker and message in the first chunk, closing marker alone in the last chunk. The
+        # closing marker (tag then __exception__) only appears in the footer, so split at the footer tag.
+        # Exercises the exception_buf accumulation branch.
+        split = body.rfind(TAGGED_EXCEPTION_TAG.encode())
+    else:
+        # Split inside the opening __exception__ marker itself, so neither chunk contains the whole
+        # marker. Exercises the _carryover branch, which must rejoin the marker across the two chunks.
+        split = body.find(b"__exception__") + 7
+    chunks = [body[:split], body[split:]]
+
+    class ChunkedSource:
+        def __init__(self):
+            self.gen = iter(chunks)
+            self.exception_tag = TAGGED_EXCEPTION_TAG
+
+        def close(self, ex: Exception | None = None):
+            pass
+
+    for cls in CResponseBuffer, PyResponseBuffer:
+        with pytest.raises(StreamFailureError) as ex:
+            NativeTransform.parse_response(cls(ChunkedSource()))
+        assert str(ex.value) == "Big bam occurred right while reading the data"
