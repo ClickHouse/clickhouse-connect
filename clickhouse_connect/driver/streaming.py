@@ -274,10 +274,16 @@ class QueuedStreamSource(Closable):
 class StreamingFileAdapter:
     """File-like adapter for PyArrow streaming."""
 
+    # Once this many already-consumed bytes pile up at the front of the backing
+    # buffer, drop them. This keeps the buffer bounded without paying an
+    # O(residual) compaction on every read.
+    COMPACT_THRESHOLD = 1024 * 1024
+
     def __init__(self, streaming_source):
         self.streaming_source = streaming_source
         self.gen = streaming_source.gen
-        self.buffer = b""
+        self.buffer = bytearray()
+        self.pos = 0
         self.closed = False
         self.eof = False
 
@@ -286,35 +292,49 @@ class StreamingFileAdapter:
         if self.closed or self.eof:
             return b""
 
-        if size != -1 and len(self.buffer) >= size:
-            result = self.buffer[:size]
-            self.buffer = self.buffer[size:]
-            return result
+        buffer = self.buffer
 
-        chunks = [self.buffer] if self.buffer else []
-        current_len = len(self.buffer)
-        self.buffer = b""
-
-        while (size == -1 or current_len < size) and not self.eof:
-            try:
-                chunk = next(self.gen)
-                if chunk:
-                    chunks.append(chunk)
-                    current_len += len(chunk)
-                else:
+        # Pull more chunks only when the buffered residual cannot satisfy the
+        # request. PyArrow interleaves small framing reads with large body
+        # reads, so most calls are served from the residual without pulling.
+        if size == -1 or len(buffer) - self.pos < size:
+            if self.pos:
+                del buffer[: self.pos]
+                self.pos = 0
+            while (size == -1 or len(buffer) < size) and not self.eof:
+                try:
+                    chunk = next(self.gen)
+                    if chunk:
+                        buffer += chunk
+                    else:
+                        self.eof = True
+                        break
+                except StopIteration:
                     self.eof = True
                     break
-            except StopIteration:
-                self.eof = True
-                break
 
-        full_data = b"".join(chunks)
+        pos = self.pos
+        available = len(buffer) - pos
 
-        if size == -1 or len(full_data) <= size:
-            return full_data
+        # Hand back the whole residual when unbounded or when it is no larger
+        # than requested; otherwise return a `size` slice and advance the read
+        # offset instead of recopying the residual tail on every read. The
+        # memoryview keeps the returned bytes a single copy.
+        if size == -1 or available <= size:
+            view = memoryview(buffer)
+            result = bytes(view[pos:])
+            view.release()
+            self.buffer = bytearray()
+            self.pos = 0
+            return result
 
-        result = full_data[:size]
-        self.buffer = full_data[size:]
+        view = memoryview(buffer)
+        result = bytes(view[pos : pos + size])
+        view.release()
+        self.pos = pos + size
+        if self.pos >= self.COMPACT_THRESHOLD:
+            del buffer[: self.pos]
+            self.pos = 0
         return result
 
     def close(self):

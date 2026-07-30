@@ -10,6 +10,7 @@ import pytest
 from clickhouse_connect.driver.compression import _zstd_compress
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.streaming import (
+    StreamingFileAdapter,
     StreamingInsertSource,
     StreamingResponseSource,
 )
@@ -437,6 +438,178 @@ async def test_streaming_insert_backpressure():
 
     assert len(received) == 100
     assert received == chunks
+
+
+# ---------------------------------------------------------------------------
+# StreamingFileAdapter: PyArrow file-like reader over the streamed chunks.
+# ---------------------------------------------------------------------------
+
+
+def _pattern(n: int) -> bytes:
+    """Deterministic, non-repeating byte payload of length n."""
+    return bytes((i * 197 + 13) & 0xFF for i in range(n))
+
+
+_THRESHOLD = StreamingFileAdapter.COMPACT_THRESHOLD
+_BIG = _pattern(_THRESHOLD * 2 + 8192)  # built once, sliced by the large-stream tests
+
+
+class _ChunkSource:
+    """Minimal stand-in for StreamingResponseSource: exposes a .gen iterator
+    over a fixed list of byte chunks, the same contract StreamingFileAdapter
+    consumes from the real streaming source."""
+
+    def __init__(self, chunks):
+        self._gen = iter(chunks)
+
+    @property
+    def gen(self):
+        return self._gen
+
+
+def _read_in_steps(adapter, size):
+    """Drain the adapter with repeated read(size) calls until EOF, returning
+    the concatenation. Also asserts no read ever overruns the requested size."""
+    out = bytearray()
+    while True:
+        data = adapter.read(size)
+        assert size == -1 or len(data) <= size
+        if not data:
+            break
+        out += data
+    return bytes(out)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [],
+        [b""],
+        [b"single"],
+        [_pattern(500)],
+        [b"ab", b"cde", b"f", b"ghij"],
+        [_pattern(300) for _ in range(20)],
+    ],
+)
+@pytest.mark.parametrize("size", [1, 3, 7, 8, 64, 250, 4096, 100_000])
+def test_file_adapter_fixed_size_reads_reconstruct_stream(chunks, size):
+    """read(size) called repeatedly returns exactly the concatenated stream,
+    however the source chunk boundaries line up with the read size."""
+    expected = b"".join(chunks)
+    adapter = StreamingFileAdapter(_ChunkSource(list(chunks)))
+    assert _read_in_steps(adapter, size) == expected
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [],
+        [_pattern(500)],
+        [b"ab", b"cde", b"f", b"ghij"],
+        [_BIG[i : i + 256 * 1024] for i in range(0, _THRESHOLD * 2, 256 * 1024)],
+    ],
+)
+def test_file_adapter_read_all_returns_whole_stream(chunks):
+    """read(-1) returns the entire remaining stream in a single call."""
+    expected = b"".join(chunks)
+    adapter = StreamingFileAdapter(_ChunkSource(list(chunks)))
+    assert adapter.read(-1) == expected
+    assert adapter.read(-1) == b""
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [_BIG[: _THRESHOLD + 5000]],  # one chunk larger than the threshold -> in-chunk compaction
+        [_BIG[i : i + 256 * 1024] for i in range(0, _THRESHOLD * 2, 256 * 1024)],  # multi-chunk past threshold
+    ],
+)
+@pytest.mark.parametrize("size", [64, 1000, 100_000])
+def test_file_adapter_large_stream_reconstructs(chunks, size):
+    """Streams larger than the compaction threshold are reassembled byte-exact
+    across the compaction boundary."""
+    expected = b"".join(chunks)
+    adapter = StreamingFileAdapter(_ChunkSource(list(chunks)))
+    assert _read_in_steps(adapter, size) == expected
+
+
+def test_file_adapter_size_larger_than_stream():
+    payload = _pattern(1000)
+    adapter = StreamingFileAdapter(_ChunkSource([payload]))
+    assert adapter.read(1_000_000) == payload
+    assert adapter.read(1_000_000) == b""
+
+
+def test_file_adapter_reads_after_eof_and_close_return_empty():
+    adapter = StreamingFileAdapter(_ChunkSource([b"data"]))
+    assert adapter.read(2) == b"da"
+    assert adapter.read(10) == b"ta"
+    assert adapter.read(10) == b""  # source exhausted
+    adapter.close()
+    assert adapter.read(10) == b""
+
+
+def test_file_adapter_zero_size_and_read_all_after_partial():
+    """read(0) returns b"" with or without a buffered residual, and read(-1)
+    drains whatever residual remains after a partial read."""
+    adapter = StreamingFileAdapter(_ChunkSource([b"abcdef"]))
+    assert adapter.read(0) == b""  # nothing buffered yet
+    assert adapter.read(3) == b"abc"  # buffers the chunk, consumes part
+    assert adapter.read(0) == b""  # residual present, still an empty read
+    assert adapter.read(-1) == b"def"  # unbounded read returns the remainder
+    assert adapter.read(-1) == b""
+
+
+def test_file_adapter_empty_chunk_terminates_stream():
+    """A falsy chunk from the source signals end-of-stream, matching the
+    original adapter behavior."""
+    adapter = StreamingFileAdapter(_ChunkSource([b"before", b"", b"after"]))
+    assert adapter.read(-1) == b"before"
+    assert adapter.read(-1) == b""
+
+
+def test_file_adapter_small_reads_do_not_recopy_residual():
+    """Regression: the pre-fix adapter rebuilt the residual on every read
+    (self.buffer = self.buffer[size:]), so N small reads over one buffered
+    chunk cost O(N * residual) copying. The fix keeps a single backing buffer
+    and advances an integer offset, so the buffer is (re)allocated only a
+    handful of times rather than once per read."""
+    payload = _pattern(64 * 1024)  # < COMPACT_THRESHOLD, so no compaction fires
+    adapter = StreamingFileAdapter(_ChunkSource([payload]))
+    out = bytearray()
+    prev = None
+    reallocations = 0
+    while True:
+        data = adapter.read(8)
+        if not data:
+            break
+        out += data
+        current = adapter.buffer  # prev stays referenced -> no address reuse
+        if current is not prev:
+            reallocations += 1
+            prev = current
+    assert bytes(out) == payload
+    # 64 KiB read 8 bytes at a time is 8192 reads; the old code reallocated the
+    # residual on essentially every one of them.
+    assert reallocations <= 4
+
+
+def test_file_adapter_offset_is_compacted_on_large_stream():
+    """The advancing read offset is periodically reset by compaction, so it
+    cannot grow without bound on a stream far larger than the threshold."""
+    payload = _BIG[: _THRESHOLD * 2 + 777]
+    adapter = StreamingFileAdapter(_ChunkSource([payload]))
+    out = bytearray()
+    max_pos = 0
+    while True:
+        data = adapter.read(50)
+        if not data:
+            break
+        out += data
+        max_pos = max(max_pos, adapter.pos)
+    assert bytes(out) == payload
+    # Without compaction the offset would climb to ~2 * threshold.
+    assert max_pos < _THRESHOLD
 
 
 if __name__ == "__main__":

@@ -9,6 +9,10 @@
 - Inserting empty bytes `b""` into a non-nullable `FixedString(N)` column now zero-pads to N bytes instead of raising `DataError`, matching the existing string and nullable-bytes write paths. Closes [#880](https://github.com/ClickHouse/clickhouse-connect/issues/880).
 - Per-query and client settings that are not present in `system.settings` for the current user (including custom settings declared `CHANGEABLE_IN_READONLY` on a role) are now forwarded to ClickHouse instead of raising `ProgrammingError: Setting ... is unknown or readonly`. The client cannot discover those settings without extra privileges, so the server is treated as authoritative. Setting `invalid_setting_action` to `drop` still drops them, so a single settings dict stays portable across server versions. Known readonly settings still honor `invalid_setting_action`, and reserved HTTP request parameter names such as `query`, `user`, `default_format`, and the `param_` bound-parameter namespace still raise a client-side `ProgrammingError` because they are not settings. Closes [#530](https://github.com/ClickHouse/clickhouse-connect/issues/530).
 
+### Improvements
+
+- `StreamingFileAdapter`, the PyArrow reader behind `AsyncClient.query_arrow` and `AsyncClient.query_arrow_stream`, no longer recopies its entire residual buffer on every read. It previously held the residual in an immutable `bytes` and re-sliced the whole remainder (`self.buffer = self.buffer[size:]`) on each call, so the small framing reads that PyArrow interleaves with record-batch bodies made the copy volume scale with the buffered chunk size. The residual is now kept in a `bytearray` walked by an integer offset and compacted only past a threshold, which removes the per-read recopy. The bytes returned to the caller are unchanged. The effect is small for the default large blocks and large for streams made of many small Arrow batches, such as a small `max_block_size`. Closes [#911](https://github.com/ClickHouse/clickhouse-connect/issues/911).
+
 ## 1.6.0, 2026-07-23
 
 ### Bug Fixes
