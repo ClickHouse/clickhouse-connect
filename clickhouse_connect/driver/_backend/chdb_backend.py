@@ -328,10 +328,16 @@ class _ChdbStreamFile(io.RawIOBase):
     """io.IOBase adapter over a chdb StreamingResult for raw_stream callers.
     Holds the handle lock for its lifetime."""
 
+    # Once this many already-consumed bytes pile up at the front of the backing
+    # buffer, drop them. This keeps the buffer bounded without paying an
+    # O(residual) compaction on every read.
+    COMPACT_THRESHOLD = 1024 * 1024
+
     def __init__(self, streaming_result: Any, handle: _EngineHandle):
         super().__init__()
         self._sr = streaming_result
         self._buf = bytearray()
+        self._pos: int = 0
         self._eof = False
         self._released = [False]
         self._finalizer = weakref.finalize(self, _finalize_stream, streaming_result, handle, self._released)
@@ -356,24 +362,54 @@ class _ChdbStreamFile(io.RawIOBase):
     def read(self, size: int | None = -1) -> bytes:
         if self.closed or self._released[0]:
             raise ValueError("I/O operation on closed file")
+        buf = self._buf
         if size is None or size < 0:
-            parts = [bytes(self._buf)]
-            self._buf.clear()
+            view = memoryview(buf)
+            parts = [bytes(view[self._pos :])]
+            view.release()
+            self._buf = bytearray()
+            self._pos = 0
             while not self._eof:
                 chunk = self._pull()
                 if not chunk:
                     break
                 parts.append(chunk)
             return b"".join(parts)
-        while len(self._buf) < size and not self._eof:
-            chunk = self._pull()
-            if not chunk:
-                break
-            self._buf.extend(chunk)
-        if not self._buf:
+        # Serve small reads from the buffered residual by advancing an integer
+        # offset, pulling more blocks only when the residual cannot satisfy the
+        # request. chdb yields large blocks, so `del self._buf[:size]` on every
+        # read would memmove the whole residual tail each time; the offset plus
+        # threshold compaction keeps the per-read cost flat.
+        if len(buf) - self._pos < size:
+            if self._pos:
+                del buf[: self._pos]
+                self._pos = 0
+            while len(buf) < size and not self._eof:
+                chunk = self._pull()
+                if not chunk:
+                    break
+                buf.extend(chunk)
+        pos = self._pos
+        available = len(buf) - pos
+        if available <= 0:
             return b""
-        out = bytes(self._buf[:size])
-        del self._buf[:size]
+        # Hand back the whole residual when it fits in the request; otherwise
+        # return a `size` slice and advance the offset instead of recopying the
+        # tail. The memoryview keeps the returned bytes a single copy.
+        if available <= size:
+            view = memoryview(buf)
+            out = bytes(view[pos:])
+            view.release()
+            self._buf = bytearray()
+            self._pos = 0
+            return out
+        view = memoryview(buf)
+        out = bytes(view[pos : pos + size])
+        view.release()
+        self._pos = pos + size
+        if self._pos >= self.COMPACT_THRESHOLD:
+            del buf[: self._pos]
+            self._pos = 0
         return out
 
     def readinto(self, buf) -> int:

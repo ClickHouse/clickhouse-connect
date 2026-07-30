@@ -17,7 +17,7 @@ import pytest
 pytest.importorskip("chdb")
 
 import clickhouse_connect
-from clickhouse_connect.driver._backend.chdb_backend import ChdbBackend
+from clickhouse_connect.driver._backend.chdb_backend import ChdbBackend, _ChdbStreamFile, _EngineHandle
 from clickhouse_connect.driver._backend.contracts import SyncBackend
 from clickhouse_connect.driver._backend.models import Capabilities
 from clickhouse_connect.driver._chdbclient import ChdbClient
@@ -501,3 +501,174 @@ class TestChdbLifecycle:
         with pytest.raises(DatabaseError):
             client.set_client_setting("max_threads", "garbage_value")
         assert client.get_client_setting("max_threads") is None
+
+
+def _pattern(n: int) -> bytes:
+    """Deterministic, non-repeating byte payload of length n."""
+    return bytes((i * 197 + 13) & 0xFF for i in range(n))
+
+
+def _stream_file(chunks) -> _ChdbStreamFile:
+    """Build a _ChdbStreamFile over a fixed list of byte chunks. The real class
+    is fed each chdb block by iterating a StreamingResult and holds the handle
+    lock for its lifetime, so a plain iterator and a lock-held handle reproduce
+    the contract without the chdb engine."""
+    handle = _EngineHandle(None)
+    handle.lock.acquire()
+    return _ChdbStreamFile(iter(list(chunks)), handle)
+
+
+def _read_in_steps(stream, size) -> bytes:
+    """Drain the stream with repeated read(size) calls, asserting no read
+    overruns the request, and return the concatenation."""
+    out = bytearray()
+    while True:
+        data = stream.read(size)
+        assert size == -1 or len(data) <= size
+        if not data:
+            break
+        out += data
+    return bytes(out)
+
+
+_THRESHOLD = _ChdbStreamFile.COMPACT_THRESHOLD
+
+
+class TestChdbStreamFile:
+    """_ChdbStreamFile is the io.RawIOBase that raw_stream returns for
+    stream-safe formats. It buffers whole chdb blocks and hands out size slices."""
+
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            [],
+            [b""],
+            [b"single"],
+            [_pattern(500)],
+            [b"ab", b"cde", b"f", b"ghij"],
+            [_pattern(300) for _ in range(20)],
+        ],
+    )
+    @pytest.mark.parametrize("size", [1, 3, 7, 8, 64, 250, 4096, 100_000])
+    def test_fixed_size_reads_reconstruct_stream(self, chunks, size):
+        """read(size) called repeatedly returns exactly the concatenated stream,
+        however the block boundaries line up with the read size."""
+        assert _read_in_steps(_stream_file(chunks), size) == b"".join(chunks)
+
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            [],
+            [_pattern(500)],
+            [b"ab", b"cde", b"f", b"ghij"],
+            [_pattern(256 * 1024) for _ in range(9)],  # > 2 * threshold total
+        ],
+    )
+    def test_read_all_returns_whole_stream(self, chunks):
+        """read(-1) returns the entire remaining stream in a single call."""
+        stream = _stream_file(chunks)
+        assert stream.read(-1) == b"".join(chunks)
+        assert stream.read(-1) == b""
+
+    @pytest.mark.parametrize("size", [64, 1000, 100_000])
+    def test_large_stream_reconstructs_across_compaction(self, size):
+        """A stream far larger than the compaction threshold is reassembled
+        byte-exact across the compaction boundaries."""
+        chunks = [_pattern(256 * 1024) for _ in range(9)]  # ~2.25 MiB, past 2 * threshold
+        assert _read_in_steps(_stream_file(chunks), size) == b"".join(chunks)
+
+    def test_size_larger_than_stream(self):
+        payload = _pattern(1000)
+        stream = _stream_file([payload])
+        assert stream.read(1_000_000) == payload
+        assert stream.read(1_000_000) == b""
+
+    def test_read_all_after_partial(self):
+        stream = _stream_file([b"abcdef"])
+        assert stream.read(3) == b"abc"
+        assert stream.read(-1) == b"def"  # unbounded read drains the residual
+        assert stream.read(-1) == b""
+
+    def test_zero_size_and_pre_pull_compaction(self):
+        # read(0) always returns b"" and consumes nothing, with or without a
+        # buffered residual. A small read that leaves a nonzero offset followed
+        # by a read the residual cannot satisfy forces the pre-pull compaction
+        # (`del self._buf[: self._pos]`) at a nonzero offset.
+        stream = _stream_file([b"ab", b"cde", b"f", b"ghij"])
+        assert stream.read(0) == b""  # nothing buffered yet
+        assert stream.read(4) == b"abcd"  # buffers "ab"+"cde", offset left mid-block
+        assert stream.read(0) == b""  # residual present, still an empty read
+        assert stream.read(1000) == b"efghij"  # compacts the consumed prefix, then pulls the rest
+        assert stream.read(0) == b""
+        assert stream.read(-1) == b""
+
+    def test_readinto_fills_and_matches_read(self):
+        stream = _stream_file([_pattern(200), _pattern(200)])
+        buf = bytearray(150)
+        assert stream.readinto(buf) == 150
+        assert bytes(buf) == (_pattern(200) + _pattern(200))[:150]
+
+    def test_read_after_close_raises(self):
+        stream = _stream_file([b"data"])
+        assert stream.read(2) == b"da"
+        assert stream.read(10) == b"ta"
+        assert stream.read(10) == b""  # source exhausted
+        stream.close()
+        with pytest.raises(ValueError):
+            stream.read(10)
+
+    def test_small_reads_do_not_recopy_residual(self):
+        """Regression: the pre-fix read did `del self._buf[:size]` on every call,
+        memmoving the whole residual tail each time (O(residual) per read). The
+        fix keeps one backing buffer and advances an integer offset, so a block
+        read in small steps is not re-shuffled on every read."""
+        block = _pattern(64 * 1024)  # < COMPACT_THRESHOLD, so compaction never fires
+        stream = _stream_file([block])
+        out = bytearray()
+        buffer_lengths = set()
+        while True:
+            data = stream.read(8)
+            if not data:
+                break
+            out += data
+            buffer_lengths.add(len(stream._buf))
+        assert bytes(out) == block
+        # The pre-fix code shrank the buffer by 8 on every one of the 8192 reads,
+        # so it saw thousands of distinct residual lengths. The fix retains the
+        # whole block in one buffer (constant length) until the final drain
+        # empties it, so only two lengths are ever seen.
+        assert len(buffer_lengths) <= 2
+
+    def test_offset_is_bounded_by_compaction(self):
+        """On a stream far larger than the threshold, the advancing read offset
+        is periodically reset by compaction, so consumed bytes cannot pile up
+        without bound at the front of the buffer."""
+        stream = _stream_file([_pattern(_THRESHOLD * 2 + 777)])
+        max_pos = 0
+        while True:
+            data = stream.read(50)
+            if not data:
+                break
+            max_pos = max(max_pos, stream._pos)
+        assert max_pos < _THRESHOLD + 50
+
+
+class TestChdbRawStreamCopy:
+    """End-to-end: the stream-safe raw_stream path returns a _ChdbStreamFile and
+    reading it at any granularity yields exactly the materialized bytes."""
+
+    @pytest.mark.parametrize("fmt", ["TabSeparated", "RowBinary"])
+    @pytest.mark.parametrize("size", [1, 8192, 1_000_000])
+    def test_chunked_read_matches_materialized(self, client, fmt, size):
+        # ORDER BY pins the row order so the streamed bytes are deterministic.
+        # These formats carry no per-block framing, so the concatenated stream
+        # equals the materialized result regardless of chdb's block boundaries.
+        query = "SELECT number FROM numbers(100000) ORDER BY number"
+        expected = client.raw_query(query, fmt=fmt)
+        stream = client.raw_stream(query, fmt=fmt)
+        try:
+            assert isinstance(stream, _ChdbStreamFile)
+            out = _read_in_steps(stream, size)
+        finally:
+            stream.close()
+        assert out == expected

@@ -9,6 +9,10 @@
 - Inserting empty bytes `b""` into a non-nullable `FixedString(N)` column now zero-pads to N bytes instead of raising `DataError`, matching the existing string and nullable-bytes write paths. Closes [#880](https://github.com/ClickHouse/clickhouse-connect/issues/880).
 - Per-query and client settings that are not present in `system.settings` for the current user (including custom settings declared `CHANGEABLE_IN_READONLY` on a role) are now forwarded to ClickHouse instead of raising `ProgrammingError: Setting ... is unknown or readonly`. The client cannot discover those settings without extra privileges, so the server is treated as authoritative. Setting `invalid_setting_action` to `drop` still drops them, so a single settings dict stays portable across server versions. Known readonly settings still honor `invalid_setting_action`, and reserved HTTP request parameter names such as `query`, `user`, `default_format`, and the `param_` bound-parameter namespace still raise a client-side `ProgrammingError` because they are not settings. Closes [#530](https://github.com/ClickHouse/clickhouse-connect/issues/530).
 
+### Improvements
+
+- `raw_stream` on the experimental in-process chDB backend no longer recopies its residual buffer on every read. The file-like reader it returns for stream-safe formats (`Native`, `TabSeparated`, `TSV`, `CSV`, `RowBinary`, `JSONEachRow`) held the buffered chDB block in a `bytearray` and ran `del self._buf[:size]` on each read, memmoving the whole residual tail every time. chDB yields large blocks, so reading one in small steps, as line iteration (`for line in stream`) and fixed-size `read()` loops do, cost O(residual) per read. The residual is now walked with an integer offset and compacted only past a threshold, so the per-read cost is flat. The bytes returned to the caller are unchanged. Closes [#917](https://github.com/ClickHouse/clickhouse-connect/issues/917).
+
 ## 1.6.0, 2026-07-23
 
 ### Bug Fixes
