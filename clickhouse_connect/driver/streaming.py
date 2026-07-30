@@ -3,6 +3,7 @@ import logging
 import threading
 import zlib
 from collections.abc import Callable, Iterable, Iterator
+from typing import Any
 
 import lz4.frame
 
@@ -304,7 +305,7 @@ class StreamExceptionScanner:
         self.exception_tag = exception_tag
         self._tag = exception_tag.encode()
         self._carry = b""
-        self.armed = False
+        self.armed: bool = False
         self._block = bytearray()
         self.error_message: str | None = None
 
@@ -386,11 +387,11 @@ class StreamingFileAdapter:
     pyarrow as truncated or garbled Arrow data.
     """
 
-    def __init__(self, source, exception_tag: str | None = None):
+    def __init__(self, source: Any, exception_tag: str | None = None):
         raw_gen = source.gen if hasattr(source, "gen") else iter(source)
-        self.exception_tag = exception_tag if exception_tag is not None else getattr(source, "exception_tag", None)
+        self.exception_tag: str | None = exception_tag if exception_tag is not None else getattr(source, "exception_tag", None)
         self._scanner = StreamExceptionScanner(self.exception_tag) if self.exception_tag else None
-        self.gen = self._guarded_gen(raw_gen) if self._scanner else raw_gen
+        self.gen: Iterator[bytes] = self._guarded_gen(raw_gen) if self._scanner else raw_gen
         self.buffer = b""
         self.closed = False
         self.eof = False
@@ -474,7 +475,7 @@ class StreamingFileAdapter:
         self.buffer = full_data[size:]
         return result
 
-    def raise_if_pending(self):
+    def raise_if_pending(self) -> None:
         """Ensure an in-band server exception is surfaced even if the Arrow reader
         stopped short of it (for example by treating padding before the exception
         block as end-of-stream). Safe to call after a clean parse; a no-op when no
@@ -488,7 +489,7 @@ class StreamingFileAdapter:
         self.closed = True
 
 
-def guarded_arrow_stream(response, converter: Callable | None = None) -> StreamContext:
+def guarded_arrow_stream(response: Any, converter: Callable | None = None) -> StreamContext:
     """Wrap a synchronous streaming HTTP response as a StreamContext of pyarrow
     RecordBatches, guarding it so a mid-stream ClickHouse exception surfaces as a
     clean StreamFailureError instead of a truncated Arrow stream or a raw transport
