@@ -1,7 +1,7 @@
 import ipaddress
 import uuid
 import zoneinfo
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 
@@ -45,6 +45,13 @@ def test_finalize():
         (date(2023, 6, 1), "2023-06-01"),
         (datetime(2023, 6, 1, 20, 4, 5), "2023-06-01 20:04:05"),
         ([date(2023, 6, 1), date(2023, 8, 5)], "['2023-06-01', '2023-08-05']"),
+        # ClickHouse Time is Int32 seconds since midnight (#919)
+        (time(14, 30, 0), "52200"),
+        (time(0, 0, 0), "0"),
+        (time(23, 59, 59), "86399"),
+        (timedelta(hours=14, minutes=30), "52200"),
+        (timedelta(seconds=5), "5"),
+        ([time(1, 0, 0), time(2, 0, 0)], "[3600, 7200]"),
         (b"AB", r"\x41\x42"),
         (b"\x00\xf8'", r"\x00\xf8\x27"),
         ([b"AB"], r"['\x41\x42']"),
@@ -94,9 +101,38 @@ def test_format_query_value_bytes(value, expected):
     assert format_query_value(value) == expected
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (time(14, 30, 0), 52200),
+        (time(0, 0, 0), 0),
+        (time(23, 59, 59), 86399),
+        # Fractional seconds are floored to match ClickHouse Time (second precision)
+        (time(14, 30, 0, 999999), 52200),
+        (timedelta(hours=14, minutes=30), 52200),
+        (timedelta(seconds=5), 5),
+        ([time(1, 0, 0), time(2, 0, 0)], "[3600, 7200]"),
+    ],
+)
+def test_format_query_value_time(value, expected):
+    assert format_query_value(value) == expected
+
+
 def test_finalize_bytes():
     query = finalize_query("INSERT INTO t (id) VALUES (%(id)s)", {"id": b"j!lUA\xf8\x93q;ky\x00"})
     assert query == r"INSERT INTO t (id) VALUES ('\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00')"
+
+
+def test_finalize_time():
+    """Time binds as integer seconds so ClickHouse Time columns accept the literal (#919)."""
+    query = finalize_query("INSERT INTO t (t) VALUES (%(t)s)", {"t": time(14, 30, 0)})
+    assert query == "INSERT INTO t (t) VALUES (52200)"
+
+
+def test_bind_query_time_server_side():
+    query, params = bind_query("SELECT {t:Time}", {"t": time(14, 30, 0)})
+    assert params["param_t"] == "52200"
+    assert query == "SELECT {t:Time}"
 
 
 class TestBindQueryTimezoneHint:

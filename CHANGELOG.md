@@ -4,6 +4,7 @@
 
 ### Bug Fixes
 
+- DB API: add the PEP 249 `Binary` constructor (`Binary = bytes`) so SQLAlchemy `LargeBinary` bind processing no longer raises `AttributeError: module 'clickhouse_connect.dbapi' has no attribute 'Binary'`. Also expose the standard `Date`, `Time`, `Timestamp`, and `*FromTicks` constructors. Query and server-side binds of `datetime.time` and `timedelta` values now send integer seconds (ticks) instead of the bare `HH:MM:SS` string, matching ClickHouse `Time`/`Time64` storage. Closes [#919](https://github.com/ClickHouse/clickhouse-connect/issues/919).
 - Parsing a nested `Variant`, `Tuple`, `Nested`, or typed `JSON` column type whose element is an `Enum` with an escaped single quote in a value name no longer corrupts the escape sequence and fails while re-parsing the element type. Closes [#878](https://github.com/ClickHouse/clickhouse-connect/issues/878).
 - `None` nested inside an `Array` or `Tuple`, or inside a `Map` when `dict_parameter_format="map"`, now renders as the SQL `NULL` keyword instead of the `\N` sentinel used for top-level values. Top-level scalar `None` binds are unchanged. Closes [#879](https://github.com/ClickHouse/clickhouse-connect/issues/879).
 - Inserting empty bytes `b""` into a non-nullable `FixedString(N)` column now zero-pads to N bytes instead of raising `DataError`, matching the existing string and nullable-bytes write paths. Closes [#880](https://github.com/ClickHouse/clickhouse-connect/issues/880).

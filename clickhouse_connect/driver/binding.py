@@ -3,7 +3,7 @@ import re
 import uuid
 import zoneinfo
 from collections.abc import Sequence
-from datetime import date, datetime, timezone, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -255,6 +255,12 @@ def format_query_value(value: Any, server_tz: tzinfo | None = timezone.utc):
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
         return f"'{value.isoformat()}'"
+    # ClickHouse Time/Time64 store integer ticks (seconds since midnight for Time).
+    # Bare str(time) / str(timedelta) is not a valid Int32/Int64 literal.
+    if isinstance(value, time):
+        return value.hour * 3600 + value.minute * 60 + value.second
+    if isinstance(value, timedelta):
+        return int(value.total_seconds())
     if isinstance(value, list):
         return f"[{', '.join(str_query_value(x, server_tz) for x in value)}]"
     if isinstance(value, tuple):
@@ -312,6 +318,12 @@ def format_bind_value(value: Any, server_tz: tzinfo | None = timezone.utc, top_l
         if top_level:
             return value.isoformat()
         return f"'{value.isoformat()}'"
+    # ClickHouse Time/Time64 store integer ticks (seconds since midnight for Time).
+    # Bare str(time) / str(timedelta) is not a valid Int32/Int64 literal.
+    if isinstance(value, time):
+        return str(value.hour * 3600 + value.minute * 60 + value.second)
+    if isinstance(value, timedelta):
+        return str(int(value.total_seconds()))
     if isinstance(value, list):
         return f"[{', '.join(recurse(x) for x in value)}]"
     if isinstance(value, tuple):
