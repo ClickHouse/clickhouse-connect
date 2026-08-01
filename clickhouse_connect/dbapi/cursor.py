@@ -51,7 +51,13 @@ class Cursor:
     def close(self) -> None:
         self.data = None
 
-    def execute(self, operation: str, parameters: Any = None, settings: dict[str, Any] | None = None) -> None:
+    def execute(
+        self,
+        operation: str,
+        parameters: Any = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+    ) -> None:
         if not parameters and isinstance(operation, str):
             # Per PEP 249 pyformat paramstyle, callers (e.g. SQLAlchemy) escape
             # literal percent signs as %% in operation strings.  When there are
@@ -59,7 +65,7 @@ class Cursor:
             # unescaping automatically.  When there are no parameters,
             # finalize_query short-circuits, so we must unescape here.
             operation = operation.replace("%%", "%")
-        query_result = self.client.query(operation, parameters, settings=settings)
+        query_result = self.client.query(operation, parameters, settings=settings, query_formats=query_formats)
         self.data = query_result.result_set
         self._rowcount = len(self.data)
         self._summary.append(query_result.summary)
@@ -76,8 +82,13 @@ class Cursor:
         else:
             stripped = operation.strip().rstrip(";").strip()
             if stripped.upper().startswith(("SELECT", "WITH")):
-                # Introspection re-query carries the same settings so the derived column shape matches.
-                meta_result = self.client.query(f"SELECT * FROM ({stripped}) LIMIT 0", parameters, settings=settings)
+                # Introspection re-query carries the same settings/formats so the derived column shape matches.
+                meta_result = self.client.query(
+                    f"SELECT * FROM ({stripped}) LIMIT 0",
+                    parameters,
+                    settings=settings,
+                    query_formats=query_formats,
+                )
                 if meta_result.column_names:
                     self.names = meta_result.column_names
                     self.types = [x.name for x in meta_result.column_types]
@@ -120,13 +131,19 @@ class Cursor:
         self._summary.append(insert_summary.summary)
         return True
 
-    def executemany(self, operation: str, parameters: Any, settings: dict[str, Any] | None = None) -> None:
+    def executemany(
+        self,
+        operation: str,
+        parameters: Any,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+    ) -> None:
         if not parameters or self._try_bulk_insert(operation, parameters, settings):
             return
         self.data = []
         try:
             for param_row in parameters:
-                query_result = self.client.query(operation, param_row, settings=settings)
+                query_result = self.client.query(operation, param_row, settings=settings, query_formats=query_formats)
                 self.data.extend(query_result.result_set)
                 if self.names or self.types:
                     if query_result.column_names != self.names:

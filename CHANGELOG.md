@@ -4,6 +4,7 @@
 
 ### Bug Fixes
 
+- SQLAlchemy reflection (`get_columns`, `get_table_names`, `Table(..., autoload_with=...)`, and related inspector methods) no longer breaks when a global String read format such as `set_default_formats("String", "bytes")` is configured. Metadata queries now use the same internal `String` → `string` query format override as the core driver's orchestration path, so schema cells decode as `str` while user queries still honor the global format. Closes [#920](https://github.com/ClickHouse/clickhouse-connect/issues/920).
 - Parsing a nested `Variant`, `Tuple`, `Nested`, or typed `JSON` column type whose element is an `Enum` with an escaped single quote in a value name no longer corrupts the escape sequence and fails while re-parsing the element type. Closes [#878](https://github.com/ClickHouse/clickhouse-connect/issues/878).
 - `None` nested inside an `Array` or `Tuple`, or inside a `Map` when `dict_parameter_format="map"`, now renders as the SQL `NULL` keyword instead of the `\N` sentinel used for top-level values. Top-level scalar `None` binds are unchanged. Closes [#879](https://github.com/ClickHouse/clickhouse-connect/issues/879).
 - Inserting empty bytes `b""` into a non-nullable `FixedString(N)` column now zero-pads to N bytes instead of raising `DataError`, matching the existing string and nullable-bytes write paths. Closes [#880](https://github.com/ClickHouse/clickhouse-connect/issues/880).
