@@ -280,6 +280,40 @@ def test_query_with_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+TRAILING_TERMINATOR_QUERIES = [
+    "SELECT 13",
+    "SELECT 13;",
+    "SELECT 13;\n",
+    "SELECT 13; ",
+    "SELECT 13; -- trailing",
+    "SELECT 13; // trailing",
+    "SELECT 13; # trailing",
+    "SELECT 13; #!trailing",
+    "SELECT 13; /* trailing */",
+    "SELECT 13; /* outer /* inner */ outer */",
+    "SELECT 13 /* keep */;",
+]
+
+
+@pytest.mark.parametrize("query", TRAILING_TERMINATOR_QUERIES)
+def test_query_trailing_semicolon(param_client, call, query):
+    # A query final ";" followed by whitespace or a comment must not turn the appended
+    # FORMAT clause into a second statement, which the server rejects with code 62
+    result = call(param_client.query, query)
+    assert result.result_rows == [(13,)]
+
+
+@pytest.mark.parametrize("query", TRAILING_TERMINATOR_QUERIES)
+def test_raw_query_trailing_semicolon(param_client, call, query):
+    # raw_query appends the FORMAT clause before binding, so that path strips as well
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == b"13\n"
+
+
+@pytest.mark.parametrize("query", TRAILING_TERMINATOR_QUERIES)
+def test_command_trailing_semicolon(param_client, call, query):
+    assert call(param_client.command, query) == 13
+
+
 def test_insert_csv_format(param_client, call, test_table_engine: str):
     call(param_client.command, "DROP TABLE IF EXISTS test_csv")
     call(

@@ -27,7 +27,7 @@ from clickhouse_connect.driver._backend.orchestration import (
     insert_context_sequence,
     run_sync,
 )
-from clickhouse_connect.driver.binding import bind_query, str_query_value
+from clickhouse_connect.driver.binding import bind_query, str_query_value, strip_trailing_semicolon
 from clickhouse_connect.driver.common import (
     StreamContext,
     coerce_bool,
@@ -530,7 +530,9 @@ class Client(ABC):
     ) -> tuple[str | bytes, dict[str, str], QueryRuntime]:
         """Append the format, bind parameters, and build the runtime for a raw query."""
         if fmt:
-            query += f"\n FORMAT {fmt}"
+            # bind_query strips the trailing terminator as well, but it only sees the query
+            # after FORMAT has been appended, which would already be a second statement.
+            query = strip_trailing_semicolon(query) + f"\n FORMAT {fmt}"
         final_query, bind_params = bind_query(query, parameters, self.server_tz)
         runtime = QueryRuntime(
             database=self.database if use_database else None,

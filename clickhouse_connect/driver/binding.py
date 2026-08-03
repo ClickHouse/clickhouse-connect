@@ -60,8 +60,118 @@ def _is_validly_quoted(identifier: str, quote: str) -> bool:
     return True
 
 
+# Whitespace the server lexer skips. Deliberately ASCII only, matching isWhitespaceASCII.
+_SQL_WHITESPACE = " \t\n\r\v\f"
+# Everything that can start a comment, a quoted token or a statement terminator. A plain
+# alternation of literals, so the search itself cannot backtrack.
+_scan_re = re.compile(r"['\"`;]|--|//|#[ !]|/\*|\$\w*\$")
+
+
+def _skip_line_comment(query: str, pos: int) -> int:
+    """Return the index after a "--", "//", "# " or "#!" comment."""
+    end = query.find("\n", pos)
+    return len(query) if end < 0 else end + 1
+
+
+def _skip_block_comment(query: str, pos: int) -> int:
+    """Return the index after a "/* */" comment, or -1 if it is not closed.
+
+    Block comments nest, so an inner "/*" has to be matched by its own "*/".
+    """
+    depth = 0
+    while True:
+        opened = query.find("/*", pos)
+        closed = query.find("*/", pos)
+        if closed < 0:
+            return -1
+        if 0 <= opened < closed:
+            depth += 1
+            pos = opened + 2
+            continue
+        depth -= 1
+        pos = closed + 2
+        if depth == 0:
+            return pos
+
+
+def _skip_quoted(query: str, pos: int) -> int:
+    """Return the index after a quoted string or identifier, or -1 if it is not closed.
+
+    Accepts backslash escapes (\\X) and doubled-quote escapes ('', "", ``).
+    """
+    quote = query[pos]
+    pos += 1
+    end = len(query)
+    while pos < end:
+        char = query[pos]
+        if char == "\\":
+            pos += 2
+        elif char == quote:
+            if query[pos + 1 : pos + 2] == quote:
+                pos += 2
+            else:
+                return pos + 1
+        else:
+            pos += 1
+    return -1
+
+
+def _skip_heredoc(query: str, pos: int, tag: str) -> int:
+    """Return the index after a "$tag$ ... $tag$" heredoc, or -1 if it is not closed."""
+    closed = query.find(tag, pos + len(tag))
+    return -1 if closed < 0 else closed + len(tag)
+
+
+def strip_trailing_semicolon(query: str) -> str:
+    """Remove a query-final ";" so an appended FORMAT or LIMIT clause stays in the same statement.
+
+    The terminator is removed even when whitespace or comments follow it, for example
+    "SELECT 1;\\n", "SELECT 1; -- done" or "SELECT 1; /* done */". Everything from the
+    terminating ";" onwards is dropped, while text before it, including comments, is kept.
+    A query with no trailing ";", including one ending in whitespace or a comment, is
+    returned unchanged, and a ";" inside a comment or a quoted token is not a terminator.
+
+    The query is scanned once, left to right, following the server lexer: "--", "//", "# "
+    and "#!" line comments, nested "/* */" block comments, '', "" and `` quoting, and
+    "$tag$" heredocs. The scan jumps from one such token to the next, so it stays linear in
+    the length of the query. A query with an unterminated comment, quote or heredoc is
+    returned unchanged so the server reports the syntax error itself.
+    """
+    if ";" not in query:
+        return query
+    cut = -1
+    pos = 0
+    while True:
+        match = _scan_re.search(query, pos)
+        # Anything skipped over that is not whitespace is query text, so any ";" before it
+        # is not a trailing terminator
+        skipped = query[pos : match.start()] if match else query[pos:]
+        if skipped.strip(_SQL_WHITESPACE):
+            cut = -1
+        if match is None:
+            break
+        token = match.group()
+        pos = match.start()
+        if token == ";":
+            if cut < 0:
+                cut = pos
+            pos += 1
+        elif token in ("--", "//") or token[0] == "#":
+            pos = _skip_line_comment(query, pos)
+        elif token == "/*":
+            pos = _skip_block_comment(query, pos)
+            if pos < 0:
+                return query
+        else:
+            pos = _skip_quoted(query, pos) if token[0] != "$" else _skip_heredoc(query, pos, token)
+            if pos < 0:
+                return query
+            cut = -1
+    return query if cut < 0 else query[:cut]
+
+
 def finalize_query(query: str, parameters: Sequence | dict[str, Any] | None, server_tz: tzinfo | None = None) -> str:
-    query = query.rstrip(";")
+    query = strip_trailing_semicolon(query)
     if not parameters:
         return query
     if hasattr(parameters, "items"):
@@ -129,7 +239,7 @@ def bind_query(
     parameters: Sequence | dict[str, Any] | None,
     server_tz: tzinfo | None = None,
 ) -> tuple[str | bytes, dict[str, str]]:
-    query = query.rstrip(";")
+    query = strip_trailing_semicolon(query)
     if not parameters:
         return query, {}
 
