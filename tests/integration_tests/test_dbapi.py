@@ -52,6 +52,20 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
 
 
+def test_executemany_with_spaced_qualified_table(dbapi_connection, table_context: Callable, test_db: str):
+    """ClickHouse accepts whitespace around the dot in a database qualified table name, so
+    the bulk insert path must target the qualified table instead of just the database.
+    """
+    with table_context("dbapi_executemany_qualified", ["id UInt32", "name String"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            f"INSERT INTO {test_db} . dbapi_executemany_qualified (id, name) VALUES (%s, %s)",
+            [(13, "user_1"), (79, "user_2")],
+        )
+        cursor.execute("SELECT id, name FROM dbapi_executemany_qualified ORDER BY id")
+        assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
 def test_description_null_ok_reflects_result_type(dbapi_connection):
     if not dbapi_connection.client.min_version("24.8"):
         pytest.skip("Variant and Dynamic require ClickHouse 24.8 or newer")

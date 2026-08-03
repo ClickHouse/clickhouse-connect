@@ -3,7 +3,7 @@ import pytest
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import unescape_identifier
-from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
+from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum, parse_table_name
 from clickhouse_connect.driver.query import remove_sql_comments
 
 
@@ -150,3 +150,48 @@ def test_remove_comments_no_space_after_dashes():
     # `--` inside quoted strings is preserved
     assert remove_sql_comments("SELECT 'a--b'") == "SELECT 'a--b'"
     assert remove_sql_comments('SELECT "a--b"') == 'SELECT "a--b"'
+
+
+@pytest.mark.parametrize(
+    "expr, expected_table, expected_remainder",
+    [
+        ("tbl VALUES (%s)", "tbl", "VALUES (%s)"),
+        ("tbl(n) VALUES (%s)", "tbl", "(n) VALUES (%s)"),
+        ("db.tbl VALUES (%s)", "db.tbl", "VALUES (%s)"),
+        ("db . tbl VALUES (%s)", "db . tbl", "VALUES (%s)"),
+        ("db\n.\ttbl VALUES (%s)", "db\n.\ttbl", "VALUES (%s)"),
+        ("`db`.`tbl` VALUES (%s)", "`db`.`tbl`", "VALUES (%s)"),
+        ("9tbl VALUES (%s)", "9tbl", "VALUES (%s)"),
+        ("db$1 . tbl$2 VALUES (%s)", "db$1 . tbl$2", "VALUES (%s)"),
+        ("`db` . `tbl` VALUES (%s)", "`db` . `tbl`", "VALUES (%s)"),
+        ('"db" . "tbl" VALUES (%s)', '"db" . "tbl"', "VALUES (%s)"),
+        ("`my.tbl` VALUES (%s)", "`my.tbl`", "VALUES (%s)"),
+        ("`my tbl`(n) VALUES (%s)", "`my tbl`", "(n) VALUES (%s)"),
+        ("`my``tbl` VALUES (%s)", "`my``tbl`", "VALUES (%s)"),
+        ("`my\\`tbl` VALUES (%s)", "`my\\`tbl`", "VALUES (%s)"),
+        ("  tbl  VALUES (%s)", "tbl", "VALUES (%s)"),
+        ("tbl", "tbl", ""),
+        ("tbl ", "tbl", ""),
+    ],
+)
+def test_parse_table_name(expr, expected_table, expected_remainder):
+    assert parse_table_name(expr) == (expected_table, expected_remainder)
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "",
+        "   ",
+        "(n) VALUES (%s)",
+        "`tbl VALUES (%s)",
+        '"tbl VALUES',
+        "db-tbl VALUES (%s)",
+        "`db`-`tbl` VALUES (%s)",
+        "db.tbl-2 VALUES (%s)",
+        "tbl%s VALUES",
+    ],
+)
+def test_parse_table_name_invalid(expr):
+    with pytest.raises(ValueError):
+        parse_table_name(expr)

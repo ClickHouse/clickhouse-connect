@@ -584,3 +584,53 @@ def test_executemany_generator_falls_through_to_row_by_row():
 
     client.insert.assert_not_called()
     assert client.query.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "statement, expected_table, expected_columns",
+    [
+        ("INSERT INTO db.test_table VALUES (%s, %s)", "db.test_table", "*"),
+        ("INSERT INTO db . test_table VALUES (%s, %s)", "db . test_table", "*"),
+        ("INSERT INTO `db` . `test_table` VALUES (%s, %s)", "`db` . `test_table`", "*"),
+        ('INSERT INTO "db" . "test_table" (id, name) VALUES (%s, %s)', '"db" . "test_table"', ["id", "name"]),
+        ("INSERT INTO db . test_table (id, name) VALUES (%s, %s)", "db . test_table", ["id", "name"]),
+        ("INSERT INTO `my test_table` VALUES (%s, %s)", "`my test_table`", "*"),
+    ],
+)
+def test_executemany_bulk_insert_qualified_table_names(statement, expected_table, expected_columns):
+    """A database qualified table name keeps the bulk insert fast path and is passed on
+    unchanged, including the whitespace around the dot separator that ClickHouse allows.
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany(statement, rows)
+
+    client.insert.assert_called_once_with(expected_table, rows, expected_columns, settings=None)
+    client.query.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO test_table ",
+        "INSERT INTO  ",
+        "INSERT INTO (id) VALUES (%s)",
+        "INSERT INTO db-test_table VALUES (%s)",
+        "INSERT INTO db.test_table-2 VALUES (%s)",
+    ],
+)
+def test_executemany_unusable_table_name_falls_through_to_row_by_row(statement):
+    """An insert statement whose table name cannot be parsed falls through to the row-by-row
+    path. It must never bulk insert into a truncated prefix of the name, and a statement with
+    nothing after the table name must not raise IndexError out of the table name parsing.
+    """
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.executemany(statement, [(13,)])
+
+    client.insert.assert_not_called()
+    client.query.assert_called_once_with(statement, (13,), settings=None)

@@ -1,4 +1,70 @@
+import re
+
 from clickhouse_connect.driver.common import unescape_identifier
+
+# ClickHouse lexes an unquoted identifier as a run of ASCII word characters or dollar signs,
+# so names such as 9t and t$x are legal without quoting
+_unquoted_identifier_re = re.compile(r"[0-9A-Za-z_$]+")
+
+
+def _parse_identifier_part(expr: str, pos: int) -> int | None:
+    """
+    Parse a single identifier part of an identifier chain, either quoted with backticks or double quotes,
+    or an unquoted sequence of identifier characters.  Returns the position immediately after the part,
+    or None if there is no valid identifier part at pos.
+    """
+    quote = expr[pos] if pos < len(expr) else ""
+    if quote not in ("`", '"'):
+        match = _unquoted_identifier_re.match(expr, pos)
+        return None if match is None else match.end()
+    pos += 1
+    length = len(expr)
+    while pos < length:
+        char = expr[pos]
+        if char == "\\":
+            # A backslash escapes the next character, for example \` or \\
+            pos += 2
+        elif char == quote:
+            # A doubled quote character is an escaped literal, a lone one closes the part
+            if pos + 1 < length and expr[pos + 1] == quote:
+                pos += 2
+            else:
+                return pos + 1
+        else:
+            pos += 1
+    return None
+
+
+def parse_table_name(expr: str) -> tuple[str, str]:
+    """
+    Parse a leading, optionally database qualified, table identifier such as tbl, db.tbl, `db`.`tbl`, or
+    "db"."tbl".  Whitespace around the dot separator is valid ClickHouse syntax, so it is accepted and
+    preserved in the returned identifier.
+
+    The identifier must be followed by the end of the expression or by a delimiter, so an expression such
+    as db-tbl is rejected rather than parsed as the identifier db.
+
+    :param expr: Expression starting with a table identifier
+    :return: Tuple of the identifier as written and any text remaining after it
+    :raises ValueError: If expr does not start with a valid table identifier
+    """
+    pos = len(expr) - len(expr.lstrip())
+    start = pos
+    while True:
+        part_end = _parse_identifier_part(expr, pos)
+        if part_end is None:
+            raise ValueError(f"Unrecognized table name in {expr}")
+        end = part_end
+        pos = end
+        while pos < len(expr) and expr[pos].isspace():
+            pos += 1
+        if pos >= len(expr) or expr[pos] != ".":
+            if end < len(expr) and not expr[end].isspace() and expr[end] not in "(,;":
+                raise ValueError(f"Unrecognized table name in {expr}")
+            return expr[start:end], expr[end:].strip()
+        pos += 1
+        while pos < len(expr) and expr[pos].isspace():
+            pos += 1
 
 
 def parse_callable(expr) -> tuple[str, tuple[str | int, ...], str]:

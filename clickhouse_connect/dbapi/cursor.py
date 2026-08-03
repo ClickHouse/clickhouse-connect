@@ -8,7 +8,7 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
-from clickhouse_connect.driver.parser import parse_callable
+from clickhouse_connect.driver.parser import parse_callable, parse_table_name
 from clickhouse_connect.driver.query import remove_sql_comments
 
 logger = logging.getLogger(__name__)
@@ -143,11 +143,11 @@ class Cursor:
         match = insert_re.match(remove_sql_comments(operation))
         if not match:
             return False
-        temp = match.group(1)
-        table_end = min(temp.find(" "), temp.find("("))
-        table = temp[:table_end].strip()
-        temp = temp[table_end:].strip()
-        if temp[0] == "(":
+        try:
+            table, temp = parse_table_name(match.group(1))
+        except ValueError:
+            return False
+        if temp.startswith("("):
             _, op_columns, temp = parse_callable(temp)
         else:
             op_columns = None
