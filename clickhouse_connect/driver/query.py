@@ -404,7 +404,65 @@ class QueryResult(Closable):
             self._block_gen = None
 
 
-comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--)[^\n]*$)", re.MULTILINE | re.DOTALL)
+# Everything that can start a comment or a quoted token in the server lexer. A plain
+# alternation of literals, so the search itself cannot backtrack.  A "$" is a word character
+# for the server lexer, so a heredoc tag only opens one at the start of a token.
+_comment_scan_re = re.compile(r"['\"`]|--|//|#[ !]|/\*|(?<![\w$])\$\w*\$")
+
+
+def _end_of_line_comment(sql: str, pos: int) -> int:
+    """Return the index of the newline that ends a "--", "//", "# " or "#!" comment."""
+    end = sql.find("\n", pos)
+    return len(sql) if end < 0 else end
+
+
+def _end_of_block_comment(sql: str, pos: int) -> int:
+    """Return the index after a "/* */" comment, or -1 if it is not closed.
+
+    Block comments nest, so an inner "/*" has to be matched by its own "*/".
+    """
+    depth = 0
+    while True:
+        opened = sql.find("/*", pos)
+        closed = sql.find("*/", pos)
+        if closed < 0:
+            return -1
+        if 0 <= opened < closed:
+            depth += 1
+            pos = opened + 2
+            continue
+        depth -= 1
+        pos = closed + 2
+        if depth == 0:
+            return pos
+
+
+def _end_of_quoted(sql: str, pos: int) -> int:
+    """Return the index after a quoted string or identifier, or -1 if it is not closed.
+
+    Accepts backslash escapes (\\X) and doubled quote escapes ('', "", ``).
+    """
+    quote = sql[pos]
+    pos += 1
+    end = len(sql)
+    while pos < end:
+        char = sql[pos]
+        if char == "\\":
+            pos += 2
+        elif char == quote:
+            if sql[pos + 1 : pos + 2] == quote:
+                pos += 2
+            else:
+                return pos + 1
+        else:
+            pos += 1
+    return -1
+
+
+def _end_of_heredoc(sql: str, pos: int, tag: str) -> int:
+    """Return the index after a "$tag$ ... $tag$" heredoc, or -1 if it is not closed."""
+    closed = sql.find(tag, pos + len(tag))
+    return -1 if closed < 0 else closed + len(tag)
 
 
 def remove_sql_comments(sql: str) -> str:
@@ -412,19 +470,53 @@ def remove_sql_comments(sql: str) -> str:
     Remove SQL comments.  This is useful to determine the type of SQL query, such as SELECT or INSERT, but we
     don't fully trust it to correctly ignore weird quoted strings, and other edge cases, so we always pass the
     original SQL to ClickHouse (which uses a full-fledged AST/ token parser)
+
+    The query is scanned once, left to right, following the server lexer: "--", "//", "# " and "#!" line
+    comments, nested "/* */" block comments, '', "" and `` quoting, and "$tag$" heredocs.  A comment marker
+    inside a quoted token or a heredoc is not a comment, and a quote inside a comment does not start a quoted
+    token.  The scan jumps from one such token to the next, so it stays linear in the length of the query.  A
+    query with an unterminated comment or quote is rejected by the server, so the rest of it is kept as is,
+    while an unterminated heredoc tag is treated as a bare word, which is what the server lexer does.
     :param sql:  SQL query
     :return: SQL Query without SQL comments
     """
-
-    def replacer(match):
-        # if the 2nd group (capturing comments) is not None, it means we have captured a
-        # non-quoted, actual comment string, so return nothing to remove the comment
-        if match.group(2):
-            return ""
-        # Otherwise we've actually captured a quoted string, so return it
-        return match.group(1)
-
-    return comment_re.sub(replacer, sql)
+    kept: list[str] = []
+    pos = 0
+    while True:
+        match = _comment_scan_re.search(sql, pos)
+        if match is None:
+            kept.append(sql[pos:])
+            break
+        kept.append(sql[pos : match.start()])
+        token = match.group()
+        start = match.start()
+        if token in ("--", "//") or token[0] == "#":
+            # The newline itself is not part of the comment, it is copied on the next pass
+            pos = _end_of_line_comment(sql, start)
+        elif token == "/*":
+            end = _end_of_block_comment(sql, start)
+            if end < 0:
+                kept.append(sql[start:])
+                break
+            pos = end
+        elif token[0] == "$":
+            end = _end_of_heredoc(sql, start, token)
+            if end < 0:
+                # The server lexer falls back to a bare word when the closing tag is missing,
+                # so the scan continues after the text that looked like an opening tag
+                kept.append(token)
+                pos = match.end()
+                continue
+            kept.append(sql[start:end])
+            pos = end
+        else:
+            end = _end_of_quoted(sql, start)
+            if end < 0:
+                kept.append(sql[start:])
+                break
+            kept.append(sql[start:end])
+            pos = end
+    return "".join(kept)
 
 
 def to_arrow(content: bytes):

@@ -150,3 +150,39 @@ def test_remove_comments_no_space_after_dashes():
     # `--` inside quoted strings is preserved
     assert remove_sql_comments("SELECT 'a--b'") == "SELECT 'a--b'"
     assert remove_sql_comments('SELECT "a--b"') == 'SELECT "a--b"'
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        # line comment forms the server lexer accepts
+        ("SELECT 13 // LIMIT 5", "SELECT 13 "),
+        ("SELECT 13 # LIMIT 5", "SELECT 13 "),
+        ("SELECT 13 #!LIMIT 5", "SELECT 13 "),
+        ("SELECT 13 // LIMIT 5\nLIMIT 3", "SELECT 13 \nLIMIT 3"),
+        ("SELECT 13 -- // # /*", "SELECT 13 "),
+        # a bare `#` is not a comment marker, it needs a following space or `!`
+        ("SELECT 13 #LIMIT 5", "SELECT 13 #LIMIT 5"),
+        ("SELECT 13 #\tLIMIT 5", "SELECT 13 #\tLIMIT 5"),
+        # block comments nest, so the inner `*/` does not end the outer comment
+        ("SELECT /* a /* b */ c */ 13", "SELECT  13"),
+        ("SELECT /* a /* b /* c */ d */ e */ 13", "SELECT  13"),
+        # a comment marker inside a quoted identifier, string or heredoc is not a comment
+        ("SELECT `a--b` FROM tbl", "SELECT `a--b` FROM tbl"),
+        ("SELECT `a``b--c` FROM tbl", "SELECT `a``b--c` FROM tbl"),
+        ("SELECT 'a''b--c'", "SELECT 'a''b--c'"),
+        ("SELECT 'a\\'b--c'", "SELECT 'a\\'b--c'"),
+        ("SELECT $$--$$", "SELECT $$--$$"),
+        ("SELECT $tag$ // $tag$", "SELECT $tag$ // $tag$"),
+        ("SELECT '--' // trailing", "SELECT '--' "),
+        # a `$` is a word character for the server lexer, so it only opens a heredoc at the
+        # start of a token, and an unclosed tag is just a word
+        ("SELECT 13 AS a$b$c -- LIMIT 0", "SELECT 13 AS a$b$c "),
+        ("SELECT 13 $notatag$ -- LIMIT 0", "SELECT 13 $notatag$ "),
+        # an unterminated comment or quote is left alone, the server reports it
+        ("SELECT 13 /* unclosed", "SELECT 13 /* unclosed"),
+        ("SELECT 'unclosed--", "SELECT 'unclosed--"),
+    ],
+)
+def test_remove_comments_lexer_forms(sql, expected):
+    assert remove_sql_comments(sql) == expected

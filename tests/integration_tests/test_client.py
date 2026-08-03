@@ -280,6 +280,36 @@ def test_query_with_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+COMMENTED_LIMIT_QUERIES = [
+    # a LIMIT inside a comment is not a LIMIT, so the client side query_limit still applies
+    ("SELECT number FROM numbers(5) -- LIMIT 5", [(0,), (1,)]),
+    ("SELECT number FROM numbers(5) // LIMIT 5", [(0,), (1,)]),
+    ("SELECT number FROM numbers(5) # LIMIT 5", [(0,), (1,)]),
+    ("SELECT number FROM numbers(5) #!LIMIT 5", [(0,), (1,)]),
+    ("SELECT number FROM numbers(5) // LIMIT 0", [(0,), (1,)]),
+    ("SELECT number FROM numbers(5) /* LIMIT 5 */", [(0,), (1,)]),
+    ("SELECT number FROM numbers(5) /* a /* LIMIT 0 */ b */", [(0,), (1,)]),
+    ("SELECT number AS `a$b$c` FROM numbers(5) // LIMIT 5", [(0,), (1,)]),
+    # a comment marker inside a quoted identifier, string or heredoc is not a comment, so
+    # the real trailing LIMIT is honored and the client does not append a second one
+    ("SELECT number AS `a--b` FROM numbers(9) LIMIT 1", [(0,)]),
+    ("SELECT number, $$--$$ AS tag FROM numbers(9) LIMIT 1", [(0, "--")]),
+    ("SELECT number FROM numbers(9) WHERE toString(number) != 'x-- LIMIT 0' LIMIT 1", [(0,)]),
+    ("SELECT number FROM numbers(9) WHERE toString(number) != 'a\\'b-- LIMIT 0' LIMIT 1", [(0,)]),
+]
+
+
+@pytest.mark.parametrize(("query", "expected_rows"), COMMENTED_LIMIT_QUERIES)
+def test_query_limit_with_comments(param_client, call, query: str, expected_rows: list[tuple]):
+    old_limit = param_client.query_limit
+    param_client.query_limit = 2
+    try:
+        result = call(param_client.query, query)
+    finally:
+        param_client.query_limit = old_limit
+    assert result.result_rows == expected_rows
+
+
 def test_insert_csv_format(param_client, call, test_table_engine: str):
     call(param_client.command, "DROP TABLE IF EXISTS test_csv")
     call(
