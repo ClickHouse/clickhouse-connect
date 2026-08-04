@@ -688,7 +688,14 @@ def test_json_shared_data_compound_values(param_client: Client, call, table_cont
                (2, '{"obj": {"a": "1"}}'),
                (3, '{"nums": [1, 2, 3]}'),
                (4, '{"nested": [[1, 2], [3]]}'),
-               (5, '{"nullable": [1, null, 3]}')""",
+               (5, '{"nullable": [1, null, 3]}'),
+               (6, '{"m": {"x": "1", "y": "2"}}'),
+               (7, '{"ds": ["2024-01-15", "2024-02-20"]}'),
+               (8, '{"ts": ["2024-01-15 12:30:45"]}'),
+               (9, '{"ts64": ["2024-01-15 12:30:45.123"]}'),
+               (10, '{"mix": [1, "a", null]}'),
+               (11, '{"d": "2024-01-15"}'),
+               (12, '{"empty": []}')""",
         )
 
         rows = {r[0]: r[1] for r in call(param_client.query, "SELECT id, data FROM json_shared_compound ORDER BY id").result_set}
@@ -697,24 +704,25 @@ def test_json_shared_data_compound_values(param_client: Client, call, table_cont
         assert rows[1]["arr"] == [{"k": "v"}]
         # scalar path unchanged (guards against regression)
         assert rows[1]["s"] == "hello"
+        # nested objects flatten into dotted scalar paths, not compound values
         assert rows[2]["obj"] == {"a": "1"}
         assert rows[3]["nums"] == [1, 2, 3]
         assert rows[4]["nested"] == [[1, 2], [3]]
         assert rows[5]["nullable"] == [1, None, 3]
-
-
-def test_json_shared_data_map(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "json")
-    if not param_client.min_version("24.10"):
-        pytest.skip("JSON shared data decoding requires 24.10+")
-
-    with table_context("json_shared_map", ["id Int32", "data JSON(max_dynamic_paths=0)"]):
-        call(
-            param_client.command,
-            """INSERT INTO json_shared_map VALUES
-               (1, '{"m": {"x": "1", "y": "2"}}')""",
-        )
-
-        row = call(param_client.query, "SELECT data FROM json_shared_map").result_set[0][0]
-
-        assert row["m"] == {"x": "1", "y": "2"}
+        assert rows[6]["m"] == {"x": "1", "y": "2"}
+        # date and datetime strings infer as Array(Nullable(Date)) and
+        # Array(Nullable(DateTime)) under default settings. Expected temporal
+        # values come from a regular column decode of the same literals so the
+        # assertions hold for any server timezone.
+        expected_ts, expected_ts64 = call(
+            param_client.query,
+            "SELECT toDateTime('2024-01-15 12:30:45'), toDateTime64('2024-01-15 12:30:45.123', 9)",
+        ).result_set[0]
+        assert rows[7]["ds"] == [datetime.date(2024, 1, 15), datetime.date(2024, 2, 20)]
+        assert rows[8]["ts"] == [expected_ts]
+        assert rows[9]["ts64"] == [expected_ts64]
+        # heterogeneous array: Array(Dynamic) with a null element
+        assert rows[10]["mix"] == [1, "a", None]
+        # top-level non-string scalar outside the legacy discriminator table
+        assert rows[11]["d"] == datetime.date(2024, 1, 15)
+        assert rows[12]["empty"] == []
