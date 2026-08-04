@@ -22,6 +22,7 @@ from typing import Any
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.bytesource import ByteArraySource
+from clickhouse_connect.driver.query import QueryContext
 
 # Binary type index -> ClickHouse type name, for types whose single-value binary
 # encoding is identical to their one-row native column encoding.
@@ -60,17 +61,42 @@ class UnsupportedBinaryTypeError(Exception):
 
 
 class _Node:
-    __slots__ = ("kind", "child", "children", "names", "ch_type")
+    """One node of a parsed binary type encoding."""
 
-    def __init__(self, kind, child=None, children=None, names=None, ch_type=None):
+    __slots__ = ("kind", "child", "children", "typed_paths", "names", "ch_type")
+
+    kind: str
+    child: "_Node | None"
+    children: "list[_Node]"
+    typed_paths: "dict[str, _Node]"
+    names: "list[str]"
+    ch_type: Any
+
+    def __init__(
+        self,
+        kind: str,
+        child: "_Node | None" = None,
+        children: "list[_Node] | None" = None,
+        typed_paths: "dict[str, _Node] | None" = None,
+        names: "list[str] | None" = None,
+        ch_type: Any = None,
+    ) -> None:
         self.kind = kind
         self.child = child
-        self.children = children
-        self.names = names
+        self.children = children if children is not None else []
+        self.typed_paths = typed_paths if typed_paths is not None else {}
+        self.names = names if names is not None else []
         self.ch_type = ch_type
 
 
-def read_encoded_type(source: ByteArraySource) -> _Node:
+def _child_of(node: _Node) -> _Node:
+    """Return the element type of a node that wraps exactly one other type."""
+    if node.child is None:
+        raise UnsupportedBinaryTypeError(f"{node.kind} node is missing its element type")
+    return node.child
+
+
+def _read_encoded_type(source: ByteArraySource) -> _Node:
     """Parse a binary type encoding, leaving the cursor at the start of the value."""
     idx = source.read_byte()
 
@@ -79,23 +105,23 @@ def read_encoded_type(source: ByteArraySource) -> _Node:
         return _Node("scalar", ch_type=get_from_name(name))
 
     if idx == ARRAY:
-        return _Node("array", child=read_encoded_type(source))
+        return _Node("array", child=_read_encoded_type(source))
 
     if idx == NULLABLE:
-        return _Node("nullable", child=read_encoded_type(source))
+        return _Node("nullable", child=_read_encoded_type(source))
 
     if idx == LOW_CARDINALITY:
         # LowCardinality delegates to the dictionary type's serializeBinary
-        return read_encoded_type(source)
+        return _read_encoded_type(source)
 
     if idx == MAP:
-        key = read_encoded_type(source)
-        value = read_encoded_type(source)
+        key = _read_encoded_type(source)
+        value = _read_encoded_type(source)
         return _Node("map", children=[key, value])
 
     if idx == TUPLE:
         count = source.read_leb128()
-        return _Node("tuple", children=[read_encoded_type(source) for _ in range(count)])
+        return _Node("tuple", children=[_read_encoded_type(source) for _ in range(count)])
 
     if idx == NAMED_TUPLE:
         count = source.read_leb128()
@@ -103,7 +129,7 @@ def read_encoded_type(source: ByteArraySource) -> _Node:
         children = []
         for _ in range(count):
             names.append(source.read_leb128_str())
-            children.append(read_encoded_type(source))
+            children.append(_read_encoded_type(source))
         return _Node("named_tuple", children=children, names=names)
 
     if idx == DYNAMIC:
@@ -112,22 +138,22 @@ def read_encoded_type(source: ByteArraySource) -> _Node:
 
     if idx == JSON:
         source.read_byte()  # uint8 serialization version
-        source.read_leb128()  # max_dynamic_paths  (was: _read_var_int(source))
+        source.read_leb128()  # max_dynamic_paths (var_uint)
         source.read_byte()  # uint8 max_dynamic_types
         typed_paths = {}
         for _ in range(source.read_leb128()):
             path = source.read_leb128_str()
-            typed_paths[path] = read_encoded_type(source)
+            typed_paths[path] = _read_encoded_type(source)
         for _ in range(source.read_leb128()):  # SKIP paths
             source.read_leb128_str()
         for _ in range(source.read_leb128()):  # SKIP REGEXP
             source.read_leb128_str()
-        return _Node("json", children=typed_paths)
+        return _Node("json", typed_paths=typed_paths)
 
     raise UnsupportedBinaryTypeError(f"Unhandled binary type index 0x{idx:02X}")
 
 
-def read_binary_value(source: ByteArraySource, node: _Node, ctx) -> Any:
+def _read_binary_value(source: ByteArraySource, node: _Node, ctx) -> Any:
     """Read one value in ISerialization::serializeBinary format."""
     kind = node.kind
 
@@ -141,12 +167,13 @@ def read_binary_value(source: ByteArraySource, node: _Node, ctx) -> Any:
 
     if kind == "array":
         count = source.read_leb128()
-        return [read_binary_value(source, node.child, ctx) for _ in range(count)]
+        child = _child_of(node)
+        return [_read_binary_value(source, child, ctx) for _ in range(count)]
 
     if kind == "nullable":
         if source.read_byte():
             return None
-        return read_binary_value(source, node.child, ctx)
+        return _read_binary_value(source, _child_of(node), ctx)
 
     if kind == "map":
         # Serialized as the nested Array(Tuple(K, V))
@@ -154,31 +181,31 @@ def read_binary_value(source: ByteArraySource, node: _Node, ctx) -> Any:
         key_node, value_node = node.children
         mapping = {}
         for _ in range(count):
-            key = read_binary_value(source, key_node, ctx)
-            mapping[key] = read_binary_value(source, value_node, ctx)
+            key = _read_binary_value(source, key_node, ctx)
+            mapping[key] = _read_binary_value(source, value_node, ctx)
         return mapping
 
     if kind == "tuple":
-        return tuple(read_binary_value(source, child, ctx) for child in node.children)
+        return tuple(_read_binary_value(source, child, ctx) for child in node.children)
 
     if kind == "named_tuple":
-        return {name: read_binary_value(source, child, ctx) for name, child in zip(node.names, node.children)}
+        return {name: _read_binary_value(source, child, ctx) for name, child in zip(node.names, node.children)}
 
     if kind == "dynamic":
-        return read_binary_value(source, read_encoded_type(source), ctx)
+        return _read_binary_value(source, _read_encoded_type(source), ctx)
 
     if kind == "json":
         from clickhouse_connect.datatypes.dynamic import _nest_value  # circular import
 
-        typed_paths = node.children or {}
+        typed_paths = node.typed_paths
         obj: dict[str, Any] = {}
         for _ in range(source.read_leb128()):
             path = source.read_leb128_str()
             path_node = typed_paths.get(path)
             if path_node is None:
                 # dynamic path or shared data: value is self describing
-                path_node = read_encoded_type(source)
-            value = read_binary_value(source, path_node, ctx)
+                path_node = _read_encoded_type(source)
+            value = _read_binary_value(source, path_node, ctx)
             if value is not None:
                 _nest_value(obj, path, value)
         return obj
@@ -186,11 +213,18 @@ def read_binary_value(source: ByteArraySource, node: _Node, ctx) -> Any:
     raise UnsupportedBinaryTypeError(f"Unhandled node kind {kind}")
 
 
-def decode_binary_value(binary_data: bytes, ctx):
-    """Decode <encoded type><value>.  Raises on anything unexpected."""
+def _decode_binary_value(binary_data: bytes, ctx: QueryContext) -> Any:
+    """Decode ``<encoded type><serializeBinary value>`` into a Python object.
+
+    :param binary_data: The complete encoded value, including the leading type encoding.
+    :param ctx: Query context used for scalar column decoding.
+    :returns: The decoded Python value.
+    :raises UnsupportedBinaryTypeError: If the type encoding is not supported,
+        or if the parser does not consume exactly ``binary_data``.
+    """
     source = ByteArraySource(binary_data)
-    node = read_encoded_type(source)
-    value = read_binary_value(source, node, ctx)
+    node = _read_encoded_type(source)
+    value = _read_binary_value(source, node, ctx)
     if source.pos != len(binary_data):
         raise UnsupportedBinaryTypeError(f"Trailing bytes after decode: consumed {source.pos} of {len(binary_data)}")
     return value
