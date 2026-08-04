@@ -3,7 +3,7 @@ import os
 import time
 import uuid
 import zoneinfo
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
 
 import pytest
 
@@ -17,6 +17,32 @@ from clickhouse_connect.driver.binding import (
     format_bind_value,
     format_query_value,
 )
+
+HAS_TZSET = hasattr(time, "tzset")
+NON_UTC_HOST_TZ = "America/New_York"
+
+
+class NoOffsetTZ(tzinfo):
+    def utcoffset(self, dt):
+        return None
+
+    def dst(self, dt):
+        return None
+
+
+def _force_process_timezone(monkeypatch, tz_name: str) -> str | None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", tz_name)
+    time.tzset()
+    return original_tz
+
+
+def _restore_process_timezone(monkeypatch, original_tz: str | None) -> None:
+    if original_tz is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", original_tz)
+    time.tzset()
 
 
 def test_finalize():
@@ -272,28 +298,131 @@ class TestBindQuerySuffixCollision:
         assert params == {}
 
 
-def test_naive_datetime_not_shifted_by_server_tz():
-    # A naive datetime carries no source timezone, so it must be written verbatim.
-    # The host tz is forced to a non-server zone so that the previous behaviour
-    # (astimezone(server_tz) on a naive value, assuming host-local time) would
-    # visibly shift the value.
-    original_tz = os.environ.get("TZ")
-    os.environ["TZ"] = "America/New_York"
-    time.tzset()
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+def test_naive_datetime_wall_binding_behavior(monkeypatch):
+    original_tz = _force_process_timezone(monkeypatch, NON_UTC_HOST_TZ)
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "wall")
     try:
         berlin = zoneinfo.ZoneInfo("Europe/Berlin")
-        naive = datetime(2025, 1, 1, 12, 0, 0)
+        naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
 
         assert format_query_value(naive, server_tz=berlin) == "'2025-01-01 12:00:00'"
         assert format_bind_value(naive, server_tz=berlin) == "2025-01-01 12:00:00"
-        assert format_query_value(DT64Param(naive), server_tz=berlin) == "'2025-01-01 12:00:00.000000'"
+        assert format_bind_value(naive, server_tz=berlin, top_level=False) == "'2025-01-01 12:00:00'"
+        assert format_bind_value(DT64Param(naive), server_tz=berlin) == "2025-01-01 12:00:00.250306"
+        assert format_query_value(DT64Param(naive), server_tz=berlin) == "'2025-01-01 12:00:00.250306'"
 
-        # timezone-aware values are still converted to the server timezone
+        _, params = bind_query(
+            "SELECT {dt:DateTime}, {dt_berlin:DateTime('Europe/Berlin')}",
+            {"dt": naive, "dt_berlin": naive},
+            server_tz=timezone.utc,
+        )
+        assert params == {"param_dt": "2025-01-01 12:00:00", "param_dt_berlin": "2025-01-01 12:00:00"}
+
+        query, params = bind_query(
+            "SELECT %(items)s, %(pair)s",
+            {"items": [naive], "pair": (naive, "user_1")},
+            server_tz=berlin,
+        )
+        assert query == "SELECT ['2025-01-01 12:00:00'], ('2025-01-01 12:00:00', 'user_1')"
+        assert params == {}
+
+        _, params = bind_query(
+            "SELECT {items:Array(DateTime)}, {berlin:Datetime('Europe/Berlin')}, "
+            "{nullable:Nullable(DateTime64(6))}, {pair:Tuple(DateTime64(6), String)}, "
+            "{vals:Array(Tuple(DateTime64(6), String))}",
+            {
+                "items": [naive],
+                "berlin": naive,
+                "nullable": naive,
+                "pair": (naive, "user_1"),
+                "vals": [(naive, "user_2")],
+            },
+            server_tz=berlin,
+        )
+        assert params == {
+            "param_items": "['2025-01-01 12:00:00']",
+            "param_berlin": "2025-01-01 12:00:00",
+            "param_nullable": "2025-01-01 12:00:00.250306",
+            "param_pair": "('2025-01-01 12:00:00.250306', 'user_1')",
+            "param_vals": "[('2025-01-01 12:00:00.250306', 'user_2')]",
+        }
+
         aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         assert format_query_value(aware, server_tz=berlin) == "'2025-01-01 13:00:00'"
+        assert format_bind_value(aware, server_tz=berlin) == "2025-01-01 13:00:00"
+        assert format_bind_value(DT64Param(aware), server_tz=berlin) == "2025-01-01 13:00:00.000000"
     finally:
-        if original_tz is None:
-            os.environ.pop("TZ", None)
-        else:
-            os.environ["TZ"] = original_tz
-        time.tzset()
+        common.set_setting("naive_datetime_binding", original_setting)
+        _restore_process_timezone(monkeypatch, original_tz)
+
+
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+@pytest.mark.parametrize(
+    "host_tz, query_utc, bind_utc, berlin_value",
+    [
+        ("UTC", "2025-01-01 12:00:00", "2025-01-01 12:00:00", "2025-01-01 13:00:00"),
+        (NON_UTC_HOST_TZ, "2025-01-01 12:00:00", "2025-01-01 17:00:00", "2025-01-01 18:00:00"),
+    ],
+)
+def test_naive_datetime_legacy_binding_behavior(
+    monkeypatch,
+    host_tz,
+    query_utc,
+    bind_utc,
+    berlin_value,
+):
+    original_tz = _force_process_timezone(monkeypatch, host_tz)
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "legacy")
+    try:
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
+
+        assert format_query_value(naive, server_tz=timezone.utc) == f"'{query_utc}'"
+        assert format_query_value(naive, server_tz=berlin) == f"'{berlin_value}'"
+        assert format_bind_value(naive, server_tz=timezone.utc) == bind_utc
+        assert format_bind_value(naive, server_tz=berlin) == berlin_value
+        assert format_bind_value(DT64Param(naive), server_tz=timezone.utc) == f"{bind_utc}.250306"
+        assert format_bind_value(DT64Param(naive), server_tz=berlin) == f"{berlin_value}.250306"
+
+        _, params = bind_query(
+            "SELECT {dt:DateTime}, {dt_berlin:DateTime('Europe/Berlin')}",
+            {"dt": naive, "dt_berlin": naive},
+            server_tz=timezone.utc,
+        )
+        assert params == {"param_dt": bind_utc, "param_dt_berlin": berlin_value}
+
+        _, params = bind_query(
+            "SELECT {dt:DateTime64(6, 'UTC')}, {items:Array(DateTime64(6, 'UTC'))}",
+            {"dt": naive, "items": [naive]},
+            server_tz=timezone.utc,
+        )
+        assert params == {
+            "param_dt": f"{bind_utc}.250306",
+            "param_items": f"['{bind_utc}.250306']",
+        }
+
+        # Aware values must format identically in legacy and wall modes.
+        aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        assert format_query_value(aware, server_tz=berlin) == "'2025-01-01 13:00:00'"
+        assert format_bind_value(aware, server_tz=berlin) == "2025-01-01 13:00:00"
+        assert format_bind_value(DT64Param(aware), server_tz=berlin) == "2025-01-01 13:00:00.000000"
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
+        _restore_process_timezone(monkeypatch, original_tz)
+
+
+def test_none_offset_tzinfo_is_naive_for_wall_binding():
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "wall")
+    try:
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        value = datetime(2025, 1, 1, 12, 0, 0, 250306, tzinfo=NoOffsetTZ())
+
+        assert format_query_value(value, server_tz=berlin) == "'2025-01-01 12:00:00'"
+        assert format_bind_value(value, server_tz=berlin) == "2025-01-01 12:00:00"
+        assert DT64Param(value).format(berlin, top_level=True) == "2025-01-01 12:00:00.250306"
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
