@@ -668,3 +668,45 @@ def test_dynamic_uint64_single_variant(param_client: Client, call, table_context
         result = call(param_client.query, "SELECT * FROM dynamic_uint64 ORDER BY id").result_set
         assert result[0][1] == 17
         assert result[1][1] == 9223372036854775900
+
+
+def test_json_shared_data_compound_values(test_client: Client, table_context: Callable):
+    """Compound values stored in JSON shared data must decode to Python objects.
+
+    max_dynamic_paths=0 forces every path into shared data on insert, so this
+    does not depend on merge history.
+    """
+    type_available(test_client, "json")
+    if not test_client.min_version("24.10"):
+        pytest.skip("JSON shared data decoding requires 24.10+")
+
+    with table_context("json_shared_compound", ["id Int32", "data JSON(max_dynamic_paths=0)"]):
+        test_client.command(
+            """INSERT INTO json_shared_compound VALUES
+               (1, '{"s": "hello", "arr": [{"k": "v"}]}'),
+               (2, '{"obj": {"a": "1"}}'),
+               (3, '{"nums": [1, 2, 3]}'),
+               (4, '{"nested": [[1, 2], [3]]}'),
+               (5, '{"nullable": [1, null, 3]}')"""
+        )
+        rows = {r[0]: r[1] for r in test_client.query("SELECT id, data FROM json_shared_compound ORDER BY id").result_rows}
+
+        # the reported case: array of objects
+        assert rows[1]["arr"] == [{"k": "v"}]
+        # scalar path unchanged (guards against regression)
+        assert rows[1]["s"] == "hello"
+        assert rows[2]["obj"] == {"a": "1"}
+        assert rows[3]["nums"] == [1, 2, 3]
+        assert rows[4]["nested"] == [[1, 2], [3]]
+        assert rows[5]["nullable"] == [1, None, 3]
+
+
+def test_json_shared_data_map(test_client: Client, table_context: Callable):
+    type_available(test_client, "json")
+    if not test_client.min_version("24.10"):
+        pytest.skip("JSON shared data decoding requires 24.10+")
+
+    with table_context("json_shared_map", ["id Int32", "data JSON(max_dynamic_paths=0)"]):
+        test_client.command("""INSERT INTO json_shared_map VALUES (1, '{"m": {"x": "1", "y": "2"}}')""")
+        row = test_client.query("SELECT data FROM json_shared_map").result_rows[0][0]
+        assert row["m"] == {"x": "1", "y": "2"}

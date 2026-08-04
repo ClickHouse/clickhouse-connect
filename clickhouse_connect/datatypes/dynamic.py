@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.binary_value import decode_binary_value
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.bytesource import ByteArraySource
@@ -407,10 +408,14 @@ def _decode_variant(binary_data: bytes, ctx: QueryContext, validate_length: bool
 
     type_name = STANDARD_DISCRIMINATOR_TYPES.get(discriminator)
     if type_name is None:
-        return binary_data
+        try:
+            return decode_binary_value(binary_data, ctx)
+        except Exception as e:  # noqa: BLE001  never raise out of a decode
+            logger.debug("Compound variant decode failed: %s", e)
+            return binary_data
 
     if validate_length and not _validate_variant_length(binary_data, discriminator):
-        return None
+        return binary_data
 
     value_type = get_from_name(type_name)
     try:
