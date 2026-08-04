@@ -180,6 +180,29 @@ def coerce_bool(val: str | bool | None) -> bool:
     return val is True or (isinstance(val, str) and val.lower() in ("true", "1", "y", "yes"))
 
 
+def coerce_show_clickhouse_errors(val: bool | str | None) -> bool | str:
+    """
+    Normalize show_clickhouse_errors to True, False, or the string "scrub".
+
+    "scrub" keeps the SQL error text and symbolic name but strips the server
+    URL and the trailing "(version ...)" trailer from exception messages.
+    """
+    if val is None:
+        return True
+    if isinstance(val, str):
+        lowered = val.strip().lower()
+        if lowered == "scrub":
+            return "scrub"
+        if lowered in ("true", "1", "y", "yes"):
+            return True
+        if lowered in ("false", "0", "n", "no", ""):
+            return False
+        raise ProgrammingError(
+            f'Unrecognized show_clickhouse_errors option "{val}". Expected True, False, or "scrub".'
+        )
+    return bool(val)
+
+
 def version_at_least(server_version: str | None, required_version: str) -> bool:
     """
     Determine whether server_version is at least required_version.

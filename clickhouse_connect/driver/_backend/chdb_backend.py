@@ -43,6 +43,7 @@ from clickhouse_connect.driver.exceptions import (
     ProgrammingError,
     StreamFailureError,
     error_name_from_body,
+    scrub_error_details,
 )
 
 if TYPE_CHECKING:
@@ -409,7 +410,10 @@ class ChdbBackend:
         if not self.show_clickhouse_errors or not message:
             # The numeric code is always populated, matching the HTTP path
             return DatabaseError("The ClickHouse server returned an error.", code=code)
-        return DatabaseError(message, code=code, name=error_name_from_body(message))
+        name = error_name_from_body(message)
+        if self.show_clickhouse_errors == "scrub":
+            message = scrub_error_details(message)
+        return DatabaseError(message, code=code, name=name)
 
     def _guard(self) -> None:
         if self._closed:

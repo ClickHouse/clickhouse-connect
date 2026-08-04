@@ -347,7 +347,7 @@ class HttpSyncBackend:
                         continue
                 logger.debug("Non-retryable HTTP transport error type=%s", type(ex).__name__)
                 logger.warning("Unexpected Http Driver Exception")
-                err_url = f" ({self.url})" if self.show_clickhouse_errors else ""
+                err_url = f" ({self.url})" if self.show_clickhouse_errors is True else ""
                 raise OperationalError(f"Error {ex} executing HTTP request attempt {attempts}{err_url}") from ex
             finally:
                 if query_session:

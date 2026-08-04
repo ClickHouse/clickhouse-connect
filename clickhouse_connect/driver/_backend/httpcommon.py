@@ -35,8 +35,10 @@ from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     OperationalError,
     ProgrammingError,
+    ShowClickhouseErrors,
     error_code_from_header,
     error_name_from_body,
+    scrub_error_details,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,30 +72,41 @@ def build_http_error(
     status: int,
     err_code: str | None,
     full_body: str,
-    show_clickhouse_errors: bool,
+    show_clickhouse_errors: ShowClickhouseErrors,
     url: str,
     retried: bool,
 ) -> DatabaseError:
-    """Build the exception for a failed HTTP response from its already-read body."""
+    """Build the exception for a failed HTTP response from its already-read body.
+
+    show_clickhouse_errors controls how much detail is included:
+    - True: full server response including version trailer, plus the request URL
+    - "scrub": SQL error text and symbolic name, without host/URL or version
+    - False: generic message only (structured ``code`` is still set)
+    """
+    show_detail = bool(show_clickhouse_errors)
+    scrub = show_clickhouse_errors == "scrub"
     code = error_code_from_header(err_code)
-    name = error_name_from_body(full_body) if show_clickhouse_errors else None
+    name = error_name_from_body(full_body) if show_detail else None
     body = ""
     try:
         body = common.format_error(full_body).strip()
     except Exception:
         logger.warning("Failed to format error response body", exc_info=True)
 
-    if show_clickhouse_errors:
+    if show_detail:
+        if scrub and body:
+            body = scrub_error_details(body)
         if err_code:
             err_str = f"Received ClickHouse exception, code: {err_code}"
         else:
             err_str = f"HTTP driver received HTTP status {status}"
         if body:
             err_str = f"{err_str}, server response: {body}"
+        if show_clickhouse_errors is True:
+            err_str = f"{err_str} (for url {url})"
     else:
         err_str = "The ClickHouse server returned an error"
 
-    err_str = f"{err_str} (for url {url})"
     err_type = OperationalError if retried else DatabaseError
     return err_type(err_str, code=code, name=name)
 

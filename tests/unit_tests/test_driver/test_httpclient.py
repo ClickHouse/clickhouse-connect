@@ -229,14 +229,15 @@ class TestAsyncClientErrorHandler:
 
     @staticmethod
     def make_client():
-        client = AsyncClient(
-            interface="http",
-            host="localhost",
-            port=8123,
-            username="default",
-            password="",
-            database="default",
-        )
+        with patch.object(AsyncClient, "_initialize", new=AsyncMock()):
+            client = AsyncClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
         client.url = "http://localhost:8123"
         client.show_clickhouse_errors = True
         return client
@@ -300,15 +301,16 @@ class TestHttpClientErrorHandler:
 
     def setup_method(self):
         """Set up common test fixtures"""
-        # Create a minimal HttpClient instance
-        self.client = HttpClient(
-            interface="http",
-            host="localhost",
-            port=8123,
-            username="default",
-            password="",
-            database="default",
-        )
+        # Create a minimal HttpClient instance without contacting a server
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
         self.client.url = "http://localhost:8123"
 
         # Always turn on show_clickhouse_error. Will disable in tests as needed.
@@ -423,14 +425,42 @@ class TestHttpClientErrorHandler:
         with pytest.raises(DatabaseError) as excinfo:
             self.client._error_handler(response)
 
-        # Verify the error message is generic
+        # Verify the error message is generic and does not leak host/URL
         error_msg = str(excinfo.value)
-        assert "The ClickHouse server returned an error (for url http://localhost:8123)" in error_msg
+        assert error_msg == "The ClickHouse server returned an error"
         assert "Invalid query" not in error_msg  # Should not include the body
         assert "99" not in error_msg  # Should not include the exception code
+        assert self.client.url not in error_msg
         # Numeric code is still exposed structurally, but the body-derived name is suppressed
         assert excinfo.value.code == 99
         assert excinfo.value.name is None
+        response.close.assert_called_once()
+
+    def test_error_handler_with_scrub_mode(self):
+        """scrub keeps the SQL error but strips version trailer and URL"""
+        self.client.show_clickhouse_errors = "scrub"
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(
+                b"Code: 60. DB::Exception: Unknown table 'x'. "
+                b"(UNKNOWN_TABLE) (version 26.2.4.23 (official build))"
+            ),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Received ClickHouse exception, code: 60" in error_msg
+        assert "Unknown table 'x'" in error_msg
+        assert "(UNKNOWN_TABLE)" in error_msg
+        assert "version" not in error_msg
+        assert "official build" not in error_msg
+        assert self.client.url not in error_msg
+        assert "(for url" not in error_msg
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
         response.close.assert_called_once()
 
     def test_error_handler_with_unicode_decode_error(self):

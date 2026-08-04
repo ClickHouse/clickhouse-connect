@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- `show_clickhouse_errors` now accepts `"scrub"` in addition to `True`/`False`. Scrub mode keeps the SQL exception text and symbolic name (for example `UNKNOWN_TABLE`) while stripping the server URL and the trailing `(version ...)` trailer from client exception messages. When error detail is disabled (`False`), the request URL is no longer appended to the generic error string. Addresses the middle ground requested in [#344](https://github.com/ClickHouse/clickhouse-connect/issues/344).
+
 ### Bug Fixes
 
 - Parsing a nested `Variant`, `Tuple`, `Nested`, or typed `JSON` column type whose element is an `Enum` with an escaped single quote in a value name no longer corrupts the escape sequence and fails while re-parsing the element type. Closes [#878](https://github.com/ClickHouse/clickhouse-connect/issues/878).
