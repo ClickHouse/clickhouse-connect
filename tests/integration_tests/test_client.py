@@ -496,6 +496,56 @@ def test_role_setting_works(param_client: Client, test_config: TestConfig, clien
     assert res.result_rows == [([role_limited],)]
 
 
+def test_changeable_in_readonly_custom_setting(
+    param_client: Client, test_config: TestConfig, client_factory: Callable, client_mode: str, call
+):
+    """Readonly user can set CHANGEABLE_IN_READONLY custom settings via settings= (issue #530)."""
+    if test_config.cloud:
+        pytest.skip("Skipping role test in cloud mode - cannot create custom users")
+
+    # Docker test servers set custom_settings_prefixes=SQL_; skip otherwise.
+    try:
+        call(param_client.command, "SELECT 1 SETTINGS SQL_RO_probe_530='ok'")
+    except DatabaseError:
+        pytest.skip("Server does not allow SQL_ custom settings (need custom_settings_prefixes)")
+
+    # Roles and users are server global, so the sync and async runs need distinct names to
+    # stay isolated when xdist runs them in parallel.
+    role = f"ch_connect_ro_role_530_{client_mode}"
+    user = f"ch_connect_ro_user_530_{client_mode}"
+    password = "R7m!pZt9qL#x"
+    setting = "SQL_RO_my_rls_key"
+
+    try:
+        call(param_client.command, f"DROP USER IF EXISTS {user}")
+        call(param_client.command, f"DROP ROLE IF EXISTS {role}")
+
+        call(param_client.command, f"CREATE ROLE {role}")
+        # CHANGEABLE_IN_READONLY lets a readonly user set the custom setting even though it is
+        # not visible in system.settings for that user, which is what previously tripped the
+        # client into rejecting it. This mirrors the row-policy getSetting use case in #530.
+        call(param_client.command, f"ALTER ROLE {role} SETTINGS {setting} CHANGEABLE_IN_READONLY")
+        call(param_client.command, f"CREATE USER {user} IDENTIFIED BY '{password}' DEFAULT ROLE {role} SETTINGS readonly = 1")
+
+        # The readonly user cannot set the writable session defaults the factory normally applies,
+        # so opt out of them.
+        client = client_factory(username=user, password=password, apply_test_settings=False)
+
+        # Inline SETTINGS clause already works; the settings= path must match.
+        inline = call(client.query, f"SELECT getSetting('{setting}') AS v SETTINGS {setting}='tenant_1'")
+        assert inline.result_rows == [("tenant_1",)]
+
+        via_param = call(client.query, f"SELECT getSetting('{setting}') AS v", settings={setting: "tenant_1"})
+        assert via_param.result_rows == [("tenant_1",)]
+
+        # A different value takes effect per query, confirming the setting reaches the server.
+        other = call(client.query, f"SELECT getSetting('{setting}') AS v", settings={setting: "tenant_2"})
+        assert other.result_rows == [("tenant_2",)]
+    finally:
+        call(param_client.command, f"DROP USER IF EXISTS {user}")
+        call(param_client.command, f"DROP ROLE IF EXISTS {role}")
+
+
 def test_query_id_autogeneration(param_client: Client, test_table_engine: str, call):
     """Test that query_id is auto-generated for query(), command(), and insert() methods"""
     result = call(param_client.query, "SELECT 1")

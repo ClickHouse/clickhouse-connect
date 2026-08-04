@@ -58,3 +58,20 @@ def test_execute(test_engine: Engine):
 
         rows = list(row for row in conn.execute(text("describe TABLE system.columns")))
         assert len(rows) > 5
+
+
+def test_empty_result_with_leading_comments_keeps_metadata(test_engine: Engine):
+    sql = """
+        /* outer /* nested */ done */
+        #! clickhouse
+        # hash
+        // slash
+        -- dash
+        WITH 13 AS value_1
+        SELECT value_1 WHERE 0
+        """
+    with test_engine.begin() as conn:
+        result = conn.execute(text(sql))
+
+        assert list(result) == []
+        assert list(result.keys()) == ["value_1"]

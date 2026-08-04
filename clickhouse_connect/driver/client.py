@@ -77,6 +77,15 @@ arrow_str_setting = "output_format_arrow_string_as_string"
 # user-configured global read formats such as set_default_formats("String", "bytes").
 _INTERNAL_QUERY_FORMATS = {"String": "string"}
 
+# Names the ClickHouse HTTP interface consumes as request parameters, not query settings.
+# The subset already carried in valid_transport_settings (database, role, query_id, ...) is
+# forwarded on purpose; these remaining names have no meaning as settings and would corrupt
+# the request if placed in the query string, so they are rejected rather than forwarded.
+_HTTP_RESERVED_SETTING_NAMES = frozenset({"query", "user", "password", "default_format", "stacktrace", "close_session"})
+# Prefixes the HTTP interface reserves. param_ is the bound-parameter namespace emitted by
+# bind_query, so a setting named param_x would override an actual query parameter value.
+_HTTP_RESERVED_SETTING_PREFIXES = ("param_",)
+
 
 def _strip_utc_timezone_from_arrow(table: pyarrow.Table) -> pyarrow.Table:
     """Strip UTC timezone from timestamp columns in Arrow table.
@@ -133,6 +142,12 @@ class Client(ABC):
     _initial_settings: dict[str, Any] | None = None
     valid_transport_settings: set[str] = set()
     optional_transport_settings: set[str] = set()
+    # Names and name prefixes the transport reserves for request parameters rather than query
+    # settings. They must never be forwarded as a setting even when unknown to system.settings,
+    # because a transport (e.g. HTTP query params) would treat them as something other than a
+    # setting and silently corrupt the request.
+    _reserved_setting_names: set[str] = set()
+    _reserved_setting_prefixes: tuple[str, ...] = ()
     database = None
     max_error_message = 0
     _tz_source: TzSource = "auto"
@@ -244,7 +259,13 @@ class Client(ABC):
 
     def _validate_settings(self, settings: dict[str, Any] | None) -> dict[str, str]:
         """
-        This strips any ClickHouse settings that are not recognized or are read only.
+        Filter and normalize ClickHouse settings before they are sent to the server.
+
+        Settings known to be readonly on this server are handled according to the
+        common ``invalid_setting_action`` option. Settings that do not appear in
+        ``system.settings`` for the current user (for example custom settings made
+        ``CHANGEABLE_IN_READONLY`` on a role) are forwarded to ClickHouse so the
+        server can accept or reject them.
         :param settings:  Dictionary of setting name and values
         :return: A filtered dictionary of settings with values rendered as strings
         """
@@ -285,16 +306,31 @@ class Client(ABC):
             if setting_def and setting_def.value == str_value:
                 if setting_def.readonly or (current_setting is not None and current_setting == setting_def.value):
                     return None
-            if setting_def is None or setting_def.readonly:
+            if setting_def is None:
+                # Not present in system.settings for this user. May be a custom setting,
+                # including one made CHANGEABLE_IN_READONLY on a role, which the client cannot
+                # discover without extra privileges. Forward it and let ClickHouse accept or
+                # reject it.
+                if key in self.optional_transport_settings:
+                    return None
+                if key in self._reserved_setting_names or key.startswith(self._reserved_setting_prefixes):
+                    raise ProgrammingError(f"{key} is a reserved transport parameter and cannot be sent as a setting") from None
+                if invalid_action == "drop":
+                    # Honor the caller's opt-in to strip settings the client cannot validate,
+                    # which keeps a single settings dict portable across server versions.
+                    logger.warning("Dropping setting %s not found in system.settings", key)
+                    return None
+                return str_value
+            if setting_def.readonly:
                 if key in self.optional_transport_settings:
                     return None
                 if invalid_action == "send":
-                    logger.warning("Attempting to send unrecognized or readonly setting %s", key)
+                    logger.warning("Attempting to send readonly setting %s", key)
                 elif invalid_action == "drop":
-                    logger.warning("Dropping unrecognized or readonly settings %s", key)
+                    logger.warning("Dropping readonly setting %s", key)
                     return None
                 else:
-                    raise ProgrammingError(f"Setting {key} is unknown or readonly") from None
+                    raise ProgrammingError(f"Setting {key} is readonly") from None
         return str_value
 
     def _setting_status(self, key: str) -> SettingStatus:
@@ -345,9 +381,11 @@ class Client(ABC):
     @abstractmethod
     def set_client_setting(self, key: str, value: Any) -> None:
         """
-        Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
-        or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
-        to send the setting anyway based on the common setting 'invalid_setting_action'
+        Set a clickhouse setting for the client after initialization. Settings identified as read only on the
+        server honor the common setting 'invalid_setting_action', which can throw a ProgrammingError, drop the
+        setting, or send it anyway. Settings not present in system.settings for the current user (for example a
+        custom setting made CHANGEABLE_IN_READONLY on a role) are forwarded to ClickHouse, which accepts or
+        rejects them, unless 'invalid_setting_action' is 'drop', in which case they are dropped.
         :param key: ClickHouse setting name
         :param value: ClickHouse setting value
         """

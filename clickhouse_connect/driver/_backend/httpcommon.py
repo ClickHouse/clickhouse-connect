@@ -395,7 +395,13 @@ def plan_command_request(
     transport_settings: dict[str, str] | None,
 ) -> CommandRequestPlan:
     """Shape an already-bound command into an HTTP request plan."""
-    params = dict(bind_params)
+    # Settings go in first so the structural request parameters below (bind params, external
+    # data metadata, query) win any name collision, matching plan_query_request.
+    params: dict[str, str] = {}
+    if runtime.database:
+        params["database"] = runtime.database
+    params.update(runtime.settings)
+    params.update(bind_params)
     headers: dict[str, Any] = {}
     payload: str | bytes | None = None
     form_files = None
@@ -418,9 +424,6 @@ def plan_command_request(
         params["query"] = bound_cmd
     else:
         payload = bound_cmd
-    if runtime.database:
-        params["database"] = runtime.database
-    params.update(runtime.settings)
     headers = dict_copy(headers, transport_settings)
     method = "POST" if payload or form_files else "GET"
     return CommandRequestPlan(params, headers, method, payload=payload, form_files=form_files)
