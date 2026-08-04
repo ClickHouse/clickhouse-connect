@@ -85,3 +85,35 @@ def test_description_metadata_requery_with_leading_and_trailing_comments(dbapi_c
 
     assert cursor.fetchall() == []
     assert cursor.description == []
+
+
+@pytest.mark.parametrize(
+    "statement_template",
+    [
+        "INSERT INTO TABLE {table} (id, name) VALUES (%s, %s)",
+        "INSERT INTO {table}\n    (id, name)\nVALUES\n    (%s, %s)",
+        'INSERT INTO {table} ("id", "name") VALUES (%s, %s)',
+    ],
+)
+def test_executemany_insert_statement_forms(dbapi_connection, table_context: Callable, statement_template: str):
+    """The bulk insert fast path must handle the INSERT forms the server accepts, including the
+    optional TABLE keyword, a statement spread over several lines, and double-quoted columns.
+    """
+    with table_context("dbapi_executemany_forms", ["id UInt32", "name String"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            statement_template.format(table="dbapi_executemany_forms"),
+            [(13, "user_1"), (79, "user_2")],
+        )
+        cursor.execute("SELECT id, name FROM dbapi_executemany_forms ORDER BY id")
+        assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+def test_executemany_into_table_function(dbapi_connection):
+    """An INSERT into a table function has no table to bulk insert into, so it runs row by row
+    against the server instead of being sent to a table named FUNCTION.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.executemany("INSERT INTO FUNCTION null('id UInt32') VALUES (%s)", [(13,), (79,)])
+
+    assert cursor.rowcount == 0

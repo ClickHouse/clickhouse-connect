@@ -150,3 +150,19 @@ def test_remove_comments_no_space_after_dashes():
     # `--` inside quoted strings is preserved
     assert remove_sql_comments("SELECT 'a--b'") == "SELECT 'a--b'"
     assert remove_sql_comments('SELECT "a--b"') == 'SELECT "a--b"'
+
+
+def test_unescape_double_quoted_identifier():
+    # ClickHouse accepts double quotes as well as backticks around an identifier, and
+    # quote_identifier passes through a validly double-quoted identifier unchanged, so
+    # unescape_identifier must strip both (verified against the server: "id" and `id`
+    # both name the column id).
+    assert unescape_identifier('"directory"') == "directory"
+    assert unescape_identifier('"weird.name"') == "weird.name"
+    assert unescape_identifier('"directory"."id"') == "directory.id"
+    # A doubled or backslash-escaped double quote is one literal double quote.
+    assert unescape_identifier('"a""b"') == 'a"b'
+    assert unescape_identifier('"a\\"b"') == 'a"b'
+    # A backtick inside a double-quoted part, and the reverse, are literal characters.
+    assert unescape_identifier('"a`b"') == "a`b"
+    assert unescape_identifier('`a"b`') == 'a"b'

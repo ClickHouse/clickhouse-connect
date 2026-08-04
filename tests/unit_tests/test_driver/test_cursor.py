@@ -584,3 +584,90 @@ def test_executemany_generator_falls_through_to_row_by_row():
 
     client.insert.assert_not_called()
     assert client.query.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "statement, expected_columns",
+    [
+        ("INSERT INTO test_table VALUES (%s, %s)", "*"),
+        ("INSERT INTO TABLE test_table VALUES (%s, %s)", "*"),
+        ("INSERT INTO TABLE test_table (id, name) VALUES (%s, %s)", ["id", "name"]),
+        ("INSERT INTO test_table\nVALUES (%s, %s)", "*"),
+        ("INSERT INTO test_table\n    (id, name)\nVALUES\n    (%s, %s)", ["id", "name"]),
+        ('INSERT INTO test_table ("id", "name") VALUES (%s, %s)', ["id", "name"]),
+        ('INSERT INTO test_table ("id", `name`) VALUES (%s, %s)', ["id", "name"]),
+        ("INSERT INTO test_table(id, name)VALUES(%s, %s)", ["id", "name"]),
+        ("insert into test_table (id, name) values (%s, %s)", ["id", "name"]),
+    ],
+)
+def test_executemany_bulk_insert_accepted_statement_forms(statement, expected_columns):
+    """ClickHouse accepts an optional TABLE keyword before the target, an INSERT spread over
+    multiple lines, and double-quoted column names.  All of them keep the bulk insert fast path
+    and resolve to the same table and column names.
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany(statement, rows)
+
+    client.insert.assert_called_once_with("test_table", rows, expected_columns, settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_with_double_quoted_columns_and_dict_rows():
+    """Double-quoted column names unescape to the bare names, so they match the row dict keys
+    and keep the bulk insert fast path.
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
+    cursor.executemany('INSERT INTO test_table ("id", "name") VALUES (%(id)s, %(name)s)', rows)
+
+    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
+    client.query.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO FUNCTION null('id UInt32') VALUES (%s)",
+        "INSERT INTO TABLE FUNCTION null('id UInt32') VALUES (%s)",
+        "INSERT INTO test_table SETTINGS async_insert = 1 VALUES (%s)",
+        "INSERT INTO test_table\nSELECT %s AS id\nFROM other_table\nWHERE name = 'VALUES'",
+        "INSERT INTO test_table FORMAT Values (%s)",
+        "INSERT INTO test_table (id, name\nVALUES (%s)",
+        "INSERT INTO TABLE",
+        "INSERT INTO (id) VALUES (%s)",
+    ],
+)
+def test_executemany_non_values_insert_falls_through_to_row_by_row(statement):
+    """A statement that is not a plain INSERT VALUES into a named table must keep the original
+    SQL on the row-by-row path, where the server sees it as written.  A table function has no
+    table to bulk insert into, a SETTINGS, SELECT, or FORMAT clause would be dropped by a bulk
+    insert, and a malformed statement must be reported by the server rather than raising out of
+    the statement parsing.
+    """
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.executemany(statement, [(13,)])
+
+    client.insert.assert_not_called()
+    client.query.assert_called_once_with(statement, (13,), settings=None)
+
+
+def test_executemany_bulk_insert_with_quoted_keyword_table_name():
+    """A quoted table name is never a keyword, so a table actually named TABLE is inserted into
+    instead of being treated as the optional TABLE keyword.
+    """
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13, "user_1"), (79, "user_2")]
+    cursor.executemany('INSERT INTO "TABLE" VALUES (%s, %s)', rows)
+
+    client.insert.assert_called_once_with('"TABLE"', rows, "*", settings=None)
+    client.query.assert_not_called()

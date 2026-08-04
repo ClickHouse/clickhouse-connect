@@ -13,10 +13,33 @@ from clickhouse_connect.driver.query import remove_sql_comments
 
 logger = logging.getLogger(__name__)
 
-insert_re = re.compile(r"^\s*INSERT\s+INTO\s+(.*$)", re.IGNORECASE)
+# DOTALL because a formatted INSERT commonly spans multiple lines, so the target and the VALUES
+# keyword are not necessarily on the same line as the INSERT INTO
+insert_re = re.compile(r"^\s*INSERT\s+INTO\s+(.*)$", re.IGNORECASE | re.DOTALL)
+# A table identifier ends at the first whitespace character or at the opening paren of a column list
+_table_end_re = re.compile(r"[\s(]")
+# ClickHouse lexes an unquoted identifier or keyword as a run of ASCII word characters or dollar signs
+_unquoted_word_re = re.compile(r"[0-9A-Za-z_$]+")
 str_type = get_from_name("String")
 int_type = get_from_name("Int32")
 _IMPLICIT_NULLABLE_BASE_TYPES = frozenset(("Dynamic", "Variant"))
+
+
+def _skip_keyword(expr: str, keyword: str) -> str | None:
+    """
+    Remove a leading unquoted keyword, and the whitespace that must follow it, from expr.
+
+    :param expr: Expression to strip the keyword from
+    :param keyword: Upper case keyword to look for
+    :return: The remainder of expr after the keyword, or None if expr does not start with the keyword
+    """
+    match = _unquoted_word_re.match(expr)
+    if match is None or match.group(0).upper() != keyword:
+        return None
+    remainder = expr[match.end() :]
+    if not remainder[:1].isspace():
+        return None
+    return remainder.lstrip()
 
 
 def _cursor_null_ok(ch_type: Any) -> bool | None:
@@ -143,15 +166,32 @@ class Cursor:
         match = insert_re.match(remove_sql_comments(operation))
         if not match:
             return False
-        temp = match.group(1)
-        table_end = min(temp.find(" "), temp.find("("))
-        table = temp[:table_end].strip()
+        temp = match.group(1).lstrip()
+        # ClickHouse accepts an optional TABLE keyword before the target of an INSERT
+        without_table_keyword = _skip_keyword(temp, "TABLE")
+        if without_table_keyword is not None:
+            temp = without_table_keyword
+        if _skip_keyword(temp, "FUNCTION") is not None:
+            return False  # INSERT INTO [TABLE] FUNCTION targets a table function, which has no table to insert into
+        table_end_match = _table_end_re.search(temp)
+        table_end = table_end_match.start() if table_end_match else len(temp)
+        table = temp[:table_end]
+        if not table:
+            return False
         temp = temp[table_end:].strip()
-        if temp[0] == "(":
-            _, op_columns, temp = parse_callable(temp)
+        if temp.startswith("("):
+            try:
+                _, op_columns, temp = parse_callable(temp)
+            except IndexError:
+                # An unterminated column list runs off the end of the statement.  The server is the right
+                # place to report that syntax error, so keep the statement intact on the row by row path.
+                return False
         else:
             op_columns = None
-        if "VALUES" not in temp.upper():
+        # The rows can only be sent as a bulk insert if VALUES immediately follows the target and its column
+        # list.  Anything else, such as an INSERT SELECT or an INSERT with a SETTINGS clause, is not a simple
+        # VALUES insert and must keep the original statement intact on the row by row path.
+        if not temp.upper().startswith("VALUES"):
             return False
         if not isinstance(data, Sequence) or len(data) == 0:
             return False
