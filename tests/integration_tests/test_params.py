@@ -132,10 +132,7 @@ def test_naive_datetime_wall_binding_live(param_client: Client, call, monkeypatc
     try:
         naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
         dt = naive.replace(microsecond=0)
-        query = (
-            "SELECT {dt:DateTime('UTC')}, {dt64:DateTime64(6, 'UTC')}, "
-            "{items:Array(Tuple(DateTime('UTC'), DateTime64(6, 'UTC')))}"
-        )
+        query = "SELECT {dt:DateTime('UTC')}, {dt64:DateTime64(6, 'UTC')}, {items:Array(Tuple(DateTime('UTC'), DateTime64(6, 'UTC')))}"
         row = call(
             param_client.query,
             query,
@@ -146,8 +143,7 @@ def test_naive_datetime_wall_binding_live(param_client: Client, call, monkeypatc
 
         row = call(
             param_client.query,
-            "SELECT toString({dt:DateTime}), "
-            "formatDateTime({dt_berlin:DateTime('Europe/Berlin')}, '%F %T', 'Europe/Berlin')",
+            "SELECT toString({dt:DateTime}), formatDateTime({dt_berlin:DateTime('Europe/Berlin')}, '%F %T', 'Europe/Berlin')",
             parameters={"dt": dt, "dt_berlin": dt},
             query_tz="UTC",
         ).first_row
