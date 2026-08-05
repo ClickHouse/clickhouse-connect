@@ -51,7 +51,6 @@ from clickhouse_connect.driver.client import (
 from clickhouse_connect.driver.common import (
     StreamContext,
     coerce_bool,
-    coerce_show_clickhouse_errors,
     dict_copy,  # noqa: F401  (compatibility re-export)
 )
 from clickhouse_connect.driver.ctypes import RespBuffCls
@@ -309,7 +308,7 @@ class AsyncClient(Client):
 
     @show_clickhouse_errors.setter
     def show_clickhouse_errors(self, value: bool | str) -> None:
-        self._backend.show_clickhouse_errors = coerce_show_clickhouse_errors(value)
+        self._backend.show_clickhouse_errors = value
 
     @property
     def _autogenerate_query_id(self) -> bool:

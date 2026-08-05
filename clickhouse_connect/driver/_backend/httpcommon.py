@@ -35,7 +35,6 @@ from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     OperationalError,
     ProgrammingError,
-    ShowClickhouseErrors,
     error_code_from_header,
     error_name_from_body,
     scrub_error_details,
@@ -72,7 +71,7 @@ def build_http_error(
     status: int,
     err_code: str | None,
     full_body: str,
-    show_clickhouse_errors: ShowClickhouseErrors,
+    show_clickhouse_errors: bool | str,
     url: str,
     retried: bool,
 ) -> DatabaseError:

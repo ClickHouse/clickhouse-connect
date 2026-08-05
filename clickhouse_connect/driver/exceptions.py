@@ -5,11 +5,6 @@ libraries.  In most cases docstring are taken from the DBIApi 2.0 documentation
 """
 
 import re
-from typing import Literal
-
-# True: full detail including server URL/version. False: generic message.
-# "scrub": SQL error text without host/URL or server version trailer.
-ShowClickhouseErrors = bool | Literal["scrub"]
 
 _error_name_re = re.compile(r"\(([A-Z][A-Z0-9_]+)\)")
 

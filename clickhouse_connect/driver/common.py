@@ -186,21 +186,11 @@ def coerce_show_clickhouse_errors(val: bool | str | None) -> bool | str:
 
     "scrub" keeps the SQL error text and symbolic name but strips the server
     URL and the trailing "(version ...)" trailer from exception messages.
+    Other values coerce like booleans.
     """
-    if val is None:
-        return True
-    if isinstance(val, str):
-        lowered = val.strip().lower()
-        if lowered == "scrub":
-            return "scrub"
-        if lowered in ("true", "1", "y", "yes"):
-            return True
-        if lowered in ("false", "0", "n", "no", ""):
-            return False
-        raise ProgrammingError(
-            f'Unrecognized show_clickhouse_errors option "{val}". Expected True, False, or "scrub".'
-        )
-    return bool(val)
+    if isinstance(val, str) and val.strip().lower() == "scrub":
+        return "scrub"
+    return coerce_bool(val)
 
 
 def version_at_least(server_version: str | None, required_version: str) -> bool:

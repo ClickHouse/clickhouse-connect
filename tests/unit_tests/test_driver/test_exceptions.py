@@ -1,12 +1,9 @@
-import pytest
-
 from clickhouse_connect.driver._backend.httpcommon import build_http_error
 from clickhouse_connect.driver.common import coerce_show_clickhouse_errors
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     Error,
     OperationalError,
-    ProgrammingError,
     StreamClosedError,
     error_code_from_header,
     error_name_from_body,
@@ -108,12 +105,9 @@ class TestCoerceShowClickhouseErrors:
         assert coerce_show_clickhouse_errors("true") is True
         assert coerce_show_clickhouse_errors("false") is False
 
-    def test_none_defaults_to_true(self):
-        assert coerce_show_clickhouse_errors(None) is True
-
-    def test_rejects_unknown_string(self):
-        with pytest.raises(ProgrammingError, match="Unrecognized show_clickhouse_errors"):
-            coerce_show_clickhouse_errors("redact")
+    def test_other_values_coerce_like_bool(self):
+        assert coerce_show_clickhouse_errors(None) is False
+        assert coerce_show_clickhouse_errors("redact") is False
 
 
 class TestBuildHttpError:

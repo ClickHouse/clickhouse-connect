@@ -24,7 +24,7 @@ from clickhouse_connect.driver.binding import (
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
 from clickhouse_connect.driver.client import _HTTP_RESERVED_SETTING_NAMES, _HTTP_RESERVED_SETTING_PREFIXES
-from clickhouse_connect.driver.common import coerce_bool, coerce_int, coerce_show_clickhouse_errors, dict_add, dict_copy
+from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httputil import (
     ResponseSource,  # noqa: F401  (compatibility re-export)
@@ -256,7 +256,7 @@ class HttpClient(SyncBackendClient):
 
     @show_clickhouse_errors.setter
     def show_clickhouse_errors(self, value: bool | str) -> None:
-        self._backend.show_clickhouse_errors = coerce_show_clickhouse_errors(value)
+        self._backend.show_clickhouse_errors = value
 
     @property
     def _autogenerate_query_id(self) -> bool:
