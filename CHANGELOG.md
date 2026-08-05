@@ -4,7 +4,7 @@
 
 ### Improvements
 
-- SQLAlchemy: added support for materialized common table expressions. `cc_sqlalchemy.select(...).cte("name", materialized=True)` emits `WITH name AS MATERIALIZED (...)`, so a CTE referenced more than once is computed once instead of being inlined and re-executed at each reference. A module-level `cc_sqlalchemy.cte(statement, "name", materialized=True)` does the same for a statement built with the standard `sqlalchemy.select`. The keyword renders only on the ClickHouse dialect. The server materializes the CTE only when the `enable_materialized_cte` setting is also enabled for the query, and requires ClickHouse 26.3 or later. Closes [#900](https://github.com/ClickHouse/clickhouse-connect/issues/900).
+- SQLAlchemy: added support for materialized common table expressions. `cc_sqlalchemy.select(...).cte("name", materialized=True)` emits `WITH name AS MATERIALIZED (...)`, so a CTE referenced more than once is computed once instead of being inlined and re-executed at each reference. A module-level `cc_sqlalchemy.cte(statement, "name", materialized=True)` does the same for a statement built with the standard `sqlalchemy.select`. The keyword renders only on the ClickHouse dialect. The server materializes the CTE only when the experimental `enable_materialized_cte` setting is also enabled for the query and the analyzer is enabled. Materialized CTEs require ClickHouse 26.3 or later. The SQLAlchemy helpers reject `recursive=True` with `materialized=True` because ClickHouse does not support recursive materialized CTEs. Closes [#900](https://github.com/ClickHouse/clickhouse-connect/issues/900).
 
 ### Bug Fixes
 

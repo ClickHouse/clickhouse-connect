@@ -7,8 +7,8 @@ from clickhouse_connect.cc_sqlalchemy import cte, select
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt32
 from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
 
-# Both are required: the keyword alone leaves the CTE inlined, and so does the setting alone.
-MATERIALIZED_CTE_SETTINGS = {"enable_materialized_cte": 1}
+# Materialization requires the keyword, the setting, and the analyzer.
+MATERIALIZED_CTE_SETTINGS = {"enable_materialized_cte": 1, "enable_analyzer": 1}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -93,14 +93,22 @@ def test_module_level_cte_executes(test_engine: Engine, book: Table):
         assert conn.execute(stmt).scalar_one() == 3
 
 
-def test_materialized_cte_without_setting_is_a_silent_no_op(test_engine: Engine, book: Table):
-    """With enable_materialized_cte off the server ignores the keyword instead of erroring.
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"enable_materialized_cte": 0, "enable_analyzer": 1},
+        {"enable_materialized_cte": 1, "enable_analyzer": 0},
+    ],
+    ids=["setting-disabled", "analyzer-disabled"],
+)
+def test_disabled_materialized_cte_is_a_silent_no_op(test_engine: Engine, book: Table, settings: dict[str, int]):
+    """With either requirement off, the server ignores the keyword instead of erroring.
 
-    Confirmed on 26.4: the query succeeds and the plan inlines the CTE body, with no
+    The query succeeds and the plan inlines the CTE body, with no
     exception and no warning. Forgetting the setting is a performance bug, not a failure.
     """
     ranked = ranked_cte(book, materialized=True)
-    stmt = sa_select(func.count()).select_from(ranked).execution_options(settings={"enable_materialized_cte": 0})
+    stmt = sa_select(func.count()).select_from(ranked).execution_options(settings=settings)
 
     with test_engine.connect() as conn:
         assert conn.execute(stmt).scalar_one() == 3

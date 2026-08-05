@@ -163,6 +163,11 @@ def limit_by(select_stmt: Select, by_clauses: Any, limit: int, offset: int | Non
     return new_stmt
 
 
+def _validate_cte_options(recursive: bool, materialized: bool) -> None:
+    if recursive and materialized:
+        raise ValueError("materialized CTEs cannot be recursive")
+
+
 def _apply_materialized(new_cte: CTE, materialized: bool) -> CTE:
     if not materialized:
         return new_cte
@@ -182,16 +187,20 @@ def cte(
     """Standard SQLAlchemy `cte()` plus `materialized=True` for `WITH <name> AS MATERIALIZED (...)`.
 
     A materialized CTE body is computed once instead of being inlined at every reference.
-    Requires ClickHouse 26.3 or later, and the server only honors the keyword when the
-    `enable_materialized_cte` setting is also enabled for the query:
+    Requires ClickHouse 26.3 or later. The server only honors the keyword when the
+    analyzer and the `enable_materialized_cte` setting are enabled for the query:
 
-        stmt = select(...).execution_options(settings={"enable_materialized_cte": 1})
+        stmt = select(...).execution_options(
+            settings={"enable_materialized_cte": 1, "enable_analyzer": 1}
+        )
 
     Use this with the standard `sqlalchemy.select`. Statements built with
     `cc_sqlalchemy.select` have the same options on their own `.cte()` method.
+    Raises `ValueError` when `recursive` and `materialized` are both true.
     """
     if not isinstance(statement, HasCTE):
-        raise TypeError("cte() expects a SQLAlchemy statement that supports CTEs")
+        raise TypeError(f"cte() expects a SQLAlchemy statement that supports CTEs. Got {type(statement).__name__}")
+    _validate_cte_options(recursive, materialized)
     return _apply_materialized(statement.cte(name=name, recursive=recursive, nesting=nesting), materialized)
 
 
@@ -326,6 +335,7 @@ class ClickHouseSelect(Select[Any]):
 
         See :func:`cte` for the server requirements.
         """
+        _validate_cte_options(recursive, materialized)
         return _apply_materialized(super().cte(name=name, recursive=recursive, nesting=nesting), materialized)
 
     def limit_by(self, by_clauses: Any, limit: int, offset: int | None = None) -> "ClickHouseSelect":

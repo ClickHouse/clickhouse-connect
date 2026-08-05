@@ -5,12 +5,14 @@ from sqlalchemy import select as sa_select
 from sqlalchemy import table as sa_table
 from sqlalchemy import values as sa_values
 from sqlalchemy.dialects import postgresql, registry
+from sqlalchemy.sql.selectable import Values
 
 from clickhouse_connect.cc_sqlalchemy import cte, dialect_name, select
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt32
 
 dialect = registry.load(dialect_name)()
 metadata = MetaData()
+HAS_VALUES_CTE = hasattr(Values, "cte")
 
 book = Table(
     "book",
@@ -47,6 +49,7 @@ def test_module_level_cte_on_plain_sqlalchemy_select(materialized: bool):
     assert ("WITH `ranked` AS MATERIALIZED" in sql) is materialized
 
 
+@pytest.mark.skipif(not HAS_VALUES_CTE, reason="SQLAlchemy Values.cte() is unavailable")
 def test_module_level_cte_accepts_a_values_construct():
     """`Values.cte()` is the one non-Select CTE source the dialect already supports."""
     rows = sa_values(sa_column("book_id", UInt32), name="row_source").data([(13,), (17,)])
@@ -56,7 +59,7 @@ def test_module_level_cte_accepts_a_values_construct():
 
 
 def test_module_level_cte_rejects_a_statement_without_cte_support():
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="Got Column"):
         cte(book.c.book_id, "ranked")
 
 
@@ -90,8 +93,13 @@ def test_materialized_and_plain_ctes_have_distinct_cache_keys():
     assert materialized_key != plain_key
 
 
-def test_recursive_materialized_cte_keeps_both_keywords():
-    cte_ = select(book.c.book_id).cte("ranked", recursive=True, materialized=True)
-    sql = compile_sql(sa_select(cte_.c.book_id))
-    assert "WITH RECURSIVE `ranked`" in sql
-    assert "AS MATERIALIZED" in sql
+@pytest.mark.parametrize(
+    "build_cte",
+    [
+        lambda: select(book.c.book_id).cte("ranked", recursive=True, materialized=True),
+        lambda: cte(sa_select(book.c.book_id), "ranked", recursive=True, materialized=True),
+    ],
+)
+def test_recursive_materialized_cte_is_rejected(build_cte):
+    with pytest.raises(ValueError, match="materialized CTEs cannot be recursive"):
+        build_cte()

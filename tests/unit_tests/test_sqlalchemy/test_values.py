@@ -3,11 +3,13 @@ from datetime import datetime
 import pytest
 import sqlalchemy as db
 from sqlalchemy import DateTime as SqlaDateTime
+from sqlalchemy.sql.selectable import Values
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
 SA_2 = db.__version__ >= "2"
+HAS_VALUES_CTE = hasattr(Values, "cte")
 
 dialect = ClickHouseDialect()
 
@@ -53,7 +55,7 @@ def test_values_maps_generic_sqla_datetime_type():
     assert "VALUES('ts DateTime', ('2024-01-02 03:04:05')) AS `v`" in sql
 
 
-@pytest.mark.skipif(not SA_2, reason="Values.cte() was added in SA 2.x")
+@pytest.mark.skipif(not HAS_VALUES_CTE, reason="SQLAlchemy Values.cte() is unavailable")
 def test_values_cte_wraps_table_function_in_select():
     values_clause = (
         db.values(
