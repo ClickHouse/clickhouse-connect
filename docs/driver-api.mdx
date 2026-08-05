@@ -792,7 +792,7 @@ For advanced use cases requiring direct access to ClickHouse HTTP interfaces wit
 
 ## Python DB-API 2.0 {#python-db-api-20}
 
-The `clickhouse_connect.dbapi` module implements the PEP 249 connection and cursor interface. It declares API level 2.0, `threadsafety=2`, and `paramstyle="pyformat"`.
+The `clickhouse_connect.dbapi` module implements the PEP 249 connection and cursor interface. It declares API level 2.0, `threadsafety=2`, and `paramstyle="pyformat"`. The module also provides the PEP 249 type constructors `Date`, `Time`, `Timestamp`, and `Binary`, and the `DateFromTicks`, `TimeFromTicks`, and `TimestampFromTicks` functions.
 
 ```python
 from clickhouse_connect import dbapi
