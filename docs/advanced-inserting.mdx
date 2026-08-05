@@ -212,6 +212,8 @@ epoch_timestamp = int(naive_time.replace(tzinfo=timezone.utc).timestamp())
 client.insert("events", [[epoch_timestamp]], column_names=["event_time"])
 ```
 
+This local interpretation applies to inserts only. Naive `datetime` query parameters are bound as wall time without host-local conversion. See the [Parameters argument](/integrations/language-clients/python/driver-api#parameters-argument) section. [Issue #938](https://github.com/ClickHouse/clickhouse-connect/issues/938) tracks unifying insert and parameter binding.
+
 #### DateTime columns with timezone metadata {#datetime-columns-with-timezone-metadata}
 
 ClickHouse columns can declare timezone metadata, for example `DateTime('America/Denver')` or `DateTime64(3, 'Asia/Tokyo')`. The metadata controls how values are presented when queried.

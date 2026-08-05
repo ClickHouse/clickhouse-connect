@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Behavior Changes
+
+- Naive `datetime` query parameters now bind as wall time instead of being interpreted in the client host timezone. Previously a naive value passed through `astimezone` for server-side `{name:DateTime}` parameters and `DT64Param` values, so the same query could match different rows depending on the timezone of the machine running it. Only workloads that bind naive datetime parameters with a non-UTC host timezone or a non-UTC target timezone are affected. Environments where both the host and the bind target are UTC see no change, and client-side `%` parameters against a UTC server were already sent verbatim. Two changes are observable. First, on a non-UTC host with a UTC target, server-side parameters and `DT64Param` values no longer shift, which corrects silently wrong results. Second, when the bind target is a non-UTC timezone, a naive value now means wall time in that timezone instead of the instant implied by the client local timezone, which can change matched rows for code that relied on the old conversion. A related consequence is that inserting a naive datetime and then filtering with the same naive value no longer matches on a non-UTC host, because the insert path still interprets naive values as host local time. [#938](https://github.com/ClickHouse/clickhouse-connect/issues/938) tracks unifying insert semantics. Timezone-aware datetimes are unchanged and still convert to the target bind timezone. Set `common.set_setting("naive_datetime_binding", "legacy")` to restore the previous behavior exactly. To make a naive value represent a specific instant under either mode, attach the intended `tzinfo` before binding.
+
 ### Bug Fixes
 
 - Parsing a nested `Variant`, `Tuple`, `Nested`, or typed `JSON` column type whose element is an `Enum` with an escaped single quote in a value name no longer corrupts the escape sequence and fails while re-parsing the element type. Closes [#878](https://github.com/ClickHouse/clickhouse-connect/issues/878).
