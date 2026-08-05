@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.binary_value import _decode_binary_value
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.bytesource import ByteArraySource
@@ -392,7 +393,12 @@ def _validate_variant_length(binary_data: bytes, discriminator: int) -> bool:
     return True  # Unknown discriminator, skip validation
 
 
-def _decode_variant(binary_data: bytes, ctx: QueryContext, validate_length: bool = True):
+def _decode_variant(
+    binary_data: bytes,
+    ctx: QueryContext,
+    validate_length: bool = True,
+    decode_compound: bool = False,
+):
     """Try to decode variant-encoded binary data.
 
     Returns the decoded value on success, or the original bytes on failure
@@ -407,7 +413,18 @@ def _decode_variant(binary_data: bytes, ctx: QueryContext, validate_length: bool
 
     type_name = STANDARD_DISCRIMINATOR_TYPES.get(discriminator)
     if type_name is None:
-        return binary_data
+        # Compound decoding is opt-in. JSON shared data always stores
+        # <encoded type><serializeBinary value>, so the recursive decoder is
+        # always correct there. A Dynamic SharedVariant may instead hold a
+        # plain string, so that path keeps returning raw bytes until it has
+        # its own reproduction and tests.
+        if not decode_compound:
+            return binary_data
+        try:
+            return _decode_binary_value(binary_data, ctx)
+        except Exception as e:  # noqa: BLE001 - never raise out of a decode
+            logger.debug("Compound variant decode failed: %s", e)
+            return binary_data
 
     if validate_length and not _validate_variant_length(binary_data, discriminator):
         return None
@@ -435,7 +452,7 @@ def decode_shared_data_value(binary_data: bytes, ctx: QueryContext):
             return binary_data  # already decoded
         else:
             binary_data = bytes(binary_data)
-    return _decode_variant(binary_data, ctx)
+    return _decode_variant(binary_data, ctx, decode_compound=True)
 
 
 def decode_shared_variant_value(binary_data: bytes, ctx: QueryContext):
