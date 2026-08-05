@@ -76,7 +76,7 @@ jobs:
           CLICKHOUSE_CONNECT_SKIP_CYTHON=1 python -m build --sdist --outdir "$RUNNER_TEMP/dist"
           CLICKHOUSE_CONNECT_SKIP_CYTHON=1 "$RUNNER_TEMP/consumer/bin/pip" install "$RUNNER_TEMP"/dist/*.tar.gz
           # Stub packages are intentionally unpinned. If the ratchet count shifts without a repo change, pin them here.
-          "$RUNNER_TEMP/consumer/bin/pip" install numpy pandas pandas-stubs pyarrow polars
+          "$RUNNER_TEMP/consumer/bin/pip" install numpy pandas pandas-stubs pyarrow polars "sqlalchemy>=2.0,<3.0"
           "$RUNNER_TEMP/consumer/bin/pip" install "mypy==2.1.0" "pyright==1.1.408"
       - name: Confirm py.typed shipped with the install
         run: test -f "$RUNNER_TEMP"/consumer/lib/python*/site-packages/clickhouse_connect/py.typed
@@ -86,10 +86,11 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent consumer_smoke.py
       - name: Public type completeness ratchet
-        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1116 --python "$RUNNER_TEMP/consumer/bin/python"
+        # SQLAlchemy must be installed while verifytypes scans the public cc_sqlalchemy annotations.
+        # The pre-feature baseline is 1120 with that optional surface resolved.
+        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1120 --python "$RUNNER_TEMP/consumer/bin/python"
       - name: SQLAlchemy Select typing smoke test
         run: |
-          "$RUNNER_TEMP/consumer/bin/pip" install "sqlalchemy>=2.0,<3.0"
           cp tests/type_check/sqlalchemy_select_smoke.py "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent sqlalchemy_select_smoke.py
