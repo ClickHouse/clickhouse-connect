@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- SQLAlchemy: added support for materialized common table expressions. `cc_sqlalchemy.select(...).cte("name", materialized=True)` emits `WITH name AS MATERIALIZED (...)`, so a CTE referenced more than once is computed once instead of being inlined and re-executed at each reference. A module-level `cc_sqlalchemy.cte(statement, "name", materialized=True)` does the same for a statement built with the standard `sqlalchemy.select`. The keyword renders only on the ClickHouse dialect. The server materializes the CTE only when the experimental `enable_materialized_cte` setting is also enabled for the query and the analyzer is enabled. Materialized CTEs require ClickHouse 26.3 or later. The SQLAlchemy helpers reject `recursive=True` with `materialized=True` because ClickHouse does not support recursive materialized CTEs. Closes [#900](https://github.com/ClickHouse/clickhouse-connect/issues/900).
 - Added the global `naive_datetime_insert` setting for Python object inserts, including naive ISO strings accepted by `DateTime64`. Set it to `"server"` to interpret a naive `datetime` in the timezone declared by the `DateTime` or `DateTime64` column, or in the server timezone when the column has no timezone. The default remains `"local"` in 1.x and preserves the existing host-local conversion. This setting does not change `datetime64`-dtype NumPy and Pandas columns. Use `naive_datetime_binding` to control naive `datetime` query parameters. See [#938](https://github.com/ClickHouse/clickhouse-connect/issues/938).
 
 ### Behavior Changes

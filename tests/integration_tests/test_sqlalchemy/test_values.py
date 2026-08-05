@@ -1,10 +1,11 @@
 import pytest
 import sqlalchemy as db
 from sqlalchemy.engine import Engine
+from sqlalchemy.sql.selectable import Values
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime
 
-SA_2 = db.__version__ >= "2"
+HAS_VALUES_CTE = hasattr(Values, "cte")
 
 
 def test_values_round_trip_multi_column(test_engine: Engine):
@@ -46,7 +47,7 @@ def test_values_round_trip_type_name_with_quotes(test_engine: Engine):
         assert str(value).startswith("2024-01-02 03:04:05")
 
 
-@pytest.mark.skipif(not SA_2, reason="Values.cte() was added in SA 2.x")
+@pytest.mark.skipif(not HAS_VALUES_CTE, reason="SQLAlchemy Values.cte() is unavailable")
 def test_values_cte_round_trip(test_engine: Engine):
     with test_engine.begin() as conn:
         values_clause = (

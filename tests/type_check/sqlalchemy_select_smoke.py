@@ -37,3 +37,7 @@ after_common_generatives = (
 )
 assert_type(after_common_generatives, cc_sa.ClickHouseSelect)
 after_common_generatives.prewhere(book.c.title != "done")
+
+materialized = base.cte("ranked", materialized=True)
+assert_type(materialized, sa.CTE)
+assert_type(cc_sa.cte(sa.select(book.c.id), "ranked", materialized=True), sa.CTE)
