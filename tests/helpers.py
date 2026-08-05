@@ -15,9 +15,13 @@ from clickhouse_connect.tools.datagen import RandomValueDef, random_ascii_str, r
 
 PROJECT_ROOT_DIR = Path(__file__).parent.parent
 
+# The in-band exception block a streaming ClickHouse server writes into an HTTP response body when a
+# query fails mid-stream. The exact byte layout is authoritative: captured from a real server
+# (v26.5.1.882). Note that `__exception__` is separated from the tag by CRLF on both the opening and
+# closing markers (`__exception__\r\n<tag>` ... `<tag>\r\n__exception__`), not directly adjacent.
 TAGGED_EXCEPTION_TAG = "PU1FNUFH98"
 TAGGED_EXCEPTION_BODY = (
-    b"bodybodybodybody\r\n__exception__PU1FNUFH98\r\nBig bam occurred right while reading the data\r\n46 PU1FNUFH98__exception__\r\n"
+    b"bodybodybodybody\r\n__exception__\r\nPU1FNUFH98\r\nBig bam occurred right while reading the data\n45 PU1FNUFH98\r\n__exception__\r\n"
 )
 
 LOW_CARD_PERC = 0.4

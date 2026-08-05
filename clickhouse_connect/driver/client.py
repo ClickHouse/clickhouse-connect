@@ -1246,6 +1246,7 @@ class Client(ABC):
                 settings,
                 data,
                 transport_settings,
+                server_tz=self.server_tz,
             ),
             self._execute_operation,
         )

@@ -19,13 +19,24 @@ must_escape = (BS, "'", "`", "\t", "\n")
 external_bind_re = re.compile(r"\{(\w+):([^}]+)\}")
 
 
+def _datetime_is_aware(value: datetime) -> bool:
+    return value.utcoffset() is not None
+
+
+def _legacy_naive_datetime_binding() -> bool:
+    return common.get_setting("naive_datetime_binding") == "legacy"
+
+
 class DT64Param:
     def __init__(self, value: datetime):
         self.value = value
 
     def format(self, tz: tzinfo | None, top_level: bool) -> str:
         value = self.value
-        if tz:
+        if _legacy_naive_datetime_binding():
+            if tz:
+                value = value.astimezone(tz)
+        elif tz is not None and _datetime_is_aware(value):
             value = value.astimezone(tz)
         s = value.strftime("%Y-%m-%d %H:%M:%S.%f")
         if top_level:
@@ -250,7 +261,10 @@ def format_query_value(value: Any, server_tz: tzinfo | None = timezone.utc):
     if isinstance(value, DT64Param):
         return value.format(server_tz, False)
     if isinstance(value, datetime):
-        if value.tzinfo is not None or not tzutil.is_utc_timezone(server_tz):
+        if _legacy_naive_datetime_binding():
+            if value.tzinfo is not None or not tzutil.is_utc_timezone(server_tz):
+                value = value.astimezone(server_tz)
+        elif _datetime_is_aware(value):
             value = value.astimezone(server_tz)
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if isinstance(value, date):
@@ -303,7 +317,8 @@ def format_bind_value(value: Any, server_tz: tzinfo | None = timezone.utc, top_l
     if isinstance(value, DT64Param):
         return value.format(server_tz, top_level)
     if isinstance(value, datetime):
-        value = value.astimezone(server_tz)
+        if _legacy_naive_datetime_binding() or _datetime_is_aware(value):
+            value = value.astimezone(server_tz)
         val = value.strftime("%Y-%m-%d %H:%M:%S")
         if top_level:
             return val

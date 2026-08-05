@@ -170,6 +170,7 @@ def insert_context_sequence(
     settings: dict[str, Any] | None = None,
     data: Sequence[Sequence[Any]] | None = None,
     transport_settings: dict[str, str] | None = None,
+    server_tz: tzinfo = timezone.utc,
 ) -> Generator[Operation, object, InsertContext]:
     full_table = table
     if "." not in table:
@@ -211,6 +212,7 @@ def insert_context_sequence(
         settings=settings,
         transport_settings=transport_settings,
         data=data,
+        server_tz=server_tz,
     )
 
 
