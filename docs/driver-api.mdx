@@ -377,6 +377,10 @@ WHERE metric >= 35200.44
 ```
 
 <Note>
+Datetime binding treats naive values as wall time. The client formats a naive `datetime` verbatim. ClickHouse interprets it using the timezone declared in a server-side placeholder such as `{dt:DateTime('Europe/Berlin')}`, then `session_timezone` when set, then the server timezone. A timezone-aware `datetime` is converted to the timezone declared in the placeholder when present, otherwise to the server timezone reported at connection time. If the `session_timezone` setting differs from that reported server timezone, declare a timezone in the placeholder to keep the intended instant for aware values.
+
+For temporary compatibility with older host-local conversion, set `common.set_setting("naive_datetime_binding", "legacy")` before binding parameters. To preserve an instant, attach the intended `tzinfo` to the `datetime` value before passing it as a parameter. Inserts through `client.insert` interpret naive `datetime` values in the process local timezone by default. Set the global `naive_datetime_insert` setting to `"server"` to interpret them as wall time in the column timezone, or the server timezone when the column has none. See [Timezone-naive datetime objects](/integrations/language-clients/python/advanced-inserting#timezone-naive-datetime-objects).
+
 For a server-side `{value:DateTime64(precision)}` placeholder, the declared type preserves sub-second precision automatically, including inside `Array` and `Tuple` hints.
 
 Client-side `%s` binding has no declared type. Wrap a `datetime` in `DT64Param` when it must render with sub-second precision:
