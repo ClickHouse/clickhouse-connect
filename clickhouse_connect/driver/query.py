@@ -412,15 +412,20 @@ def remove_sql_comments(sql: str) -> str:
     Remove SQL comments.  This is useful to determine the type of SQL query, such as SELECT or INSERT, but we
     don't fully trust it to correctly ignore weird quoted strings, and other edge cases, so we always pass the
     original SQL to ClickHouse (which uses a full-fledged AST/ token parser)
+
+    A block comment is replaced with a single space because the server lexer treats it as a token separator,
+    so "SELECT/*c*/1" is two tokens for the server and has to stay two tokens here.  A line comment ends at
+    its newline, which is kept, so it separates the tokens around it on its own.
     :param sql:  SQL query
     :return: SQL Query without SQL comments
     """
 
     def replacer(match):
         # if the 2nd group (capturing comments) is not None, it means we have captured a
-        # non-quoted, actual comment string, so return nothing to remove the comment
+        # non-quoted, actual comment string, so replace it with its separator
         if match.group(2):
-            return ""
+            # the 3rd group is only set for a line comment, whose terminating newline is not consumed
+            return "" if match.group(3) else " "
         # Otherwise we've actually captured a quoted string, so return it
         return match.group(1)
 
