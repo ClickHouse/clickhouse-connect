@@ -50,6 +50,21 @@ with engine.connect() as conn:
     value = conn.execute(stmt).scalar_one()
 ```
 
+### Per-query read formats {#sqlalchemy-per-query-read-formats}
+
+Set ClickHouse read formats on an engine, connection, or statement through SQLAlchemy execution options with `query_formats`, with statement formats applied first so they override matching connection or engine keys and wildcards.
+
+```python
+from sqlalchemy import text
+
+stmt = text("SELECT user_uuid FROM users").execution_options(
+    query_formats={"UUID": "string"}
+)
+
+with engine.connect() as conn:
+    rows = conn.execute(stmt).all()
+```
+
 ### Server-side parameters {#sqlalchemy-server-side-parameters}
 
 SQLAlchemy normally renders client-side parameters. Opt in to ClickHouse server-side parameters when creating the engine:

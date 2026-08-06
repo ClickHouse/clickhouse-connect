@@ -1,9 +1,10 @@
 import sqlalchemy as db
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, Table, inspect, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Point, SimpleAggregateFunction, UInt32
+from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 
 
 def test_basic_reflection(test_engine: Engine):
@@ -122,3 +123,44 @@ def test_user_declared_primary_key(test_engine: Engine, test_db: str):
     )
     assert [c.name for c in table.primary_key.columns] == ["org_id", "id"]
     assert {c.name for c in table.columns} == {"org_id", "id", "payload"}
+
+
+def test_reflection_with_string_bytes_format(test_engine: Engine, test_db: str):
+    """Global set_default_formats("String", "bytes") must not break SQLAlchemy reflection.
+
+    Metadata queries force String -> string decode (same as core _INTERNAL_QUERY_FORMATS).
+    User SELECT data still returns bytes. Closes #920.
+    """
+    common.set_setting("invalid_setting_action", "drop")
+    table_name = "reflect_bytes_fmt"
+    try:
+        with test_engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
+            conn.execute(text(f"CREATE TABLE {test_db}.{table_name} (k UInt32, s String) ENGINE MergeTree ORDER BY k"))
+            conn.execute(text(f"INSERT INTO {test_db}.{table_name} VALUES (1, 'hello')"))
+
+        set_default_formats("String", "bytes")
+
+        with test_engine.connect() as conn:
+            insp = inspect(conn)
+            table_names = insp.get_table_names(schema=test_db)
+            assert table_name in table_names
+            assert all(isinstance(name, str) for name in table_names)
+
+            columns = insp.get_columns(table_name, schema=test_db)
+            assert [(c["name"], type(c["name"])) for c in columns] == [
+                ("k", str),
+                ("s", str),
+            ]
+            assert all(isinstance(c["name"], str) for c in columns)
+
+            table = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
+            assert {c.name for c in table.columns} == {"k", "s"}
+
+            # User data still honors the global bytes format.
+            row = conn.execute(text(f"SELECT s FROM {test_db}.{table_name} WHERE k = 1")).fetchone()
+            assert row[0] == b"hello"
+    finally:
+        clear_all_formats()
+        with test_engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))

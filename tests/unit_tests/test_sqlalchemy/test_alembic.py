@@ -1,5 +1,6 @@
 from io import StringIO
 from types import MappingProxyType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from alembic.autogenerate import render
@@ -237,6 +238,22 @@ def test_clickhouse_impl_registration():
     assert DefaultImpl.get_by_dialect(ClickHouseDialect()) is ClickHouseImpl
     context = MigrationContext.configure(dialect_name="clickhousedb")
     assert isinstance(context.impl, ClickHouseImpl)
+
+
+def test_clickhouse_impl_current_database_uses_internal_query_formats():
+    result = Mock()
+    result.scalar.return_value = "default"
+    connection = Mock()
+    connection.execute.return_value = result
+    opts = {"include_schemas": True}
+
+    ClickHouseImpl(ClickHouseDialect(), connection, False, False, StringIO(), opts)
+
+    connection.execute.assert_called_once()
+    statement = connection.execute.call_args[0][0]
+    assert str(statement) == "SELECT currentDatabase()"
+    assert statement.get_execution_options()["query_formats"] == {"String": "string"}
+    assert opts["version_table_schema"] == "default"
 
 
 def test_render_type_uses_clickhouse_names():
