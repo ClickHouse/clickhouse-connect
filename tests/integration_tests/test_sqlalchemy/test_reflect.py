@@ -128,7 +128,7 @@ def test_user_declared_primary_key(test_engine: Engine, test_db: str):
 def test_reflection_with_string_bytes_format(test_engine: Engine, test_db: str):
     """Global set_default_formats("String", "bytes") must not break SQLAlchemy reflection.
 
-    Metadata queries force String→string decode (same as core _INTERNAL_QUERY_FORMATS).
+    Metadata queries force String -> string decode (same as core _INTERNAL_QUERY_FORMATS).
     User SELECT data still returns bytes. Closes #920.
     """
     common.set_setting("invalid_setting_action", "drop")

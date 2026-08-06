@@ -97,10 +97,10 @@ class ClickHouseDialect(DefaultDialect):
         stmt = getattr(context, "invoked_statement", None)
         stmt_formats = stmt.get_execution_options().get("query_formats") if stmt is not None else None
         if not stmt_formats:
-            return dict(merged) if merged else None
+            return merged
         if not merged:
             return dict(stmt_formats)
-        return {**merged, **stmt_formats}
+        return {**stmt_formats, **{k: v for k, v in merged.items() if k not in stmt_formats}}
 
     def do_execute(self, cursor, statement, parameters, context=None):
         cast(Cursor, cursor).execute(

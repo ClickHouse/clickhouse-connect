@@ -12,6 +12,7 @@ from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_forma
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
+from clickhouse_connect.driver.query import QueryContext
 
 
 class _StubQueryResult:
@@ -90,6 +91,19 @@ def test_dialect_do_execute_missing_query_formats_key_forwards_none():
     assert _query_formats(client)[0] is None
 
 
+def test_dialect_statement_query_formats_take_wildcard_precedence():
+    context = _FakeContext(
+        {"query_formats": {"Str*": "bytes", "UUID": "string"}},
+        text("SELECT 13").execution_options(query_formats={"String": "string"}),
+    )
+
+    formats = ClickHouseDialect._ch_query_formats(context)
+
+    assert list(formats) == ["String", "Str*", "UUID"]
+    assert formats == {"String": "string", "Str*": "bytes", "UUID": "string"}
+    assert QueryContext(query_formats=formats).active_fmt("String") == "string"
+
+
 def test_with_internal_query_formats_sets_execution_option():
     clause = with_internal_query_formats(text("SHOW TABLES"))
     assert clause.get_execution_options()["query_formats"] == dict(_INTERNAL_QUERY_FORMATS)
@@ -123,6 +137,18 @@ def test_public_statement_query_formats_reach_client(mock_engine):
     engine, client = mock_engine
     with engine.connect() as conn:
         conn.exec_driver_sql("SELECT 1")
+        client.query.reset_mock()
+        client.query.return_value = _NamedRowsResult([["x"]], ["name"])
+        stmt = text("SHOW TABLES").execution_options(query_formats={"String": "string"})
+        conn.execute(stmt)
+    assert _query_formats(client) == [{"String": "string"}]
+
+
+def test_public_same_key_statement_query_format_wins(mock_engine):
+    engine, client = mock_engine
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")
+        conn = conn.execution_options(query_formats={"String": "bytes"})
         client.query.reset_mock()
         client.query.return_value = _NamedRowsResult([["x"]], ["name"])
         stmt = text("SHOW TABLES").execution_options(query_formats={"String": "string"})
