@@ -814,7 +814,7 @@ finally:
     connection.close()
 ```
 
-`Cursor.execute` and `Cursor.executemany` accept an additional `settings` keyword argument for ClickHouse settings. `executemany` uses the driver's Native bulk-insert path for compatible `INSERT ... VALUES` statements with a materialized sequence of rows. `fetchone`, `fetchmany`, and `fetchall` consume the current materialized result.
+`Cursor.execute` and `Cursor.executemany` accept additional `settings` and `query_formats` keyword arguments. `settings` passes ClickHouse settings. `query_formats` applies read formats by ClickHouse type when a statement returns rows, using the same mapping as `Client.query`. `executemany` uses the driver's Native bulk-insert path for compatible `INSERT ... VALUES` statements with a materialized sequence of rows. `fetchone`, `fetchmany`, and `fetchall` consume the current materialized result.
 
 `Cursor.description` derives `null_ok` from each result column type. Non-nullable types report `False`, and nullable types report `True`, including `Nullable` wrappers, `Variant`, and `Dynamic`. `None` means the nullability is unknown. When a query that starts with `SELECT` or `WITH`, ignoring leading comments, returns no rows and no column metadata, the cursor runs a `LIMIT 0` metadata query to populate `description`. If that metadata query fails, `description` is left empty.
 
