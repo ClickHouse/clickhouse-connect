@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import threading
 import time
 import zlib
 from unittest.mock import Mock
@@ -350,6 +351,51 @@ async def test_backpressure_with_bounded_queue():
     # All chunks should still be received despite slow consumer
     assert len(result) == 100
     assert result == chunks
+
+
+@pytest.mark.asyncio
+async def test_sync_close_runs_on_event_loop_thread():
+    """close() from an executor thread runs response teardown on the loop thread."""
+    loop_thread = threading.current_thread()
+    close_thread = None
+
+    class StalledContent:
+        @staticmethod
+        async def read(n=-1):
+            await asyncio.sleep(3600)
+
+    class StalledResponse:
+        def __init__(self):
+            self.content = StalledContent()
+            self.headers = {}
+            self.closed = False
+
+        def close(self):
+            nonlocal close_thread
+            close_thread = threading.current_thread()
+            self.closed = True
+
+    response = StalledResponse()
+
+    source = StreamingResponseSource(response, encoding=None)
+    loop = asyncio.get_running_loop()
+    await source.start_producer(loop)
+
+    await loop.run_in_executor(None, source.close)
+
+    for _ in range(100):
+        if response.closed:
+            break
+        await asyncio.sleep(0.01)
+
+    assert response.closed
+    assert close_thread is loop_thread
+
+    if source._producer_task is not None:
+        try:
+            await source._producer_task
+        except asyncio.CancelledError:
+            pass
 
 
 class MockTransform:
