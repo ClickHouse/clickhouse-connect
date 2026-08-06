@@ -137,7 +137,8 @@ LIMIT
 2
 -- 6dcd92a04feb50f14bbcf07c661680ba
 """
-    assert remove_sql_comments(sql) == "SELECT \n* FROM benchmark_results  WHERE result = 'True'\n\nLIMIT\n\n2\n\n"
+    # a block comment leaves a single space behind, a line comment leaves the newline that ended it
+    assert remove_sql_comments(sql) == "SELECT \n* FROM benchmark_results   WHERE result = 'True'\n \nLIMIT\n \n2\n\n"
 
 
 def test_remove_comments_no_space_after_dashes():
@@ -150,3 +151,28 @@ def test_remove_comments_no_space_after_dashes():
     # `--` inside quoted strings is preserved
     assert remove_sql_comments("SELECT 'a--b'") == "SELECT 'a--b'"
     assert remove_sql_comments('SELECT "a--b"') == 'SELECT "a--b"'
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        # a block comment separates the tokens around it for the server, so it cannot be dropped
+        ("SELECT/*c*/number FROM numbers(9)", "SELECT number FROM numbers(9)"),
+        ("SELECT number FROM numbers(9)/*c*/LIMIT 1", "SELECT number FROM numbers(9) LIMIT 1"),
+        ("SELECT number FROM numbers(9) LIMIT/*c*/0", "SELECT number FROM numbers(9) LIMIT 0"),
+        ("INSERT/*c*/INTO/*c*/t VALUES", "INSERT INTO t VALUES"),
+        ("SELECT/*\nmultiline\n*/1", "SELECT 1"),
+        ("SELECT/*a*//*b*/1", "SELECT  1"),
+        # a comment at either end of the query separates it from nothing, but is still a separator
+        ("/*c*/SELECT 1", " SELECT 1"),
+        ("SELECT 1/*c*/", "SELECT 1 "),
+        # a line comment ends at its newline, which is kept, so it needs no replacement
+        ("SELECT\n--c\n1", "SELECT\n\n1"),
+        ("SELECT 1--c", "SELECT 1"),
+        # a block comment inside a quoted string or identifier is not a comment
+        ("SELECT '/*c*/'", "SELECT '/*c*/'"),
+        ('SELECT "/*c*/"', 'SELECT "/*c*/"'),
+    ],
+)
+def test_remove_comments_separates_tokens(sql: str, expected: str):
+    assert remove_sql_comments(sql) == expected
