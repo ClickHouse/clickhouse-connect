@@ -9,7 +9,7 @@ from clickhouse_connect import create_client, datatypes
 from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.exceptions import DatabaseError, StreamFailureError
 from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
@@ -76,6 +76,53 @@ def test_query_error_exposes_structured_code(param_client, call):
         call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
     assert excinfo.value.code == 60
     assert excinfo.value.name == "UNKNOWN_TABLE"
+
+
+@pytest.mark.parametrize("mode", ["scrub", False])
+def test_query_error_show_clickhouse_errors_modes(param_client, call, test_config: TestConfig, mode):
+    original = param_client.show_clickhouse_errors
+    param_client.show_clickhouse_errors = mode
+    try:
+        with pytest.raises(DatabaseError) as excinfo:
+            call(param_client.query, "SELECT * FROM does_not_exist_tbl_937")
+    finally:
+        param_client.show_clickhouse_errors = original
+
+    error_msg = str(excinfo.value)
+    assert excinfo.value.code == 60
+    if mode == "scrub":
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        assert "UNKNOWN_TABLE" in error_msg
+        assert "version" not in error_msg.lower()
+        assert param_client.url not in error_msg
+        assert test_config.host not in error_msg
+    else:
+        assert error_msg == "The ClickHouse server returned an error"
+        assert excinfo.value.name is None
+
+
+@pytest.mark.parametrize("mode", ["scrub", False])
+def test_stream_error_show_clickhouse_errors_modes(param_client, call, consume_stream, mode):
+    original = param_client.show_clickhouse_errors
+    param_client.show_clickhouse_errors = mode
+    try:
+        with pytest.raises(StreamFailureError) as excinfo:
+            stream = call(
+                param_client.query_rows_stream,
+                "SELECT sleepEachRow(0.01), throwIf(number = 100) FROM numbers(200)",
+                settings={"max_block_size": 1, "wait_end_of_query": 0},
+            )
+            consume_stream(stream)
+    finally:
+        param_client.show_clickhouse_errors = original
+
+    error_msg = str(excinfo.value)
+    if mode == "scrub":
+        assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in error_msg
+        assert "version" not in error_msg.lower()
+        assert param_client.url not in error_msg
+    else:
+        assert error_msg == "The ClickHouse server returned an error"
 
 
 def test_client_name(param_client, client_mode):

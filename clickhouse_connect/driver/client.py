@@ -29,8 +29,8 @@ from clickhouse_connect.driver._backend.orchestration import (
 )
 from clickhouse_connect.driver.binding import bind_query, str_query_value
 from clickhouse_connect.driver.common import (
+    ShowClickHouseErrors,
     StreamContext,
-    coerce_bool,
     coerce_int,
     coerce_show_clickhouse_errors,
     dict_copy,
@@ -154,7 +154,7 @@ class Client(ABC):
     _tz_source: TzSource = "auto"
     _apply_server_tz = False
     tz_mode: TzMode = "naive_utc"
-    show_clickhouse_errors = True
+    show_clickhouse_errors: ShowClickHouseErrors = True
 
     @property
     def tz_source(self) -> TzSource:

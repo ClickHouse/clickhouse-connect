@@ -14,6 +14,8 @@ _error_name_re = re.compile(r"\(([A-Z][A-Z0-9_]+)\)")
 # a coincidental "(version ...)" mid-text is left alone.
 _version_trailer_re = re.compile(r"\s*\(version\s+(?:[^()]|\([^()]*\))*\)\s*$")
 
+GENERIC_CLICKHOUSE_ERROR = "The ClickHouse server returned an error"
+
 
 def error_code_from_header(header_value: str | None) -> int | None:
     """Parse the numeric ClickHouse error code from the exception header value."""

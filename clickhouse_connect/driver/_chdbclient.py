@@ -22,6 +22,7 @@ from urllib.parse import urlencode
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.chdb_backend import CHDB_TRANSPORT_SETTINGS, ChdbBackend
 from clickhouse_connect.driver._backendclient import SyncBackendClient
+from clickhouse_connect.driver.common import ShowClickHouseErrors, coerce_show_clickhouse_errors
 from clickhouse_connect.driver.query import TzMode, TzSource
 from clickhouse_connect.driver.transform import NativeTransform
 
@@ -104,12 +105,12 @@ class ChdbClient(SyncBackendClient):
             raise
 
     @property
-    def show_clickhouse_errors(self) -> bool | str:  # type: ignore[override]
+    def show_clickhouse_errors(self) -> ShowClickHouseErrors:
         return self._backend.show_clickhouse_errors
 
     @show_clickhouse_errors.setter
-    def show_clickhouse_errors(self, value: bool | str) -> None:
-        self._backend.show_clickhouse_errors = value
+    def show_clickhouse_errors(self, value: ShowClickHouseErrors | str | None) -> None:
+        self._backend.show_clickhouse_errors = coerce_show_clickhouse_errors(value)
 
     def set_client_setting(self, key: str, value: Any) -> None:
         str_value = self._validate_setting(key, value, common.get_setting("invalid_setting_action"))

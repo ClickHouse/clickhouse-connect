@@ -1,9 +1,13 @@
+import pytest
+
+from clickhouse_connect import common
 from clickhouse_connect.driver._backend.httpcommon import build_http_error
 from clickhouse_connect.driver.common import coerce_show_clickhouse_errors
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     Error,
     OperationalError,
+    ProgrammingError,
     StreamClosedError,
     error_code_from_header,
     error_name_from_body,
@@ -98,16 +102,20 @@ class TestCoerceShowClickhouseErrors:
     def test_accepts_scrub(self):
         assert coerce_show_clickhouse_errors("scrub") == "scrub"
         assert coerce_show_clickhouse_errors("SCRUB") == "scrub"
+        assert coerce_show_clickhouse_errors(" scrub ") == "scrub"
 
-    def test_accepts_bool_and_string_bools(self):
-        assert coerce_show_clickhouse_errors(True) is True
-        assert coerce_show_clickhouse_errors(False) is False
-        assert coerce_show_clickhouse_errors("true") is True
-        assert coerce_show_clickhouse_errors("false") is False
+    @pytest.mark.parametrize("value", [True, "true", "TRUE", "1", "y", "yes"])
+    def test_accepts_truthy_values(self, value):
+        assert coerce_show_clickhouse_errors(value) is True
 
-    def test_other_values_coerce_like_bool(self):
-        assert coerce_show_clickhouse_errors(None) is False
-        assert coerce_show_clickhouse_errors("redact") is False
+    @pytest.mark.parametrize("value", [False, None, "false", "FALSE", "0", "n", "no", ""])
+    def test_accepts_falsy_values(self, value):
+        assert coerce_show_clickhouse_errors(value) is False
+
+    @pytest.mark.parametrize("value", ["redact", "scrubb"])
+    def test_rejects_unknown_strings(self, value):
+        with pytest.raises(ProgrammingError, match="show_clickhouse_errors"):
+            coerce_show_clickhouse_errors(value)
 
 
 class TestBuildHttpError:
@@ -145,3 +153,19 @@ class TestBuildHttpError:
         assert isinstance(exc, OperationalError)
         assert exc.code == 159
         assert self.URL not in str(exc)
+
+    def test_scrub_happens_before_truncation(self):
+        body = (
+            "Code: 60. DB::Exception: Unknown table expression identifier "
+            "'missing_table_937'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"
+        )
+        original = common.get_setting("max_error_size")
+        common.set_setting("max_error_size", body.find(".2.4.23"))
+        try:
+            exc = build_http_error(404, "60", body, "scrub", self.URL, False)
+        finally:
+            common.set_setting("max_error_size", original)
+
+        assert "missing_table_937" in str(exc)
+        assert "UNKNOWN_TABLE" in str(exc)
+        assert "version" not in str(exc)

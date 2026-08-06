@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import bind_query
-from clickhouse_connect.driver.common import StreamContext, dict_copy, empty_gen, get_rename_method
+from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, dict_copy, empty_gen, get_rename_method
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.external import ExternalData
@@ -141,6 +141,7 @@ class QueryContext(BaseQueryContext):
         self.block_info = False
         self.as_pandas = as_pandas
         self.streaming = streaming
+        self.show_clickhouse_errors: ShowClickHouseErrors = True
         self._rename_response_column: str | None = rename_response_column
         self.column_renamer = get_rename_method(rename_response_column)
         self._update_query()

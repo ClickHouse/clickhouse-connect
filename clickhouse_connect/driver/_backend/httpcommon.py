@@ -29,9 +29,10 @@ if TYPE_CHECKING:
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier, use_form_encoding
-from clickhouse_connect.driver.common import coerce_bool, dict_copy
+from clickhouse_connect.driver.common import ShowClickHouseErrors, coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import _zstd_decompress, available_compression
 from clickhouse_connect.driver.exceptions import (
+    GENERIC_CLICKHOUSE_ERROR,
     DatabaseError,
     OperationalError,
     ProgrammingError,
@@ -72,7 +73,7 @@ def build_http_error(
     status: int,
     err_code: str | None,
     full_body: str,
-    show_clickhouse_errors: bool | str,
+    show_clickhouse_errors: ShowClickHouseErrors,
     url: str,
     retried: bool,
 ) -> DatabaseError:
@@ -87,15 +88,14 @@ def build_http_error(
     scrub = show_clickhouse_errors == "scrub"
     code = error_code_from_header(err_code)
     name = error_name_from_body(full_body) if show_detail else None
+    display_body = scrub_error_details(full_body) if scrub else full_body
     body = ""
     try:
-        body = common.format_error(full_body).strip()
+        body = common.format_error(display_body).strip()
     except Exception:
         logger.warning("Failed to format error response body", exc_info=True)
 
     if show_detail:
-        if scrub and body:
-            body = scrub_error_details(body)
         if err_code:
             err_str = f"Received ClickHouse exception, code: {err_code}"
         else:
@@ -105,7 +105,7 @@ def build_http_error(
         if show_clickhouse_errors is True:
             err_str = f"{err_str} (for url {url})"
     else:
-        err_str = "The ClickHouse server returned an error"
+        err_str = GENERIC_CLICKHOUSE_ERROR
 
     err_type = OperationalError if retried else DatabaseError
     return err_type(err_str, code=code, name=name)

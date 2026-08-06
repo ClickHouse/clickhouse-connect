@@ -49,8 +49,10 @@ from clickhouse_connect.driver.client import (
     _apply_arrow_tz_policy,
 )
 from clickhouse_connect.driver.common import (
+    ShowClickHouseErrors,
     StreamContext,
     coerce_bool,
+    coerce_show_clickhouse_errors,
     dict_copy,  # noqa: F401  (compatibility re-export)
 )
 from clickhouse_connect.driver.ctypes import RespBuffCls
@@ -303,12 +305,12 @@ class AsyncClient(Client):
         self._backend.session = value
 
     @property
-    def show_clickhouse_errors(self) -> bool | str:  # type: ignore[override]
+    def show_clickhouse_errors(self) -> ShowClickHouseErrors:
         return self._backend.show_clickhouse_errors
 
     @show_clickhouse_errors.setter
-    def show_clickhouse_errors(self, value: bool | str) -> None:
-        self._backend.show_clickhouse_errors = value
+    def show_clickhouse_errors(self, value: ShowClickHouseErrors | str | None) -> None:
+        self._backend.show_clickhouse_errors = coerce_show_clickhouse_errors(value)
 
     @property
     def _autogenerate_query_id(self) -> bool:
