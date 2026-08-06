@@ -280,6 +280,41 @@ def test_query_with_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        # the server reads a block comment as a token separator, so this is a SELECT and query_limit applies
+        ("SELECT/*c*/number FROM numbers(9)", [(0,), (1,)]),
+        # the query already has a LIMIT, so the client must not append its own
+        ("SELECT number FROM numbers(9)/*c*/LIMIT 1", [(0,)]),
+        ("SELECT number FROM numbers(9) LIMIT/*c*/1", [(0,)]),
+    ],
+)
+def test_query_with_comment_between_tokens(param_client, call, sql: str, expected: list):
+    old_limit = param_client.query_limit
+    param_client.query_limit = 2
+    try:
+        result = call(param_client.query, sql)
+    finally:
+        param_client.query_limit = old_limit
+    assert result.result_set == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT name, database FROM system.tables LIMIT/*c*/0",
+        "SELECT name, database FROM system.tables LIMIT /*c*/0",
+        "SELECT name, database FROM system.tables LIMIT 0/*c*/",
+    ],
+)
+def test_get_columns_only_with_comment(param_client, call, sql: str):
+    # a comment anywhere around the trailing LIMIT 0 still reaches the columns only metadata probe
+    result = call(param_client.query, sql)
+    assert result.column_names == ("name", "database")
+    assert len(result.result_set) == 0
+
+
 def test_insert_csv_format(param_client, call, test_table_engine: str):
     call(param_client.command, "DROP TABLE IF EXISTS test_csv")
     call(

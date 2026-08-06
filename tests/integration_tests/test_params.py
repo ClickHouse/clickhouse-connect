@@ -1,9 +1,31 @@
+import os
+import time
 from collections.abc import Callable
 from datetime import date, datetime
+
+import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.binding import DT64Param
+
+HAS_TZSET = hasattr(time, "tzset")
+NON_UTC_HOST_TZ = "America/New_York"
+
+
+def _force_process_timezone(monkeypatch, tz_name: str) -> str | None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", tz_name)
+    time.tzset()
+    return original_tz
+
+
+def _restore_process_timezone(monkeypatch, original_tz: str | None) -> None:
+    if original_tz is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", original_tz)
+    time.tzset()
 
 
 def test_params(param_client: Client, call, table_context: Callable):
@@ -100,6 +122,35 @@ def test_datetime_64_params(param_client: Client, call):
 
     result = call(param_client.query, "SELECT {a1:Array(DateTime64(6))}", parameters={"a1": dt_values}).first_row
     assert result[0] == dt_values
+
+
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+def test_naive_datetime_wall_binding_live(param_client: Client, call, monkeypatch):
+    original_tz = _force_process_timezone(monkeypatch, NON_UTC_HOST_TZ)
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "wall")
+    try:
+        naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
+        dt = naive.replace(microsecond=0)
+        query = "SELECT {dt:DateTime('UTC')}, {dt64:DateTime64(6, 'UTC')}, {items:Array(Tuple(DateTime('UTC'), DateTime64(6, 'UTC')))}"
+        row = call(
+            param_client.query,
+            query,
+            parameters={"dt": dt, "dt64": naive, "items": [(dt, naive)]},
+            query_tz="UTC",
+        ).first_row
+        assert row == (dt, naive, [(dt, naive)])
+
+        row = call(
+            param_client.query,
+            "SELECT toString({dt:DateTime}), formatDateTime({dt_berlin:DateTime('Europe/Berlin')}, '%F %T', 'Europe/Berlin')",
+            parameters={"dt": dt, "dt_berlin": dt},
+            query_tz="UTC",
+        ).first_row
+        assert row == ("2025-01-01 12:00:00", "2025-01-01 12:00:00")
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
+        _restore_process_timezone(monkeypatch, original_tz)
 
 
 def test_null_in_containers(param_client: Client, call):
