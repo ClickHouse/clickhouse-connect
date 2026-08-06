@@ -32,6 +32,3 @@ test.env
 # Local ClickHouse server source checkout for agent reference (see AGENTS.md)
 /.server-src/
 .server-ref
-# Personal agents stay local, but the docs drift rubric is part of CI
-.claude/agents/*
-!.claude/agents/docs-drift-reviewer.md
