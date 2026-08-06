@@ -13,6 +13,7 @@
 
 ### Bug Fixes
 
+- DB API module now provides the PEP 249 type constructors `Binary`, `Date`, `Time`, `Timestamp`, `DateFromTicks`, `TimeFromTicks`, and `TimestampFromTicks`. SQLAlchemy `LargeBinary` inserts no longer raise `AttributeError`. Addresses the Binary constructor failure in [#919](https://github.com/ClickHouse/clickhouse-connect/issues/919).
 - Fractional `DateTime64` values before the Unix epoch now serialize with the correct second. The serializer truncated negative timestamps toward zero before adding the fractional component, which shifted affected values forward by one second. This affected Python `datetime` values and accepted ISO strings in both naive datetime insert modes. See [#938](https://github.com/ClickHouse/clickhouse-connect/issues/938).
 - Parsing a nested `Variant`, `Tuple`, `Nested`, or typed `JSON` column type whose element is an `Enum` with an escaped single quote in a value name no longer corrupts the escape sequence and fails while re-parsing the element type. Closes [#878](https://github.com/ClickHouse/clickhouse-connect/issues/878).
 - `None` nested inside an `Array` or `Tuple`, or inside a `Map` when `dict_parameter_format="map"`, now renders as the SQL `NULL` keyword instead of the `\N` sentinel used for top-level values. Top-level scalar `None` binds are unchanged. Closes [#879](https://github.com/ClickHouse/clickhouse-connect/issues/879).
