@@ -111,6 +111,52 @@ with engine.connect() as conn:
     conn.execute(stmt)
 ```
 
+### JSON subcolumns {#sqlalchemy-json-subcolumns}
+
+For a column declared or reflected as ClickHouse `JSON`, use square brackets to select one segment of a storage-backed subcolumn path at a time:
+
+```python
+from sqlalchemy import Column, MetaData, Table, select
+
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, UInt32
+
+events = Table(
+    "events",
+    MetaData(),
+    Column("payload", JSON),
+)
+
+request_id = events.c.payload["context"]["request"].subcolumn(
+    "id",
+    type_=UInt32,
+)
+
+stmt = select(
+    events.c.payload["severity"].label("severity"),
+    request_id.label("request_id"),
+)
+```
+
+`payload["severity"]` compiles to ClickHouse dotted identifier syntax. Each part is quoted separately, for example `` `events`.`payload`.`severity` ``. It reads ClickHouse's stored JSON subcolumn and does not call `getSubcolumn`. Chain `[]` or `.subcolumn()` once for each path segment. Each segment must be a non-empty string.
+
+Passing `type_` to `.subcolumn()` wraps the dotted path in a SQL `CAST` and assigns that type to the SQLAlchemy expression. Without `type_`, `.subcolumn("segment")` behaves like `["segment"]`.
+
+An untyped path has ClickHouse's `Dynamic` type. ClickHouse does not allow `Dynamic` values directly in `ORDER BY` or `GROUP BY`. Pass `type_` when a subcolumn is used there.
+
+For statically typed code, import `json_subcolumn` from `clickhouse_connect.cc_sqlalchemy`. The helper also takes one segment at a time and preserves the Python result type from `type_`:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import json_subcolumn
+
+context = json_subcolumn(events.c.payload, "context")
+request = json_subcolumn(context, "request")
+request_id = json_subcolumn(request, "id", type_=UInt32)
+```
+
+In this example, type checkers see `request_id` as `ColumnElement[int]`.
+
+Each segment is quoted independently, including names with spaces or backticks. Backticks do not make a dot literal to ClickHouse JSON path handling. When `json_type_escape_dots_in_keys` is enabled, use ClickHouse's `%2E` encoding for literal dots in keys. Access a key named `a.b` as `payload["a%2Eb"]`, not `payload["a.b"]`.
+
 ### ClickHouse query extensions {#sqlalchemy-query-extensions}
 
 Import `select` from `clickhouse_connect.cc_sqlalchemy` to expose typed ClickHouse methods to static type checkers. The standard `sqlalchemy.select` also has these methods at runtime.

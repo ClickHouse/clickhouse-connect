@@ -11,11 +11,13 @@ correctly for both parameterized and non-parameterized queries.
 
 from unittest.mock import Mock
 
-from sqlalchemy import text
+from sqlalchemy import Integer, column, select, table, text
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 from clickhouse_connect.dbapi.cursor import Cursor
+from clickhouse_connect.driver.binding import finalize_query
 
 
 def _make_dialect():
@@ -102,3 +104,23 @@ def test_preparer_double_percents_enabled():
     dialect = _make_dialect()
     preparer = dialect.preparer(dialect)
     assert preparer._double_percents is True
+
+
+def test_percent_in_identifier_survives_parameter_binding():
+    dialect = _make_dialect()
+    events = table("events%2026", column("value%pct", Integer))
+    compiled = select(events.c["value%pct"]).where(events.c["value%pct"] == 13).compile(dialect=dialect)
+
+    assert "`events%%2026`.`value%%pct`" in compiled.string
+    final_sql = finalize_query(compiled.string, compiled.params)
+    assert "`events%2026`.`value%pct`" in final_sql
+    assert " = 13" in final_sql
+
+
+def test_quote_identifier_keeps_existing_direct_call_contract():
+    dialect = _make_dialect()
+    preparer = dialect.identifier_preparer
+
+    assert preparer.quote_identifier("value%pct") == "`value%pct`"
+    assert ChIdentifierPreparer.quote_identifier("value%pct") == "`value%pct`"
+    assert preparer.quote("value%pct") == "`value%%pct`"
