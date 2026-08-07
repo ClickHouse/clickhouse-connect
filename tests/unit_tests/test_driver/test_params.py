@@ -3,8 +3,10 @@ import os
 import time
 import uuid
 import zoneinfo
-from datetime import date, datetime, timezone, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import time as dt_time
 
+import pandas as pd
 import pytest
 
 from clickhouse_connect import common
@@ -125,6 +127,76 @@ def test_format_query_value_bytes(value, expected):
 def test_finalize_bytes():
     query = finalize_query("INSERT INTO t (id) VALUES (%(id)s)", {"id": b"j!lUA\xf8\x93q;ky\x00"})
     assert query == r"INSERT INTO t (id) VALUES ('\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00')"
+
+
+TIME_OF_DAY_CASES = [
+    (dt_time(14, 30, 0), "14:30:00"),
+    (dt_time(1, 2, 3, 456789), "01:02:03.456789"),
+    (dt_time(9, 5, 7, tzinfo=timezone.utc), "09:05:07"),
+    (dt_time(9, 5, 7, 250306, tzinfo=zoneinfo.ZoneInfo("Europe/Berlin")), "09:05:07.250306"),
+    (timedelta(0), "00:00:00"),
+    (timedelta(hours=1, minutes=2, seconds=3), "01:02:03"),
+    (timedelta(seconds=5, microseconds=250306), "00:00:05.250306"),
+    (timedelta(seconds=-2), "-00:00:02"),
+    (timedelta(microseconds=-1), "-00:00:00.000001"),
+    (timedelta(days=2, hours=3, seconds=13), "51:00:13"),
+    (timedelta(days=-1, hours=-1, minutes=-30), "-25:30:00"),
+    (pd.Timedelta("13s 500ns"), "00:00:13.000000500"),
+    (pd.Timedelta("-1ns"), "-00:00:00.000000001"),
+    (pd.Timedelta("1s 250306us"), "00:00:01.250306"),
+]
+
+
+@pytest.mark.parametrize("value, expected", TIME_OF_DAY_CASES)
+def test_format_query_value_time(value, expected):
+    assert format_query_value(value) == f"'{expected}'"
+
+
+@pytest.mark.parametrize("value, expected", TIME_OF_DAY_CASES)
+def test_format_bind_value_time(value, expected):
+    assert format_bind_value(value) == expected
+    assert format_bind_value(value, top_level=False) == f"'{expected}'"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ([dt_time(1, 2, 3)], "['01:02:03']"),
+        ([timedelta(seconds=-2), timedelta(hours=1)], "['-00:00:02', '01:00:00']"),
+        ((dt_time(1, 2, 3, 456789), None), "('01:02:03.456789', NULL)"),
+        ((timedelta(seconds=13), "user_1"), "('00:00:13', 'user_1')"),
+        ([(timedelta(seconds=13), dt_time(1, 2, 3))], "[('00:00:13', '01:02:03')]"),
+    ],
+)
+def test_time_value_nesting(value, expected):
+    assert format_query_value(value) == expected
+    assert format_bind_value(value) == expected
+
+
+def test_time_value_map_format():
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        value = {"start": dt_time(1, 2, 3), "gap": timedelta(seconds=-2), "end": None}
+        expected = "{'start':'01:02:03', 'gap':'-00:00:02', 'end':NULL}"
+        assert format_query_value(value) == expected
+        assert format_bind_value(value) == expected
+    finally:
+        common.set_setting("dict_parameter_format", original)
+
+
+def test_finalize_time_values():
+    parameters = {"t": dt_time(14, 30, 0), "td": timedelta(hours=-1, seconds=-13)}
+    query = finalize_query("SELECT * FROM t1 WHERE t = %(t)s AND td = %(td)s", parameters)
+    assert query == "SELECT * FROM t1 WHERE t = '14:30:00' AND td = '-01:00:13'"
+
+
+def test_bind_query_time_params():
+    _, params = bind_query(
+        "SELECT {t:Time}, {arr:Array(Time64(6))}",
+        {"t": timedelta(seconds=-2), "arr": [dt_time(1, 2, 3, 250306)]},
+    )
+    assert params == {"param_t": "-00:00:02", "param_arr": "['01:02:03.250306']"}
 
 
 class TestBindQueryTimezoneHint:
