@@ -234,7 +234,7 @@ def use_form_encoding(query: str | bytes, bind_params: dict[str, str], force_for
 
 
 def _format_time_of_day(value: time | timedelta) -> str:
-    """Format a time or timedelta as the [-]HH:MM:SS[.ffffff] literal used by Time/Time64."""
+    """Format a time or timedelta as the [-]HH:MM:SS[.ffffff|.fffffffff] literal used by Time/Time64."""
 
     if isinstance(value, time):
         base = f"{value.hour:02d}:{value.minute:02d}:{value.second:02d}"
