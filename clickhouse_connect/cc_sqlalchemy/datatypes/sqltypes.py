@@ -326,18 +326,17 @@ class Time(ChSqlaType, Interval):  # type: ignore[misc]
     second precision. Maps to Python timedelta objects.
     """
 
+    cache_ok = True
+
     def __init__(self, type_def: TypeDef = EMPTY_TYPE_DEF):
         ChSqlaType.__init__(self, type_def)
         Interval.__init__(self)
 
-    def process_bind_param(self, value, dialect):
-        return value
-
-    def process_result_value(self, value, dialect):
-        return value
-
-    def process_literal_param(self, value, dialect):
+    def bind_processor(self, dialect):
         return None
+
+    def coerce_compared_value(self, op, value):
+        return self
 
 
 class Time64(ChSqlaType, Interval):  # type: ignore[misc]
@@ -348,6 +347,8 @@ class Time64(ChSqlaType, Interval):  # type: ignore[misc]
     999:59:59.999999999 configurable precision. Maps to Python timedelta objects.
     If no precision is defined it default to 3.
     """
+
+    cache_ok = True
 
     def __init__(self, precision: int | None = None, type_def: TypeDef | None = None):
         """
@@ -369,14 +370,11 @@ class Time64(ChSqlaType, Interval):  # type: ignore[misc]
 
         Interval.__init__(self, second_precision=precision)
 
-    def process_bind_param(self, value, dialect):
-        return value
-
-    def process_result_value(self, value, dialect):
-        return value
-
-    def process_literal_param(self, value, dialect):
+    def bind_processor(self, dialect):
         return None
+
+    def coerce_compared_value(self, op, value):
+        return self
 
 
 def Nullable(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N802
