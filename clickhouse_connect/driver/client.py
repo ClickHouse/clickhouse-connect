@@ -29,9 +29,10 @@ from clickhouse_connect.driver._backend.orchestration import (
 )
 from clickhouse_connect.driver.binding import bind_query, str_query_value
 from clickhouse_connect.driver.common import (
+    ShowClickHouseErrors,
     StreamContext,
-    coerce_bool,
     coerce_int,
+    coerce_show_clickhouse_errors,
     dict_copy,
     version_at_least,
 )
@@ -153,7 +154,7 @@ class Client(ABC):
     _tz_source: TzSource = "auto"
     _apply_server_tz = False
     tz_mode: TzMode = "naive_utc"
-    show_clickhouse_errors = True
+    show_clickhouse_errors: ShowClickHouseErrors = True
 
     @property
     def tz_source(self) -> TzSource:
@@ -178,7 +179,7 @@ class Client(ABC):
         server_host_name: str | None,
         tz_source: TzSource | None = None,
         tz_mode: TzMode | None = None,
-        show_clickhouse_errors: bool | None = None,
+        show_clickhouse_errors: bool | str | None = None,
         autoconnect: bool = True,
     ):
         """
@@ -193,6 +194,8 @@ class Client(ABC):
           naive UTC timestamps.  "aware" forces timezone-aware UTC datetimes.  "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column defines a timezone and naive
           for bare DateTime columns.
+        :param show_clickhouse_errors: True for full error detail (including URL/version), False for a generic
+          message, or "scrub" for the SQL error without host/URL or version trailer.
         :param autoconnect: If True, immediately connect to server and fetch settings. If False,
           defer connection to _connect() method. Used by async clients to avoid blocking I/O in __init__.
         """
@@ -201,7 +204,7 @@ class Client(ABC):
         if database and database != "__default__":
             self.database = database
         if show_clickhouse_errors is not None:
-            self.show_clickhouse_errors = coerce_bool(show_clickhouse_errors)
+            self.show_clickhouse_errors = coerce_show_clickhouse_errors(show_clickhouse_errors)
         self.server_host_name = server_host_name
         self.uri = uri
         self.tz_mode = tz_mode if tz_mode is not None else "naive_utc"
