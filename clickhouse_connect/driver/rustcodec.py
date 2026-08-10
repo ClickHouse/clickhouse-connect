@@ -17,7 +17,12 @@ from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedE
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
-from clickhouse_connect.driver.rustnumpy import _build_converters, _convert_block
+from clickhouse_connect.driver.rustnumpy import (
+    _build_converters,
+    _contains_json_type,
+    _convert_block,
+    _normalize_json_shared_column,
+)
 from clickhouse_connect.driver.streaming import ReadAheadSource
 from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
 from clickhouse_connect.driver.types import ByteSource, Closable
@@ -132,8 +137,8 @@ class _ExceptionTagScanner:
 
     def __init__(self, exception_tag: str):
         tag_bytes = exception_tag.encode()
-        self._open_marker = b"__exception__" + tag_bytes
-        self._close_marker = tag_bytes + b"__exception__"
+        self._open_marker = b"__exception__\r\n" + tag_bytes
+        self._close_marker = tag_bytes + b"\r\n__exception__"
         self._carryover = b""
         self._exception_buf: bytearray | None = None
 
@@ -170,20 +175,17 @@ def _binding_value_error(ex: ValueError) -> Error:
     return DataError(str(ex))
 
 
-def _contains_json_type(ch_type: object) -> bool:
-    """Return whether a ClickHouse type contains JSON through any supported container.
-
-    Probed child attributes are not always types (QBit.element_type is a str), so non-types are False.
-    """
+def _contains_datetime_type(ch_type: object) -> bool:
+    """Return whether a ClickHouse type contains DateTime or DateTime64."""
     if not isinstance(ch_type, ClickHouseType):
         return False
-    if ch_type.base_type == "JSON":
+    if isinstance(ch_type, DateTimeBase):
         return True
     for attr in ("element_type", "key_type", "value_type"):
         child = getattr(ch_type, attr, None)
-        if child is not None and _contains_json_type(child):
+        if child is not None and _contains_datetime_type(child):
             return True
-    return any(_contains_json_type(child) for child in getattr(ch_type, "element_types", ()))
+    return any(_contains_datetime_type(child) for child in getattr(ch_type, "element_types", ()))
 
 
 def _python_codec_tuple_container(ch_type: ClickHouseType) -> bool:
@@ -343,14 +345,17 @@ class _RustNativeTransform:
             read_source.close()
             raise
 
+        def normalize_json_columns(columns: list) -> list:
+            return [_normalize_json_shared_column(col_type, column, context) for col_type, column in zip(col_types, columns)]
+
         if not context.use_numpy and not context.streaming:
             # Buffered query: materialize each batch to Python columns as it arrives so object building
             # on this thread overlaps the producer's transport drain, and any decode error surfaces here
             # rather than on a later result access.
             try:
-                batch_columns = [first.to_python_columns()]
+                batch_columns = [normalize_json_columns(first.to_python_columns())]
                 for batch in blocks:
-                    batch_columns.append(batch.to_python_columns())
+                    batch_columns.append(normalize_json_columns(batch.to_python_columns()))
             except NotImplementedError as ex:
                 read_source.close()
                 raise _unsupported_decode_error(ex) from ex
@@ -367,6 +372,7 @@ class _RustNativeTransform:
 
         def match_containers(columns: list) -> list:
             # Streamed blocks match the Python codec's per-column containers.
+            columns = normalize_json_columns(columns)
             return [tuple(column) if flag else column for flag, column in zip(tuple_flags, columns)]
 
         try:
@@ -428,6 +434,17 @@ class _RustNativeTransform:
         core = _ch_core_module()
         if core is None:
             raise NotSupportedError('The rust native codec is unavailable (_ch_core not importable); use native_codec="python"')
+
+        if common.get_setting("naive_datetime_insert") == "server" and any(
+            _contains_datetime_type(ch_type) for ch_type in context.column_types
+        ):
+            if self.strict:
+                raise NotSupportedError(
+                    'native_codec="rust_strict" does not support naive_datetime_insert="server" for DateTime inserts; '
+                    'use native_codec="python" or "rust"'
+                )
+            logger.info('Native codec fallback to Python for insert: naive_datetime_insert="server"')
+            return NativeTransform.build_insert(context)
 
         # json_serialization_format 0 selects the legacy String-header JSON insert
         # framing, which the core's JSON encoder does not emit. Route those inserts

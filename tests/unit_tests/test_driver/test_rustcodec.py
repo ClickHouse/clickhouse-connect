@@ -1,7 +1,7 @@
 import logging
 import struct
 import sys
-from datetime import timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -73,6 +73,13 @@ def restore_native_codec_fixture():
     original = common.get_setting("native_codec")
     yield
     common.set_setting("native_codec", original)
+
+
+@pytest.fixture(name="restore_naive_datetime_insert")
+def restore_naive_datetime_insert_fixture():
+    original = common.get_setting("naive_datetime_insert")
+    yield
+    common.set_setting("naive_datetime_insert", original)
 
 
 @pytest.fixture(name="clean_type_cache")
@@ -393,6 +400,53 @@ def test_build_insert_global_write_format_non_strict_falls_back(monkeypatch, cle
 
     rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(rust_ctx))
     python_out = b"".join(NativeTransform.build_insert(python_ctx))
+    assert rust_out == python_out
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "DateTime",
+        "Nullable(DateTime64(6))",
+        "Array(DateTime)",
+        "Tuple(DateTime64(6), String)",
+        "Map(String, DateTime)",
+        "Variant(DateTime, String)",
+        "Nested(ts DateTime64(6))",
+    ],
+)
+def test_build_insert_naive_datetime_server_strict_raises(monkeypatch, restore_naive_datetime_insert, type_name):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run for server-timezone datetime inserts")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    common.set_setting("naive_datetime_insert", "server")
+    context = InsertContext("fake_table", ["value"], [get_from_name(type_name)])
+
+    with pytest.raises(NotSupportedError, match='naive_datetime_insert="server"'):
+        _RustNativeTransform(strict=True).build_insert(context)
+
+
+def test_build_insert_naive_datetime_server_non_strict_falls_back(monkeypatch, restore_naive_datetime_insert):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise AssertionError("encoder must not run for server-timezone datetime inserts")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    common.set_setting("naive_datetime_insert", "server")
+    value = datetime(2025, 7, 15, 12, 34, 56, 250306)
+    column_names = ["dt", "nested"]
+    column_types = [get_from_name("DateTime"), get_from_name("Array(Tuple(DateTime64(6), String))")]
+    rows = [(value, [(value, "user_1")])]
+    rust_ctx = InsertContext("fake_table", column_names, column_types, rows, server_tz=ZoneInfo("America/Denver"))
+    python_ctx = InsertContext("fake_table", column_names, column_types, rows, server_tz=ZoneInfo("America/Denver"))
+
+    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(rust_ctx))
+    python_out = b"".join(NativeTransform.build_insert(python_ctx))
+
     assert rust_out == python_out
 
 

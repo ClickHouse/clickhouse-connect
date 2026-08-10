@@ -58,7 +58,7 @@ class TestLowCardinalityInsertFastPath:
         uniq = [f"tag_{i}" for i in range(5)]
         vals = [uniq[i % 5] for i in range(20)] + ["solo"]
         # Runtime-built distinct objects with equal content must dedupe by content.
-        vals += ["tag_%d" % (i % 3) for i in range(6)]
+        vals += [f"tag_{i % 3}" for i in range(6)]
         from_list = self._encode("LowCardinality(String)", vals)
         assert from_list == self._encode("LowCardinality(String)", tuple(vals), len(vals))
         assert from_list == self._encode("LowCardinality(String)", _NdarrayLikeColumn(vals), len(vals))

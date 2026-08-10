@@ -9,7 +9,7 @@ from clickhouse_connect import create_client, datatypes
 from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.exceptions import DatabaseError, StreamFailureError
 from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
@@ -76,6 +76,53 @@ def test_query_error_exposes_structured_code(param_client, call):
         call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
     assert excinfo.value.code == 60
     assert excinfo.value.name == "UNKNOWN_TABLE"
+
+
+@pytest.mark.parametrize("mode", ["scrub", False])
+def test_query_error_show_clickhouse_errors_modes(param_client, call, test_config: TestConfig, mode):
+    original = param_client.show_clickhouse_errors
+    param_client.show_clickhouse_errors = mode
+    try:
+        with pytest.raises(DatabaseError) as excinfo:
+            call(param_client.query, "SELECT * FROM does_not_exist_tbl_937")
+    finally:
+        param_client.show_clickhouse_errors = original
+
+    error_msg = str(excinfo.value)
+    assert excinfo.value.code == 60
+    if mode == "scrub":
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        assert "UNKNOWN_TABLE" in error_msg
+        assert "version" not in error_msg.lower()
+        assert param_client.url not in error_msg
+        assert test_config.host not in error_msg
+    else:
+        assert error_msg == "The ClickHouse server returned an error"
+        assert excinfo.value.name is None
+
+
+@pytest.mark.parametrize("mode", ["scrub", False])
+def test_stream_error_show_clickhouse_errors_modes(param_client, call, consume_stream, mode):
+    original = param_client.show_clickhouse_errors
+    param_client.show_clickhouse_errors = mode
+    try:
+        with pytest.raises(StreamFailureError) as excinfo:
+            stream = call(
+                param_client.query_rows_stream,
+                "SELECT sleepEachRow(0.01), throwIf(number = 100) FROM numbers(200)",
+                settings={"max_block_size": 1, "wait_end_of_query": 0},
+            )
+            consume_stream(stream)
+    finally:
+        param_client.show_clickhouse_errors = original
+
+    error_msg = str(excinfo.value)
+    if mode == "scrub":
+        assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in error_msg
+        assert "version" not in error_msg.lower()
+        assert param_client.url not in error_msg
+    else:
+        assert error_msg == "The ClickHouse server returned an error"
 
 
 def test_client_name(param_client, client_mode):
@@ -280,6 +327,41 @@ def test_query_with_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        # the server reads a block comment as a token separator, so this is a SELECT and query_limit applies
+        ("SELECT/*c*/number FROM numbers(9)", [(0,), (1,)]),
+        # the query already has a LIMIT, so the client must not append its own
+        ("SELECT number FROM numbers(9)/*c*/LIMIT 1", [(0,)]),
+        ("SELECT number FROM numbers(9) LIMIT/*c*/1", [(0,)]),
+    ],
+)
+def test_query_with_comment_between_tokens(param_client, call, sql: str, expected: list):
+    old_limit = param_client.query_limit
+    param_client.query_limit = 2
+    try:
+        result = call(param_client.query, sql)
+    finally:
+        param_client.query_limit = old_limit
+    assert result.result_set == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT name, database FROM system.tables LIMIT/*c*/0",
+        "SELECT name, database FROM system.tables LIMIT /*c*/0",
+        "SELECT name, database FROM system.tables LIMIT 0/*c*/",
+    ],
+)
+def test_get_columns_only_with_comment(param_client, call, sql: str):
+    # a comment anywhere around the trailing LIMIT 0 still reaches the columns only metadata probe
+    result = call(param_client.query, sql)
+    assert result.column_names == ("name", "database")
+    assert len(result.result_set) == 0
+
+
 def test_insert_csv_format(param_client, call, test_table_engine: str):
     call(param_client.command, "DROP TABLE IF EXISTS test_csv")
     call(
@@ -331,21 +413,22 @@ def test_show_row_policies(param_client, call, table_context: Callable, test_con
     if not param_client.min_version("20"):
         pytest.skip(f"Not supported server version {param_client.server_version}")
 
-    for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
-        result = call(param_client.query, statement)
-        assert result.result_rows == [[""]]
-        result.close()
-
     policy = "test_show_row_policies_policy"
-    with table_context("test_show_row_policies", ["id UInt32"]) as table:
+    table_name = "test_show_row_policies"
+    with table_context(table_name, ["id UInt32"]) as table:
         target = f"{quote_identifier(param_client.database)}.{table.table}"
         call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
         try:
-            assert call(param_client.command, f"SHOW ROW POLICIES ON {target}") == ""
-            assert call(param_client.command, f"SHOW POLICIES ON {target}") == ""
+            for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+                assert call(param_client.command, f"{statement} ON {target}") == ""
 
             call(param_client.command, f"CREATE ROW POLICY {policy} ON {target} USING id = 13 TO ALL")
-            assert policy in call(param_client.command, f"SHOW ROW POLICIES ON {target}")
+            listed = f"{policy} ON {param_client.database}.{table_name}"
+            for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+                assert call(param_client.command, f"{statement} ON {target}") == policy
+                result = call(param_client.query, statement)
+                assert listed in result.result_rows[0][0].splitlines()
+                result.close()
         finally:
             call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
 
@@ -493,6 +576,56 @@ def test_role_setting_works(param_client: Client, test_config: TestConfig, clien
     )
     res = call(role_client.query, "SELECT currentRoles()")
     assert res.result_rows == [([role_limited],)]
+
+
+def test_changeable_in_readonly_custom_setting(
+    param_client: Client, test_config: TestConfig, client_factory: Callable, client_mode: str, call
+):
+    """Readonly user can set CHANGEABLE_IN_READONLY custom settings via settings= (issue #530)."""
+    if test_config.cloud:
+        pytest.skip("Skipping role test in cloud mode - cannot create custom users")
+
+    # Docker test servers set custom_settings_prefixes=SQL_; skip otherwise.
+    try:
+        call(param_client.command, "SELECT 1 SETTINGS SQL_RO_probe_530='ok'")
+    except DatabaseError:
+        pytest.skip("Server does not allow SQL_ custom settings (need custom_settings_prefixes)")
+
+    # Roles and users are server global, so the sync and async runs need distinct names to
+    # stay isolated when xdist runs them in parallel.
+    role = f"ch_connect_ro_role_530_{client_mode}"
+    user = f"ch_connect_ro_user_530_{client_mode}"
+    password = "R7m!pZt9qL#x"
+    setting = "SQL_RO_my_rls_key"
+
+    try:
+        call(param_client.command, f"DROP USER IF EXISTS {user}")
+        call(param_client.command, f"DROP ROLE IF EXISTS {role}")
+
+        call(param_client.command, f"CREATE ROLE {role}")
+        # CHANGEABLE_IN_READONLY lets a readonly user set the custom setting even though it is
+        # not visible in system.settings for that user, which is what previously tripped the
+        # client into rejecting it. This mirrors the row-policy getSetting use case in #530.
+        call(param_client.command, f"ALTER ROLE {role} SETTINGS {setting} CHANGEABLE_IN_READONLY")
+        call(param_client.command, f"CREATE USER {user} IDENTIFIED BY '{password}' DEFAULT ROLE {role} SETTINGS readonly = 1")
+
+        # The readonly user cannot set the writable session defaults the factory normally applies,
+        # so opt out of them.
+        client = client_factory(username=user, password=password, apply_test_settings=False)
+
+        # Inline SETTINGS clause already works; the settings= path must match.
+        inline = call(client.query, f"SELECT getSetting('{setting}') AS v SETTINGS {setting}='tenant_1'")
+        assert inline.result_rows == [("tenant_1",)]
+
+        via_param = call(client.query, f"SELECT getSetting('{setting}') AS v", settings={setting: "tenant_1"})
+        assert via_param.result_rows == [("tenant_1",)]
+
+        # A different value takes effect per query, confirming the setting reaches the server.
+        other = call(client.query, f"SELECT getSetting('{setting}') AS v", settings={setting: "tenant_2"})
+        assert other.result_rows == [("tenant_2",)]
+    finally:
+        call(param_client.command, f"DROP USER IF EXISTS {user}")
+        call(param_client.command, f"DROP ROLE IF EXISTS {role}")
 
 
 def test_query_id_autogeneration(param_client: Client, test_table_engine: str, call):

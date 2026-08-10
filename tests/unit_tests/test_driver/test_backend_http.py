@@ -221,7 +221,13 @@ class TestCommandPlan:
         assert result.form_files is None
         assert result.headers == {}
         assert result.params == {"param_id": "7", "database": "db1", "max_threads": "4"}
-        assert list(result.params) == ["param_id", "database", "max_threads"]
+        # Settings precede the structural params (bind params, external data, query), matching
+        # plan_query_request so a setting cannot override them.
+        assert list(result.params) == ["database", "max_threads", "param_id"]
+
+    def test_bind_params_win_over_colliding_setting(self):
+        result = command_plan(bind_params={"param_id": "13"}, runtime=QueryRuntime(settings={"param_id": "79"}))
+        assert result.params["param_id"] == "13"
 
     def test_str_data_payload(self):
         result = command_plan("INSERT INTO t FORMAT CSV", data="1\n2\n")
@@ -243,8 +249,13 @@ class TestCommandPlan:
         assert result.payload is None
         assert result.params["query"] == "SELECT count() FROM f1"
         assert result.params["_f1_format"] == "CSV"
-        assert list(result.params) == ["_f1_format", "_f1_structure", "query", "database", "max_threads"]
+        assert list(result.params) == ["database", "max_threads", "_f1_format", "_f1_structure", "query"]
         assert result.method == "POST"
+
+    def test_external_data_params_win_over_colliding_setting(self):
+        external = make_external_data()
+        result = command_plan("SELECT count() FROM f1", external_data=external, runtime=QueryRuntime(settings={"_f1_format": "TSV"}))
+        assert result.params["_f1_format"] == "CSV"
 
     def test_external_data_with_data_raises(self):
         with pytest.raises(ProgrammingError, match="external data"):

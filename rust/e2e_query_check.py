@@ -15,9 +15,9 @@ BASELINE_PATH = os.environ.get("CHC_BASELINE_PATH", os.path.abspath(os.path.join
 sys.path.insert(0, BASELINE_PATH)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import clickhouse_connect  # noqa: E402
-
 from rust_client import query_rust  # noqa: E402
+
+import clickhouse_connect  # noqa: E402
 
 ROW_LIMIT = 1_000_000
 

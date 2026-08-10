@@ -47,6 +47,8 @@ The option is ignored for `interface="chdb"` clients, which always use the Pytho
 
 Fallback decisions are made before any bytes are read or sent, so there is never a mid-stream codec switch. For queries the choice happens before the response body is consumed. For inserts the Rust encoder is only selected when every column type is supported, otherwise the whole insert runs on the Python codec.
 
+When `naive_datetime_insert="server"` is active, `rust` routes an insert containing any `DateTime` or `DateTime64` column to the Python codec so the declared column timezone or server timezone is applied. `rust_strict` rejects that combination. The default `naive_datetime_insert="local"` mode continues to use the Rust encoder.
+
 Driver-internal metadata queries always use the Python codec, silently, in every mode.
 
 Malformed Native payloads detected by the Rust codec raise `DataError`.

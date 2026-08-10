@@ -1,10 +1,12 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.dbapi.cursor import Cursor
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
 
 
 def create_mock_client(result_data):
@@ -298,6 +300,50 @@ def test_executemany_bulk_insert_with_dotted_backtick_columns():
     client.query.assert_not_called()
 
 
+def test_executemany_bulk_insert_unescapes_percent_identifiers_for_dict_rows():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"value%pct": 13}, {"value%pct": 79}]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES (%(value_pct)s)", rows)
+
+    client.insert.assert_called_once_with("`events%2026`", [[13], [79]], ["value%pct"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_unescapes_percent_identifiers_for_tuple_rows():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13,), (79,)]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES (%s)", rows)
+
+    client.insert.assert_called_once_with("`events%2026`", rows, ["value%pct"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_keeps_percents_for_server_side_statements():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13,), (79,)]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES ({v:UInt32})", rows)
+
+    client.insert.assert_called_once_with("`events%%2026`", rows, ["value%%pct"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_keeps_percents_for_server_side_dict_rows():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"value%%pct": 13}, {"value%%pct": 79}]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES ({v:UInt32})", rows)
+
+    client.insert.assert_called_once_with("`events%%2026`", [[13], [79]], ["value%%pct"], settings=None)
+    client.query.assert_not_called()
+
+
 def test_execute_unescapes_double_percents_without_parameters():
     """Test that cursor.execute unescapes %% to % when no parameters are given.
 
@@ -369,7 +415,7 @@ def test_execute_empty_result_fetches_metadata_with_parameters():
         {"value_1": 13, "param_1": 1},
     )
 
-    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, False)]
     assert client.query.call_args_list[1].args == (
         "SELECT * FROM (SELECT value_1 FROM test_table WHERE value_1 = %(value_1)s LIMIT %(param_1)s) LIMIT 0",
         {"value_1": 13, "param_1": 1},
@@ -391,11 +437,147 @@ def test_execute_empty_with_query_fetches_metadata():
 
     cursor.execute("WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79")
 
-    assert cursor.description == [("value_1", "UInt64", None, None, None, None, True)]
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, False)]
     assert client.query.call_args_list[1].args == (
         "SELECT * FROM (WITH value_1 AS 13 SELECT value_1 WHERE value_1 = 79) LIMIT 0",
         None,
     )
+
+
+@pytest.mark.parametrize(
+    "type_code, expected_null_ok",
+    [
+        ("String", False),
+        ("Nullable(Int32)", True),
+        ("LowCardinality(Nullable(String))", True),
+        (get_from_name("String"), False),
+        (get_from_name("Nullable(String)"), True),
+        ("Variant(String, UInt64)", True),
+        ("Dynamic", True),
+        ("SimpleAggregateFunction(any, Nullable(String))", True),
+        ("SimpleAggregateFunction(any, Dynamic)", True),
+        ("SimpleAggregateFunction(any, Variant(String, UInt64))", True),
+        ("SimpleAggregateFunction(any, UInt64)", False),
+        ("Array(Nullable(String))", False),
+        ("Tuple(Nullable(String), UInt32)", False),
+        ("Array(Tuple(Nullable(String), UInt32))", False),
+        ("Map(String, Nullable(UInt32))", False),
+        ("JSON", False),
+        ("Nothing", True),
+        ("Nullable(Nothing)", True),
+        ("Tuple(", None),
+        ("SimpleAggregateFunction(any)", None),
+        ("FixedString(x)", None),
+        (object(), None),
+    ],
+)
+def test_description_null_ok_uses_type_metadata_without_changing_type_code(type_code, expected_null_ok):
+    cursor = Cursor(Mock())
+    cursor.names = ["value_1"]
+    cursor.types = [type_code]
+
+    description = cursor.description
+
+    assert description[0][1] is type_code
+    assert description[0][6] is expected_null_ok
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_null_ok",
+    [
+        ("UInt32", False),
+        ("Variant(UInt32, String)", True),
+    ],
+)
+def test_executemany_resets_description_and_keeps_type_code_object(type_name, expected_null_ok):
+    col_type = get_from_name(type_name)
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([(13,)], column_names=["old_value"], column_types=[get_from_name("UInt32")]),
+        create_mock_query_result([(79,)], column_names=["value_1"], column_types=[col_type]),
+    ]
+    cursor = Cursor(client)
+    cursor.execute("SELECT 13 AS old_value")
+
+    cursor.executemany("SELECT %(value_1)s AS value_1", [{"value_1": 79}])
+
+    assert cursor.description == [("value_1", col_type, None, None, None, None, expected_null_ok)]
+
+
+def test_execute_empty_with_leading_comments_fetches_metadata():
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result(
+            [],
+            column_names=["value_1"],
+            column_types=[SimpleNamespace(name="UInt64")],
+        ),
+    ]
+    cursor = Cursor(client)
+    operation = "\n/* outer /* nested */ done */\n-- line\n#! shell\n# hash\n// slash\nWITH value_1 AS 13 SELECT value_1 WHERE 0"
+
+    cursor.execute(operation)
+
+    assert cursor.description == [("value_1", "UInt64", None, None, None, None, False)]
+    assert client.query.call_count == 2
+
+
+def test_execute_empty_metadata_probe_failure_leaves_description_empty(caplog):
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([], column_names=["old_value"], column_types=[SimpleNamespace(name="UInt64")]),
+        create_mock_query_result([]),
+        DatabaseError("Code: 62. Syntax error"),
+    ]
+    cursor = Cursor(client)
+    cursor.execute("SELECT 13 AS old_value")
+
+    with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.dbapi.cursor"):
+        cursor.execute("/* leading */ SELECT 13 WHERE 0;\n-- trailing")
+
+    assert cursor.description == []
+    assert client.query.call_count == 3
+    assert "DB-API cursor metadata probe failed; leaving description empty" in caplog.messages
+
+
+def test_execute_empty_ignores_select_inside_leading_comment_for_metadata_probe():
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.execute("/* SELECT 13 /* nested */ */ OPTIMIZE TABLE tbl")
+
+    assert cursor.description == []
+    client.query.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "#token\nSELECT 13",
+        "#\nSELECT 13",
+        "#\tcomment\nSELECT 13",
+    ],
+)
+def test_execute_empty_does_not_treat_bare_hash_as_comment(operation):
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.execute(operation)
+
+    assert cursor.description == []
+    client.query.assert_called_once()
+
+
+def test_execute_empty_metadata_probe_unexpected_error_propagates():
+    client = Mock()
+    client.query.side_effect = [create_mock_query_result([]), RuntimeError("unexpected failure")]
+    cursor = Cursor(client)
+
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        cursor.execute("/* leading */ SELECT 13 WHERE 0")
 
 
 def _mock_insert_client(written_rows: int, summary_extra: dict | None = None):

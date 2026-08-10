@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 if TYPE_CHECKING:
     import numpy
 
+from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
 from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options, tzutil
@@ -24,6 +25,12 @@ from clickhouse_connect.driver.types import ByteSource
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
+
+
+def _localized_timestamp(value: datetime, target_tz: tzinfo) -> float:
+    if value.utcoffset() is None:
+        value = value.replace(tzinfo=target_tz)
+    return value.timestamp()
 
 
 class Date(ClickHouseType):
@@ -194,6 +201,12 @@ class DateTime(DateTimeBase):
         if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
+        elif common.get_setting("naive_datetime_insert") == "server":
+            active_tz = self.tzinfo or ctx.server_tz
+            if self.nullable:
+                column = [int(_localized_timestamp(x, active_tz)) if x else 0 for x in column]
+            else:
+                column = [int(_localized_timestamp(x, active_tz)) for x in column]
         else:
             if self.nullable:
                 column = [int(x.timestamp()) if x else 0 for x in column]
@@ -261,8 +274,9 @@ class DateTime64(DateTimeBase):
     def _read_binary_naive(self, column: Sequence):
         return data_conv.read_datetime64_naive_col(column, self.prec)
 
-    def _datetime64_ticks(self, value: datetime) -> int:
-        seconds = floor(value.timestamp())
+    def _datetime64_ticks(self, value: datetime, active_tz: tzinfo | None = None) -> int:
+        timestamp = _localized_timestamp(value, active_tz) if active_tz is not None else value.timestamp()
+        seconds = floor(timestamp)
         return ((seconds * 1000000 + value.microsecond) * self.prec) // 1000000
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
@@ -270,23 +284,25 @@ class DateTime64(DateTimeBase):
         if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
-        elif isinstance(first, str):
-            original_column = column
-            column = []
-
-            for x in original_column:
-                if not x and self.nullable:
-                    v = 0
-                else:
-                    dt = datetime.fromisoformat(x)
-                    v = self._datetime64_ticks(dt)
-
-                column.append(v)
         else:
-            if self.nullable:
-                column = [self._datetime64_ticks(x) if x else 0 for x in column]
+            server_mode = common.get_setting("naive_datetime_insert") == "server"
+            active_tz = (self.tzinfo or ctx.server_tz) if server_mode else None
+            if isinstance(first, str):
+                original_column = column
+                column = []
+
+                for x in original_column:
+                    if not x and self.nullable:
+                        v = 0
+                    else:
+                        dt = datetime.fromisoformat(x)
+                        v = self._datetime64_ticks(dt, active_tz)
+
+                    column.append(v)
+            elif self.nullable:
+                column = [self._datetime64_ticks(x, active_tz) if x else 0 for x in column]
             else:
-                column = [self._datetime64_ticks(x) for x in column]
+                column = [self._datetime64_ticks(x, active_tz) for x in column]
         write_array("q", column, dest, ctx.column_name)
 
 

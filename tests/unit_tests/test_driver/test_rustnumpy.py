@@ -1,8 +1,10 @@
+from array import array
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver import rustnumpy
@@ -20,6 +22,56 @@ class _ArrowColumn:
 
     def to_pylist(self):
         return self.values.tolist()
+
+
+_COMPOUND_JSON_CELL = b"\x1e\x01\x03\x01\x02\x03"
+_JSON_VALUE = {"shared": _COMPOUND_JSON_CELL, "typed_raw": b"\x01\x0d", "plain": "user_1"}
+_DECODED_JSON_VALUE = {"shared": [1, 2, 3], "typed_raw": b"\x01\x0d", "plain": "user_1"}
+
+
+@pytest.mark.parametrize(
+    ("type_name", "column", "expected"),
+    [
+        ("JSON", [_JSON_VALUE], [_DECODED_JSON_VALUE]),
+        ("Nullable(JSON)", [None, _JSON_VALUE], [None, _DECODED_JSON_VALUE]),
+        ("Array(JSON)", [[_JSON_VALUE]], [[_DECODED_JSON_VALUE]]),
+        (
+            "Tuple(JSON, FixedString(3))",
+            [(_JSON_VALUE, b"raw")],
+            [(_DECODED_JSON_VALUE, b"raw")],
+        ),
+        (
+            "Tuple(payload JSON, raw FixedString(3))",
+            [{"payload": _JSON_VALUE, "raw": b"raw"}],
+            [{"payload": _DECODED_JSON_VALUE, "raw": b"raw"}],
+        ),
+        ("Map(String, JSON)", [{"value": _JSON_VALUE}], [{"value": _DECODED_JSON_VALUE}]),
+        (
+            "Nested(payload JSON, raw FixedString(3))",
+            [[{"payload": _JSON_VALUE, "raw": b"raw"}]],
+            [[{"payload": _DECODED_JSON_VALUE, "raw": b"raw"}]],
+        ),
+        ("Variant(JSON, String)", [_JSON_VALUE, "plain"], [_DECODED_JSON_VALUE, "plain"]),
+        ("Variant(Array(JSON), String)", [[_JSON_VALUE], "plain"], [[_DECODED_JSON_VALUE], "plain"]),
+        (
+            "Variant(JSON, Map(String, FixedString(3)))",
+            [typed_variant(_JSON_VALUE, "JSON"), typed_variant({"raw": b"raw"}, "Map(String, FixedString(3))")],
+            [typed_variant(_DECODED_JSON_VALUE, "JSON"), typed_variant({"raw": b"raw"}, "Map(String, FixedString(3))")],
+        ),
+    ],
+)
+def test_normalize_json_shared_column_compound_matrix(type_name, column, expected):
+    result = rustnumpy._normalize_json_shared_column(get_from_name(type_name), column, QueryContext())
+
+    assert result == expected
+
+
+def test_normalize_json_shared_column_preserves_non_json_container():
+    column = array("Q", [13, 79])
+
+    result = rustnumpy._normalize_json_shared_column(get_from_name("UInt64"), column, QueryContext())
+
+    assert result is column
 
 
 def test_bfloat16_converter_widens_fixed_binary_words(monkeypatch):
@@ -170,10 +222,13 @@ def test_time_converter_uses_native_timedelta_dtype(monkeypatch, type_name, dtyp
     monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: _ArrowColumn(wire_values))
 
     result = rustnumpy._make_time_convert(ch_type)(None, None, 0)
+    pandas_result = rustnumpy._make_time_convert(ch_type, as_pandas=True)(None, None, 0)
 
     assert result.dtype == np.dtype(dtype)
     np.testing.assert_array_equal(result, np.array(ticks, dtype=dtype))
     assert np.shares_memory(result, wire_values) is (type_name != "Time")
+    assert pandas_result.dtype == np.dtype("timedelta64[ns]")
+    np.testing.assert_array_equal(pandas_result, np.array(ticks, dtype=dtype).astype("timedelta64[ns]"))
 
 
 @pytest.mark.parametrize(
@@ -193,10 +248,13 @@ def test_nullable_time_converter_uses_nat(monkeypatch, type_name, dtype):
     wire_values = pa.array([-5, None, 79], type=wire_type)
     monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire_values)
 
-    result = rustnumpy._make_time_convert(ch_type, as_pandas=True)(None, None, 0)
+    result = rustnumpy._make_time_convert(ch_type, as_pandas=True, use_extended_dtypes=True)(None, None, 0)
+    default_result = rustnumpy._make_time_convert(ch_type, as_pandas=True)(None, None, 0)
 
     assert result.dtype == np.dtype(dtype)
     np.testing.assert_array_equal(result, np.array([-5, "NaT", 79], dtype=dtype))
+    assert default_result.dtype == np.dtype("timedelta64[ns]")
+    np.testing.assert_array_equal(default_result, np.array([-5, "NaT", 79], dtype=dtype).astype("timedelta64[ns]"))
 
 
 def test_nullable_time64_query_np_preserves_nanosecond_scalars(monkeypatch):

@@ -32,6 +32,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from functools import partial
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASELINE_PATH = os.environ.get("CHC_BASELINE_PATH", REPO_ROOT)
@@ -41,10 +42,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _ch_core  # noqa: E402
 import pandas as pd  # noqa: E402
 import pyarrow as pa  # noqa: E402
+from rust_client import _decompressed_chunks, _mirrored_request, query_rust  # noqa: E402
 
 import clickhouse_connect  # noqa: E402
 from clickhouse_connect.driverc import dataconv  # noqa: E402
-from rust_client import _decompressed_chunks, _mirrored_request, query_rust  # noqa: E402
 
 ITERS = int(os.environ.get("BENCH_ITERS", "7"))
 
@@ -145,7 +146,7 @@ def run_workload(client, workload):
             continue
         if gate == "numpy" and not workload.pandas_numpy:
             continue
-        v1_stats, rust_stats = bench_pair(lambda: v1_fn(client, workload.query), lambda: rust_fn(client, workload.query))
+        v1_stats, rust_stats = bench_pair(partial(v1_fn, client, workload.query), partial(rust_fn, client, workload.query))
         ratio = v1_stats[0] / rust_stats[0] if rust_stats[0] else float("inf")
         print(f"    {label:8s} v1 {fmt(v1_stats)}  rust {fmt(rust_stats)}  speedup {ratio:5.2f}x")
 

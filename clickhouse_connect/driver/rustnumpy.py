@@ -4,17 +4,18 @@ The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds wi
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
 the Python codec by construction. Non-nullable numeric and temporal columns take the Arrow exit. Time and
-Time64 keep their declared duration units through nullable and nested NumPy/pandas output. Strings, enums,
+Time64 keep their declared duration units through NumPy and extended pandas output. Strings, enums,
 and remaining nullable columns take the rust python-object exit and are finalized through the driver's own
 _finalize_column.
 """
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
+from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes.base import ClickHouseType
-from clickhouse_connect.datatypes.container import Array, Map, Tuple
+from clickhouse_connect.datatypes.container import Array, Map, Nested, Tuple
 from clickhouse_connect.datatypes.numeric import BFloat16, Interval
 from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
@@ -28,6 +29,95 @@ logger: logging.Logger = logging.getLogger(__name__)
 BlockConverter = Callable[[Any, Any, int], Any]
 
 _TIME64_UNITS = {3: "ms", 6: "us", 9: "ns"}
+_COMPOUND_JSON_BINARY_TYPE_INDEXES = frozenset({0x1E, 0x1F, 0x20, 0x23, 0x26, 0x27, 0x2B, 0x30})
+
+
+def _contains_json_type(ch_type: object) -> bool:
+    """Return whether a ClickHouse type contains JSON through a supported container."""
+    if not isinstance(ch_type, ClickHouseType):
+        return False
+    if ch_type.base_type == "JSON":
+        return True
+    for attr in ("element_type", "key_type", "value_type"):
+        if _contains_json_type(getattr(ch_type, attr, None)):
+            return True
+    return any(_contains_json_type(child) for child in getattr(ch_type, "element_types", ()))
+
+
+def _decode_json_tree(value: Any, context: QueryContext) -> Any:
+    """Decode raw shared-data cells inside one materialized JSON object."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        binary_value = bytes(value)
+        if not binary_value or binary_value[0] not in _COMPOUND_JSON_BINARY_TYPE_INDEXES:
+            return value
+        decoded = dynamic_module.decode_shared_data_value(binary_value, context)
+        return value if decoded == binary_value else decoded
+    if isinstance(value, dict):
+        return {key: _decode_json_tree(item, context) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_json_tree(item, context) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_decode_json_tree(item, context) for item in value)
+    return value
+
+
+def _variant_materialized_type(ch_type: ClickHouseType) -> type | None:
+    if ch_type.base_type == "JSON" or isinstance(ch_type, Map):
+        return dict
+    if isinstance(ch_type, Nested):
+        return list
+    if isinstance(ch_type, Tuple) and ch_type.element_names:
+        return dict
+    return ch_type.python_type
+
+
+def _normalize_json_shared_value(ch_type: ClickHouseType, value: Any, context: QueryContext) -> Any:
+    """Apply JSON shared-data decoding without changing non-JSON sibling values."""
+    if value is None:
+        return None
+    if isinstance(ch_type, SimpleAggregateFunction):
+        return _normalize_json_shared_value(ch_type.element_type, value, context)
+    if ch_type.base_type == "JSON":
+        return _decode_json_tree(value, context)
+    if isinstance(ch_type, Array):
+        return [_normalize_json_shared_value(ch_type.element_type, item, context) for item in value]
+    if isinstance(ch_type, Tuple):
+        if ch_type.element_names and isinstance(value, dict):
+            result = dict(value)
+            for name, element_type in zip(ch_type.element_names, ch_type.element_types):
+                result[name] = _normalize_json_shared_value(element_type, value[name], context)
+            return result
+        return tuple(_normalize_json_shared_value(element_type, item, context) for element_type, item in zip(ch_type.element_types, value))
+    if isinstance(ch_type, Map):
+        return {
+            _normalize_json_shared_value(ch_type.key_type, key, context): _normalize_json_shared_value(ch_type.value_type, item, context)
+            for key, item in value.items()
+        }
+    if isinstance(ch_type, Nested):
+        return [
+            {
+                name: _normalize_json_shared_value(element_type, item[name], context)
+                for name, element_type in zip(ch_type.element_names, ch_type.element_types)
+            }
+            for item in value
+        ]
+    if isinstance(ch_type, dynamic_module.Variant):
+        if isinstance(value, dynamic_module.TypedVariant):
+            for element_type in ch_type.element_types:
+                if element_type.name == value.type_name:
+                    normalized = _normalize_json_shared_value(element_type, value.value, context)
+                    return dynamic_module.TypedVariant(normalized, value.type_name)
+            return value
+        candidates = [element_type for element_type in ch_type.element_types if _variant_materialized_type(element_type) is type(value)]
+        if len(candidates) == 1:
+            return _normalize_json_shared_value(candidates[0], value, context)
+    return value
+
+
+def _normalize_json_shared_column(ch_type: ClickHouseType, column: Sequence[Any], context: QueryContext) -> Sequence[Any]:
+    if not _contains_json_type(ch_type):
+        return column
+    return [_normalize_json_shared_value(ch_type, value, context) for value in column]
 
 
 class _Converter:
@@ -105,7 +195,11 @@ def _make_datetime64_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
     return convert
 
 
-def _make_time_convert(ch_type: Time | Time64, as_pandas: bool = False) -> BlockConverter:
+def _make_time_convert(
+    ch_type: Time | Time64,
+    as_pandas: bool = False,
+    use_extended_dtypes: bool = False,
+) -> BlockConverter:
     unit = "s" if isinstance(ch_type, Time) else _TIME64_UNITS[ch_type.scale]
 
     def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
@@ -116,7 +210,7 @@ def _make_time_convert(ch_type: Time | Time64, as_pandas: bool = False) -> Block
                 column = column.cast(options.arrow.int64())
             values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
             if as_pandas:
-                return values
+                return values if use_extended_dtypes else values.astype("timedelta64[ns]")
             # The Python codec's query_np contract for nullable temporal columns
             # is an object array of numpy.timedelta64 scalars and None. Assign a
             # list here because direct ndarray assignment coerces the scalars to
@@ -132,11 +226,13 @@ def _make_time_convert(ch_type: Time | Time64, as_pandas: bool = False) -> Block
             # Arrow time types cannot represent negative or >=24-hour values.
             # NumPy timedelta64 has the same 64-bit layout, so only reinterpret
             # the dtype here. No values or validity data are copied.
-            return values.view(ch_type.np_type)
+            result = values.view(ch_type.np_type)
+            return result.astype("timedelta64[ns]") if as_pandas and not use_extended_dtypes else result
         # Time is Int32 on the wire while NumPy timedelta64 uses Int64. Widening
         # requires one allocation, but still avoids one Python timedelta object
         # per cell and lets NumPy perform the conversion in bulk.
-        return values.astype(ch_type.np_type, copy=False)
+        result = values.astype(ch_type.np_type, copy=False)
+        return result.astype("timedelta64[ns]") if as_pandas and not use_extended_dtypes else result
 
     return convert
 
@@ -414,6 +510,7 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
                 f"The rust native codec cannot decode this column for numpy/pandas output: {ex}. "
                 'Use native_codec="python" to fall back to the Python codec'
             ) from ex
+        column = cast(list[Any], _normalize_json_shared_column(ch_type, column, context))
         if leaf_predicate is not None:
             column = _refinalize_leaves(ch_type, column, context, leaf_predicate)
         if extended_pandas and isinstance(ch_type, DateTimeBase) and getattr(first_value(column), "tzinfo", None) is not None:
@@ -466,7 +563,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.
     if isinstance(ch_type, (Time, Time64)) and not ch_type.low_card:
-        return _Converter(True, _make_time_convert(ch_type, context.as_pandas))
+        return _Converter(True, _make_time_convert(ch_type, context.as_pandas, context.use_extended_dtypes))
     if isinstance(ch_type, Time) and ch_type.low_card:
         return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
     if isinstance(ch_type, Interval) and not ch_type.low_card:

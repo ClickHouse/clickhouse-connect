@@ -74,8 +74,8 @@ class TestEncodeFastPaths:
         assert encoded == build_native_block([("v", "Nullable(Int64)", values)])
 
     def test_fallback_types_still_accepted(self):
-        from decimal import Decimal
         import enum
+        from decimal import Decimal
 
         class IntLike(enum.IntEnum):
             SEVEN = 7

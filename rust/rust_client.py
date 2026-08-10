@@ -32,6 +32,7 @@ import queue
 import threading
 
 import _ch_core
+
 from clickhouse_connect.driver.httpclient import columns_only_re
 from clickhouse_connect.driver.query import remove_sql_comments
 

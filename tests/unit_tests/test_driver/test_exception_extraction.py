@@ -20,7 +20,7 @@ class TestExceptionExtraction:
         error_msg_part1 = "Error on line 1"
         error_msg_part2 = "Error on line 2"
 
-        response_body = b"__exception__ABC1234567\r\nError on line 1\nError on line 2\r\n99 ABC1234567__exception__\r\n"
+        response_body = b"__exception__\r\nABC1234567\r\nError on line 1\nError on line 2\n99 ABC1234567\r\n__exception__\r\n"
 
         result = extract_exception_with_tag(response_body, exception_tag)
         assert result is not None

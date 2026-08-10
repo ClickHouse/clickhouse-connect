@@ -375,15 +375,17 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
     schema = (
         "id UInt8, "
         "payload json(max_dynamic_paths=2, `typed.value` Int64), "
+        "shared_payload JSON(max_dynamic_paths=0), "
         "nullable_payload Nullable(JSON), "
         "items Array(JSON), "
         "wrapped Tuple(payload JSON)"
     )
-    names = ["id", "payload", "nullable_payload", "items", "wrapped"]
+    names = ["id", "payload", "shared_payload", "nullable_payload", "items", "wrapped"]
     rows = [
         [
             0,
             {"typed": {"value": 13}, "name": "user_1", "active": True, "score": 17},
+            {"items": [{"kind": "shared"}]},
             None,
             [{"kind": "first"}, {"count": 13}],
             ({"nested": {"value": "a"}},),
@@ -391,6 +393,7 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
         [
             1,
             {"typed": {"value": 79}, "ratio": 2.5, "deep": {"value": "x"}, "extra": -13},
+            {"mix": [1, "a", None]},
             {"nullable": "present"},
             [],
             ({"nested": {"value": "b"}},),
@@ -398,6 +401,7 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
         [
             2,
             {"typed": {"value": 5}, "other": 79, "flag": False, "tail": "shared"},
+            {"empty": []},
             {"array": [1, None, 3]},
             [{"kind": "last"}],
             ({"nested": {"value": "c"}},),
@@ -407,6 +411,7 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
         (
             0,
             {"typed": {"value": 13}, "name": "user_1", "active": True, "score": 17},
+            {"items": [{"kind": "shared"}]},
             None,
             [{"kind": "first"}, {"count": 13}],
             {"payload": {"nested": {"value": "a"}}},
@@ -414,6 +419,7 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
         (
             1,
             {"typed": {"value": 79}, "ratio": 2.5, "deep": {"value": "x"}, "extra": -13},
+            {"mix": [1, "a", None]},
             {"nullable": "present"},
             [],
             {"payload": {"nested": {"value": "b"}}},
@@ -421,6 +427,7 @@ def test_rust_codec_json_round_trip_parity(client_factory, call, consume_stream,
         (
             2,
             {"typed": {"value": 5}, "other": 79, "flag": False, "tail": "shared"},
+            {"empty": []},
             {"array": [1, None, 3]},
             [{"kind": "last"}],
             {"payload": {"nested": {"value": "c"}}},

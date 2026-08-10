@@ -426,16 +426,16 @@ class TestArrayInsertFastPath:
             self._encode("Array(Int64)", [[1], 5, [3]], 3)
 
     def test_row_fallback_preserves_cause(self):
-        class Boom(Exception):
+        class BoomError(Exception):
             pass
 
         class EvilRow:
             def __iter__(self):
-                raise Boom("iteration exploded")
+                raise BoomError("iteration exploded")
 
         with pytest.raises(ValueError, match="row 1 is not a valid Array value") as excinfo:
             self._encode("Array(Int64)", [[1], EvilRow()], 2)
-        assert isinstance(excinfo.value.__cause__, Boom)
+        assert isinstance(excinfo.value.__cause__, BoomError)
 
     def test_flat_refs_refcount_balance(self):
         shared = 1 << 40

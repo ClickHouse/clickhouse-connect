@@ -1,13 +1,40 @@
+import os
+import time as time_module
+import zoneinfo
 from collections.abc import Callable
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv6Address
 from uuid import UUID
 
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DataError
+
+HAS_TZSET = hasattr(time_module, "tzset")
+
+
+@pytest.fixture
+def naive_datetime_server_environment(monkeypatch):
+    original_insert_setting = common.get_setting("naive_datetime_insert")
+    original_binding_setting = common.get_setting("naive_datetime_binding")
+    original_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "America/New_York")
+        time_module.tzset()
+        common.set_setting("naive_datetime_insert", "server")
+        common.set_setting("naive_datetime_binding", "wall")
+        yield
+    finally:
+        common.set_setting("naive_datetime_insert", original_insert_setting)
+        common.set_setting("naive_datetime_binding", original_binding_setting)
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        time_module.tzset()
 
 
 def test_insert(param_client: Client, call, test_table_engine: str):
@@ -21,6 +48,70 @@ def test_insert(param_client: Client, call, test_table_engine: str):
     copy_result = call(param_client.command, "SELECT count() from test_system_insert")
     assert tables_result.row_count == copy_result
     call(param_client.command, "DROP TABLE IF EXISTS test_system_insert")
+
+
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+def test_naive_datetime_server_insert_matches_wall_bind(
+    param_client: Client,
+    call,
+    table_context: Callable,
+    naive_datetime_server_environment,
+):
+    columns = [
+        "key UInt8",
+        "dt DateTime",
+        "dt64 DateTime64(6)",
+        "dt_tz DateTime('America/Chicago')",
+        "dt64_tz DateTime64(6, 'America/Chicago')",
+        "nullable_dt Nullable(DateTime)",
+        "dt_array Array(DateTime)",
+        "dt_tuple Tuple(DateTime, String)",
+        "dt_tuple_array Array(Tuple(DateTime64(6), String))",
+    ]
+    with table_context("test_naive_datetime_server_insert", columns):
+        value = datetime(2025, 7, 15, 12, 34, 56, 250306)
+        data = [[13, value, value, value, value, value, [value], (value, "user_1"), [(value, "user_2")]]]
+        call(param_client.insert, "test_naive_datetime_server_insert", data)
+        result = call(
+            param_client.query,
+            "SELECT count() FROM test_naive_datetime_server_insert "
+            "WHERE dt = {dt:DateTime} "
+            "AND dt64 = {dt64:DateTime64(6)} "
+            "AND dt_tz = {dt_tz:DateTime('America/Chicago')} "
+            "AND dt64_tz = {dt64_tz:DateTime64(6, 'America/Chicago')} "
+            "AND nullable_dt = {nullable_dt:Nullable(DateTime)} "
+            "AND dt_array = {dt_array:Array(DateTime)} "
+            "AND dt_tuple = {dt_tuple:Tuple(DateTime, String)} "
+            "AND dt_tuple_array = {dt_tuple_array:Array(Tuple(DateTime64(6), String))}",
+            parameters={
+                "dt": value,
+                "dt64": value,
+                "dt_tz": value,
+                "dt64_tz": value,
+                "nullable_dt": value,
+                "dt_array": [value],
+                "dt_tuple": (value, "user_1"),
+                "dt_tuple_array": [(value, "user_2")],
+            },
+        )
+        assert result.first_item["count()"] == 1
+
+
+def test_insert_context_uses_client_server_timezone(param_client: Client, call):
+    original_server_tz = param_client.server_tz
+    server_tz = zoneinfo.ZoneInfo("America/Chicago")
+    try:
+        param_client.server_tz = server_tz
+        context = call(
+            param_client.create_insert_context,
+            "unused_table",
+            column_names=["value"],
+            column_type_names=["DateTime"],
+        )
+
+        assert context.server_tz == server_tz
+    finally:
+        param_client.server_tz = original_server_tz
 
 
 def test_decimal_conv(param_client: Client, call, table_context: Callable):
@@ -352,6 +443,35 @@ def test_bad_strings(param_client: Client, call, table_context: Callable):
             call(param_client.insert, "test_bad_strings", [[1, b"\x0535abc", "😀🙃"]])
         except DataError as ex:
             assert "encoded" in str(ex)
+
+
+def test_fixed_string_empty_bytes(param_client: Client, call, table_context: Callable):
+    with table_context(
+        "test_fs_empty_bytes",
+        "key Int32, fs FixedString(6), nfs Nullable(FixedString(6)), afs Array(FixedString(6))",
+    ):
+        empty = b"\x00" * 6
+        data = [
+            [79, b"needle", b"abcdef", [b"needle", b""]],
+            [13, b"", b"", [b"", b"abcdef"]],
+        ]
+        call(param_client.insert, "test_fs_empty_bytes", data)
+        result = call(param_client.query, "SELECT key, fs, nfs, afs FROM test_fs_empty_bytes ORDER BY key").result_set
+        assert result == [
+            (13, empty, empty, [empty, b"abcdef"]),
+            (79, b"needle", b"abcdef", [b"needle", empty]),
+        ]
+        with pytest.raises(DataError, match="does not match column size"):
+            call(param_client.insert, "test_fs_empty_bytes", [[102, b"abc", None, []]])
+        # None into a non-nullable FixedString fails with TypeError from len(None).
+        # Current behavior, not a promised contract.
+        with pytest.raises(TypeError):
+            call(param_client.insert, "test_fs_empty_bytes", [[102, None, b"abcdef", []]])
+
+    with table_context("test_lc_fs_empty_bytes", "key Int32, lc LowCardinality(FixedString(6))"):
+        call(param_client.insert, "test_lc_fs_empty_bytes", [[79, b"needle"], [13, b""]])
+        result = call(param_client.query, "SELECT key, lc FROM test_lc_fs_empty_bytes ORDER BY key").result_set
+        assert result == [(13, b"\x00" * 6), (79, b"needle")]
 
 
 def test_low_card_dictionary_size(param_client: Client, call, table_context: Callable):

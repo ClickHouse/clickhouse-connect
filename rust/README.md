@@ -54,8 +54,9 @@ Map, Variant, the supported name-decoration aliases, and the function
 signatures for `AggregateFunction` registered by the core. Dynamic query
 decode is also supported, including nested shapes and Arrow's result-wide dense
 union. Typed Dynamic children use their ordinary Python values, intrinsic NULL
-uses `None`, and the Python object exits decode SharedVariant cells to the same
-typed values as ordinary columns; AggregateFunction states and unsupported
+uses `None`, and the Python object exits decode SharedVariant cells, including
+compound JSON shared-data values, to the same typed values as ordinary columns;
+AggregateFunction states and unsupported
 descriptors stay exact Python `bytes`, and the Arrow exit keeps every shared
 cell as `bytes` for schema stability. Variant uses `None`
 for its intrinsic NULL, ordinary Python values for unambiguous alternatives,

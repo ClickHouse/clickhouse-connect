@@ -1,10 +1,15 @@
 import ipaddress
+import os
+import time
 import uuid
 import zoneinfo
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import time as dt_time
 
+import pandas as pd
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import (
     DT64Param,
@@ -14,6 +19,32 @@ from clickhouse_connect.driver.binding import (
     format_bind_value,
     format_query_value,
 )
+
+HAS_TZSET = hasattr(time, "tzset")
+NON_UTC_HOST_TZ = "America/New_York"
+
+
+class NoOffsetTZ(tzinfo):
+    def utcoffset(self, dt):
+        return None
+
+    def dst(self, dt):
+        return None
+
+
+def _force_process_timezone(monkeypatch, tz_name: str) -> str | None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", tz_name)
+    time.tzset()
+    return original_tz
+
+
+def _restore_process_timezone(monkeypatch, original_tz: str | None) -> None:
+    if original_tz is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", original_tz)
+    time.tzset()
 
 
 def test_finalize():
@@ -58,10 +89,25 @@ def test_finalize():
         ([ipaddress.IPv4Address("10.13.79.1")], "['10.13.79.1']"),
         (ipaddress.IPv6Address("2001:db8::79"), "2001:db8::79"),
         ([ipaddress.IPv6Address("2001:db8::79")], "['2001:db8::79']"),
+        (None, "\\N"),
+        (["user_1", None], "['user_1', NULL]"),
+        (("user_1", None, 79), "('user_1', NULL, 79)"),
+        (("user_1", ("user_2", None)), "('user_1', ('user_2', NULL))"),
+        ([("user_1", None)], "[('user_1', NULL)]"),
     ],
 )
 def test_format_bind_value(value, expected):
     assert format_bind_value(value) == expected
+
+
+def test_format_bind_value_map_null():
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        assert format_bind_value({"user_1": None}) == "{'user_1':NULL}"
+        assert format_bind_value({"user_1": "user_2", "user_3": None}) == "{'user_1':'user_2', 'user_3':NULL}"
+    finally:
+        common.set_setting("dict_parameter_format", original)
 
 
 @pytest.mark.parametrize(
@@ -81,6 +127,76 @@ def test_format_query_value_bytes(value, expected):
 def test_finalize_bytes():
     query = finalize_query("INSERT INTO t (id) VALUES (%(id)s)", {"id": b"j!lUA\xf8\x93q;ky\x00"})
     assert query == r"INSERT INTO t (id) VALUES ('\x6a\x21\x6c\x55\x41\xf8\x93\x71\x3b\x6b\x79\x00')"
+
+
+TIME_OF_DAY_CASES = [
+    (dt_time(14, 30, 0), "14:30:00"),
+    (dt_time(1, 2, 3, 456789), "01:02:03.456789"),
+    (dt_time(9, 5, 7, tzinfo=timezone.utc), "09:05:07"),
+    (dt_time(9, 5, 7, 250306, tzinfo=zoneinfo.ZoneInfo("Europe/Berlin")), "09:05:07.250306"),
+    (timedelta(0), "00:00:00"),
+    (timedelta(hours=1, minutes=2, seconds=3), "01:02:03"),
+    (timedelta(seconds=5, microseconds=250306), "00:00:05.250306"),
+    (timedelta(seconds=-2), "-00:00:02"),
+    (timedelta(microseconds=-1), "-00:00:00.000001"),
+    (timedelta(days=2, hours=3, seconds=13), "51:00:13"),
+    (timedelta(days=-1, hours=-1, minutes=-30), "-25:30:00"),
+    (pd.Timedelta("13s 500ns"), "00:00:13.000000500"),
+    (pd.Timedelta("-1ns"), "-00:00:00.000000001"),
+    (pd.Timedelta("1s 250306us"), "00:00:01.250306"),
+]
+
+
+@pytest.mark.parametrize("value, expected", TIME_OF_DAY_CASES)
+def test_format_query_value_time(value, expected):
+    assert format_query_value(value) == f"'{expected}'"
+
+
+@pytest.mark.parametrize("value, expected", TIME_OF_DAY_CASES)
+def test_format_bind_value_time(value, expected):
+    assert format_bind_value(value) == expected
+    assert format_bind_value(value, top_level=False) == f"'{expected}'"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ([dt_time(1, 2, 3)], "['01:02:03']"),
+        ([timedelta(seconds=-2), timedelta(hours=1)], "['-00:00:02', '01:00:00']"),
+        ((dt_time(1, 2, 3, 456789), None), "('01:02:03.456789', NULL)"),
+        ((timedelta(seconds=13), "user_1"), "('00:00:13', 'user_1')"),
+        ([(timedelta(seconds=13), dt_time(1, 2, 3))], "[('00:00:13', '01:02:03')]"),
+    ],
+)
+def test_time_value_nesting(value, expected):
+    assert format_query_value(value) == expected
+    assert format_bind_value(value) == expected
+
+
+def test_time_value_map_format():
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        value = {"start": dt_time(1, 2, 3), "gap": timedelta(seconds=-2), "end": None}
+        expected = "{'start':'01:02:03', 'gap':'-00:00:02', 'end':NULL}"
+        assert format_query_value(value) == expected
+        assert format_bind_value(value) == expected
+    finally:
+        common.set_setting("dict_parameter_format", original)
+
+
+def test_finalize_time_values():
+    parameters = {"t": dt_time(14, 30, 0), "td": timedelta(hours=-1, seconds=-13)}
+    query = finalize_query("SELECT * FROM t1 WHERE t = %(t)s AND td = %(td)s", parameters)
+    assert query == "SELECT * FROM t1 WHERE t = '14:30:00' AND td = '-01:00:13'"
+
+
+def test_bind_query_time_params():
+    _, params = bind_query(
+        "SELECT {t:Time}, {arr:Array(Time64(6))}",
+        {"t": timedelta(seconds=-2), "arr": [dt_time(1, 2, 3, 250306)]},
+    )
+    assert params == {"param_t": "-00:00:02", "param_arr": "['01:02:03.250306']"}
 
 
 class TestBindQueryTimezoneHint:
@@ -252,3 +368,133 @@ class TestBindQuerySuffixCollision:
         q, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
         assert q == "SELECT '2026-01-01 12:00:00.250306'"
         assert params == {}
+
+
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+def test_naive_datetime_wall_binding_behavior(monkeypatch):
+    original_tz = _force_process_timezone(monkeypatch, NON_UTC_HOST_TZ)
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "wall")
+    try:
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
+
+        assert format_query_value(naive, server_tz=berlin) == "'2025-01-01 12:00:00'"
+        assert format_bind_value(naive, server_tz=berlin) == "2025-01-01 12:00:00"
+        assert format_bind_value(naive, server_tz=berlin, top_level=False) == "'2025-01-01 12:00:00'"
+        assert format_bind_value(DT64Param(naive), server_tz=berlin) == "2025-01-01 12:00:00.250306"
+        assert format_query_value(DT64Param(naive), server_tz=berlin) == "'2025-01-01 12:00:00.250306'"
+
+        _, params = bind_query(
+            "SELECT {dt:DateTime}, {dt_berlin:DateTime('Europe/Berlin')}",
+            {"dt": naive, "dt_berlin": naive},
+            server_tz=timezone.utc,
+        )
+        assert params == {"param_dt": "2025-01-01 12:00:00", "param_dt_berlin": "2025-01-01 12:00:00"}
+
+        query, params = bind_query(
+            "SELECT %(items)s, %(pair)s",
+            {"items": [naive], "pair": (naive, "user_1")},
+            server_tz=berlin,
+        )
+        assert query == "SELECT ['2025-01-01 12:00:00'], ('2025-01-01 12:00:00', 'user_1')"
+        assert params == {}
+
+        _, params = bind_query(
+            "SELECT {items:Array(DateTime)}, {berlin:Datetime('Europe/Berlin')}, "
+            "{nullable:Nullable(DateTime64(6))}, {pair:Tuple(DateTime64(6), String)}, "
+            "{vals:Array(Tuple(DateTime64(6), String))}",
+            {
+                "items": [naive],
+                "berlin": naive,
+                "nullable": naive,
+                "pair": (naive, "user_1"),
+                "vals": [(naive, "user_2")],
+            },
+            server_tz=berlin,
+        )
+        assert params == {
+            "param_items": "['2025-01-01 12:00:00']",
+            "param_berlin": "2025-01-01 12:00:00",
+            "param_nullable": "2025-01-01 12:00:00.250306",
+            "param_pair": "('2025-01-01 12:00:00.250306', 'user_1')",
+            "param_vals": "[('2025-01-01 12:00:00.250306', 'user_2')]",
+        }
+
+        aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        assert format_query_value(aware, server_tz=berlin) == "'2025-01-01 13:00:00'"
+        assert format_bind_value(aware, server_tz=berlin) == "2025-01-01 13:00:00"
+        assert format_bind_value(DT64Param(aware), server_tz=berlin) == "2025-01-01 13:00:00.000000"
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
+        _restore_process_timezone(monkeypatch, original_tz)
+
+
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+@pytest.mark.parametrize(
+    "host_tz, query_utc, bind_utc, berlin_value",
+    [
+        ("UTC", "2025-01-01 12:00:00", "2025-01-01 12:00:00", "2025-01-01 13:00:00"),
+        (NON_UTC_HOST_TZ, "2025-01-01 12:00:00", "2025-01-01 17:00:00", "2025-01-01 18:00:00"),
+    ],
+)
+def test_naive_datetime_legacy_binding_behavior(
+    monkeypatch,
+    host_tz,
+    query_utc,
+    bind_utc,
+    berlin_value,
+):
+    original_tz = _force_process_timezone(monkeypatch, host_tz)
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "legacy")
+    try:
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
+
+        assert format_query_value(naive, server_tz=timezone.utc) == f"'{query_utc}'"
+        assert format_query_value(naive, server_tz=berlin) == f"'{berlin_value}'"
+        assert format_bind_value(naive, server_tz=timezone.utc) == bind_utc
+        assert format_bind_value(naive, server_tz=berlin) == berlin_value
+        assert format_bind_value(DT64Param(naive), server_tz=timezone.utc) == f"{bind_utc}.250306"
+        assert format_bind_value(DT64Param(naive), server_tz=berlin) == f"{berlin_value}.250306"
+
+        _, params = bind_query(
+            "SELECT {dt:DateTime}, {dt_berlin:DateTime('Europe/Berlin')}",
+            {"dt": naive, "dt_berlin": naive},
+            server_tz=timezone.utc,
+        )
+        assert params == {"param_dt": bind_utc, "param_dt_berlin": berlin_value}
+
+        _, params = bind_query(
+            "SELECT {dt:DateTime64(6, 'UTC')}, {items:Array(DateTime64(6, 'UTC'))}",
+            {"dt": naive, "items": [naive]},
+            server_tz=timezone.utc,
+        )
+        assert params == {
+            "param_dt": f"{bind_utc}.250306",
+            "param_items": f"['{bind_utc}.250306']",
+        }
+
+        # Aware values must format identically in legacy and wall modes.
+        aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        assert format_query_value(aware, server_tz=berlin) == "'2025-01-01 13:00:00'"
+        assert format_bind_value(aware, server_tz=berlin) == "2025-01-01 13:00:00"
+        assert format_bind_value(DT64Param(aware), server_tz=berlin) == "2025-01-01 13:00:00.000000"
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
+        _restore_process_timezone(monkeypatch, original_tz)
+
+
+def test_none_offset_tzinfo_is_naive_for_wall_binding():
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "wall")
+    try:
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        value = datetime(2025, 1, 1, 12, 0, 0, 250306, tzinfo=NoOffsetTZ())
+
+        assert format_query_value(value, server_tz=berlin) == "'2025-01-01 12:00:00'"
+        assert format_bind_value(value, server_tz=berlin) == "2025-01-01 12:00:00"
+        assert DT64Param(value).format(berlin, top_level=True) == "2025-01-01 12:00:00.250306"
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
