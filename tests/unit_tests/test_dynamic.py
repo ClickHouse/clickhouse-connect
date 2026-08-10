@@ -23,6 +23,16 @@ def test_variant_invalid_data_size():
         v_type.data_size(["not an int"])
 
 
+def test_json_insert_uses_native_serialization():
+    json_type = get_from_name("JSON")
+    prefix = bytearray()
+
+    json_type.write_column_prefix(prefix)
+
+    assert json_type.insert_name == "JSON"
+    assert prefix == b"\x01\x00\x00\x00\x00\x00\x00\x00"  # serialization version 1 (UInt64 LE)
+
+
 def test_dynamic_prefix_sorts_shared_variant():
     # Prefix: struct_version=1, max_dynamic_types=1, num_variants=1, "UInt64",
     # discriminator_format=0. UInt64 and SharedVariant have no per-column prefix.
