@@ -224,11 +224,13 @@ def test_time_converter_uses_native_timedelta_dtype(monkeypatch, type_name, dtyp
     result = rustnumpy._make_time_convert(ch_type)(None, None, 0)
     pandas_result = rustnumpy._make_time_convert(ch_type, as_pandas=True)(None, None, 0)
 
+    # The Python codec keeps the wire unit for non-nullable Time columns in every pandas
+    # version, so the pandas exit must not coerce.
     assert result.dtype == np.dtype(dtype)
     np.testing.assert_array_equal(result, np.array(ticks, dtype=dtype))
     assert np.shares_memory(result, wire_values) is (type_name != "Time")
-    assert pandas_result.dtype == np.dtype("timedelta64[ns]")
-    np.testing.assert_array_equal(pandas_result, np.array(ticks, dtype=dtype).astype("timedelta64[ns]"))
+    assert pandas_result.dtype == np.dtype(dtype)
+    np.testing.assert_array_equal(pandas_result, np.array(ticks, dtype=dtype))
 
 
 @pytest.mark.parametrize(
@@ -243,6 +245,7 @@ def test_time_converter_uses_native_timedelta_dtype(monkeypatch, type_name, dtyp
 def test_nullable_time_converter_uses_nat(monkeypatch, type_name, dtype):
     np = pytest.importorskip("numpy")
     pa = pytest.importorskip("pyarrow")
+    pd = pytest.importorskip("pandas")
     ch_type = get_from_name(type_name)
     wire_type = pa.int32() if type_name == "Nullable(Time)" else pa.int64()
     wire_values = pa.array([-5, None, 79], type=wire_type)
@@ -253,8 +256,11 @@ def test_nullable_time_converter_uses_nat(monkeypatch, type_name, dtype):
 
     assert result.dtype == np.dtype(dtype)
     np.testing.assert_array_equal(result, np.array([-5, "NaT", 79], dtype=dtype))
-    assert default_result.dtype == np.dtype("timedelta64[ns]")
-    np.testing.assert_array_equal(default_result, np.array([-5, "NaT", 79], dtype=dtype).astype("timedelta64[ns]"))
+    # The Python codec's nullable path hands the DataFrame constructor an object array, which
+    # pandas < 3 infers as timedelta64[ns] and pandas >= 3 keeps at the scalar unit.
+    default_dtype = "timedelta64[ns]" if int(pd.__version__.split(".", 1)[0]) < 3 else dtype
+    assert default_result.dtype == np.dtype(default_dtype)
+    np.testing.assert_array_equal(default_result, np.array([-5, "NaT", 79], dtype=dtype).astype(default_dtype))
 
 
 def test_nullable_time64_query_np_preserves_nanosecond_scalars(monkeypatch):

@@ -552,6 +552,8 @@ def test_rust_codec_time_parity(client_factory, call, test_config):
             [timedelta(seconds=-5, microseconds=-500_000), timedelta(0), timedelta(seconds=3_723, microseconds=123_456)],
         ),
     ]
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
     for expression, values, expected in cases:
         rows = ", ".join(f"('{value}')" for value in values)
         query = f"SELECT {expression} AS c FROM values('v String', {rows})"
@@ -560,13 +562,16 @@ def test_rust_codec_time_parity(client_factory, call, test_config):
         python_result = call(python_client.query, query)
         assert rust_result.result_rows == python_result.result_rows == [(value,) for value in expected]
 
-        np = pytest.importorskip("numpy")
         rust_np = call(rust_client.query_np, query)
         python_np = call(python_client.query_np, query)
         assert rust_np.dtype == python_np.dtype
         np.testing.assert_array_equal(rust_np, python_np)
 
-    pd = pytest.importorskip("pandas")
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            assert rust_df["c"].dtype == python_df["c"].dtype
+            pd.testing.assert_frame_equal(rust_df, python_df)
     nullable_cases = [
         ("Time", ["000:00:13", None, "-000:00:05"]),
         ("Time64(6)", ["000:00:13.000079", None, "-000:00:05.500000"]),

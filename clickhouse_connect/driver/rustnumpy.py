@@ -195,12 +195,19 @@ def _make_datetime64_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
     return convert
 
 
+def _pandas_infers_ns_timedeltas() -> bool:
+    """pandas < 3 infers timedelta64[ns] for the object arrays the Python codec's nullable
+    temporal path hands to the DataFrame constructor. pandas >= 3 keeps the scalar unit."""
+    return int(options.pd.__version__.split(".", 1)[0]) < 3
+
+
 def _make_time_convert(
     ch_type: Time | Time64,
     as_pandas: bool = False,
     use_extended_dtypes: bool = False,
 ) -> BlockConverter:
     unit = "s" if isinstance(ch_type, Time) else _TIME64_UNITS[ch_type.scale]
+    nullable_pandas_ns = as_pandas and not use_extended_dtypes and _pandas_infers_ns_timedeltas()
 
     def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
         column = _arrow_column(arrow_table, index)
@@ -210,7 +217,7 @@ def _make_time_convert(
                 column = column.cast(options.arrow.int64())
             values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
             if as_pandas:
-                return values if use_extended_dtypes else values.astype("timedelta64[ns]")
+                return values.astype("timedelta64[ns]") if nullable_pandas_ns else values
             # The Python codec's query_np contract for nullable temporal columns
             # is an object array of numpy.timedelta64 scalars and None. Assign a
             # list here because direct ndarray assignment coerces the scalars to
@@ -226,13 +233,11 @@ def _make_time_convert(
             # Arrow time types cannot represent negative or >=24-hour values.
             # NumPy timedelta64 has the same 64-bit layout, so only reinterpret
             # the dtype here. No values or validity data are copied.
-            result = values.view(ch_type.np_type)
-            return result.astype("timedelta64[ns]") if as_pandas and not use_extended_dtypes else result
+            return values.view(ch_type.np_type)
         # Time is Int32 on the wire while NumPy timedelta64 uses Int64. Widening
         # requires one allocation, but still avoids one Python timedelta object
         # per cell and lets NumPy perform the conversion in bulk.
-        result = values.astype(ch_type.np_type, copy=False)
-        return result.astype("timedelta64[ns]") if as_pandas and not use_extended_dtypes else result
+        return values.astype(ch_type.np_type, copy=False)
 
     return convert
 
