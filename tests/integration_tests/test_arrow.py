@@ -11,8 +11,6 @@ from clickhouse_connect.driver.options import arrow
 def test_arrow(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")
-    if not param_client.min_version("21"):
-        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
     with table_context("test_arrow_insert", ["animal String", "legs Int64"]):
         n_legs = arrow.array([2, 4, 5, 100] * 50)
         animals = arrow.array(["Flamingo", "Horse", "Brittle stars", "Centipede"] * 50)
@@ -38,8 +36,6 @@ def test_arrow(param_client: Client, call, table_context: Callable):
 def test_arrow_stream(param_client: Client, call, table_context, consume_stream):
     if not arrow:
         pytest.skip("PyArrow package not available")
-    if not param_client.min_version("21"):
-        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
     with table_context("test_arrow_insert", ["counter Int64", "letter String"]):
         counter = arrow.array(range(1000000))
         alphabet = string.ascii_lowercase
@@ -73,8 +69,6 @@ def test_arrow_stream(param_client: Client, call, table_context, consume_stream)
 def test_arrow_map(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")
-    if not param_client.min_version("21"):
-        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
     with table_context(
         "test_arrow_map", ["trade_date Date, code String", "kdj Map(String, Float32)", "update_time DateTime DEFAULT now()"]
     ):

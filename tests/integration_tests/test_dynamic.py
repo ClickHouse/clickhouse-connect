@@ -283,8 +283,6 @@ def test_typed_json(param_client: Client, call, table_context: Callable):
 
 
 def test_nullable_json(param_client: Client, call, table_context: Callable):
-    if not param_client.min_version("25.2"):
-        pytest.skip(f"Nullable(JSON) type not available in this version: {param_client.server_version}")
     with table_context("nullable_json", ["key Int32", "value_1 Nullable(JSON)", "value_2 Nullable(JSON)", "value_3 Nullable(JSON)"]):
         v1 = {"item_a": 5, "item_b": 10}
 
@@ -300,8 +298,6 @@ def test_nullable_json(param_client: Client, call, table_context: Callable):
 
 def test_complex_json(param_client: Client, call, table_context: Callable):
     type_available(param_client, "json")
-    if not param_client.min_version("24.10"):
-        pytest.skip("Complex JSON broken before 24.10")
     with table_context("new_json_complex", ["key Int32", "value Tuple(t JSON)"]):
         data = [[100, ({"a": "qwe123", "b": "main", "c": None},)]]
         call(param_client.insert, "new_json_complex", data)
@@ -312,8 +308,8 @@ def test_complex_json(param_client: Client, call, table_context: Callable):
 
 def test_json_str_time(param_client: Client, call, test_config: TestConfig):
 
-    if not param_client.min_version("25.1") or test_config.cloud:
-        pytest.skip("JSON string/numbers bug before 25.1, skipping")
+    if test_config.cloud:
+        pytest.skip("Skipping JSON string inference test in cloud env")
     result = call(param_client.query, 'SELECT \'{"timerange": "2025-01-01T00:00:00+0000"}\'::JSON').result_set
     assert result[0][0]["timerange"] == datetime.datetime(2025, 1, 1)
 
@@ -677,8 +673,6 @@ def test_json_shared_data_compound_values(param_client: Client, call, table_cont
     does not depend on merge history.
     """
     type_available(param_client, "json")
-    if not param_client.min_version("24.10"):
-        pytest.skip("JSON shared data decoding requires 24.10+")
 
     with table_context("json_shared_compound", ["id Int32", "data JSON(max_dynamic_paths=0)"]):
         call(

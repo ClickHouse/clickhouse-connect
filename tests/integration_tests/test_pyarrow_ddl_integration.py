@@ -14,9 +14,6 @@ pytest.importorskip("pyarrow")
 
 
 def test_arrow_create_table_and_insert(param_client: Client, call):
-    if not param_client.min_version("20"):
-        pytest.skip(f"Not supported server version {param_client.server_version}")
-
     table_name = "test_arrow_basic_integration"
 
     call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
@@ -102,9 +99,6 @@ def test_arrow_schema_to_column_defs(param_client: Client, call):
 
 
 def test_arrow_datetime_create_and_insert(param_client: Client, call):
-    if not param_client.min_version("20"):
-        pytest.skip(f"Not supported server version {param_client.server_version}")
-
     table_name = "test_arrow_datetime_integration"
 
     call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")

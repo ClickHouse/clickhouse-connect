@@ -91,8 +91,6 @@ def test_polars_query(param_client: Client, call, table_context: Callable):
 def test_polars_arrow_stream(param_client: Client, call, client_mode, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")
-    if not param_client.min_version("21"):
-        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
     with table_context("test_arrow_insert", ["counter Int64", "letter String"]) as ctx:
         counter = arrow.array(range(1000000))
         alphabet = string.ascii_lowercase
