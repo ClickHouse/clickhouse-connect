@@ -15,7 +15,6 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect import common
 from clickhouse_connect.common import version
-from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import options, tzutil
@@ -255,8 +254,6 @@ class Client(ABC):
         self.server_settings = dict(server_info.settings)
         if result.protocol_version:
             self.protocol_version = result.protocol_version
-        if result.json_serialization_format is not None:
-            dynamic_module.json_serialization_format = result.json_serialization_format
         for key, value in result.client_setting_writes:
             self.set_client_setting(key, value)
 

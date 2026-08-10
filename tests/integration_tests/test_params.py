@@ -31,13 +31,12 @@ def _restore_process_timezone(monkeypatch, original_tz: str | None) -> None:
 def test_params(param_client: Client, call, table_context: Callable):
     result = call(param_client.query, "SELECT name, database FROM system.tables WHERE database = {db:String}", parameters={"db": "system"})
     assert result.first_item["database"] == "system"
-    if param_client.min_version("21"):
-        result = call(
-            param_client.query,
-            "SELECT name, {col:String} FROM system.tables WHERE table ILIKE {t:String}",
-            parameters={"t": "%rr%", "col": "database"},
-        )
-        assert "rr" in result.first_item["name"]
+    result = call(
+        param_client.query,
+        "SELECT name, {col:String} FROM system.tables WHERE table ILIKE {t:String}",
+        parameters={"t": "%rr%", "col": "database"},
+    )
+    assert "rr" in result.first_item["name"]
 
     first_date = datetime.strptime("Jun 1 2005  1:33PM", "%b %d %Y %I:%M%p").replace(tzinfo=param_client.server_tz)
     second_date = datetime.strptime("Dec 25 2022  5:00AM", "%b %d %Y %I:%M%p").replace(tzinfo=param_client.server_tz)

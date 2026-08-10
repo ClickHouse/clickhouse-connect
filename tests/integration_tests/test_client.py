@@ -196,45 +196,44 @@ def test_session_params(test_config: TestConfig, client_factory, call):
     result = call(client.query, "SELECT number FROM system.numbers LIMIT 5", settings={"query_id": "test_session_params"}).result_set
     assert len(result) == 5
 
-    if client.min_version("21"):
-        if test_config.host != "localhost":
-            return  # By default, the session log isn't enabled, so we only validate in environments we control
+    if test_config.host != "localhost":
+        return  # By default, the session log isn't enabled, so we only validate in environments we control
 
-        def check_session_in_log():
-            max_retries = 100
-            for _ in range(max_retries):
-                result = call(
-                    client.query,
-                    f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " + "event_time > now() - 30",
-                ).result_set
+    def check_session_in_log():
+        max_retries = 100
+        for _ in range(max_retries):
+            result = call(
+                client.query,
+                f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " + "event_time > now() - 30",
+            ).result_set
 
-                if len(result) > 0:
-                    assert result[0] == (session_id, test_config.username)
-                    return
+            if len(result) > 0:
+                assert result[0] == (session_id, test_config.username)
+                return
 
-                sleep(0.1)
+            sleep(0.1)
 
-            pytest.fail(f"session_id '{session_id}' did not appear in system.session_log after {max_retries * 0.1}s")
+        pytest.fail(f"session_id '{session_id}' did not appear in system.session_log after {max_retries * 0.1}s")
 
-        def check_query_in_log():
-            max_retries = 100
-            for _ in range(max_retries):
-                result = call(
-                    client.query,
-                    "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " + "event_time > now() - 30",
-                ).result_set
+    def check_query_in_log():
+        max_retries = 100
+        for _ in range(max_retries):
+            result = call(
+                client.query,
+                "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " + "event_time > now() - 30",
+            ).result_set
 
-                if len(result) > 0:
-                    assert result[0] == ("test_session_params", test_config.username)
-                    return
+            if len(result) > 0:
+                assert result[0] == ("test_session_params", test_config.username)
+                return
 
-                sleep(0.1)
+            sleep(0.1)
 
-            pytest.fail(f"query_id 'test_session_params' did not appear in system.query_log after {max_retries * 0.1}s")
+        pytest.fail(f"query_id 'test_session_params' did not appear in system.query_log after {max_retries * 0.1}s")
 
-        # Check both logs with smart retry logic
-        check_session_in_log()
-        check_query_in_log()
+    # Check both logs with smart retry logic
+    check_session_in_log()
+    check_query_in_log()
 
 
 def test_dsn_config(test_config: TestConfig):
@@ -400,8 +399,6 @@ def test_command_as_query(param_client, call):
 
 
 def test_show_create(param_client, call):
-    if not param_client.min_version("21"):
-        pytest.skip(f"Not supported server version {param_client.server_version}")
     result = call(param_client.query, "SHOW CREATE TABLE system.tables")
     result.close()
     assert "statement" in result.column_names
@@ -410,8 +407,6 @@ def test_show_create(param_client, call):
 def test_show_row_policies(param_client, call, table_context: Callable, test_config: TestConfig):
     if test_config.cloud:
         pytest.skip("Skipping row policy test in cloud env")
-    if not param_client.min_version("20"):
-        pytest.skip(f"Not supported server version {param_client.server_version}")
 
     policy = "test_show_row_policies_policy"
     table_name = "test_show_row_policies"

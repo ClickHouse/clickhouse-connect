@@ -2,8 +2,6 @@ import asyncio
 import os
 import random
 
-import pytest
-
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ddl import TableColumnDef, create_table
@@ -14,8 +12,6 @@ MAX_DATA_ROWS = 40
 
 
 def test_query_fuzz(param_client: Client, call, test_table_engine: str, client_mode: str):
-    if not param_client.min_version("21"):
-        pytest.skip(f"flatten_nested setting not supported in this server version {param_client.server_version}")
     test_runs = int(os.environ.get("CLICKHOUSE_CONNECT_TEST_FUZZ", "250"))
     param_client.tz_source = "server"
     try:
