@@ -396,6 +396,8 @@ client.query(query, parameters=parameters)
 ```
 
 For backward compatibility, a dictionary parameter name ending in `_64` also requests DateTime64 formatting when that exact suffixed name is not present in the query.
+
+A `datetime.time` or `datetime.timedelta` parameter formats as a `[-]HH:MM:SS[.ffffff]` literal for ClickHouse `Time` and `Time64` columns, in both binding styles and inside `Array` and `Tuple` values. The client adds the quotes, so don't quote the placeholder in the query. A `timedelta` may be negative and may exceed 24 hours. A pandas `Timedelta` keeps its nanoseconds and formats a nine digit fraction for `Time64(9)`. Timezone info on an aware `time` is ignored because ClickHouse `Time` has no timezone.
 </Note>
 
 ### Settings argument {#settings-argument-1}

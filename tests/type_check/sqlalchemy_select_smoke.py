@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
+from sqlalchemy.sql import ColumnElement
 from typing_extensions import assert_type
 
 import clickhouse_connect.cc_sqlalchemy as cc_sa
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, UInt32
 
 book = sa.table(
     "book",
@@ -41,3 +43,12 @@ after_common_generatives.prewhere(book.c.title != "done")
 materialized = base.cte("ranked", materialized=True)
 assert_type(materialized, sa.CTE)
 assert_type(cc_sa.cte(sa.select(book.c.id), "ranked", materialized=True), sa.CTE)
+
+json_payload = sa.column("payload", JSON())
+untyped_json_path = cc_sa.json_subcolumn(json_payload, "severity")
+assert_type(untyped_json_path, ColumnElement[object])
+typed_json_path = cc_sa.json_subcolumn(json_payload, "request_id", type_=UInt32())
+assert_type(typed_json_path, ColumnElement[int])
+typed_json_path_from_class = cc_sa.json_subcolumn(json_payload, "request_id", type_=UInt32)
+assert_type(typed_json_path_from_class, ColumnElement[int])
+cc_sa.json_subcolumn(json_payload, 13)  # type: ignore[call-overload]
