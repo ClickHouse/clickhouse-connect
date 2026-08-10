@@ -300,6 +300,50 @@ def test_executemany_bulk_insert_with_dotted_backtick_columns():
     client.query.assert_not_called()
 
 
+def test_executemany_bulk_insert_unescapes_percent_identifiers_for_dict_rows():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"value%pct": 13}, {"value%pct": 79}]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES (%(value_pct)s)", rows)
+
+    client.insert.assert_called_once_with("`events%2026`", [[13], [79]], ["value%pct"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_unescapes_percent_identifiers_for_tuple_rows():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13,), (79,)]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES (%s)", rows)
+
+    client.insert.assert_called_once_with("`events%2026`", rows, ["value%pct"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_keeps_percents_for_server_side_statements():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [(13,), (79,)]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES ({v:UInt32})", rows)
+
+    client.insert.assert_called_once_with("`events%%2026`", rows, ["value%%pct"], settings=None)
+    client.query.assert_not_called()
+
+
+def test_executemany_bulk_insert_keeps_percents_for_server_side_dict_rows():
+    client = Mock()
+    cursor = Cursor(client)
+
+    rows = [{"value%%pct": 13}, {"value%%pct": 79}]
+    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES ({v:UInt32})", rows)
+
+    client.insert.assert_called_once_with("`events%%2026`", [[13], [79]], ["value%%pct"], settings=None)
+    client.query.assert_not_called()
+
+
 def test_execute_unescapes_double_percents_without_parameters():
     """Test that cursor.execute unescapes %% to % when no parameters are given.
 
