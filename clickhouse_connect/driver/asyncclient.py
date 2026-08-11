@@ -77,7 +77,7 @@ from clickhouse_connect.driver.streaming import (
     start_streaming_response,
 )
 from clickhouse_connect.driver.summary import QuerySummary
-from clickhouse_connect.driver.transform import Transform
+from clickhouse_connect.driver.transform import NativeTransform, Transform
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
@@ -262,6 +262,9 @@ class AsyncClient(Client):
         self.headers["User-Agent"] = self.headers["User-Agent"].replace("mode:sync;", "mode:async;")
         if headers:
             self.headers.update(headers)
+        if not isinstance(self._transform, NativeTransform):
+            # The codec is a client-level choice, so the tag is applied at construction rather than per call.
+            add_integration_tag(self.headers, self._reported_libs, "clickhouse-connect-core")
 
         # Store aiohttp-specific params for deferred initialization
         self._compress_param = compress

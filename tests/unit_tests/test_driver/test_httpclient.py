@@ -1,4 +1,5 @@
 import logging
+import sys
 import zoneinfo
 from datetime import timezone
 from typing import Any
@@ -9,7 +10,7 @@ import pytest
 from urllib3.exceptions import HTTPError
 
 from clickhouse_connect import common
-from clickhouse_connect.driver import create_async_client, create_client
+from clickhouse_connect.driver import create_async_client, create_client, rustcodec
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver._backend.httpcommon import plan_data_insert_request
 from clickhouse_connect.driver.asyncclient import AsyncClient
@@ -175,6 +176,46 @@ class TestAsyncClientHeaders:
             )
 
         assert client.headers["X-Gateway"] == "cloudflare"
+
+
+class _CompatibleCore:
+    """Stand-in for the compiled module with a compatible binding API."""
+
+    __version__ = "0.1.0"
+    BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
+
+
+class TestNativeCodecIntegrationTag:
+    @pytest.mark.parametrize(("codec", "tagged"), [("rust", True), ("rust_strict", True), ("python", False)])
+    def test_sync_client_user_agent(self, monkeypatch, codec, tagged):
+        monkeypatch.setitem(sys.modules, "_ch_core", _CompatibleCore)
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+                native_codec=codec,
+            )
+
+        assert ("clickhouse-connect-core/" in client.headers["User-Agent"]) is tagged
+
+    @pytest.mark.parametrize(("codec", "tagged"), [("rust", True), ("rust_strict", True), ("python", False)])
+    def test_async_client_user_agent(self, monkeypatch, codec, tagged):
+        monkeypatch.setitem(sys.modules, "_ch_core", _CompatibleCore)
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+            native_codec=codec,
+        )
+
+        assert ("clickhouse-connect-core/" in client.headers["User-Agent"]) is tagged
 
 
 class _MockInsertContext:
