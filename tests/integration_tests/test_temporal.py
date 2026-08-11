@@ -7,17 +7,12 @@ import pytest
 from tests.integration_tests.conftest import TestConfig
 
 
-# Module-level version and cloud checks
+# Module-level cloud checks
 @pytest.fixture(autouse=True, scope="module")
-def module_setup_and_checks(test_client, test_config: TestConfig):
+def module_setup_and_checks(test_config: TestConfig):
     """Check prerequisites for Time/Time64 type tests."""
     if test_config.cloud:
         pytest.skip("Time/Time64 types require settings change, but settings are locked in cloud")
-
-    version_str = test_client.query("SELECT version()").result_rows[0][0]
-    major, minor, *_ = map(int, version_str.split("."))
-    if (major, minor) < (25, 6):
-        pytest.skip("Time and Time64 types require ClickHouse 25.6+")
 
 
 class TimeTestData:

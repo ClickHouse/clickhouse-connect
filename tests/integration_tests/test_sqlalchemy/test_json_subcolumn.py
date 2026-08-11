@@ -19,9 +19,6 @@ def json_subcolumn_table(test_engine: Engine, test_db: str, test_table_engine: s
     )
 
     with test_engine.begin() as conn:
-        client = conn.connection.driver_connection.client
-        if not client.min_version("25.3"):
-            pytest.skip("JSON subcolumns require ClickHouse 25.3 or newer")
         events.drop(conn, checkfirst=True)
         events.create(conn)
         conn.execute(

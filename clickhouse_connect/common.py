@@ -93,7 +93,7 @@ _init_common("naive_datetime_binding", ("wall", "legacy"), "wall")
 _init_common("naive_datetime_insert", ("local", "server"), "local")
 _init_common("max_connection_age", (), 10 * 60)  # Max time in seconds to keep reusing a database TCP connection
 _init_common("product_name", (), "")  # Product name used as part of client identification for ClickHouse query_log
-_init_common("readonly", (0, 1), 0)  # Implied "read_only" ClickHouse settings for versions prior to 19.17
+_init_common("readonly", (0, 1), 0)  # Deprecated no-op retained for 1.x compatibility
 _init_common("send_os_user", (True, False), True)
 
 # Selects the codec for client-managed FORMAT Native query and insert paths. Seeded by

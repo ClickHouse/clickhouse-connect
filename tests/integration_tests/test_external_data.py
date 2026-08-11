@@ -20,8 +20,6 @@ def test_external_simple(param_client: Client, call):
 def test_external_arrow(param_client: Client, call):
     if not arrow:
         pytest.skip("PyArrow package not available")
-    if not param_client.min_version("21"):
-        pytest.skip(f"PyArrow is not supported in this server version {param_client.server_version}")
     data_file = f"{Path(__file__).parent}/movies.csv"
     data = ExternalData(data_file, fmt="CSVWithNames", structure=["movie String", "year UInt16", "rating Decimal32(3)"])
     result = call(param_client.query_arrow, "SELECT * FROM movies ORDER BY movie", external_data=data, settings=ext_settings)
@@ -111,15 +109,14 @@ def test_external_command(param_client: Client, call):
     assert "8.25" == result[0:4]
 
     call(param_client.command, "DROP TABLE IF EXISTS movies_ext")
-    if param_client.min_version("22.8"):
-        query_result = call(
-            param_client.query,
-            "CREATE TABLE movies_ext ENGINE MergeTree() ORDER BY tuple() EMPTY " + "AS SELECT * FROM movies",
-            external_data=data,
-        )
-        assert "query_id" in query_result.first_item
-        call(param_client.raw_query, "INSERT INTO movies_ext SELECT * FROM movies", external_data=data)
-        assert 250 == call(param_client.command, "SELECT COUNT() FROM movies_ext")
+    query_result = call(
+        param_client.query,
+        "CREATE TABLE movies_ext ENGINE MergeTree() ORDER BY tuple() EMPTY " + "AS SELECT * FROM movies",
+        external_data=data,
+    )
+    assert "query_id" in query_result.first_item
+    call(param_client.raw_query, "INSERT INTO movies_ext SELECT * FROM movies", external_data=data)
+    assert 250 == call(param_client.command, "SELECT COUNT() FROM movies_ext")
 
 
 def test_external_with_form_encode(client_factory, call):

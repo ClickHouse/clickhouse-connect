@@ -154,9 +154,6 @@ def test_pandas_low_card(param_client: Client, call, table_context: Callable):
 def test_pandas_large_types(param_client: Client, call, table_context: Callable):
     columns = ["key String", "value Int256", "u_value UInt256"]
     key2_value = 30000000000000000000000000000000000
-    if not param_client.min_version("21"):
-        columns = ["key String", "value Int64"]
-        key2_value = 3000000000000000000
     with table_context("test_pandas_big_int", columns):
         df = pd.DataFrame([["key1", 2000, 50], ["key2", key2_value, 70], ["key3", -2350, 70]], columns=["key", "value", "u_value"])
         source_df = df.copy()
@@ -194,8 +191,6 @@ def test_pandas_enums(param_client: Client, call, table_context: Callable):
 
 
 def test_pandas_datetime64(param_client: Client, call, table_context: Callable):
-    if not param_client.min_version("20"):
-        pytest.skip(f"DateTime64 not supported in this server version {param_client.server_version}")
     nano_timestamp = pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
     milli_timestamp = pd.Timestamp(2022, 5, 3, 10, 44, 10, 55000)
     chicago_timestamp = milli_timestamp.tz_localize("America/Chicago")
@@ -230,8 +225,6 @@ def test_pandas_datetime64(param_client: Client, call, table_context: Callable):
 
 
 def test_pandas_streams(param_client: Client, call, consume_stream):
-    if not param_client.min_version("22"):
-        pytest.skip(f"generateRandom is not supported in this server version {param_client.server_version}")
     runs = os.environ.get("CLICKHOUSE_CONNECT_TEST_FUZZ", "250")
     for _ in range(int(runs) // 2):
         query_rows = random.randint(0, 5000) + 20000
@@ -329,8 +322,6 @@ def test_pandas_small_blocks(test_config: TestConfig, param_client: Client, call
 
 
 def test_pandas_string_to_df_insert(param_client: Client, call, table_context: Callable):
-    if not param_client.min_version("25.2"):
-        pytest.skip(f"Nullable(JSON) type not available in this version: {param_client.server_version}")
     with table_context(
         "test_pandas_string_to_df_insert",
         [
@@ -376,9 +367,6 @@ def test_pandas_string_to_df_insert(param_client: Client, call, table_context: C
 
 def test_pandas_time(test_config: TestConfig, param_client: Client, call, table_context: Callable):
     """Round trip test for Time types"""
-    if not param_client.min_version("25.6"):
-        pytest.skip("Time and types require ClickHouse 25.6+")
-
     if test_config.cloud:
         pytest.skip("Time types require settings change, but settings are locked in cloud, skipping tests.")
 
@@ -409,9 +397,6 @@ def test_pandas_time(test_config: TestConfig, param_client: Client, call, table_
 
 def test_pandas_time64(test_config: TestConfig, param_client: Client, call, table_context: Callable):
     """Round trip test for Time64 types"""
-    if not param_client.min_version("25.6"):
-        pytest.skip("Time64 types require ClickHouse 25.6+")
-
     if test_config.cloud:
         pytest.skip("Time64 types require settings change, but settings are locked in cloud, skipping tests.")
 
@@ -512,8 +497,6 @@ def test_pandas_datetime_resolution_roundtrip(param_client: Client, call, table_
 
 def test_pandas_datetime64_scale_resolution(param_client: Client, call, table_context: Callable):
     """Verify DateTime64 columns return their native scale resolution."""
-    if not param_client.min_version("20"):
-        pytest.skip(f"DateTime64 not supported in this server version {param_client.server_version}")
     with table_context(
         "test_dt64_scale_res",
         [
@@ -582,8 +565,6 @@ def test_pandas_insert_df_arrow(param_client: Client, call, table_context: Calla
 
 def test_pandas_time_resolution(test_config: TestConfig, param_client: Client, call, table_context: Callable):
     """Verify Time columns return timedelta64[s] resolution."""
-    if not param_client.min_version("25.6"):
-        pytest.skip("Time types require ClickHouse 25.6+")
     if test_config.cloud:
         pytest.skip("Time types require settings change, but settings are locked in cloud.")
 

@@ -3,7 +3,6 @@ from collections.abc import Generator
 from typing import Any, Literal, cast
 
 from clickhouse_connect import common
-from clickhouse_connect.datatypes import dynamic as dynamic_module
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.base import ClickHouseType, ch_read_formats, ch_write_formats
 from clickhouse_connect.datatypes.container import Tuple
@@ -19,7 +18,6 @@ from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.rustnumpy import (
     _build_converters,
-    _contains_json_type,
     _convert_block,
     _normalize_json_shared_column,
 )
@@ -444,18 +442,6 @@ class _RustNativeTransform:
                     'use native_codec="python" or "rust"'
                 )
             logger.info('Native codec fallback to Python for insert: naive_datetime_insert="server"')
-            return NativeTransform.build_insert(context)
-
-        # json_serialization_format 0 selects the legacy String-header JSON insert
-        # framing, which the core's JSON encoder does not emit. Route those inserts
-        # through the Python serializer.
-        if dynamic_module.json_serialization_format == 0 and any(_contains_json_type(ch_type) for ch_type in context.column_types):
-            if self.strict:
-                raise NotSupportedError(
-                    'native_codec="rust_strict" does not support JSON inserts while the legacy JSON serialization '
-                    'format is active. Use native_codec="python" or "rust"'
-                )
-            logger.info("Native codec fallback to Python for insert: legacy JSON serialization")
             return NativeTransform.build_insert(context)
 
         if ch_write_formats:

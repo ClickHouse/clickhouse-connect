@@ -8,7 +8,6 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.common import _native_codec_env_default
-from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import rustcodec
 from clickhouse_connect.driver.exceptions import (
@@ -80,16 +79,6 @@ def restore_naive_datetime_insert_fixture():
     original = common.get_setting("naive_datetime_insert")
     yield
     common.set_setting("naive_datetime_insert", original)
-
-
-@pytest.fixture(name="clean_type_cache")
-def clean_type_cache_fixture():
-    # Container types bake element insert names at construction and the registry caches instances by
-    # name, so types built under a monkeypatched json_serialization_format must not outlive the test.
-    snapshot = dict(registry.type_cache)
-    yield
-    registry.type_cache.clear()
-    registry.type_cache.update(snapshot)
 
 
 @pytest.fixture(name="clean_formats")
@@ -450,46 +439,8 @@ def test_build_insert_naive_datetime_server_non_strict_falls_back(monkeypatch, r
     assert rust_out == python_out
 
 
-@pytest.mark.parametrize(
-    "type_name",
-    [
-        "JSON",
-        "Nullable(JSON)",
-        "Array(JSON)",
-        "Tuple(id UInt8, payload JSON)",
-        "Map(String, JSON)",
-        "Variant(JSON, String)",
-        "Nested(x JSON)",
-    ],
-)
-def test_build_insert_legacy_json_strict_raises(monkeypatch, clean_type_cache, type_name):
-    class FakeCore:
-        @staticmethod
-        def encode_native_block(*args):
-            raise AssertionError("encoder must not run for legacy JSON serialization")
-
-    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
-    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
-    with pytest.raises(NotSupportedError, match="legacy JSON serialization"):
-        _RustNativeTransform(strict=True).build_insert(_json_ctx([], type_name))
-
-
-def test_build_insert_legacy_json_non_strict_falls_back(monkeypatch):
-    class FakeCore:
-        @staticmethod
-        def encode_native_block(*args):
-            raise AssertionError("encoder must not run for legacy JSON serialization")
-
-    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
-    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
-    rows = [({"id": 13},), ({"name": "user_1"},)]
-    rust_out = b"".join(_RustNativeTransform(strict=False).build_insert(_json_ctx(rows)))
-    python_out = b"".join(NativeTransform.build_insert(_json_ctx(rows)))
-    assert rust_out == python_out
-
-
 @pytest.mark.parametrize("strict", [False, True])
-def test_build_insert_modern_json_uses_rust(monkeypatch, strict):
+def test_build_insert_json_uses_rust(monkeypatch, strict):
     calls = []
 
     class FakeCore:
@@ -499,7 +450,6 @@ def test_build_insert_modern_json_uses_rust(monkeypatch, strict):
             return b"rust_block"
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
-    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 1)
     rows = [({"id": 13},), ({"name": "user_1"},)]
 
     chunks = list(_RustNativeTransform(strict=strict).build_insert(_json_ctx(rows)))
@@ -513,14 +463,13 @@ def _qbit_ctx(data, type_name) -> InsertContext:
 
 
 @pytest.mark.parametrize("type_name", ["QBit(Float32, 8)", "Array(QBit(Float32, 8))"])
-def test_build_insert_legacy_json_flag_qbit(monkeypatch, type_name):
+def test_build_insert_probe_fallback_qbit(monkeypatch, type_name):
     class FakeCore:
         @staticmethod
         def encode_native_block(*args):
             raise NotImplementedError("unsupported")
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
-    monkeypatch.setattr(rustcodec.dynamic_module, "json_serialization_format", 0)
     vector = [0.5, 1.5, -2.0, 13.0, 79.0, 0.0, -1.25, 3.75]
     value = vector if type_name.startswith("QBit") else [vector]
     rows = [(value,), (value,)]

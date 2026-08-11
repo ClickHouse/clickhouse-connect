@@ -7,18 +7,15 @@ from sqlalchemy import MetaData, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Time, Time64, UInt32
-from clickhouse_connect.driver import Client
 from tests.integration_tests.conftest import TestConfig
 
 TABLE_NAME = "sqla_time_binds"
 
 
 @fixture(scope="module", autouse=True)
-def time_support(test_client: Client, test_config: TestConfig):
+def time_support(test_config: TestConfig):
     if test_config.cloud:
         pytest.skip("Time/Time64 types require settings change, but settings are locked in cloud")
-    if not test_client.min_version("25.6"):
-        pytest.skip("Time and Time64 types require ClickHouse 25.6+")
 
 
 @fixture(scope="module", name="time_table")

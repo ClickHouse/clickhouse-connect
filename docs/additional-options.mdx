@@ -38,7 +38,7 @@ The following global settings are currently defined:
 | `max_connection_age` | `600` | Any number of seconds | Maximum age for a reused HTTP keep-alive connection. Rotation helps distribute connections across nodes behind a load balancer. |
 | `native_codec` | `"python"` | `"python"`, `"rust"`, `"rust_strict"` | Default codec for client-managed Native format traffic, overridable per client. The `CLICKHOUSE_CONNECT_NATIVE_CODEC` environment variable seeds this setting at import. See [Rust codec](/integrations/language-clients/python/rust-codec). |
 | `product_name` | `""` | Any string | Product identifier added to client information. Use a value such as `"my-product/1.0"`. |
-| `readonly` | `0` | `0`, `1` | Compatibility hint for the `readonly` setting on very old ClickHouse servers. |
+| `readonly` | `0` | `0`, `1` | Deprecated no-op retained for 1.x compatibility. The client reads the server's `readonly` setting directly. |
 | `send_os_user` | `True` | `True`, `False` | Include the detected operating system user in client information. |
 | `send_integration_tags` | `True` | `True`, `False` | Include integrations used by the client, such as Pandas or SQLAlchemy, in the HTTP User-Agent. |
 | `use_protocol_version` | `True` | `True`, `False` | Negotiate the client protocol version used by Native-format features such as `DateTime` column timezone metadata. Disable this for proxies that reject `client_protocol_version`. |

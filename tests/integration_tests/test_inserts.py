@@ -38,10 +38,7 @@ def naive_datetime_server_environment(monkeypatch):
 
 
 def test_insert(param_client: Client, call, test_table_engine: str):
-    if param_client.min_version("19"):
-        call(param_client.command, "DROP TABLE IF EXISTS test_system_insert")
-    else:
-        call(param_client.command, "DROP TABLE IF EXISTS test_system_insert SYNC")
+    call(param_client.command, "DROP TABLE IF EXISTS test_system_insert")
     call(param_client.command, f"CREATE TABLE test_system_insert AS system.tables Engine {test_table_engine} ORDER BY name")
     tables_result = call(param_client.query, "SELECT * from system.tables")
     call(param_client.insert, table="test_system_insert", column_names="*", data=tables_result.result_set)

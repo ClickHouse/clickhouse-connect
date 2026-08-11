@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import operator
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import ClientConfig, ServerInfo
 from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver._backend.orchestration import (
@@ -25,6 +27,24 @@ from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingEr
 from clickhouse_connect.driver.models import SettingDef
 
 PROTOCOL_RESPONSE = b"\x00" * 8 + b"\x01\x01\x05check"
+VERSION_OP = CommandOp("SELECT version(), timezone()", use_database=False)
+SETTINGS_OP = QueryOp("SELECT name, value, readonly FROM system.settings LIMIT 10000")
+PROBE_OP = RawQueryOp(
+    "SELECT 1 AS check",
+    settings={"client_protocol_version": PROTOCOL_VERSION_WITH_LOW_CARD},
+    fmt="Native",
+)
+INIT_OPERATIONS: list[Operation] = [VERSION_OP, SETTINGS_OP, PROBE_OP]
+
+
+@contextmanager
+def _common_setting(name: str, value: object):
+    original = common.get_setting(name)
+    common.set_setting(name, value)
+    try:
+        yield
+    finally:
+        common.set_setting(name, original)
 
 
 class FakeSyncExecutor:
@@ -61,7 +81,6 @@ def _server_settings(*, writable: bool = True) -> list[dict[str, object]]:
     readonly = 0 if writable else 1
     return [
         {"name": "date_time_input_format", "value": "basic", "readonly": readonly},
-        {"name": "allow_experimental_json_type", "value": "1", "readonly": 0},
         {"name": "cast_string_to_dynamic_use_inference", "value": "0", "readonly": readonly},
         {"name": "max_threads", "value": "8", "readonly": 0},
     ]
@@ -84,21 +103,12 @@ def _run_both(
 
 
 def test_sync_and_async_init_sequences_have_identical_operations_and_results():
-    responses = [("25.6.3.116", "UTC"), _server_settings(), PROTOCOL_RESPONSE]
+    responses = [("25.8.12.129", "UTC"), _server_settings(), PROTOCOL_RESPONSE]
     config = ClientConfig(settings={"max_threads": 13}, timezone_policy="server")
     result, sync_backend, async_backend = _run_both(responses, config)
 
-    expected_operations: list[Operation] = [
-        CommandOp("SELECT version(), timezone()", use_database=False),
-        QueryOp("SELECT name, value, readonly as readonly FROM system.settings LIMIT 10000"),
-        RawQueryOp(
-            "SELECT 1 AS check",
-            settings={"client_protocol_version": PROTOCOL_VERSION_WITH_LOW_CARD},
-            fmt="Native",
-        ),
-    ]
-    assert sync_backend.operations == expected_operations
-    assert async_backend.operations == expected_operations
+    assert sync_backend.operations == INIT_OPERATIONS
+    assert async_backend.operations == INIT_OPERATIONS
     assert result.protocol_version == PROTOCOL_VERSION_WITH_LOW_CARD
     assert result.client_setting_writes == (
         ("date_time_input_format", "best_effort"),
@@ -107,40 +117,40 @@ def test_sync_and_async_init_sequences_have_identical_operations_and_results():
 
 
 def test_unresolvable_server_timezone_falls_back_to_utc():
-    result, _, _ = _run_both([("25.6.3.116", "Not/A-Timezone"), _server_settings(), PROTOCOL_RESPONSE])
+    result, _, _ = _run_both([("25.8.12.129", "Not/A-Timezone"), _server_settings(), PROTOCOL_RESPONSE])
 
     assert result.server_info.timezone is timezone.utc
     assert result.timezone_dst_safe
     assert result.apply_server_timezone
 
 
-def test_old_server_skips_protocol_probe_and_uses_legacy_readonly_setting():
-    result, sync_backend, async_backend = _run_both([("19.16.9.12", "UTC"), _server_settings()])
+def test_deprecated_readonly_setting_does_not_change_initialization():
+    with _common_setting("readonly", 1):
+        result, sync_backend, async_backend = _run_both([("25.8.12.129", "UTC"), _server_settings(), PROTOCOL_RESPONSE])
 
-    expected_operations: list[Operation] = [
-        CommandOp("SELECT version(), timezone()", use_database=False),
-        QueryOp("SELECT name, value, 0 as readonly FROM system.settings LIMIT 10000"),
-    ]
-    assert sync_backend.operations == expected_operations
-    assert async_backend.operations == expected_operations
-    assert result.protocol_version == 0
+    assert sync_backend.operations == INIT_OPERATIONS
+    assert async_backend.operations == INIT_OPERATIONS
+    assert result.protocol_version == PROTOCOL_VERSION_WITH_LOW_CARD
 
 
 def test_unwritable_default_settings_are_skipped():
-    result, _, _ = _run_both([("25.6.3.116", "UTC"), _server_settings(writable=False), PROTOCOL_RESPONSE])
+    result, _, _ = _run_both([("25.8.12.129", "UTC"), _server_settings(writable=False), PROTOCOL_RESPONSE])
 
     assert result.client_setting_writes == ()
 
 
-def test_dynamic_json_server_range_is_returned_as_local_state():
-    result, _, _ = _run_both([("24.8.12.28", "UTC"), _server_settings(), PROTOCOL_RESPONSE])
-
-    assert result.json_serialization_format == 0
-
-
 def test_protocol_probe_errors_are_handled_identically():
-    result, _, _ = _run_both([("25.6.3.116", "UTC"), _server_settings(), RuntimeError("probe failed")])
+    result, _, _ = _run_both([("25.8.12.129", "UTC"), _server_settings(), RuntimeError("probe failed")])
 
+    assert result.protocol_version == 0
+
+
+def test_protocol_probe_can_be_disabled():
+    with _common_setting("use_protocol_version", False):
+        result, sync_backend, async_backend = _run_both([("25.8.12.129", "UTC"), _server_settings()])
+
+    assert sync_backend.operations == [VERSION_OP, SETTINGS_OP]
+    assert async_backend.operations == [VERSION_OP, SETTINGS_OP]
     assert result.protocol_version == 0
 
 
@@ -174,7 +184,7 @@ def test_fatal_errors_propagate_identically_through_both_drivers():
 def test_user_settings_suppress_generated_defaults(user_settings, expected_writes):
     config = ClientConfig(settings=user_settings)
 
-    result, _, _ = _run_both([("25.6.3.116", "UTC"), _server_settings(), PROTOCOL_RESPONSE], config)
+    result, _, _ = _run_both([("25.8.12.129", "UTC"), _server_settings(), PROTOCOL_RESPONSE], config)
 
     assert result.client_setting_writes == expected_writes
 
@@ -287,7 +297,7 @@ def test_backend_values_copy_and_protect_settings_mappings():
     server_settings = {"max_threads": SettingDef("max_threads", "8", 0)}
     config = ClientConfig(settings=config_settings)
     operation = RawQueryOp("SELECT 1", settings=operation_settings)
-    server_info = ServerInfo("25.6.3.116", timezone.utc, server_settings)
+    server_info = ServerInfo("25.8.12.129", timezone.utc, server_settings)
 
     config_settings["max_threads"] = 79
     operation_settings["client_protocol_version"] = 0

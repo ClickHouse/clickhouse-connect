@@ -40,7 +40,7 @@ def test_create_database(test_engine: Engine, test_config: TestConfig, test_db: 
         with test_engine.begin() as conn:
             create_db = f"create_db_{test_db}"
             if not test_engine.dialect.has_database(conn, create_db):
-                if test_config.host == "localhost" and conn.connection.driver_connection.client.min_version("20"):
+                if test_config.host == "localhost":
                     conn.execute(CreateDatabase(create_db, "Atomic", exists_ok=True))
                 else:
                     conn.execute(CreateDatabase(create_db, exists_ok=True))
@@ -62,9 +62,6 @@ def test_create_table(test_engine: Engine, test_db: str, test_table_engine: str)
         conn.execute(text("DROP TABLE IF EXISTS simple_table_test"))
         bool_type = Boolean
         date_tz64_type = DateTime64(3, "Europe/Moscow")
-        if not conn.connection.driver_connection.client.min_version("20"):
-            bool_type = Int8
-            date_tz64_type = DateTime("Europe/Moscow")
         table = db.Table(
             "simple_table_test",
             metadata,

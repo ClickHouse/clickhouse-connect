@@ -11,11 +11,10 @@ from clickhouse_connect.datatypes.dynamic import TypedVariant, typed_variant
 from clickhouse_connect.datatypes.format import set_write_format
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
-from tests.integration_tests.conftest import TestConfig, type_available
+from tests.integration_tests.conftest import TestConfig
 
 
 def test_variant(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context(
         "basic_variants", ["key Int32", "v1 Variant(UInt64, String, Array(UInt64), UUID)", "v2 Variant(IPv4, Decimal(10, 2))"]
     ):
@@ -36,7 +35,6 @@ def test_variant(param_client: Client, call, table_context: Callable):
 
 
 def test_nested_variant(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context(
         "nested_variants",
         [
@@ -70,7 +68,6 @@ def test_nested_variant(param_client: Client, call, table_context: Callable):
 
 
 def test_variant_bool_int_ordering(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_bool_int", ["key Int32", "v1 Variant(Bool, Int32)"]):
         data = [[1, True], [2, 57], [3, False], [4, -7]]
         call(param_client.insert, "variant_bool_int", data)
@@ -82,14 +79,12 @@ def test_variant_bool_int_ordering(param_client: Client, call, table_context: Ca
 
 
 def test_variant_no_string_error(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_no_string", ["key Int32", "v1 Variant(Int64, Float64)"]):
         with pytest.raises(DataError):
             call(param_client.insert, "variant_no_string", [[1, "hello"]])
 
 
 def test_variant_ambiguous_arrays(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_arrays", ["key Int32", "v1 Variant(Array(UInt32), Array(String))"]):
         data = [[1, typed_variant([1, 2, 3], "Array(UInt32)")], [2, typed_variant(["a", "b"], "Array(String)")]]
         call(param_client.insert, "variant_arrays", data)
@@ -99,7 +94,6 @@ def test_variant_ambiguous_arrays(param_client: Client, call, table_context: Cal
 
 
 def test_variant_empty_array_fallback(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_empty_array", ["key Int32", "v1 Variant(Array(UInt32), Array(String))"]):
         data = [[1, typed_variant([], "Array(UInt32)")]]
         call(param_client.insert, "variant_empty_array", data)
@@ -108,7 +102,6 @@ def test_variant_empty_array_fallback(param_client: Client, call, table_context:
 
 
 def test_variant_uuid_dispatch(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_uuid", ["key Int32", "v1 Variant(UUID, String)"]):
         test_uuid = UUID("bef56f14-0870-4f82-a35e-9a47eff45a5b")
         data = [[1, test_uuid], [2, "just a string"]]
@@ -119,7 +112,6 @@ def test_variant_uuid_dispatch(param_client: Client, call, table_context: Callab
 
 
 def test_variant_no_implicit_coercion(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_no_coerce", ["key Int32", "v1 Variant(Int32, String)"]):
         test_uuid = UUID("bef56f14-0870-4f82-a35e-9a47eff45a5b")
         with pytest.raises(DataError):
@@ -127,7 +119,6 @@ def test_variant_no_implicit_coercion(param_client: Client, call, table_context:
 
 
 def test_variant_all_null(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_all_null", ["key Int32", "v1 Variant(Int32, String)"]):
         data = [[1, None], [2, None], [3, None]]
         call(param_client.insert, "variant_all_null", data)
@@ -138,7 +129,6 @@ def test_variant_all_null(param_client: Client, call, table_context: Callable):
 
 
 def test_variant_leading_nulls(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_leading_nulls", ["key Int32", "v1 Variant(Int32, String)"]):
         data = [[1, None], [2, None], [3, 57], [4, "hello"], [5, None]]
         call(param_client.insert, "variant_leading_nulls", data)
@@ -151,7 +141,6 @@ def test_variant_leading_nulls(param_client: Client, call, table_context: Callab
 
 
 def test_dynamic_nested(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "dynamic")
     with table_context("nested_dynamics", ["m2 Map(String, Dynamic)"], order_by="()"):
         data = [({"k4": "string8", "k5": 5000},)]
         call(param_client.insert, "nested_dynamics", data)
@@ -160,7 +149,6 @@ def test_dynamic_nested(param_client: Client, call, table_context: Callable):
 
 
 def test_dynamic(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "dynamic")
     with table_context("basic_dynamic", ["key UInt64", "v1 Dynamic", "v2 Dynamic"]):
         data = [
             [1, 58322, 15.5],
@@ -176,7 +164,6 @@ def test_dynamic(param_client: Client, call, table_context: Callable):
 
 
 def test_dynamic_shared_variant_unsupported_types(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "dynamic")
     with table_context(
         "dynamic_shared_variant",
         [
@@ -198,7 +185,6 @@ def test_dynamic_shared_variant_unsupported_types(param_client: Client, call, ta
 
 
 def test_basic_json(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "json")
     with table_context("new_json_basic", ["key Int32", "value JSON", "null_value JSON"]):
         jv3 = {"key3": 752, "value.2": "v2_rules", "blank": None}
         jv1 = {"key1": 337, "value.2": "vvvv", "HKD@spéçiäl": "Special K", "blank": "not_really_blank"}
@@ -230,7 +216,6 @@ def test_basic_json(param_client: Client, call, table_context: Callable):
 
 
 def test_json_escaped_dots_roundtrip(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "json")
     if param_client.server_settings.get("json_type_escape_dots_in_keys") is None:
         pytest.skip("json_type_escape_dots_in_keys setting unavailable on this server version")
 
@@ -264,7 +249,6 @@ def test_json_escaped_dots_roundtrip(param_client: Client, call, table_context: 
 
 
 def test_typed_json(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "json")
     with table_context("new_json_typed", ["key Int32", "value JSON(max_dynamic_paths=150, `a.b` DateTime64(3), SKIP a.c)"]):
         v1 = '{"a":{"b":"2020-10-15T10:15:44.877", "c":"skip_me"}}'
         call(param_client.insert, "new_json_typed", [[1, v1]])
@@ -274,8 +258,6 @@ def test_typed_json(param_client: Client, call, table_context: Callable):
 
 
 def test_nullable_json(param_client: Client, call, table_context: Callable):
-    if not param_client.min_version("25.2"):
-        pytest.skip(f"Nullable(JSON) type not available in this version: {param_client.server_version}")
     with table_context("nullable_json", ["key Int32", "value_1 Nullable(JSON)", "value_2 Nullable(JSON)", "value_3 Nullable(JSON)"]):
         v1 = {"item_a": 5, "item_b": 10}
 
@@ -290,9 +272,6 @@ def test_nullable_json(param_client: Client, call, table_context: Callable):
 
 
 def test_complex_json(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "json")
-    if not param_client.min_version("24.10"):
-        pytest.skip("Complex JSON broken before 24.10")
     with table_context("new_json_complex", ["key Int32", "value Tuple(t JSON)"]):
         data = [[100, ({"a": "qwe123", "b": "main", "c": None},)]]
         call(param_client.insert, "new_json_complex", data)
@@ -303,8 +282,8 @@ def test_complex_json(param_client: Client, call, table_context: Callable):
 
 def test_json_str_time(param_client: Client, call, test_config: TestConfig):
 
-    if not param_client.min_version("25.1") or test_config.cloud:
-        pytest.skip("JSON string/numbers bug before 25.1, skipping")
+    if test_config.cloud:
+        pytest.skip("Skipping JSON string inference test in cloud env")
     result = call(param_client.query, 'SELECT \'{"timerange": "2025-01-01T00:00:00+0000"}\'::JSON').result_set
     assert result[0][0]["timerange"] == datetime.datetime(2025, 1, 1)
 
@@ -314,7 +293,6 @@ def test_json_str_time(param_client: Client, call, test_config: TestConfig):
 
 
 def test_typed_variant_ambiguous_scalars(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_ambig_scalars", ["key Int32", "v1 Variant(Int64, Float64)"]):
         data = [[1, typed_variant(57, "Int64")], [2, typed_variant(57, "Float64")], [3, None]]
         call(param_client.insert, "variant_ambig_scalars", data)
@@ -325,7 +303,6 @@ def test_typed_variant_ambiguous_scalars(param_client: Client, call, table_conte
 
 
 def test_typed_variant_mixed_with_inference(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_mixed_infer", ["key Int32", "v1 Variant(Int64, String, Float64)"]):
         data = [[1, typed_variant(57, "Int64")], [2, "hello"], [3, 3.14]]
         call(param_client.insert, "variant_mixed_infer", data)
@@ -345,14 +322,12 @@ def test_typed_variant_validation():
 
 
 def test_typed_variant_member_mismatch(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_mismatch", ["key Int32", "v1 Variant(Int32, String)"]):
         with pytest.raises(DataError):
             call(param_client.insert, "variant_mismatch", [[1, typed_variant(57, "Float64")]])
 
 
 def test_variant_in_tuple(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_in_tuple", ["key Int32", "t1 Tuple(Int64, Variant(Bool, String, Int32))"]):
         data = [[1, (-40, True)], [2, (340283, "str")], [3, (0, 55)]]
         call(param_client.insert, "variant_in_tuple", data)
@@ -363,7 +338,6 @@ def test_variant_in_tuple(param_client: Client, call, table_context: Callable):
 
 
 def test_typed_variant_name_normalization(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "variant")
     with table_context("variant_norm", ["key Int32", "v1 Variant(Decimal(10, 2), String)"]):
         data = [[1, typed_variant(decimal.Decimal("1.50"), "Decimal(10,2)")]]
         call(param_client.insert, "variant_norm", data)
@@ -380,7 +354,6 @@ def test_typed_variant_name_normalization(param_client: Client, call, table_cont
     ],
 )
 def test_variant_read_typed_format(param_client: Client, call, table_context: Callable, variant_type, rows):
-    type_available(param_client, "variant")
     with table_context("variant_read_typed", ["key Int32", f"v1 {variant_type}"], settings={"allow_suspicious_variant_types": 1}):
         null_key = len(rows) + 1
         data = [[ix + 1, typed_variant(value, type_name)] for ix, (type_name, value) in enumerate(rows)]
@@ -418,7 +391,6 @@ def test_variant_read_typed_format(param_client: Client, call, table_context: Ca
 
 def test_json_with_many_paths(param_client: Client, call, table_context: Callable):
     """Test JSON with many dynamic paths to exercise the shared data structure."""
-    type_available(param_client, "json")
     with table_context("json_many_paths", ["id Int32", "data JSON(max_dynamic_paths=5)"]):
         large_json = {f"key_{i}": f"value_{i}" for i in range(20)}
         call(param_client.insert, "json_many_paths", [[1, large_json]])
@@ -435,7 +407,6 @@ def test_json_with_many_paths(param_client: Client, call, table_context: Callabl
 
 def test_json_with_long_values(param_client: Client, call, table_context: Callable):
     """Test JSON shared data with long string values (>127 chars) to verify VarInt decoding."""
-    type_available(param_client, "json")
     with table_context("json_long_values", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
         short_val = "a" * 10
         medium_val = "b" * 150
@@ -459,7 +430,6 @@ def test_json_with_long_values(param_client: Client, call, table_context: Callab
 
 def test_json_shared_data_primitive_types(param_client: Client, call, table_context: Callable):
     """Tests round-trip of integers, floats, booleans, strings, and NULL in shared data."""
-    type_available(param_client, "json")
 
     with table_context("json_primitive_types", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
         test_data = {
@@ -516,7 +486,6 @@ def test_json_shared_data_primitive_types(param_client: Client, call, table_cont
 
 def test_json_shared_data_multiple_rows(param_client: Client, call, table_context: Callable):
     """Test JSON shared data with multiple rows to ensure consistent decoding."""
-    type_available(param_client, "json")
 
     with table_context("json_multirow", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
         test_data = [
@@ -563,7 +532,6 @@ def test_json_shared_data_multiple_rows(param_client: Client, call, table_contex
 
 def test_json_shared_data_nested_keys(param_client: Client, call, table_context: Callable):
     """Test that dotted keys in shared data are properly nested into dicts."""
-    type_available(param_client, "json")
 
     with table_context("json_shared_nested", ["id Int32", "data JSON(max_dynamic_paths=2)"]):
         test_data = {
@@ -587,7 +555,6 @@ def test_json_shared_data_nested_keys(param_client: Client, call, table_context:
 
 def test_json_dynamic_variant_decoding(param_client: Client, call, table_context: Callable):
     """Test with one nested JSON path changing type across rows."""
-    type_available(param_client, "json")
     with table_context("json_dyn_variant", ["id Int32", "attributes JSON"]):
         rows = [
             [1, {"agent.value": "computer-use", "meta.region": "us-west-2"}],
@@ -610,7 +577,6 @@ def test_json_dynamic_variant_decoding(param_client: Client, call, table_context
 
 def test_json_dynamic_variant_multiple_rows(param_client: Client, call, table_context: Callable):
     """Test with top-level JSON keys changing type across rows."""
-    type_available(param_client, "json")
     with table_context("json_dyn_multi", ["id Int32", "data JSON"]):
         rows = [
             [1, {"value": 95, "status": "user_1"}],
@@ -639,7 +605,6 @@ def test_json_dynamic_variant_multiple_rows(param_client: Client, call, table_co
 
 
 def test_json_path_sorts_after_shared_variant(param_client: Client, call, table_context: Callable):
-    type_available(param_client, "json")
     # Value >= 2^63 forces UInt64 inference on default settings. "UInt64" sorts after
     # "SharedVariant" alphabetically, so this triggers the discriminator misalignment.
     huge_uint = 18000000000000000000
@@ -652,7 +617,6 @@ def test_json_path_sorts_after_shared_variant(param_client: Client, call, table_
 def test_dynamic_uint64_single_variant(param_client: Client, call, table_context: Callable):
     """Dynamic column whose only active typed variant is UInt64. Without the sort fix this
     would read each row as SharedVariant and crash or return garbage."""
-    type_available(param_client, "dynamic")
     with table_context("dynamic_uint64", ["id Int32", "d Dynamic"]):
         call(param_client.command, "INSERT INTO dynamic_uint64 SELECT 1, toUInt64(17)")
         call(param_client.command, "INSERT INTO dynamic_uint64 SELECT 2, toUInt64(9223372036854775900)")
@@ -667,9 +631,6 @@ def test_json_shared_data_compound_values(param_client: Client, call, table_cont
     max_dynamic_paths=0 forces every path into shared data on insert, so this
     does not depend on merge history.
     """
-    type_available(param_client, "json")
-    if not param_client.min_version("24.10"):
-        pytest.skip("JSON shared data decoding requires 24.10+")
 
     with table_context("json_shared_compound", ["id Int32", "data JSON(max_dynamic_paths=0)"]):
         call(
@@ -712,8 +673,13 @@ def test_json_shared_data_compound_values(param_client: Client, call, table_cont
         assert rows[7]["ds"] == [datetime.date(2024, 1, 15), datetime.date(2024, 2, 20)]
         assert rows[8]["ts"] == [expected_ts]
         assert rows[9]["ts64"] == [expected_ts64]
-        # heterogeneous array: Array(Dynamic) with a null element
-        assert rows[10]["mix"] == [1, "a", None]
+        # Heterogeneous arrays infer as Array(Nullable(Dynamic)) when the server
+        # supports it, otherwise every element coerces to String.
+        mixed_setting = param_client.server_settings.get("input_format_json_infer_array_of_dynamic_from_array_of_different_types")
+        if mixed_setting is not None and mixed_setting.value == "1":
+            assert rows[10]["mix"] == [1, "a", None]
+        else:
+            assert rows[10]["mix"] == ["1", "a", None]
         # top-level non-string scalar outside the legacy discriminator table
         assert rows[11]["d"] == datetime.date(2024, 1, 15)
         assert rows[12]["empty"] == []
