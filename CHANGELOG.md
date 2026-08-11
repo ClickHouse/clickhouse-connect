@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.7.0, 2026-08-11
+
 ### Improvements
 
 - SQLAlchemy JSON columns now support storage-backed subcolumn access with `column["segment"]`, `column.subcolumn("segment", type_=...)`, and the statically typed `json_subcolumn(...)` helper. Nested paths compile as independently quoted dotted identifiers, and typed access uses `CAST`. Closes [#899](https://github.com/ClickHouse/clickhouse-connect/issues/899).
