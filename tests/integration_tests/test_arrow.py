@@ -5,7 +5,12 @@ from datetime import date
 import pytest
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import StreamFailureError
 from clickhouse_connect.driver.options import arrow
+
+#  Fails only after the server has committed a 200 and streamed part of the result, so the error
+#  arrives in the response body rather than in the HTTP status.
+MID_STREAM_FAILURE = "SELECT number, throwIf(number = 500000, 'boom') FROM system.numbers"
 
 
 def test_arrow(param_client: Client, call, table_context: Callable):
@@ -84,3 +89,32 @@ def test_arrow_map(param_client: Client, call, table_context: Callable):
         assert isinstance(arrow_table.schema, arrow.Schema)
         call(param_client.insert_arrow, "test_arrow_map", arrow_table, settings={"insert_deduplication_token": "10382"})
         assert 4 == call(param_client.command, "SELECT count() FROM test_arrow_map")
+
+
+@pytest.mark.parametrize("method_name", ["query_arrow_stream", "query_df_arrow_stream"])
+def test_arrow_stream_reports_mid_stream_server_error(param_client: Client, call, consume_stream, method_name):
+    # A query that fails partway through a stream must surface the ClickHouse error, not a truncated
+    # Arrow stream or a raw transport error (issue #913).
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    stream = call(getattr(param_client, method_name), MID_STREAM_FAILURE)
+    with pytest.raises(StreamFailureError, match="boom"):
+        consume_stream(stream)
+
+
+def test_query_arrow_reports_mid_stream_server_error(param_client: Client, call):
+    # The async client streams this into PyArrow, so it takes the same in-band error path.
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    with pytest.raises(Exception, match="boom"):
+        call(param_client.query_arrow, MID_STREAM_FAILURE)
+
+
+def test_arrow_stream_success_is_unaffected(param_client: Client, call, consume_stream):
+    # The error tail is only consulted once the stream ends, so a healthy stream is untouched.
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    stream = call(param_client.query_arrow_stream, "SELECT number FROM system.numbers LIMIT 100000")
+    rows = []
+    consume_stream(stream, lambda batch: rows.append(batch.num_rows))
+    assert sum(rows) == 100000

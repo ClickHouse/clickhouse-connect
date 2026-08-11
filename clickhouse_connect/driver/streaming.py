@@ -2,13 +2,16 @@ import asyncio
 import logging
 import threading
 import zlib
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 
 import lz4.frame
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
+from clickhouse_connect.driver.common import ShowClickHouseErrors
 from clickhouse_connect.driver.compression import _zstd_decompressor, available_compression
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import OperationalError, StreamFailureError
+from clickhouse_connect.driver.transform import extract_stream_error, format_stream_error
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
@@ -283,15 +286,75 @@ class QueuedStreamSource(Closable):
         self.source.close()
 
 
-class StreamingFileAdapter:
-    """File-like adapter for PyArrow streaming."""
+#  ClickHouse appends an in-band exception block at the very end of the response body, so only a
+#  bounded tail of the stream can ever contain it. 64KB comfortably holds a server error message
+#  plus its tag markers without retaining an unbounded amount of a large result.
+_EXCEPTION_TAIL_SIZE = 1 << 16
 
-    def __init__(self, streaming_source):
+
+class _ExceptionTail:
+    """The trailing bytes of a response body, bounded by ``_EXCEPTION_TAIL_SIZE``.
+
+    Chunks are retained by reference and only joined when an error is actually suspected, so a
+    successful stream pays one deque append per chunk and never copies its payload.
+    """
+
+    __slots__ = ("_chunks", "_size")
+
+    def __init__(self):
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+
+    def add(self, chunk: bytes) -> None:
+        self._chunks.append(chunk)
+        self._size += len(chunk)
+        #  Keep the oldest chunk only while the newer ones cannot cover the tail on their own
+        while self._chunks and self._size - len(self._chunks[0]) >= _EXCEPTION_TAIL_SIZE:
+            self._size -= len(self._chunks.popleft())
+
+    @property
+    def message(self) -> bytes:
+        if len(self._chunks) == 1:
+            return self._chunks[0]
+        return b"".join(self._chunks)
+
+
+class StreamingFileAdapter:
+    """File-like adapter for PyArrow streaming.
+
+    PyArrow parses the response bytes directly, so a mid-stream server error would otherwise reach
+    the caller as a truncated Arrow stream or a raw transport error. This adapter keeps a bounded
+    tail of the body and consults it when the stream ends, whether that end is a clean EOF or a
+    dropped connection, so the caller sees the same ClickHouse error the native path reports.
+    """
+
+    def __init__(self, streaming_source, show_clickhouse_errors: ShowClickHouseErrors = True):
         self.streaming_source = streaming_source
         self.gen = streaming_source.gen
         self.buffer = b""
         self.closed = False
         self.eof = False
+        self._show_clickhouse_errors = show_clickhouse_errors
+        self._exception_tag = getattr(streaming_source, "exception_tag", None)
+        self._tail = _ExceptionTail()
+
+    def _server_error(self, tagged_only: bool) -> str | None:
+        """The ClickHouse error carried in the response tail, if there is one."""
+        tail = self._tail.message
+        #  An Arrow payload is binary, so unlike the native reader this cannot treat an arbitrary
+        #  decodable tail as an error message. Without a tagged block, the `Code: ` marker is the
+        #  only trustworthy evidence that the tail holds an error at all.
+        if not tagged_only and b"Code: " not in tail[-1024:]:
+            tagged_only = True
+        error_msg = extract_stream_error(
+            tail,
+            self._exception_tag,
+            self._show_clickhouse_errors,
+            tagged_only=tagged_only,
+        )
+        if error_msg is None:
+            return None
+        return format_stream_error(error_msg, self._show_clickhouse_errors)
 
     def read(self, size: int = -1) -> bytes:
         """Read up to size bytes from stream"""
@@ -311,6 +374,7 @@ class StreamingFileAdapter:
             try:
                 chunk = next(self.gen)
                 if chunk:
+                    self._tail.add(chunk)
                     chunks.append(chunk)
                     current_len += len(chunk)
                 else:
@@ -318,7 +382,24 @@ class StreamingFileAdapter:
                     break
             except StopIteration:
                 self.eof = True
+                #  The body ended cleanly, so a truncated-stream guess would be unsafe here: trust
+                #  only a tagged block, which the server writes exclusively to report a failure.
+                error_msg = self._server_error(tagged_only=True)
+                if error_msg:
+                    raise StreamFailureError(error_msg) from None
                 break
+            except Exception as ex:
+                self.eof = True
+                #  A read failure partway through the stream: OperationalError from the sync reader,
+                #  ClientPayloadError from aiohttp. ClickHouse may have written the real error into
+                #  the response body before the connection dropped, so prefer that over the
+                #  transport error, exactly as the native path does.
+                if isinstance(ex, OperationalError) or ex.__class__.__name__ == "ClientPayloadError":
+                    error_msg = self._server_error(tagged_only=False)
+                    if error_msg:
+                        raise StreamFailureError(error_msg) from None
+                    raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
+                raise
 
         full_data = b"".join(chunks)
 

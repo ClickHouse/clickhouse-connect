@@ -9,10 +9,13 @@ import lz4.frame
 import pytest
 
 from clickhouse_connect.driver.compression import _zstd_compress
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import GENERIC_CLICKHOUSE_ERROR, OperationalError, StreamFailureError
 from clickhouse_connect.driver.streaming import (
+    _EXCEPTION_TAIL_SIZE,
+    StreamingFileAdapter,
     StreamingInsertSource,
     StreamingResponseSource,
+    _ExceptionTail,
 )
 
 
@@ -483,6 +486,142 @@ async def test_streaming_insert_backpressure():
 
     assert len(received) == 100
     assert received == chunks
+
+
+EXCEPTION_TAG = "fotmsnzgmwatfhfe"
+SERVER_ERROR = "Code: 395. DB::Exception: boom: while executing 'FUNCTION throwIf'. (FUNCTION_THROW_IF_VALUE_IS_NON_ZERO)"
+
+
+def tagged_exception_block(tag: str = EXCEPTION_TAG, message: str = SERVER_ERROR) -> bytes:
+    """The in-band exception block a server appends after it has already committed a 200."""
+    return f"\r\n__exception__\r\n{tag}\r\n{message}\n{len(message)} {tag}\r\n__exception__\r\n".encode()
+
+
+class MockByteSource:
+    """Minimal stand-in for a streaming response source consumed by StreamingFileAdapter."""
+
+    def __init__(self, chunks, exception_tag=None, error=None):
+        self.chunks = chunks
+        self.exception_tag = exception_tag
+        self.error = error
+
+    @property
+    def gen(self):
+        def generator():
+            yield from self.chunks
+            if self.error:
+                raise self.error
+
+        return generator()
+
+
+def read_all(adapter) -> bytes:
+    """Drain the adapter the way PyArrow does, in bounded reads."""
+    data = b""
+    while True:
+        chunk = adapter.read(1024)
+        if not chunk:
+            return data
+        data += chunk
+
+
+class TestExceptionTail:
+    """The tail keeps only the trailing bytes, by reference, so a large result is not retained."""
+
+    def test_retains_only_bounded_trailing_bytes(self):
+        tail = _ExceptionTail()
+        for _ in range(50):
+            tail.add(b"x" * (_EXCEPTION_TAIL_SIZE // 4))
+        message = tail.message
+        assert len(message) < _EXCEPTION_TAIL_SIZE * 2
+        assert message.endswith(b"x" * 100)
+
+    def test_short_stream_is_retained_whole(self):
+        tail = _ExceptionTail()
+        tail.add(b"user_1")
+        tail.add(b"user_2")
+        assert tail.message == b"user_1user_2"
+
+    def test_error_split_across_chunks_is_recovered(self):
+        # The marker can straddle a chunk boundary, so the tail must be joined before scanning.
+        block = tagged_exception_block()
+        tail = _ExceptionTail()
+        tail.add(b"\x00" * 79)
+        tail.add(block[:13])
+        tail.add(block[13:])
+        assert block in tail.message
+
+
+class TestArrowStreamExceptionDetection:
+    """Arrow paths hand raw bytes to PyArrow, so a mid-stream server error has to be recovered
+    from the response tail rather than from the parsed stream (issue #913)."""
+
+    def test_transport_abort_with_tagged_block_reports_server_error(self):
+        source = MockByteSource(
+            [b"\x00" * 1024, tagged_exception_block()],
+            exception_tag=EXCEPTION_TAG,
+            error=OperationalError("Failed to read response data from server"),
+        )
+        adapter = StreamingFileAdapter(source)
+        with pytest.raises(StreamFailureError, match="boom"):
+            read_all(adapter)
+
+    def test_transport_abort_without_tag_falls_back_to_code_prefix(self):
+        # Servers older than the exception-tag protocol append the bare error text.
+        source = MockByteSource(
+            [b"\x00" * 1024, SERVER_ERROR.encode()],
+            error=OperationalError("Failed to read response data from server"),
+        )
+        adapter = StreamingFileAdapter(source)
+        with pytest.raises(StreamFailureError, match="boom"):
+            read_all(adapter)
+
+    def test_clean_eof_with_tagged_block_reports_server_error(self):
+        source = MockByteSource([b"\x00" * 1024, tagged_exception_block()], exception_tag=EXCEPTION_TAG)
+        adapter = StreamingFileAdapter(source)
+        with pytest.raises(StreamFailureError, match="boom"):
+            read_all(adapter)
+
+    def test_clean_eof_without_tag_does_not_guess(self):
+        # Arrow payloads are binary, so a bare `Code: ` match at a clean EOF is not trustworthy
+        # evidence of a failure and must not turn a successful stream into an error.
+        source = MockByteSource([b"\x00" * 13, SERVER_ERROR.encode()])
+        adapter = StreamingFileAdapter(source)
+        assert read_all(adapter) == b"\x00" * 13 + SERVER_ERROR.encode()
+
+    def test_transport_abort_without_server_error_still_reports_stream_failure(self):
+        source = MockByteSource([b"\x00" * 1024], error=OperationalError("Failed to read response data from server"))
+        adapter = StreamingFileAdapter(source)
+        with pytest.raises(StreamFailureError, match="connection closed by server"):
+            read_all(adapter)
+
+    def test_successful_stream_is_unchanged(self):
+        chunks = [b"user_1", b"user_2", b"user_3"]
+        adapter = StreamingFileAdapter(MockByteSource(chunks, exception_tag=EXCEPTION_TAG))
+        assert read_all(adapter) == b"".join(chunks)
+
+    def test_unrelated_error_is_not_rewritten(self):
+        # Only transport failures are candidates for an in-band error; anything else is a bug that
+        # must keep its own type and traceback.
+        source = MockByteSource([b"\x00" * 13], error=ValueError("not a transport failure"))
+        adapter = StreamingFileAdapter(source)
+        with pytest.raises(ValueError, match="not a transport failure"):
+            read_all(adapter)
+
+    @pytest.mark.parametrize(
+        "show_clickhouse_errors,expected",
+        [(False, GENERIC_CLICKHOUSE_ERROR), ("scrub", "boom")],
+    )
+    def test_error_visibility_policy_is_applied(self, show_clickhouse_errors, expected):
+        # The Arrow paths must honor the same show_clickhouse_errors policy as the native path.
+        source = MockByteSource(
+            [tagged_exception_block()],
+            exception_tag=EXCEPTION_TAG,
+            error=OperationalError("Failed to read response data from server"),
+        )
+        adapter = StreamingFileAdapter(source, show_clickhouse_errors)
+        with pytest.raises(StreamFailureError, match=expected):
+            read_all(adapter)
 
 
 if __name__ == "__main__":

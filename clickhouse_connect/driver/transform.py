@@ -1,7 +1,7 @@
 import logging
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver.common import write_leb128
+from clickhouse_connect.driver.common import ShowClickHouseErrors, write_leb128
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import (
     GENERIC_CLICKHOUSE_ERROR,
@@ -29,26 +29,13 @@ class NativeTransform:
         renamer = context.column_renamer
         show_clickhouse_errors = context.show_clickhouse_errors
 
-        def format_stream_error(error_msg: str) -> str:
-            if show_clickhouse_errors is False:
-                return GENERIC_CLICKHOUSE_ERROR
-            if show_clickhouse_errors == "scrub":
-                return scrub_error_details(error_msg)
-            return error_msg
-
         def extract_source_error(tagged_only: bool = False) -> str | None:
-            if not source.last_message:
-                return None
-            exception_tag = getattr(source, "exception_tag", None)
-            if exception_tag:
-                error_msg = extract_exception_with_tag(source.last_message, exception_tag)
-                if error_msg:
-                    return error_msg
-            if tagged_only:
-                return None
-            if show_clickhouse_errors is not True and b"Code: " not in source.last_message[-1024:]:
-                return None
-            return extract_error_message(source.last_message)
+            return extract_stream_error(
+                source.last_message,
+                getattr(source, "exception_tag", None),
+                show_clickhouse_errors,
+                tagged_only=tagged_only,
+            )
 
         def get_block():
             nonlocal block_num
@@ -61,7 +48,7 @@ class NativeTransform:
                 except StreamCompleteException:
                     error_msg = extract_source_error(tagged_only=True)
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
                     return None
                 num_rows = source.read_leb128()
                 for col_num in range(num_cols):
@@ -87,7 +74,7 @@ class NativeTransform:
                     # in the response
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
                     raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
 
                 # A read failure partway through the stream: OperationalError from the sync reader,
@@ -96,7 +83,7 @@ class NativeTransform:
                 if isinstance(ex, OperationalError) or ex.__class__.__name__ == "ClientPayloadError":
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
                     raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
 
                 raise
@@ -229,3 +216,37 @@ def extract_error_message(message: bytes) -> str:
     except UnicodeError:
         message_str = f"unrecognized data found in stream: `{message.hex()[128:]}`"
     return message_str
+
+
+def format_stream_error(error_msg: str, show_clickhouse_errors: ShowClickHouseErrors) -> str:
+    if show_clickhouse_errors is False:
+        return GENERIC_CLICKHOUSE_ERROR
+    if show_clickhouse_errors == "scrub":
+        return scrub_error_details(error_msg)
+    return error_msg
+
+
+def extract_stream_error(
+    last_message: bytes | None,
+    exception_tag: str | None,
+    show_clickhouse_errors: ShowClickHouseErrors,
+    tagged_only: bool = False,
+) -> str | None:
+    """Recover an error the server wrote into the response body after it had already committed a 200
+    and started streaming results.
+
+    A tagged block is unambiguous, so it is trusted anywhere. The untagged fallback only looks for a
+    `Code: ` prefix, which is a guess against binary payloads, so callers that cannot distinguish a
+    truncated stream from a complete one pass ``tagged_only``.
+    """
+    if not last_message:
+        return None
+    if exception_tag:
+        error_msg = extract_exception_with_tag(last_message, exception_tag)
+        if error_msg:
+            return error_msg
+    if tagged_only:
+        return None
+    if show_clickhouse_errors is not True and b"Code: " not in last_message[-1024:]:
+        return None
+    return extract_error_message(last_message)

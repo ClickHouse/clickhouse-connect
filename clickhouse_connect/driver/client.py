@@ -18,6 +18,7 @@ from clickhouse_connect.common import version
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import options, tzutil
+from clickhouse_connect.driver._backend.httpcommon import ex_tag_header
 from clickhouse_connect.driver._backend.models import ClientConfig, QueryRuntime
 from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver._backend.orchestration import (
@@ -41,6 +42,7 @@ from clickhouse_connect.driver.exceptions import (
     ProgrammingError,
 )
 from clickhouse_connect.driver.external import ExternalData
+from clickhouse_connect.driver.httputil import ResponseSource
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import SettingDef, SettingStatus, setting_status
 from clickhouse_connect.driver.options import (
@@ -60,6 +62,7 @@ from clickhouse_connect.driver.query import (
     to_arrow,
     to_arrow_batches,
 )
+from clickhouse_connect.driver.streaming import StreamingFileAdapter
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.types import Closable
 
@@ -854,19 +857,16 @@ class Client(ABC):
         check_arrow()
         self._add_integration_tag("arrow")
         settings = self._update_arrow_settings(settings, use_strings)
-        return to_arrow_batches(
-            cast(
-                io.IOBase,
-                self.raw_stream(
-                    query,
-                    parameters,
-                    settings,
-                    fmt="ArrowStream",
-                    external_data=external_data,
-                    transport_settings=transport_settings,
-                ),
-            )
+        stream = self.raw_stream(
+            query,
+            parameters,
+            settings,
+            fmt="ArrowStream",
+            external_data=external_data,
+            transport_settings=transport_settings,
         )
+        buffer, source = self._arrow_stream_source(stream)
+        return to_arrow_batches(buffer, source)
 
     def query_df_arrow(
         self,
@@ -968,13 +968,31 @@ class Client(ABC):
         raw_stream = self.raw_stream(
             query, parameters, settings, fmt="ArrowStream", external_data=external_data, transport_settings=transport_settings
         )
-        reader = options.arrow.ipc.open_stream(raw_stream)
+        buffer, source = self._arrow_stream_source(raw_stream)
+        reader = options.arrow.ipc.open_stream(buffer)
 
         def df_generator():
             for batch in reader:
                 yield converter(batch)
 
-        return StreamContext(cast(Closable, raw_stream), df_generator())
+        return StreamContext(source, df_generator())
+
+    def _arrow_stream_source(self, stream: Any) -> tuple[io.IOBase, Closable]:
+        """Prepare a raw ArrowStream response for PyArrow, returning the file to parse and the
+        object that owns the underlying connection.
+
+        Over HTTP the server can report a failure after it has already committed a 200 and started
+        streaming, by appending an exception block to the body. Reading the response directly loses
+        that block when the connection drops, so the bytes go through ResponseSource, which keeps
+        the trailing chunk, and then through the file adapter, which turns it into the same error
+        the native path raises. Backends that return a plain file object report their own errors and
+        are passed through untouched.
+        """
+        headers = getattr(stream, "headers", None)
+        if headers is None:
+            return cast(io.IOBase, stream), cast(Closable, stream)
+        source = ResponseSource(stream, exception_tag=headers.get(ex_tag_header))
+        return cast(io.IOBase, StreamingFileAdapter(source, self.show_clickhouse_errors)), cast(Closable, source)
 
     def _update_arrow_settings(self, settings: dict[str, Any] | None, use_strings: bool | None) -> dict[str, Any]:
         settings = dict_copy(settings)

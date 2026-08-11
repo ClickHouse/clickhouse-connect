@@ -439,10 +439,12 @@ def to_arrow(content: bytes):
     return reader.read_all()
 
 
-def to_arrow_batches(buffer: IOBase) -> StreamContext:
+def to_arrow_batches(buffer: IOBase, source: Closable | None = None) -> StreamContext:
     pyarrow = check_arrow()
     reader = pyarrow.ipc.open_stream(buffer)
-    return StreamContext(buffer, reader)
+    #  When the buffer is an adapter over a separate response source, that source owns the
+    #  connection and is what has to be closed when the stream context exits.
+    return StreamContext(source if source is not None else buffer, reader)
 
 
 def arrow_buffer(table, compression: str | None = None) -> tuple[Sequence[str], bytes | BinaryIO]:

@@ -877,7 +877,7 @@ class AsyncClient(Client):
         streaming_source = await start_streaming_response(response, encoding=encoding, exception_tag=exception_tag)
 
         def parse_arrow_stream():
-            file_adapter = StreamingFileAdapter(streaming_source)
+            file_adapter = StreamingFileAdapter(streaming_source, self.show_clickhouse_errors)
             reader = options.arrow.ipc.open_stream(file_adapter)
             table = reader.read_all()
             return _apply_arrow_tz_policy(table, self.tz_mode)
@@ -925,7 +925,7 @@ class AsyncClient(Client):
         queued = QueuedStreamSource(streaming_source)
 
         def batches():
-            file_adapter = StreamingFileAdapter(streaming_source)
+            file_adapter = StreamingFileAdapter(streaming_source, self.show_clickhouse_errors)
             reader = options.arrow.ipc.open_stream(file_adapter)
             for batch in reader:
                 yield converter(batch)
