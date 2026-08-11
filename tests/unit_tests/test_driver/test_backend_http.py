@@ -607,3 +607,35 @@ class TestSyncRequestTargetPath:
 
     def test_explicit_proxy_path_untouched(self):
         assert self._sent_url("http://localhost:8123/clickhouse") == "http://localhost:8123/clickhouse?database=db1"
+
+
+class TestAsyncRequestTargetPath:
+    """Parity guard for the sync fix: the async backend must also send a request
+    URL that carries a path, so both backends stay valid through a forwarding
+    HTTP proxy. It always appends "/" and passes params separately to aiohttp."""
+
+    @staticmethod
+    async def _sent_url(url):
+        backend = HttpAsyncBackend(
+            url=url,
+            headers={},
+            client_settings={},
+            timeout=Mock(),
+            connector_kwargs={},
+            ssl_context=None,
+            proxy_url=None,
+            server_host_name=None,
+            token_provider=None,
+            autogenerate_query_id=False,
+        )
+        response = SimpleNamespace(status=200, headers={})
+        backend.session = SimpleNamespace(closed=False, request=AsyncMock(return_value=response))
+        await backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
+        _args, kwargs = backend.session.request.call_args
+        return kwargs["url"], kwargs["params"]
+
+    @pytest.mark.asyncio
+    async def test_bare_authority_sends_path(self):
+        sent_url, params = await self._sent_url("http://localhost:8123")
+        assert sent_url == "http://localhost:8123/"
+        assert params == {"database": "db1"}
