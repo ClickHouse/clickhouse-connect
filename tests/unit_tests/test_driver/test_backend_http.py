@@ -575,3 +575,35 @@ class TestAsyncFilesMerge:
     def test_files_only_passthrough(self):
         files = {"_f1": ("f1", b"x")}
         assert _plan_files(make_plan(form_files=files)) is files
+
+
+class TestSyncRequestTargetPath:
+    """The sync request-target must always carry a path. A bare authority URL
+    (no proxy_path) is forwarded verbatim as an absolute-form request-target to a
+    forwarding HTTP proxy, and a missing "/" (e.g. "http://host:8123?query=...")
+    is rejected as malformed by many proxies. An explicit proxy_path must be left
+    exactly as-is so path-based routing is unaffected."""
+
+    @staticmethod
+    def _sent_url(url):
+        backend = HttpSyncBackend(
+            url=url,
+            pool_manager=Mock(),
+            owns_pool_manager=False,
+            headers={},
+            params={},
+            timeout=Mock(),
+            server_host_name=None,
+            token_provider=None,
+            autogenerate_query_id=False,
+        )
+        backend.http.request = Mock(return_value=SimpleNamespace(status=200, headers={}))
+        backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
+        (_method, sent_url), _kwargs = backend.http.request.call_args
+        return sent_url
+
+    def test_bare_authority_gets_slash(self):
+        assert self._sent_url("http://localhost:8123") == "http://localhost:8123/?database=db1"
+
+    def test_explicit_proxy_path_untouched(self):
+        assert self._sent_url("http://localhost:8123/clickhouse") == "http://localhost:8123/clickhouse?database=db1"
