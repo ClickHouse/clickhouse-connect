@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- SQLAlchemy: zero-argument table engines such as `Memory()` now round-trip through Alembic migrations, and `SummingMergeTree` and `ReplicatedSummingMergeTree` accept ClickHouse's optional list of columns to sum. Closes [#946](https://github.com/ClickHouse/clickhouse-connect/issues/946).
+
 ## 1.7.0, 2026-08-11
 
 ### Improvements

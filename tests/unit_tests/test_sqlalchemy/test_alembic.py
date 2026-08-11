@@ -10,7 +10,7 @@ from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
 from alembic.util import CommandError
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, literal_column, text
-from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.exc import ArgumentError, NoSuchTableError
 from sqlalchemy.schema import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
@@ -45,9 +45,17 @@ from clickhouse_connect.cc_sqlalchemy.alembic.utils import make_include_object
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     CollapsingMergeTree,
+    Log,
+    Memory,
     MergeTree,
+    Null,
     ReplacingMergeTree,
     ReplicatedMergeTree,
+    ReplicatedSummingMergeTree,
+    Set,
+    StripeLog,
+    SummingMergeTree,
+    TinyLog,
     VersionedCollapsingMergeTree,
     build_engine,
 )
@@ -1375,3 +1383,115 @@ def test_render_settings_module_level_matches_helper():
     assert ClickHouseDDLHelper.render_settings(settings) == rendered
     assert render_settings(None) == ""
     assert render_settings({}) == ""
+
+
+@pytest.mark.parametrize("engine_cls", (Memory, Log, StripeLog, TinyLog, Null, Set))
+def test_no_arg_table_engines_accept_zero_args(engine_cls):
+    engine = engine_cls()
+    assert repr(engine) == f"{engine_cls.__name__}()"
+    assert engine.compile() == f"Engine {engine_cls.__name__}"
+
+
+def test_memory_alembic_repr_round_trips():
+    engine = Memory({})
+    metadata = MetaData()
+    table = Table("events", metadata, Column("id", Integer), engine)
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": metadata})
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+
+    rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
+    assert "clickhouse_engine=Memory()" in rendered
+    reconstructed = eval(repr(engine), {"Memory": Memory})  # noqa: S307
+    assert reconstructed.name == "Memory"
+
+
+def test_summing_merge_tree_preserves_merge_tree_api():
+    engine = SummingMergeTree("id")
+    assert isinstance(engine, MergeTree)
+    assert engine.compile() == "Engine SummingMergeTree ORDER BY id"
+
+
+@pytest.mark.parametrize(
+    ("columns", "expected_engine"),
+    (
+        ("delta", "SummingMergeTree(delta)"),
+        (("delta",), "SummingMergeTree(delta)"),
+        (["delta", "n_tx"], "SummingMergeTree((delta, n_tx))"),
+        ((Column("delta", Integer), Column("n_tx", Integer)), "SummingMergeTree((`delta`, `n_tx`))"),
+    ),
+)
+def test_summing_merge_tree_accepts_columns(columns, expected_engine):
+    engine = SummingMergeTree(order_by="id", columns=columns)
+    assert engine.compile() == f"Engine {expected_engine} ORDER BY id"
+
+
+def test_summing_merge_tree_columns_optional():
+    engine = SummingMergeTree(order_by="id")
+    assert engine.compile() == "Engine SummingMergeTree ORDER BY id"
+
+
+@pytest.mark.parametrize("columns", ((), [], text("delta + 1")))
+def test_summing_merge_tree_rejects_invalid_columns(columns):
+    with pytest.raises(ArgumentError, match="columns"):
+        SummingMergeTree(order_by="id", columns=columns)
+
+
+def test_summing_merge_tree_requires_order_by_or_primary_key():
+    with pytest.raises(ArgumentError, match="PRIMARY KEY or ORDER BY"):
+        SummingMergeTree(columns=("delta",))
+
+
+def test_summing_merge_tree_repr_round_trips():
+    engine = SummingMergeTree(columns=("delta", "n_tx"), order_by=("id",))
+    repr_str = repr(engine)
+    assert "columns=('delta', 'n_tx')" in repr_str
+    reconstructed = eval(repr_str, {"SummingMergeTree": SummingMergeTree})  # noqa: S307
+    assert reconstructed.compile() == engine.compile()
+
+
+def test_replicated_summing_merge_tree_accepts_columns_and_preserves_positional_order_by():
+    engine = ReplicatedSummingMergeTree(
+        "id",
+        zk_path="/clickhouse/tables/{shard}",
+        replica="{replica}",
+        columns=("delta", "n_tx"),
+    )
+    assert isinstance(engine, ReplicatedMergeTree)
+    assert engine.compile() == ("Engine ReplicatedSummingMergeTree('/clickhouse/tables/{shard}', '{replica}', (delta, n_tx)) ORDER BY id")
+
+
+@pytest.mark.parametrize(
+    ("full_engine", "expected_type", "expected_compile"),
+    (
+        (
+            "SummingMergeTree((delta, n_tx)) ORDER BY id",
+            SummingMergeTree,
+            "Engine SummingMergeTree((delta, n_tx)) ORDER BY id",
+        ),
+        (
+            "ReplicatedSummingMergeTree('/path', '{replica}', (delta, n_tx)) ORDER BY id",
+            ReplicatedSummingMergeTree,
+            "Engine ReplicatedSummingMergeTree('/path', '{replica}', (delta, n_tx)) ORDER BY id",
+        ),
+        (
+            "SharedSummingMergeTree('/path', '{replica}', (delta, n_tx)) ORDER BY id",
+            SummingMergeTree,
+            "Engine SummingMergeTree((delta, n_tx)) ORDER BY id",
+        ),
+    ),
+)
+def test_reflected_summing_merge_tree_repr_round_trips(full_engine, expected_type, expected_compile):
+    engine = build_engine(full_engine)
+    assert engine is not None
+    reconstructed = eval(  # noqa: S307
+        repr(engine),
+        {
+            "ReplicatedSummingMergeTree": ReplicatedSummingMergeTree,
+            "SummingMergeTree": SummingMergeTree,
+        },
+    )
+    assert isinstance(reconstructed, expected_type)
+    assert reconstructed.compile() == expected_compile

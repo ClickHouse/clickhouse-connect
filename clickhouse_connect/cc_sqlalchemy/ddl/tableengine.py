@@ -1,7 +1,7 @@
 import logging
 import threading
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Column
 from sqlalchemy.engine.default import DefaultDialect
@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 engine_map: dict[str, type["TableEngine"]] = {}
 EngineExpr = str | TextClause | ColumnElement | InstrumentedAttribute
 EngineParam = EngineExpr | Sequence[EngineExpr] | None
+if TYPE_CHECKING:
+    _EngineExpr = str | TextClause | ColumnElement[Any] | InstrumentedAttribute[Any]
+    _EngineColumn = str | Column[Any] | InstrumentedAttribute[Any]
+else:
+    # SQLAlchemy 1.4's InstrumentedAttribute is not subscriptable at runtime.
+    _EngineExpr = EngineExpr
+    _EngineColumn = str | Column | InstrumentedAttribute
+_EngineParam = _EngineExpr | Sequence[_EngineExpr] | None
+_EngineColumns = _EngineColumn | Sequence[_EngineColumn] | None
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
 
 _engine_render_dialect: DefaultDialect | None = None
@@ -61,6 +70,24 @@ def _render_engine_expr(value: EngineExpr) -> str:
     if isinstance(value, ColumnElement):
         return _compile_engine_clause(value)
     raise ArgumentError(None, f"Engine clause expression must be a column or scalar expression, got {type(value).__name__}")
+
+
+def _render_engine_columns(value: _EngineColumn | Sequence[_EngineColumn]) -> str:
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        if not value:
+            raise ArgumentError(None, "SummingMergeTree columns cannot be empty")
+        columns = [_render_engine_column(column) for column in value]
+        return columns[0] if len(columns) == 1 else f"({', '.join(columns)})"
+    return _render_engine_column(value)
+
+
+def _render_engine_column(value: _EngineColumn) -> str:
+    value = _coerce_clause_element(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Column):
+        return quote_identifier(value.name)
+    raise ArgumentError(None, f"SummingMergeTree columns must be identifiers, got {type(value).__name__}")
 
 
 def _render_setting_value(value: Any) -> str:
@@ -115,13 +142,20 @@ class TableEngine(SchemaItem):
     arg_names: Sequence[str] = ()
     quoted_args: set[str] = set()
     optional_args: set[str] = set()
+    _column_list_args: set[str] = set()
     eng_params: Sequence[str] = ()
 
     def __init_subclass__(cls, **kwargs):
         engine_map[cls.__name__] = cls
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: dict[str, Any] | None = None):
         super().__init__()
+        # `kwargs` defaults to None (not {}) so engines with no required or optional
+        # constructor args -- Memory, Log, StripeLog, TinyLog, Null, Set -- can be
+        # built with a plain no-arg call. Alembic renders these from repr() as
+        # e.g. `Memory()`, and that render must be able to round-trip back through
+        # this constructor without callers having to pass an empty dict explicitly.
+        kwargs = kwargs if kwargs is not None else {}
         self.name = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()
@@ -132,7 +166,9 @@ class TableEngine(SchemaItem):
                 if arg_name in self.optional_args:
                     continue
                 raise ValueError(f"Required engine parameter {arg_name} not provided for {te_name}")
-            if arg_name in self.quoted_args:
+            if arg_name in self._column_list_args:
+                engine_args.append(_render_engine_columns(v))
+            elif arg_name in self.quoted_args:
                 engine_args.append(f"'{v}'")
             else:
                 engine_args.append(v)
@@ -260,7 +296,33 @@ class SharedMergeTree(MergeTree):
 
 
 class SummingMergeTree(MergeTree):
-    pass
+    arg_names: Sequence[str] = ["columns"]
+    optional_args: set[str] = {"columns"}
+    _column_list_args = {"columns"}
+
+    def __init__(
+        self,
+        order_by: _EngineParam = None,
+        primary_key: _EngineParam = None,
+        partition_by: _EngineParam = None,
+        sample_by: _EngineParam = None,
+        ttl: _EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
+        *,
+        columns: _EngineColumns = None,
+    ) -> None:
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        kwargs = {
+            "columns": columns,
+            "order_by": order_by,
+            "primary_key": primary_key,
+            "partition_by": partition_by,
+            "sample_by": sample_by,
+            "ttl": ttl,
+            "settings": settings,
+        }
+        TableEngine.__init__(self, kwargs)
 
 
 class AggregatingMergeTree(MergeTree):
@@ -360,7 +422,7 @@ class GraphiteMergeTree(TableEngine):
 
 
 class ReplicatedMergeTree(TableEngine):
-    arg_names = ["zk_path", "replica"]
+    arg_names: Sequence[str] = ["zk_path", "replica"]
     quoted_args = set(arg_names)
     optional_args = quoted_args
     eng_params = MergeTree.eng_params
@@ -386,7 +448,38 @@ class ReplicatedAggregatingMergeTree(ReplicatedMergeTree):
 
 
 class ReplicatedSummingMergeTree(ReplicatedMergeTree):
-    pass
+    arg_names: Sequence[str] = ["zk_path", "replica", "columns"]
+    quoted_args: set[str] = {"zk_path", "replica"}
+    optional_args: set[str] = set(arg_names)
+    _column_list_args = {"columns"}
+
+    def __init__(
+        self,
+        order_by: _EngineParam = None,
+        primary_key: _EngineParam = None,
+        partition_by: _EngineParam = None,
+        sample_by: _EngineParam = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
+        ttl: _EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
+        *,
+        columns: _EngineColumns = None,
+    ) -> None:
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        kwargs = {
+            "zk_path": zk_path,
+            "replica": replica,
+            "columns": columns,
+            "order_by": order_by,
+            "primary_key": primary_key,
+            "partition_by": partition_by,
+            "sample_by": sample_by,
+            "ttl": ttl,
+            "settings": settings,
+        }
+        TableEngine.__init__(self, kwargs)
 
 
 class ReplicatedReplacingMergeTree(TableEngine):
