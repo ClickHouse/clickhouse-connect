@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 engine_map: dict[str, type["TableEngine"]] = {}
 EngineExpr = str | TextClause | ColumnElement | InstrumentedAttribute
 EngineParam = EngineExpr | Sequence[EngineExpr] | None
+EngineColumn = str | Column | InstrumentedAttribute
+EngineColumns = EngineColumn | Sequence[EngineColumn] | None
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
 
 _engine_render_dialect: DefaultDialect | None = None
@@ -61,6 +63,24 @@ def _render_engine_expr(value: EngineExpr) -> str:
     if isinstance(value, ColumnElement):
         return _compile_engine_clause(value)
     raise ArgumentError(None, f"Engine clause expression must be a column or scalar expression, got {type(value).__name__}")
+
+
+def _render_engine_columns(value: EngineColumn | Sequence[EngineColumn]) -> str:
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        if not value:
+            raise ArgumentError(None, "SummingMergeTree columns cannot be empty")
+        columns = [_render_engine_column(column) for column in value]
+        return columns[0] if len(columns) == 1 else f"({', '.join(columns)})"
+    return _render_engine_column(value)
+
+
+def _render_engine_column(value: EngineColumn) -> str:
+    value = _coerce_clause_element(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Column):
+        return quote_identifier(value.name)
+    raise ArgumentError(None, f"SummingMergeTree columns must be identifiers, got {type(value).__name__}")
 
 
 def _render_setting_value(value: Any) -> str:
@@ -115,6 +135,7 @@ class TableEngine(SchemaItem):
     arg_names: Sequence[str] = ()
     quoted_args: set[str] = set()
     optional_args: set[str] = set()
+    column_list_args: set[str] = set()
     eng_params: Sequence[str] = ()
 
     def __init_subclass__(cls, **kwargs):
@@ -138,10 +159,8 @@ class TableEngine(SchemaItem):
                 if arg_name in self.optional_args:
                     continue
                 raise ValueError(f"Required engine parameter {arg_name} not provided for {te_name}")
-            if isinstance(v, (tuple, list)):
-                # e.g. SummingMergeTree((delta, n_tx)) -- a positional column list,
-                # distinct from the ORDER BY/PARTITION BY style clauses in eng_params.
-                engine_args.append(f"({', '.join(_render_engine_expr(item) for item in v)})")
+            if arg_name in self.column_list_args:
+                engine_args.append(_render_engine_columns(v))
             elif arg_name in self.quoted_args:
                 engine_args.append(f"'{v}'")
             else:
@@ -269,31 +288,23 @@ class SharedMergeTree(MergeTree):
     pass
 
 
-class SummingMergeTree(TableEngine):
-    """SummingMergeTree([columns]) -- an optional list of columns to sum on merge.
-
-    Extends TableEngine directly rather than MergeTree, matching the pattern
-    already used by ReplacingMergeTree/CollapsingMergeTree/etc: those engines
-    also take their own positional constructor arg alongside the standard
-    MergeTree clauses, so they build the combined kwargs dict themselves and
-    hand it to TableEngine.__init__ rather than going through MergeTree's
-    narrower signature (which has no `columns` parameter to receive it).
-    """
-
+class SummingMergeTree(MergeTree):
     arg_names = ["columns"]
     optional_args = {"columns"}
+    column_list_args = {"columns"}
     eng_params = MergeTree.eng_params
 
     def __init__(
         self,
-        columns: EngineParam = None,
         order_by: EngineParam = None,
         primary_key: EngineParam = None,
         partition_by: EngineParam = None,
         sample_by: EngineParam = None,
         ttl: EngineExpr | None = None,
         settings: dict[str, Any] | None = None,
-    ):
+        *,
+        columns: EngineColumns = None,
+    ) -> None:
         if order_by is None and primary_key is None:
             raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
         kwargs = {
@@ -305,7 +316,7 @@ class SummingMergeTree(TableEngine):
             "ttl": ttl,
             "settings": settings,
         }
-        super().__init__(kwargs)
+        TableEngine.__init__(self, kwargs)
 
 
 class AggregatingMergeTree(MergeTree):
@@ -431,7 +442,39 @@ class ReplicatedAggregatingMergeTree(ReplicatedMergeTree):
 
 
 class ReplicatedSummingMergeTree(ReplicatedMergeTree):
-    pass
+    arg_names = ["zk_path", "replica", "columns"]
+    quoted_args = {"zk_path", "replica"}
+    optional_args = set(arg_names)
+    column_list_args = {"columns"}
+    eng_params = MergeTree.eng_params
+
+    def __init__(
+        self,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
+        *,
+        columns: EngineColumns = None,
+    ) -> None:
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        kwargs = {
+            "zk_path": zk_path,
+            "replica": replica,
+            "columns": columns,
+            "order_by": order_by,
+            "primary_key": primary_key,
+            "partition_by": partition_by,
+            "sample_by": sample_by,
+            "ttl": ttl,
+            "settings": settings,
+        }
+        TableEngine.__init__(self, kwargs)
 
 
 class ReplicatedReplacingMergeTree(TableEngine):
