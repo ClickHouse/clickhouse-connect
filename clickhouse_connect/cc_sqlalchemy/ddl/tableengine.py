@@ -120,8 +120,14 @@ class TableEngine(SchemaItem):
     def __init_subclass__(cls, **kwargs):
         engine_map[cls.__name__] = cls
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: dict[str, Any] | None = None):
         super().__init__()
+        # `kwargs` defaults to None (not {}) so engines with no required or optional
+        # constructor args -- Memory, Log, StripeLog, TinyLog, Null, Set -- can be
+        # built with a plain no-arg call. Alembic renders these from repr() as
+        # e.g. `Memory()`, and that render must be able to round-trip back through
+        # this constructor without callers having to pass an empty dict explicitly.
+        kwargs = kwargs if kwargs is not None else {}
         self.name = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()
@@ -132,7 +138,11 @@ class TableEngine(SchemaItem):
                 if arg_name in self.optional_args:
                     continue
                 raise ValueError(f"Required engine parameter {arg_name} not provided for {te_name}")
-            if arg_name in self.quoted_args:
+            if isinstance(v, (tuple, list)):
+                # e.g. SummingMergeTree((delta, n_tx)) -- a positional column list,
+                # distinct from the ORDER BY/PARTITION BY style clauses in eng_params.
+                engine_args.append(f"({', '.join(_render_engine_expr(item) for item in v)})")
+            elif arg_name in self.quoted_args:
                 engine_args.append(f"'{v}'")
             else:
                 engine_args.append(v)
@@ -259,8 +269,43 @@ class SharedMergeTree(MergeTree):
     pass
 
 
-class SummingMergeTree(MergeTree):
-    pass
+class SummingMergeTree(TableEngine):
+    """SummingMergeTree([columns]) -- an optional list of columns to sum on merge.
+
+    Extends TableEngine directly rather than MergeTree, matching the pattern
+    already used by ReplacingMergeTree/CollapsingMergeTree/etc: those engines
+    also take their own positional constructor arg alongside the standard
+    MergeTree clauses, so they build the combined kwargs dict themselves and
+    hand it to TableEngine.__init__ rather than going through MergeTree's
+    narrower signature (which has no `columns` parameter to receive it).
+    """
+
+    arg_names = ["columns"]
+    optional_args = {"columns"}
+    eng_params = MergeTree.eng_params
+
+    def __init__(
+        self,
+        columns: EngineParam = None,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
+    ):
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        kwargs = {
+            "columns": columns,
+            "order_by": order_by,
+            "primary_key": primary_key,
+            "partition_by": partition_by,
+            "sample_by": sample_by,
+            "ttl": ttl,
+            "settings": settings,
+        }
+        super().__init__(kwargs)
 
 
 class AggregatingMergeTree(MergeTree):

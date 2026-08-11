@@ -45,9 +45,16 @@ from clickhouse_connect.cc_sqlalchemy.alembic.utils import make_include_object
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     CollapsingMergeTree,
+    Log,
+    Memory,
     MergeTree,
+    Null,
     ReplacingMergeTree,
     ReplicatedMergeTree,
+    Set,
+    StripeLog,
+    SummingMergeTree,
+    TinyLog,
     VersionedCollapsingMergeTree,
     build_engine,
 )
@@ -1375,3 +1382,61 @@ def test_render_settings_module_level_matches_helper():
     assert ClickHouseDDLHelper.render_settings(settings) == rendered
     assert render_settings(None) == ""
     assert render_settings({}) == ""
+
+
+def test_no_arg_table_engines_accept_zero_args():
+    """#946: engines with no required/optional constructor args -- Memory, Log,
+    StripeLog, TinyLog, Null, Set -- don't define their own __init__, so they
+    fall through to TableEngine.__init__(self, kwargs). That used to require
+    kwargs as a plain positional arg with no default, so Memory() raised
+    "missing 1 required positional argument: 'kwargs'" while Memory({}) worked.
+    Alembic renders these engines from repr() as a bare no-arg call (e.g.
+    "Memory()"), and running the generated migration executes exactly that
+    call, so it must not require an explicit empty dict.
+    """
+    for engine_cls in (Memory, Log, StripeLog, TinyLog, Null, Set):
+        engine = engine_cls()
+        assert repr(engine) == f"{engine_cls.__name__}()"
+        assert engine.compile() == f"Engine {engine_cls.__name__}"
+
+
+def test_memory_alembic_repr_round_trips():
+    """The exact scenario from the issue: repr(Memory({})) must produce code
+    that Alembic can write into a migration and that migration must actually
+    run, i.e. eval'ing the repr must not raise.
+    """
+    engine = Memory({})
+    repr_str = repr(engine)
+    assert repr_str == "Memory()"
+    reconstructed = eval(repr_str, {"Memory": Memory})  # noqa: S307
+    assert reconstructed.name == "Memory"
+
+
+def test_summing_merge_tree_accepts_columns():
+    """#946: SummingMergeTree had no way to pass the column list that
+    ClickHouse's SummingMergeTree([columns]) engine accepts, e.g.
+    SummingMergeTree((delta, n_tx)) ORDER BY ...
+    """
+    engine = SummingMergeTree(columns=("delta", "n_tx"), order_by="id")
+    compiled = engine.compile()
+    assert "SummingMergeTree((delta, n_tx))" in compiled
+    assert "ORDER BY id" in compiled
+
+
+def test_summing_merge_tree_columns_optional():
+    """columns is optional -- ClickHouse allows plain SummingMergeTree() ORDER BY ..."""
+    engine = SummingMergeTree(order_by="id")
+    assert engine.compile() == "Engine SummingMergeTree ORDER BY id"
+
+
+def test_summing_merge_tree_requires_order_by_or_primary_key():
+    with pytest.raises(Exception, match="PRIMARY KEY or ORDER BY"):
+        SummingMergeTree(columns=("delta",))
+
+
+def test_summing_merge_tree_repr_round_trips():
+    engine = SummingMergeTree(columns=("delta", "n_tx"), order_by=("id",))
+    repr_str = repr(engine)
+    assert "columns=('delta', 'n_tx')" in repr_str
+    reconstructed = eval(repr_str, {"SummingMergeTree": SummingMergeTree})  # noqa: S307
+    assert reconstructed.compile() == engine.compile()
