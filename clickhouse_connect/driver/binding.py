@@ -16,7 +16,8 @@ from clickhouse_connect.json_impl import any_to_json
 
 BS = "\\"
 must_escape = (BS, "'", "`", "\t", "\n")
-external_bind_re = re.compile(r"\{(\w+):([^}]+)\}")
+# `$` is a word character in the server lexer, so it is legal inside a query parameter name.
+external_bind_re = re.compile(r"\{([\w$]+):([^}]+)\}")
 
 
 def _datetime_is_aware(value: datetime) -> bool:

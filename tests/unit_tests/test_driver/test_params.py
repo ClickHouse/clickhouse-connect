@@ -370,6 +370,67 @@ class TestBindQuerySuffixCollision:
         assert params == {}
 
 
+class TestBindQueryDollarInParamName:
+    """`$` is a word character in the server lexer, so it is legal in a query parameter name."""
+
+    utc = timezone.utc
+    dt = datetime(2026, 1, 1, 12, 0, 0, 250306, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$"])
+    def test_binds_server_side(self, name):
+        query = f"SELECT {{{name}:Int32}} AS v"
+        q, params = bind_query(query, {name: 13}, server_tz=self.utc)
+        assert q == query
+        assert params == {f"param_{name}": "13"}
+
+    @pytest.mark.parametrize(
+        "type_str,expected",
+        [
+            ("DateTime64(6)", "2026-01-01 12:00:00.250306"),
+            ("Nullable(DateTime64(6))", "2026-01-01 12:00:00.250306"),
+            ("Array(DateTime64(6))", "['2026-01-01 12:00:00.250306']"),
+            ("DateTime", "2026-01-01 12:00:00"),
+        ],
+    )
+    def test_type_hint_applies(self, type_str, expected):
+        # The hint is keyed by the captured name, so a missed capture silently drops precision.
+        value = [self.dt] if type_str.startswith("Array") else self.dt
+        query = f"SELECT {{t$x:{type_str}}} AS t"
+        _, params = bind_query(query, {"t$x": value}, server_tz=self.utc)
+        assert params["param_t$x"] == expected
+
+    def test_type_hint_applies_in_mixed_query(self):
+        query = "SELECT {t$x:DateTime64(6)} AS t, {a:Int32} AS a"
+        _, params = bind_query(query, {"t$x": self.dt, "a": 79}, server_tz=self.utc)
+        assert params == {"param_t$x": "2026-01-01 12:00:00.250306", "param_a": "79"}
+
+    def test_timezone_hint_applies(self):
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        query = "SELECT {t$x:DateTime64(6, 'Europe/Berlin')} AS t"
+        _, params = bind_query(query, {"t$x": self.dt}, server_tz=self.utc)
+        assert params["param_t$x"] == self.dt.astimezone(berlin).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    def test_binary_bind_sentinel_still_wins(self):
+        # A `$name$` key is claimed by the binary bind convention, which substitutes into the
+        # query text. It must not be rerouted to server-side binding.
+        query = "SELECT {$x$:String} AS v"
+        q, params = bind_query(query, {"$x$": b"user_1"})
+        assert q == b"SELECT {$x$user_1$x$:String} AS v"
+        assert params == {}
+
+    def test_binary_bind_alongside_dollar_name(self):
+        query = "SELECT {$x$:String} AS v, {id$y:Int32} AS n"
+        q, params = bind_query(query, {"$x$": b"user_2", "id$y": 79}, server_tz=self.utc)
+        assert q == b"SELECT {$x$user_2$x$:String} AS v, {id$y:Int32} AS n"
+        assert params == {"param_id$y": "79"}
+
+    def test_no_placeholder_still_uses_client_side_path(self):
+        query = "SELECT %(a$b)s"
+        q, params = bind_query(query, {"a$b": 79}, server_tz=self.utc)
+        assert q == "SELECT 79"
+        assert params == {}
+
+
 @pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
 def test_naive_datetime_wall_binding_behavior(monkeypatch):
     original_tz = _force_process_timezone(monkeypatch, NON_UTC_HOST_TZ)

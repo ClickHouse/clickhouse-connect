@@ -9,8 +9,8 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.driver.binding import format_str
 
-# The driver's external_bind_re only recognizes \w+ placeholder names.
-_bind_name_re = re.compile(r"\w+\Z")
+# Mirrors the driver's external_bind_re, which recognizes [\w$]+ placeholder names.
+_bind_name_re = re.compile(r"[\w$]+\Z")
 
 
 def _find_outermost_marker(text, markers):
@@ -114,7 +114,7 @@ class ChStatementCompiler(SQLCompiler):
         if not _bind_name_re.match(name):
             raise CompileError(
                 f"server_side_params cannot bind parameter {name!r}: ClickHouse server-side "
-                "parameter names must match [A-Za-z0-9_]. Rename the bind parameter."
+                "parameter names must match [A-Za-z0-9_$]. Rename the bind parameter."
             )
 
     def visit_bindparam(self, bindparam, **kw):

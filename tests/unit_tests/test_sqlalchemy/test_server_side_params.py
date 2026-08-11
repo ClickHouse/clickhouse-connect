@@ -98,6 +98,13 @@ def test_non_word_bind_name_raises():
         _sql(select(events.c.id).where(events.c.id == bindparam("a-b", value=13, type_=Integer())))
 
 
+@pytest.mark.parametrize("name", ["id$x", "$x", "id$"])
+def test_dollar_bind_name_renders_server_side(name):
+    # `$` is legal in a server-side parameter name, so the dialect must not reject it (issue #936).
+    sql = _sql(select(events.c.id).where(events.c.id == bindparam(name, value=13, type_=Integer())))
+    assert f"{{{name}:Int32}}" in sql
+
+
 def test_in_list_with_bind_processor_raises():
     class ProcessedString(TypeDecorator):
         impl = String
