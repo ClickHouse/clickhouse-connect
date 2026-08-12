@@ -6,6 +6,13 @@
 
 - Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Results and dtypes match the Python codec, and the Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
 
+## 1.7.1, 2026-08-12
+
+### Bug Fixes
+
+- SQLAlchemy 2.1 compatibility. Identifier quoting forwarded the deprecated `force` argument to `IdentifierPreparer.quote`, which SQLAlchemy 2.1 removed, so any dialect use raised `TypeError` on 2.1.0b3. The parent call now passes only the identifier. The optional `force` parameter stays on the ClickHouse preparer for direct callers. Closes [#954](https://github.com/ClickHouse/clickhouse-connect/issues/954).
+- SQLAlchemy 1.4 compatibility. Column DDL using the `clickhouse_materialized`, `clickhouse_alias`, or `clickhouse_ttl` options raised `AttributeError` on SQLAlchemy 1.4 because it called a rendering helper that only exists in 2.0. The helper is now implemented locally. This appears to have been broken since 1.1.0.
+
 ## 1.7.0, 2026-08-11
 
 ### Improvements
