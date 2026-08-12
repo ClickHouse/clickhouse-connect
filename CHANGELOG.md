@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.7.1, 2026-08-12
+
 ### Bug Fixes
 
 - SQLAlchemy 2.1 compatibility. Identifier quoting forwarded the deprecated `force` argument to `IdentifierPreparer.quote`, which SQLAlchemy 2.1 removed, so any dialect use raised `TypeError` on 2.1.0b3. The parent call now passes only the identifier. The optional `force` parameter stays on the ClickHouse preparer for direct callers. Closes [#954](https://github.com/ClickHouse/clickhouse-connect/issues/954).
