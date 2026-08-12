@@ -509,3 +509,29 @@ def test_column_clause_order_comment_before_codec_before_ttl(build_column, expec
 def test_default_kinds_are_mutually_exclusive(build_column, expected):
     # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive; only the highest-precedence one is emitted.
     assert _column_spec(build_column()) == expected
+
+
+def test_render_comment_escapes_backslashes_and_quotes():
+    from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
+
+    # A backslash before a quote must not be able to terminate the string literal early.
+    # Doubling only the quote is unsafe because ClickHouse treats backslash as an escape
+    # character inside string literals.
+    payload = "\\'; DROP TABLE users; --"
+    rendered = ClickHouseDDLHelper.render_comment(payload)
+    assert rendered == format_str(payload)
+    assert rendered == "'\\\\\\'; DROP TABLE users; --'"
+    assert ClickHouseDDLHelper.render_comment(None) == "''"
+
+
+def test_create_table_comment_escapes_backslashes_and_quotes():
+    payload = "\\'; DROP TABLE users; --"
+    table = db.Table(
+        "t",
+        db.MetaData(),
+        db.Column("id", UInt64),
+        MergeTree(order_by="id"),
+        comment=payload,
+    )
+    ddl = str(CreateTable(table).compile("", dialect=dialect))
+    assert f"COMMENT {format_str(payload)}" in ddl

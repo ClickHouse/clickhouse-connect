@@ -107,8 +107,11 @@ class ClickHouseDDLHelper:
     def render_comment(comment: str | None) -> str:
         if comment is None:
             return "''"
-        escaped = comment.replace("'", "''")
-        return f"'{escaped}'"
+        # Use the driver's ClickHouse string escaping (escapes backslash as well as the
+        # single quote). Doubling only the quote is unsafe: ClickHouse treats backslash as
+        # an escape character inside string literals, so a backslash before a quote shifts
+        # the quote parity and lets a crafted comment terminate the literal early.
+        return format_str(comment)
 
     @staticmethod
     def _render_setting_value(value: Any) -> str:
@@ -143,7 +146,7 @@ class ChDDLCompiler(DDLCompiler):
         text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
         text += ") " + engine.compile()
         if table.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, sqltypes.STRINGTYPE)}"
+            text += f" COMMENT {ClickHouseDDLHelper.render_comment(table.comment)}"
         return text
 
     def _visit_create_dictionary(self, create, dictionary, if_not_exists: str):
@@ -169,7 +172,7 @@ class ChDDLCompiler(DDLCompiler):
             text += f" LIFETIME({lifetime})"
 
         if dictionary.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(dictionary.comment, sqltypes.STRINGTYPE)}"
+            text += f" COMMENT {ClickHouseDDLHelper.render_comment(dictionary.comment)}"
 
         return text
 
@@ -201,7 +204,7 @@ class ChDDLCompiler(DDLCompiler):
                 text += f" DEFAULT {default}"
         # ClickHouse requires the clause order COMMENT, then CODEC, then TTL.
         if column.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(column.comment, sqltypes.STRINGTYPE)}"
+            text += f" COMMENT {ClickHouseDDLHelper.render_comment(column.comment)}"
         codec = ClickHouseDDLHelper.get_option(column, "codec")
         if codec is not None:
             codec_sql = codec if isinstance(codec, str) else ", ".join(str(item) for item in codec)
