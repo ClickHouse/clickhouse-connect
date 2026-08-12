@@ -28,9 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, manylinux: auto }
+          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, manylinux: 2_28 }
           - { runner: ubuntu-latest, arch: x86_64, libc: musllinux, manylinux: musllinux_1_2 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, manylinux: auto }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, manylinux: 2_28 }
           - { runner: ubuntu-24.04-arm, arch: aarch64, libc: musllinux, manylinux: musllinux_1_2 }
     steps:
       - uses: actions/checkout@v6
