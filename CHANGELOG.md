@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.8.0rc1, 2026-08-12
+
 ### Improvements
 
 - Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Results and dtypes match the Python codec, and the Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
