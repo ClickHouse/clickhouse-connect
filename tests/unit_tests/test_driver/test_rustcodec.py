@@ -150,14 +150,14 @@ def test_resolve_rust_raises_when_module_missing(monkeypatch, codec):
 
 class _StaleCore:
     __version__ = "0.0.9"
-    BINDING_API_VERSION = 0
+    BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION - 1
 
 
 class _NoApiVersionCore:
     __version__ = "0.0.5"
 
 
-@pytest.mark.parametrize("core", [_StaleCore, _NoApiVersionCore], ids=["api_zero", "api_missing"])
+@pytest.mark.parametrize("core", [_StaleCore, _NoApiVersionCore], ids=["api_stale", "api_missing"])
 @pytest.mark.parametrize("codec", ["rust", "rust_strict"])
 def test_resolve_rust_raises_when_binding_api_too_old(monkeypatch, codec, core):
     monkeypatch.setitem(sys.modules, "_ch_core", core)
@@ -168,7 +168,11 @@ def test_resolve_rust_raises_when_binding_api_too_old(monkeypatch, codec, core):
     assert "pip install --upgrade clickhouse-connect-core" in message
 
 
-@pytest.mark.parametrize("api_version", [1, 2])
+@pytest.mark.parametrize(
+    "api_version",
+    [rustcodec.REQUIRED_BINDING_API_VERSION, rustcodec.REQUIRED_BINDING_API_VERSION + 1],
+    ids=["required", "newer"],
+)
 def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_log, api_version):
     class _Core:
         __version__ = "0.1.0"
@@ -177,6 +181,14 @@ def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_
     monkeypatch.setitem(sys.modules, "_ch_core", _Core)
     assert resolve_native_codec("rust") == "rust"
     assert resolve_native_codec("rust_strict") == "rust_strict"
+
+
+def test_built_binding_matches_required_api_version():
+    """The compiled extension and the driver ship from one tree, so their
+    binding API versions must be bumped together. Enforced wherever the
+    extension is built; skipped on pure-Python environments."""
+    core = pytest.importorskip("_ch_core")
+    assert core.BINDING_API_VERSION == rustcodec.REQUIRED_BINDING_API_VERSION
 
 
 def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log):
