@@ -123,15 +123,11 @@ jobs:
       PYO3_CROSS_PYTHON_VERSION: '3.10'
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python 3.10 (x64 host)
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.10'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64-pc-windows-msvc
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
+          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python3.10
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-arm64-3.10
