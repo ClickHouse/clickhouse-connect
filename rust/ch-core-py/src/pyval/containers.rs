@@ -50,7 +50,7 @@ pub(super) unsafe fn fill_tuple<'py>(
                 let mut field_sink = |i: usize, item: *mut ffi::PyObject| {
                     if validity.is_some_and(|bm| !bm.is_valid(i)) {
                         // Safety: item is an owned reference the sink takes over.
-                        discarded.push(unsafe { Py::from_owned_ptr(py, item) });
+                        discarded.push(unsafe { Bound::from_owned_ptr(py, item) }.unbind());
                         return;
                     }
                     // Safety: containers[i] is a live tuple with num_fields
@@ -67,7 +67,7 @@ pub(super) unsafe fn fill_tuple<'py>(
                 let mut err: Option<PyErr> = None;
                 let mut field_sink = |i: usize, item: *mut ffi::PyObject| {
                     // Safety: item is an owned reference the sink takes over.
-                    let item = unsafe { Py::<PyAny>::from_owned_ptr(py, item) };
+                    let item = unsafe { Bound::from_owned_ptr(py, item) }.unbind();
                     if err.is_some() || validity.is_some_and(|bm| !bm.is_valid(i)) {
                         discarded.push(item);
                         return;
@@ -206,7 +206,7 @@ pub(super) unsafe fn point_list_owned_ptr(
     // Safety: list_ptr came from PyList_New, so it is a list and this is the
     // sole owned reference. Binding it makes the error path drop the
     // partially-filled list; list_dealloc tolerates the NULL slots.
-    let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+    let list = Bound::from_owned_ptr(py, list_ptr).cast_into_unchecked::<PyList>();
     for (slot, k) in (start..end).enumerate() {
         let tuple_ptr = ffi::PyTuple_New(2);
         if tuple_ptr.is_null() {

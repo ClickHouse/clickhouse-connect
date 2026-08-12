@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
@@ -58,15 +57,14 @@ impl ColBatch {
     #[pyo3(signature = (data, has_block_info = false))]
     fn decode_native(data: &Bound<'_, PyAny>, has_block_info: bool) -> PyResult<Self> {
         let options = decode_options(has_block_info);
-        let chunked = if let Ok(bytes) = data.downcast::<pyo3::types::PyBytes>() {
+        let chunked = if let Ok(bytes) = data.cast::<pyo3::types::PyBytes>() {
             // bytes: decode straight from the borrowed buffer, no copy. The
             // borrow ties the decode to the GIL, so it cannot be released.
             decode_all_bytes(bytes.as_bytes(), &options)
         } else {
             // bytearray, memoryview: copy out, then decode without the GIL.
             let owned = buffer_to_vec(data)?;
-            data.py()
-                .allow_threads(|| decode_all_bytes(&owned, &options))
+            data.py().detach(|| decode_all_bytes(&owned, &options))
         }
         .map_err(decode_err)?;
         Ok(Self::from_chunked(chunked))
@@ -143,7 +141,7 @@ impl ColBatch {
     fn __arrow_c_stream__<'py>(
         &self,
         py: Python<'py>,
-        requested_schema: Option<PyObject>,
+        requested_schema: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
         let _ = requested_schema;
 
@@ -163,14 +161,13 @@ impl ColBatch {
             );
         }
 
-        let name = CString::new("arrow_array_stream").unwrap();
         // The destructor frees the stream if the capsule is dropped unconsumed.
         // A consumer that imports the stream moves it out and clears `release`
         // in place, so the destructor sees `None` and does nothing.
-        let capsule = PyCapsule::new_with_destructor(
+        let capsule = PyCapsule::new_with_value_and_destructor(
             py,
             SendableStream(stream),
-            Some(name),
+            c"arrow_array_stream",
             |mut stream: SendableStream, _context| {
                 // Safety: `stream` was initialized by `export_chunks_to_stream`
                 // and `release_if_set` is a no-op once a consumer cleared
@@ -225,7 +222,7 @@ impl ColBatch {
             // Safety: list_ptr came from PyList_New, so it is a list and this
             // is the sole owned reference. Binding it makes the error and
             // panic paths drop the list; list_dealloc tolerates NULL slots.
-            let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+            let list = Bound::from_owned_ptr(py, list_ptr).cast_into_unchecked::<PyList>();
 
             // Allocate every row tuple up front, moved into the list at once,
             // so the error path drops them through list_dealloc. Column-major
@@ -464,7 +461,7 @@ fn column_to_pylist<'py>(
         // Safety: list_ptr came from PyList_New, so it is a list and this is
         // the sole owned reference. Binding it makes the error and panic paths
         // drop the list; list_dealloc tolerates the NULL slots not yet filled.
-        let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+        let list = Bound::from_owned_ptr(py, list_ptr).cast_into_unchecked::<PyList>();
 
         let mut out_row: usize = 0;
         for chunk in chunks {
@@ -501,7 +498,7 @@ fn column_to_pytuple<'py>(
         // Safety: tuple_ptr came from PyTuple_New, so it is a tuple and this is
         // the sole owned reference. Binding it makes the error and panic paths
         // drop the tuple; tuple_dealloc tolerates the NULL slots not yet filled.
-        let tuple = Bound::from_owned_ptr(py, tuple_ptr).downcast_into_unchecked::<PyTuple>();
+        let tuple = Bound::from_owned_ptr(py, tuple_ptr).cast_into_unchecked::<PyTuple>();
 
         let mut out_row: usize = 0;
         for chunk in chunks {

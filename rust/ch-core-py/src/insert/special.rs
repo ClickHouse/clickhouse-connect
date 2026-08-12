@@ -14,10 +14,10 @@ pub(super) fn build_nothing_column(
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
 
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return Ok(nothing_column_from_seq(&ListSeq(list), row_count, nullable));
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return Ok(nothing_column_from_seq(
             &TupleSeq(tuple),
             row_count,
@@ -77,10 +77,10 @@ pub(super) fn build_aggregate_state_column(
 ) -> PyResult<Column> {
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return aggregate_state_column_from_seq(py, name, ch_type, &ListSeq(list), row_count);
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return aggregate_state_column_from_seq(py, name, ch_type, &TupleSeq(tuple), row_count);
     }
     aggregate_state_column_from_rows(name, ch_type, &column_values, row_count)
@@ -179,10 +179,10 @@ fn append_aggregate_state(
             "column {name:?} row {row} is None but {ch_type} is not Nullable"
         )));
     }
-    let ran_python = if let Ok(bytes) = value.downcast::<PyBytes>() {
+    let ran_python = if let Ok(bytes) = value.cast::<PyBytes>() {
         data.extend_from_slice(bytes.as_bytes());
         false
-    } else if let Ok(bytes) = value.downcast::<PyByteArray>() {
+    } else if let Ok(bytes) = value.cast::<PyByteArray>() {
         // SAFETY: the GIL is held and extend_from_slice copies the complete
         // buffer before any Python or PyO3 API can run and invalidate it.
         data.extend_from_slice(unsafe { bytes.as_bytes() });
@@ -528,7 +528,7 @@ pub(super) fn lc_string_seq<S: FastSeq>(
             // SAFETY: ptr is a valid borrowed reference, verified an exact
             // str; reading its UTF-8 runs no Python code.
             let obj =
-                unsafe { Bound::from_borrowed_ptr(py, ptr).downcast_into_unchecked::<PyString>() };
+                unsafe { Bound::from_borrowed_ptr(py, ptr).cast_into_unchecked::<PyString>() };
             let bytes = obj.to_str()?.as_bytes();
             let slot = match content_slots.get(bytes) {
                 Some(&slot) => slot,
@@ -731,7 +731,7 @@ pub(super) fn ipv4_seq<S: FastSeq>(
             // SAFETY: ptr is a valid borrowed reference, verified an exact
             // str; reading its UTF-8 runs no Python code.
             let obj =
-                unsafe { Bound::from_borrowed_ptr(py, ptr).downcast_into_unchecked::<PyString>() };
+                unsafe { Bound::from_borrowed_ptr(py, ptr).cast_into_unchecked::<PyString>() };
             let v = obj
                 .to_str()?
                 .parse::<Ipv4Addr>()
@@ -884,7 +884,7 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
             // SAFETY: ptr is a valid borrowed reference, verified an exact
             // str; reading its UTF-8 runs no Python code.
             let obj =
-                unsafe { Bound::from_borrowed_ptr(py, ptr).downcast_into_unchecked::<PyString>() };
+                unsafe { Bound::from_borrowed_ptr(py, ptr).cast_into_unchecked::<PyString>() };
             let label = obj.to_str()?;
             let Some(&code) = content_codes.get(label.as_bytes()) else {
                 return Err(PyValueError::new_err(format!(

@@ -48,23 +48,16 @@ use scalar::{
 use temporal::{dt64_secs_micros, make_date, make_datetime, make_time64};
 use variant_dynamic::{dynamic_value_owned_ptr, fill_dynamic, fill_variant, shared_cell_owned_ptr};
 
-/// Allocate a dict presized for `len` entries via `_PyDict_NewPresized` where
-/// pyo3-ffi declares it; otherwise a plain `PyDict_New`, costing only the
-/// presize.
+/// Allocate a dict sized for `len` entries. `_PyDict_NewPresized` is gone
+/// from pyo3-ffi 0.28+, so this is a plain `PyDict_New`; `len` is kept so
+/// callers still document the expected entry count.
 ///
 /// # Safety
 ///
 /// Requires the GIL. Returns an owned reference, or null with an error set.
 unsafe fn dict_new_presized(len: ffi::Py_ssize_t) -> *mut ffi::PyObject {
-    #[cfg(all(not(Py_LIMITED_API), not(PyPy)))]
-    {
-        ffi::_PyDict_NewPresized(len)
-    }
-    #[cfg(any(Py_LIMITED_API, PyPy))]
-    {
-        let _ = len;
-        ffi::PyDict_New()
-    }
+    let _ = len;
+    ffi::PyDict_New()
 }
 
 /// Type-erased sink. The Tuple/Map fills recurse through `fill_column` with
@@ -164,7 +157,7 @@ unsafe fn materialize_run<'py>(
         {
             let mut sink = |i: usize, item: *mut ffi::PyObject| {
                 // Safety: item is an owned reference the sink takes over.
-                let item = unsafe { Py::from_owned_ptr(py, item) };
+                let item = unsafe { Bound::from_owned_ptr(py, item) }.unbind();
                 if i == out.len() {
                     out.push(item);
                 } else {
@@ -192,7 +185,7 @@ unsafe fn materialize_run<'py>(
     {
         let mut sink = |i: usize, item: *mut ffi::PyObject| {
             // Safety: item is an owned reference the sink takes over.
-            out[i] = Some(unsafe { Py::from_owned_ptr(py, item) });
+            out[i] = Some(unsafe { Bound::from_owned_ptr(py, item) }.unbind());
         };
         let mut erased: DynSink<'_> = &mut sink;
         fill_column(py, col, ctx, rows, &mut erased)?;

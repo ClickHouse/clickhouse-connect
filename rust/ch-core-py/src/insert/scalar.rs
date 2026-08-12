@@ -1,4 +1,4 @@
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::PyType;
 
 use super::*;
@@ -609,7 +609,7 @@ fn float_conversion_error(
     row: usize,
     type_name: &str,
 ) -> PyErr {
-    if value.downcast::<PyString>().is_ok() {
+    if value.cast::<PyString>().is_ok() {
         return conversion_error_detail(
             value,
             column,
@@ -636,7 +636,7 @@ fn integer_range_error(
     )
 }
 
-static DECIMAL_TYPE: GILOnceCell<Py<PyType>> = GILOnceCell::new();
+static DECIMAL_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 /// isinstance check against decimal.Decimal (imported once), so Decimal
 /// subclasses are accepted like the python codec accepts them.
@@ -646,7 +646,7 @@ fn is_decimal(value: &Bound<'_, PyAny>) -> bool {
         .get_or_try_init(py, || {
             py.import("decimal")?
                 .getattr("Decimal")?
-                .downcast_into::<PyType>()
+                .cast_into::<PyType>()
                 .map(Bound::unbind)
                 .map_err(PyErr::from)
         })
@@ -749,7 +749,7 @@ fn integer_object<'py>(
     if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
         return Ok(value.clone());
     }
-    if value.downcast::<PyString>().is_ok() {
+    if value.cast::<PyString>().is_ok() {
         return Err(ctx.detail_err(value, "strings are not accepted; pass an int instead"));
     }
     if unsafe { ffi::PyFloat_Check(value.as_ptr()) } != 0 {
@@ -959,7 +959,7 @@ fn bytes_value(
     row: usize,
     type_name: &str,
 ) -> PyResult<Vec<u8>> {
-    if let Ok(s) = value.downcast::<PyString>() {
+    if let Ok(s) = value.cast::<PyString>() {
         return Ok(s.to_str()?.as_bytes().to_vec());
     }
     buffer_to_vec(value).map_err(|_| {
@@ -975,7 +975,7 @@ fn fixed_string_value(
     column: &str,
     row: usize,
 ) -> PyResult<Vec<u8>> {
-    if let Ok(s) = value.downcast::<PyString>() {
+    if let Ok(s) = value.cast::<PyString>() {
         let mut bytes = s.to_str()?.as_bytes().to_vec();
         if bytes.len() > width {
             return Err(PyValueError::new_err(format!(
@@ -1004,7 +1004,7 @@ fn uuid_bytes(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<Ve
     // Precedence: str -> int (incl. subclasses) -> `int` attribute -> duck
     // int (__index__) -> 16 raw bytes. Type checks come before extract so
     // UUID inputs do not construct a failed extraction per value.
-    if let Ok(s) = value.downcast::<PyString>() {
+    if let Ok(s) = value.cast::<PyString>() {
         return uuid_int_to_wire(parse_uuid_hex(s.to_str()?, column, row)?);
     }
     if unsafe { ffi::PyLong_Check(value.as_ptr()) } != 0 {
@@ -1065,7 +1065,7 @@ fn ipv4_value(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<u3
             .extract::<u32>()
             .map_err(|_| conversion_error(column, row, "IPv4"));
     }
-    if let Ok(s) = value.downcast::<PyString>() {
+    if let Ok(s) = value.cast::<PyString>() {
         return s
             .to_str()?
             .parse::<Ipv4Addr>()
@@ -1092,7 +1092,7 @@ fn ipv4_value(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<u3
 }
 
 fn ipv6_bytes(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<Vec<u8>> {
-    if let Ok(s) = value.downcast::<PyString>() {
+    if let Ok(s) = value.cast::<PyString>() {
         return ip_string_to_ipv6(s.to_str()?, column, row);
     }
     if let Ok(v) = value.extract::<u128>() {
@@ -1140,7 +1140,7 @@ fn enum8_value(
     column: &str,
     row: usize,
 ) -> PyResult<i8> {
-    if let Ok(name) = value.downcast::<PyString>() {
+    if let Ok(name) = value.cast::<PyString>() {
         let name = name.to_str()?;
         return variants
             .iter()
@@ -1171,7 +1171,7 @@ fn enum16_value(
     column: &str,
     row: usize,
 ) -> PyResult<i16> {
-    if let Ok(name) = value.downcast::<PyString>() {
+    if let Ok(name) = value.cast::<PyString>() {
         let name = name.to_str()?;
         return variants
             .iter()

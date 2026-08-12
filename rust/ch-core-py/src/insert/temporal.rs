@@ -20,7 +20,7 @@ struct NumpyTimedeltaMeta {
 /// they do not have a fixed duration in seconds.
 fn parse_timedelta_dtype(dtype: &Bound<'_, PyAny>) -> Option<(NumpyTimedeltaMeta, bool)> {
     let dtype_str = dtype.getattr(intern!(dtype.py(), "str")).ok()?;
-    let dtype_str = dtype_str.downcast::<PyString>().ok()?.to_str().ok()?;
+    let dtype_str = dtype_str.cast::<PyString>().ok()?.to_str().ok()?;
     let (order, rest) = match dtype_str.as_bytes().split_first()? {
         (b'<', rest) => (NumpyByteOrder::Little, rest),
         (b'>', rest) => (NumpyByteOrder::Big, rest),
@@ -103,7 +103,7 @@ fn numpy_timedelta_scalar_raw(
     };
     let bytes = value.call_method0(intern!(value.py(), "tobytes"))?;
     let bytes = bytes
-        .downcast::<PyBytes>()
+        .cast::<PyBytes>()
         .map_err(|_| PyValueError::new_err("NumPy timedelta tobytes() did not return bytes"))?;
     let raw = numpy_i64(bytes.as_bytes(), meta.order)
         .ok_or_else(|| PyValueError::new_err("NumPy timedelta scalar is not 8 bytes"))?;
@@ -127,14 +127,14 @@ fn should_probe_numpy_timedelta(value: &Bound<'_, PyAny>) -> bool {
     } {
         return false;
     }
-    if value.downcast::<PyFloat>().is_ok() {
+    if value.cast::<PyFloat>().is_ok() {
         return false;
     }
-    if value.downcast::<PyDelta>().is_ok() {
+    if value.cast::<PyDelta>().is_ok() {
         // SAFETY: the successful downcast imported the datetime C-API.
         return unsafe { ffi::PyDelta_CheckExact(value.as_ptr()) } == 0;
     }
-    if value.downcast::<PyTime>().is_ok() {
+    if value.cast::<PyTime>().is_ok() {
         // SAFETY: the successful downcast imported the datetime C-API.
         return unsafe { ffi::PyTime_CheckExact(value.as_ptr()) } == 0;
     }
@@ -229,7 +229,7 @@ impl TimeScalarProbe {
             }
         };
         let bytes = value.call_method0(intern!(py, "tobytes"))?;
-        let bytes = bytes.downcast::<PyBytes>().map_err(|_| {
+        let bytes = bytes.cast::<PyBytes>().map_err(|_| {
             PyValueError::new_err(format!(
                 "column {column:?} row {row} NumPy timedelta tobytes() did not return bytes"
             ))
@@ -432,7 +432,7 @@ pub(super) fn try_numpy_timedelta_column(
         )));
     }
     let bytes = source.call_method0("tobytes")?;
-    let bytes = bytes.downcast::<PyBytes>().map_err(|_| {
+    let bytes = bytes.cast::<PyBytes>().map_err(|_| {
         PyValueError::new_err(format!(
             "column {name:?} NumPy timedelta tobytes() did not return bytes"
         ))
@@ -731,7 +731,7 @@ pub(super) fn datetime64_ticks(
         return Ok(ticks);
     }
 
-    let value = if let Ok(s) = value.downcast::<PyString>() {
+    let value = if let Ok(s) = value.cast::<PyString>() {
         py.import("datetime")?
             .getattr("datetime")?
             .call_method1("fromisoformat", (s.to_str()?,))?
@@ -834,9 +834,9 @@ fn time_like_ticks(
         value
             .extract::<i64>()
             .map_err(|_| conversion_error(column, row, type_name))?
-    } else if let Ok(delta) = value.downcast::<PyDelta>() {
+    } else if let Ok(delta) = value.cast::<PyDelta>() {
         timedelta_ticks(delta, scale, precision, fractional, column, row, type_name)?
-    } else if let Ok(time) = value.downcast::<PyTime>() {
+    } else if let Ok(time) = value.cast::<PyTime>() {
         let total_micros = ((i128::from(time.get_hour()) * 3_600
             + i128::from(time.get_minute()) * 60
             + i128::from(time.get_second()))
@@ -844,7 +844,7 @@ fn time_like_ticks(
             + i128::from(time.get_microsecond());
         let ticks = total_micros * i128::from(scale) / 1_000_000;
         i64::try_from(ticks).map_err(|_| time_range_error(column, row, type_name, ticks))?
-    } else if let Ok(s) = value.downcast::<PyString>() {
+    } else if let Ok(s) = value.cast::<PyString>() {
         parse_time_literal(s.to_str()?, precision, fractional, column, row, type_name)?
     } else if is_float {
         // SAFETY: value is a float, so PyFloat_AsDouble cannot fail.

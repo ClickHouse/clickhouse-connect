@@ -16,10 +16,10 @@ pub(super) fn build_array_column(
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
 
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return array_column_from_seq(py, name, inner, &ListSeq(list), row_count);
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return array_column_from_seq(py, name, inner, &TupleSeq(tuple), row_count);
     }
 
@@ -152,12 +152,12 @@ fn flatten_array_row(
     row: usize,
     flat: &mut FlatRefs,
 ) -> PyResult<()> {
-    if let Ok(list) = value.downcast_exact::<PyList>() {
+    if let Ok(list) = value.cast_exact::<PyList>() {
         // SAFETY: copying exact-list items runs no Python code.
         unsafe { flat.extend_from_seq(&ListSeq(list)) };
         return Ok(());
     }
-    if let Ok(tuple) = value.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = value.cast_exact::<PyTuple>() {
         // SAFETY: copying exact-tuple items runs no Python code.
         unsafe { flat.extend_from_seq(&TupleSeq(tuple)) };
         return Ok(());
@@ -167,22 +167,22 @@ fn flatten_array_row(
             "column {name:?} row {row} is None but Array({inner}) is not Nullable"
         )));
     }
-    if value.downcast::<PyString>().is_ok() {
+    if value.cast::<PyString>().is_ok() {
         return Err(PyValueError::new_err(format!(
             "column {name:?} row {row} is a str, not an Array sequence"
         )));
     }
     // bytes-like rows flatten as int elements, matching the python codec's
     // `data.extend(row)` iteration semantics.
-    if let Ok(bytes) = value.downcast::<PyBytes>() {
+    if let Ok(bytes) = value.cast::<PyBytes>() {
         return flat.extend_from_byte_run(py, bytes.as_bytes());
     }
-    if let Ok(bytes) = value.downcast::<PyByteArray>() {
+    if let Ok(bytes) = value.cast::<PyByteArray>() {
         return flat.extend_from_byte_run(py, &bytes.to_vec());
     }
-    if value.downcast::<PySet>().is_ok()
-        || value.downcast::<PyFrozenSet>().is_ok()
-        || value.downcast::<PyDict>().is_ok()
+    if value.cast::<PySet>().is_ok()
+        || value.cast::<PyFrozenSet>().is_ok()
+        || value.cast::<PyDict>().is_ok()
     {
         return Err(PyValueError::new_err(format!(
             "column {name:?} row {row} is an unordered set/dict, which has no defined Array element order"
@@ -429,10 +429,10 @@ pub(super) fn build_tuple_column(
 ) -> PyResult<Column> {
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return tuple_column_from_seq(py, name, elements, &ListSeq(list), row_count, nullable);
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return tuple_column_from_seq(py, name, elements, &TupleSeq(tuple), row_count, nullable);
     }
     let mut builder = TupleBuilder::new(py, name, elements, row_count, nullable);
@@ -568,7 +568,7 @@ impl<'a, 'py> TupleBuilder<'a, 'py> {
         let Some(names) = &self.names else {
             return Err(PyValueError::new_err("internal tuple row mode mismatch"));
         };
-        if let Ok(dict) = value.downcast_exact::<PyDict>() {
+        if let Ok(dict) = value.cast_exact::<PyDict>() {
             for (flat, key) in self.flats.iter_mut().zip(names) {
                 match dict.get_item(key)? {
                     Some(item) => flat.push_ref(&item),
@@ -602,15 +602,15 @@ impl<'a, 'py> TupleBuilder<'a, 'py> {
     /// Read one row positionally. Exact list/tuple rows copy borrowed
     /// pointers; other iterables flatten through `list.extend`.
     fn push_positional_row(&mut self, value: &Bound<'_, PyAny>, row: usize) -> PyResult<()> {
-        if let Ok(list) = value.downcast_exact::<PyList>() {
+        if let Ok(list) = value.cast_exact::<PyList>() {
             // SAFETY: copying exact-list items runs no Python code.
             return unsafe { self.push_positional_seq(&ListSeq(list), row) };
         }
-        if let Ok(tuple) = value.downcast_exact::<PyTuple>() {
+        if let Ok(tuple) = value.cast_exact::<PyTuple>() {
             // SAFETY: copying exact-tuple items runs no Python code.
             return unsafe { self.push_positional_seq(&TupleSeq(tuple), row) };
         }
-        if value.downcast::<PyString>().is_ok() {
+        if value.cast::<PyString>().is_ok() {
             return Err(PyValueError::new_err(format!(
                 "column {:?} row {row} is a str, not a Tuple row",
                 self.name
@@ -622,7 +622,7 @@ impl<'a, 'py> TupleBuilder<'a, 'py> {
                 self.name
             )));
         }
-        if value.downcast::<PySet>().is_ok() || value.downcast::<PyFrozenSet>().is_ok() {
+        if value.cast::<PySet>().is_ok() || value.cast::<PyFrozenSet>().is_ok() {
             return Err(PyValueError::new_err(format!(
                 "column {:?} row {row} is an unordered set, which has no defined Tuple element order",
                 self.name
@@ -702,10 +702,10 @@ pub(super) fn build_map_column(
 ) -> PyResult<Column> {
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return map_column_from_seq(py, name, key_type, value_type, &ListSeq(list), row_count);
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return map_column_from_seq(py, name, key_type, value_type, &TupleSeq(tuple), row_count);
     }
     let mut builder = MapBuilder::new(py, name, key_type, value_type, row_count);
@@ -778,7 +778,7 @@ impl<'a, 'py> MapBuilder<'a, 'py> {
                 self.name, self.key_type, self.value_type
             )));
         }
-        if let Ok(dict) = value.downcast_exact::<PyDict>() {
+        if let Ok(dict) = value.cast_exact::<PyDict>() {
             for (key, val) in dict.iter() {
                 self.keys.push_ref(&key);
                 self.values.push_ref(&val);

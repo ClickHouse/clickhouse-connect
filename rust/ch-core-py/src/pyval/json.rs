@@ -364,7 +364,7 @@ pub(super) unsafe fn json_value_owned_ptr<'py>(
             let root = ptr_to_result(py, dict_new_presized(estimated))?;
             // Own the dict until the row is complete, so every error path drops
             // partially inserted values.
-            let root = Bound::from_owned_ptr(py, root).downcast_into_unchecked::<PyDict>();
+            let root = Bound::from_owned_ptr(py, root).cast_into_unchecked::<PyDict>();
             for (((_, column), child_ctx), path) in
                 structured.typed.iter().zip(typed_ctxs).zip(typed_paths)
             {

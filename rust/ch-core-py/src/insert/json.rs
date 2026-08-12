@@ -47,7 +47,7 @@ pub(super) fn build_json_text_column(
 ) -> PyResult<Column> {
     let rows = ColumnValues::new(values, name)?;
     check_row_count(name, &rows, row_count)?;
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return json_text_column_from_rows(
             py,
             name,
@@ -61,7 +61,7 @@ pub(super) fn build_json_text_column(
             nullable,
         );
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return json_text_column_from_rows(py, name, &TupleRows { py, tuple }, row_count, nullable);
     }
     json_text_column_from_rows(py, name, &rows, row_count, nullable)
@@ -82,12 +82,12 @@ pub(super) fn json_text_column_from_rows<'py, R: RowAccess<'py>>(
         for row in 0..row_count {
             let value = rows.value(row)?;
             if !value.is_none() {
-                direct_text = value.downcast::<PyString>().is_ok();
+                direct_text = value.cast::<PyString>().is_ok();
                 break;
             }
         }
     } else if row_count > 0 {
-        direct_text = rows.value(0)?.downcast::<PyString>().is_ok();
+        direct_text = rows.value(0)?.cast::<PyString>().is_ok();
     }
 
     // Resolved lazily on the first row the native writer cannot serialize.
@@ -154,7 +154,7 @@ fn append_json_document(
     data: &mut Vec<u8>,
     serialized: bool,
 ) -> PyResult<()> {
-    if let Ok(text) = value.downcast::<PyString>() {
+    if let Ok(text) = value.cast::<PyString>() {
         data.extend_from_slice(
             text.to_str()
                 .map_err(|err| json_serialize_err(value.py(), name, row, err))?
@@ -162,11 +162,11 @@ fn append_json_document(
         );
         return Ok(());
     }
-    if let Ok(bytes) = value.downcast::<PyBytes>() {
+    if let Ok(bytes) = value.cast::<PyBytes>() {
         data.extend_from_slice(bytes.as_bytes());
         return Ok(());
     }
-    if let Ok(bytes) = value.downcast::<PyByteArray>() {
+    if let Ok(bytes) = value.cast::<PyByteArray>() {
         // SAFETY: the GIL is held and the complete bytearray is copied before
         // any Python API can run and resize it.
         data.extend_from_slice(unsafe { bytes.as_bytes() });

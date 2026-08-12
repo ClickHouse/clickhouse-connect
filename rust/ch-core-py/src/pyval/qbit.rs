@@ -27,7 +27,7 @@ where
     }
     // Binding the fresh list makes every error path drop it. CPython list
     // deallocation tolerates the still-null slots after a partial fill.
-    let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+    let list = Bound::from_owned_ptr(py, list_ptr).cast_into_unchecked::<PyList>();
     for (index, &value) in values.iter().enumerate() {
         let item = make(value);
         if item.is_null() {

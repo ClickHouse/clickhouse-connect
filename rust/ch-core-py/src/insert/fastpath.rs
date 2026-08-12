@@ -446,10 +446,10 @@ impl<'py> ColumnSource<'py> {
                 "column {name:?} has {len} values but row_count is {row_count}"
             )));
         }
-        if let Ok(list) = values.downcast_exact::<PyList>() {
+        if let Ok(list) = values.cast_exact::<PyList>() {
             return Ok(Self::List(list.clone()));
         }
-        if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+        if let Ok(tuple) = values.cast_exact::<PyTuple>() {
             return Ok(Self::Tuple(tuple.clone()));
         }
         if let Some(seq) = ObjectArraySeq::matching(values, row_count) {

@@ -141,7 +141,7 @@ pub(super) fn prepare_json_path<'py>(py: Python<'py>, path: &str) -> PyResult<Js
         .map(|segment| match &unquote {
             Some(unquote) => unquote
                 .call1((segment,))?
-                .downcast_into::<PyString>()
+                .cast_into::<PyString>()
                 .map_err(Into::into),
             None => Ok(PyString::new(py, segment)),
         })

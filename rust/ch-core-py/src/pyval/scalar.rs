@@ -88,7 +88,7 @@ pub(super) unsafe fn column_value_nonnull_ptr<'py>(
                     let entry = slots.get_mut(slot).ok_or_else(lc_index_err)?;
                     if entry.is_none() {
                         let ptr = column_value_nonnull_ptr(py, &c.values, ctx, slot, None)?;
-                        *entry = Some(Py::from_owned_ptr(py, ptr));
+                        *entry = Some(Bound::from_owned_ptr(py, ptr).unbind());
                     }
                     Ok(entry
                         .as_ref()
@@ -163,7 +163,7 @@ pub(super) unsafe fn column_value_nonnull_ptr<'py>(
             // the sole owned reference. Binding it makes the error and panic
             // paths drop the partially-filled list; list_dealloc tolerates the
             // NULL slots not yet filled.
-            let list = Bound::from_owned_ptr(py, list_ptr).downcast_into_unchecked::<PyList>();
+            let list = Bound::from_owned_ptr(py, list_ptr).cast_into_unchecked::<PyList>();
             for slot in 0..count {
                 let item = column_value_to_owned_ptr(
                     py,
@@ -196,8 +196,7 @@ pub(super) unsafe fn column_value_nonnull_ptr<'py>(
                     }
                     // Safety: dict_ptr came from PyDict_New; binding it drops the
                     // partially-filled dict on the error path.
-                    let dict =
-                        Bound::from_owned_ptr(py, dict_ptr).downcast_into_unchecked::<PyDict>();
+                    let dict = Bound::from_owned_ptr(py, dict_ptr).cast_into_unchecked::<PyDict>();
                     for (field_idx, field_col) in c.fields.iter().enumerate() {
                         let item = column_value_to_owned_ptr(
                             py,
@@ -229,7 +228,7 @@ pub(super) unsafe fn column_value_nonnull_ptr<'py>(
                     // partially-filled tuple on the error path (tuple_dealloc
                     // Py_XDECREFs each slot, tolerating the NULL slots).
                     let tuple =
-                        Bound::from_owned_ptr(py, tuple_ptr).downcast_into_unchecked::<PyTuple>();
+                        Bound::from_owned_ptr(py, tuple_ptr).cast_into_unchecked::<PyTuple>();
                     for (field_idx, field_col) in c.fields.iter().enumerate() {
                         let item = column_value_to_owned_ptr(
                             py,
@@ -286,7 +285,7 @@ pub(super) unsafe fn column_value_nonnull_ptr<'py>(
             }
             // Safety: dict_ptr came from PyDict_New; binding it drops the
             // partially-filled dict on the error path.
-            let dict = Bound::from_owned_ptr(py, dict_ptr).downcast_into_unchecked::<PyDict>();
+            let dict = Bound::from_owned_ptr(py, dict_ptr).cast_into_unchecked::<PyDict>();
             for slot in start..end {
                 let key = column_value_to_owned_ptr(py, keys_col, &fctx[0], slot, None)?;
                 let key = Bound::from_owned_ptr(py, key);

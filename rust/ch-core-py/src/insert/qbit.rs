@@ -337,10 +337,10 @@ fn append_qbit_vector<T: QBitValue>(
     dimension: usize,
     out: &mut Vec<T>,
 ) -> PyResult<()> {
-    if let Ok(list) = value.downcast_exact::<PyList>() {
+    if let Ok(list) = value.cast_exact::<PyList>() {
         return append_qbit_seq(py, name, row, &ListSeq(list), dimension, out);
     }
-    if let Ok(tuple) = value.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = value.cast_exact::<PyTuple>() {
         return append_qbit_seq(py, name, row, &TupleSeq(tuple), dimension, out);
     }
     if T::append_vector_buffer(py, name, row, value, dimension, out)? {
@@ -473,7 +473,7 @@ fn build_typed_qbit<T: QBitValue>(
         let validity = nullable.then(|| Bitmap::all_valid(row_count));
         return Ok(finish_qbit(matrix, dimension, validity));
     }
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return qbit_column_from_seq::<T, _>(
             py,
             name,
@@ -484,7 +484,7 @@ fn build_typed_qbit<T: QBitValue>(
             nullable,
         );
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return qbit_column_from_seq::<T, _>(
             py,
             name,

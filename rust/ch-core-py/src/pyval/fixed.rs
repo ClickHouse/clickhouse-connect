@@ -443,7 +443,7 @@ where
                 // returned pointer is a valid owned reference; Py takes it
                 // over and the Vec drops every cached entry on any exit path.
                 let ptr = unsafe { column_value_nonnull_ptr(py, &col.values, ctx, slot, None)? };
-                *entry = Some(unsafe { Py::from_owned_ptr(py, ptr) });
+                *entry = Some(unsafe { Bound::from_owned_ptr(py, ptr) }.unbind());
             }
             Ok(entry
                 .as_ref()

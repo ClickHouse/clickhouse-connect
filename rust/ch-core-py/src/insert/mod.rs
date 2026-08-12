@@ -224,7 +224,7 @@ pub(crate) fn encode_native_block(
     // false (V1/V2 Dynamic layout: pre-25.6 servers reject FLATTENED).
     let options = EncodeOptions::default();
     let mut encoded = py
-        .allow_threads(|| encode_block(&batch, &options))
+        .detach(|| encode_block(&batch, &options))
         .map_err(encode_err)?;
 
     if !prefix.is_empty() {
@@ -282,9 +282,9 @@ fn positional_source<'py>(obj: &Bound<'py, PyAny>) -> Bound<'py, PyAny> {
 }
 
 fn is_string_or_bytes_like(obj: &Bound<'_, PyAny>) -> bool {
-    obj.downcast::<PyString>().is_ok()
-        || obj.downcast::<PyBytes>().is_ok()
-        || obj.downcast::<PyByteArray>().is_ok()
+    obj.cast::<PyString>().is_ok()
+        || obj.cast::<PyBytes>().is_ok()
+        || obj.cast::<PyByteArray>().is_ok()
 }
 
 fn build_column(

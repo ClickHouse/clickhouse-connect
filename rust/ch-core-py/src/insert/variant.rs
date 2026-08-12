@@ -12,10 +12,10 @@ pub(super) fn build_variant_column(
 ) -> PyResult<Column> {
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
-    if let Ok(list) = values.downcast_exact::<PyList>() {
+    if let Ok(list) = values.cast_exact::<PyList>() {
         return variant_column_from_seq(py, name, alternatives, &ListSeq(list), row_count);
     }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+    if let Ok(tuple) = values.cast_exact::<PyTuple>() {
         return variant_column_from_seq(py, name, alternatives, &TupleSeq(tuple), row_count);
     }
 
@@ -123,12 +123,8 @@ impl<'a, 'py> VariantBuilder<'a, 'py> {
             .import("clickhouse_connect.datatypes.registry")?
             .getattr("get_from_name")?
             .call1((type_name,))?;
-        let python_map = py_variant
-            .getattr("_python_map")?
-            .downcast_into::<PyDict>()?;
-        let name_index = py_variant
-            .getattr("_name_index")?
-            .downcast_into::<PyDict>()?;
+        let python_map = py_variant.getattr("_python_map")?.cast_into::<PyDict>()?;
+        let name_index = py_variant.getattr("_name_index")?.cast_into::<PyDict>()?;
         let typed_variant_type = py
             .import("clickhouse_connect.datatypes.dynamic")?
             .getattr("TypedVariant")?;

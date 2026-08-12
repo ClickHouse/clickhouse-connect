@@ -79,7 +79,7 @@ pub(crate) fn decode_options(has_block_info: bool) -> DecodeOptions {
 
 /// Copy the bytes out of any u8 buffer object (bytes, bytearray, memoryview).
 pub(crate) fn buffer_to_vec(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
-    if let Ok(bytes) = data.downcast::<PyBytes>() {
+    if let Ok(bytes) = data.cast::<PyBytes>() {
         Ok(bytes.as_bytes().to_vec())
     } else {
         PyBuffer::<u8>::get(data)?.to_vec(data.py())
@@ -247,7 +247,7 @@ impl PipeDecoder {
             let reader = &mut self.reader;
             let decoder = &mut self.decoder;
             let buf = &mut self.buf;
-            let result = py.allow_threads(|| -> Result<(bool, Vec<RustColBatch>), DecodeError> {
+            let result = py.detach(|| -> Result<(bool, Vec<RustColBatch>), DecodeError> {
                 use std::io::Read;
                 let n = reader.read(&mut buf[..])?;
                 if n == 0 {
@@ -315,9 +315,7 @@ impl StreamDecoder {
     ) -> PyResult<Bound<'py, PyList>> {
         // Copy out of Python-owned memory so we can drop the GIL during decode.
         let owned = buffer_to_vec(data)?;
-        let batches = py
-            .allow_threads(|| self.inner.feed(&owned))
-            .map_err(decode_err)?;
+        let batches = py.detach(|| self.inner.feed(&owned)).map_err(decode_err)?;
         let py_batches: Vec<ColBatch> = batches.into_iter().map(ColBatch::from_block).collect();
         PyList::new(py, py_batches)
     }
@@ -325,9 +323,7 @@ impl StreamDecoder {
     /// Signal end of stream. Returns any remaining complete blocks.
     /// Raises an error if the stream ends with a truncated block.
     fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let batches = py
-            .allow_threads(|| self.inner.finish())
-            .map_err(decode_err)?;
+        let batches = py.detach(|| self.inner.finish()).map_err(decode_err)?;
         let py_batches: Vec<ColBatch> = batches.into_iter().map(ColBatch::from_block).collect();
         PyList::new(py, py_batches)
     }
