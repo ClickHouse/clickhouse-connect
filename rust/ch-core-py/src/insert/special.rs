@@ -223,17 +223,61 @@ pub(super) fn build_low_cardinality_column(
         )));
     }
 
+    match ColumnSource::resolve(values, name, row_count)? {
+        ColumnSource::List(list) => lc_column_from_seq(
+            py,
+            name,
+            value_type,
+            &ListSeq(&list),
+            values,
+            row_count,
+            nullable,
+        ),
+        ColumnSource::Tuple(tuple) => lc_column_from_seq(
+            py,
+            name,
+            value_type,
+            &TupleSeq(&tuple),
+            values,
+            row_count,
+            nullable,
+        ),
+        ColumnSource::ObjectArray(seq) => {
+            if wide_int_layout(value_type).is_some() {
+                return lc_wide_column(py, name, value_type, &seq, row_count, nullable);
+            }
+            if matches!(value_type, ChType::String) {
+                return lc_string_seq(py, name, value_type, &seq, row_count, nullable);
+            }
+            lc_scalar_column(py, name, value_type, &seq, row_count, nullable)
+        }
+        ColumnSource::Values(column_values) => {
+            if wide_int_layout(value_type).is_some() {
+                return lc_wide_column(py, name, value_type, &column_values, row_count, nullable);
+            }
+            lc_scalar_column(py, name, value_type, &column_values, row_count, nullable)
+        }
+    }
+}
+
+/// LowCardinality over an exact list or tuple: the String dictionary fast
+/// path reads borrowed pointers; other value types keep safe indexed reads.
+#[allow(clippy::too_many_arguments)]
+fn lc_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    value_type: &ChType,
+    seq: &S,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    if matches!(value_type, ChType::String) {
+        return lc_string_seq(py, name, value_type, seq, row_count, nullable);
+    }
     let column_values = ColumnValues::new(values, name)?;
-    check_row_count(name, &column_values, row_count)?;
     if wide_int_layout(value_type).is_some() {
         return lc_wide_column(py, name, value_type, &column_values, row_count, nullable);
-    }
-    if matches!(value_type, ChType::String) {
-        if let Some(column) =
-            lc_string_fast_column(py, name, value_type, values, row_count, nullable)?
-        {
-            return Ok(column);
-        }
     }
     lc_scalar_column(py, name, value_type, &column_values, row_count, nullable)
 }
@@ -416,27 +460,6 @@ pub(super) fn lc_wide_column<'py, R: RowAccess<'py>>(
             dict_column,
         ))),
     }
-}
-
-/// LowCardinality(String) fast path over an exact list or tuple. Returns
-/// `Ok(None)` for other containers; the caller falls through to the generic
-/// scalar loop.
-fn lc_string_fast_column(
-    py: Python<'_>,
-    name: &str,
-    value_type: &ChType,
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-    nullable: bool,
-) -> PyResult<Option<Column>> {
-    if let Ok(list) = values.downcast_exact::<PyList>() {
-        return lc_string_seq(py, name, value_type, &ListSeq(list), row_count, nullable).map(Some);
-    }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
-        return lc_string_seq(py, name, value_type, &TupleSeq(tuple), row_count, nullable)
-            .map(Some);
-    }
-    Ok(None)
 }
 
 /// Build a LowCardinality(String) dictionary column with two cache levels:

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pyo3::exceptions::PyValueError;
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyCapsule, PyList, PyModule};
+use pyo3::types::{PyAny, PyBytes, PyCapsule, PyList, PyModule, PyTuple};
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch as RustColBatch};
 use ch_core_rs::column::Column;
@@ -269,12 +269,25 @@ impl ColBatch {
     ///
     /// With `typed_numeric`, top-level non-nullable fixed-width numeric columns
     /// use `array.array`, matching clickhouse-connect's Python Native decoder.
-    #[pyo3(signature = (*, typed_numeric = false))]
+    /// A true entry in `tuple_columns` renders that column as a tuple instead
+    /// of a list. The tuple flag is checked first, so it takes precedence over
+    /// `typed_numeric` for any column carrying both.
+    #[pyo3(signature = (*, typed_numeric = false, tuple_columns = None))]
     fn to_python_columns<'py>(
         &self,
         py: Python<'py>,
         typed_numeric: bool,
+        tuple_columns: Option<Vec<bool>>,
     ) -> PyResult<Bound<'py, PyList>> {
+        if let Some(flags) = &tuple_columns {
+            if flags.len() != self.inner.num_columns() {
+                return Err(PyValueError::new_err(format!(
+                    "tuple_columns has {} entries, expected {}",
+                    flags.len(),
+                    self.inner.num_columns()
+                )));
+            }
+        }
         for chunk in &self.inner.chunks {
             check_chunk_shape(chunk, self.inner.num_columns())?;
         }
@@ -286,6 +299,10 @@ impl ColBatch {
         let cols: Vec<Bound<'py, PyAny>> = (0..self.inner.num_columns())
             .map(|ci| {
                 let ch_type = &self.inner.schema.fields[ci].ch_type;
+                if tuple_columns.as_ref().is_some_and(|flags| flags[ci]) {
+                    let ctx = prepare_column_ctx(py, ch_type, false)?;
+                    return Ok(column_to_pytuple(py, &self.inner.chunks, ci, &ctx)?.into_any());
+                }
                 if let Some(ctor) = &array_ctor {
                     if let Some(column) =
                         typed_numeric_column(py, &self.inner.chunks, ci, ch_type, ctor)?
@@ -406,15 +423,9 @@ fn check_chunk_shape(chunk: &RustColBatch, num_cols: usize) -> PyResult<()> {
     Ok(())
 }
 
-/// Build one column as a Python list across `chunks`, one owned pointer per
-/// cell. Shared by `column_data` and `to_python_columns` so every path applies
-/// one host-value policy.
-fn column_to_pylist<'py>(
-    py: Python<'py>,
-    chunks: &[Arc<RustColBatch>],
-    col_idx: usize,
-    ctx: &ColumnCtx<'_>,
-) -> PyResult<Bound<'py, PyList>> {
+/// Reject chunks missing column `col_idx` or whose column length differs from
+/// the chunk row count. Shared by the per-column materializers.
+fn check_column_shape(chunks: &[Arc<RustColBatch>], col_idx: usize) -> PyResult<()> {
     for chunk in chunks {
         if col_idx >= chunk.columns.len() {
             return Err(PyValueError::new_err(format!(
@@ -431,6 +442,19 @@ fn column_to_pylist<'py>(
             )));
         }
     }
+    Ok(())
+}
+
+/// Build one column as a Python list across `chunks`, one owned pointer per
+/// cell. Shared by `column_data` and `to_python_columns` so every path applies
+/// one host-value policy.
+fn column_to_pylist<'py>(
+    py: Python<'py>,
+    chunks: &[Arc<RustColBatch>],
+    col_idx: usize,
+    ctx: &ColumnCtx<'_>,
+) -> PyResult<Bound<'py, PyList>> {
+    check_column_shape(chunks, col_idx)?;
     let total_rows: usize = chunks.iter().map(|c| c.num_rows).sum();
     unsafe {
         let list_ptr = ffi::PyList_New(total_rows as ffi::Py_ssize_t);
@@ -456,5 +480,42 @@ fn column_to_pylist<'py>(
         }
 
         Ok(list)
+    }
+}
+
+/// Tuple twin of `column_to_pylist`, for columns the Python codec's readers
+/// return as tuples.
+fn column_to_pytuple<'py>(
+    py: Python<'py>,
+    chunks: &[Arc<RustColBatch>],
+    col_idx: usize,
+    ctx: &ColumnCtx<'_>,
+) -> PyResult<Bound<'py, PyTuple>> {
+    check_column_shape(chunks, col_idx)?;
+    let total_rows: usize = chunks.iter().map(|c| c.num_rows).sum();
+    unsafe {
+        let tuple_ptr = ffi::PyTuple_New(total_rows as ffi::Py_ssize_t);
+        if tuple_ptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        // Safety: tuple_ptr came from PyTuple_New, so it is a tuple and this is
+        // the sole owned reference. Binding it makes the error and panic paths
+        // drop the tuple; tuple_dealloc tolerates the NULL slots not yet filled.
+        let tuple = Bound::from_owned_ptr(py, tuple_ptr).downcast_into_unchecked::<PyTuple>();
+
+        let mut out_row: usize = 0;
+        for chunk in chunks {
+            let col = &chunk.columns[col_idx];
+            let base = out_row;
+            let mut sink = |i: usize, item: *mut ffi::PyObject| {
+                // Safety: base + i < total_rows, the chunk-row sum the tuple
+                // was allocated with, and the tuple takes over the owned item.
+                ffi::PyTuple_SET_ITEM(tuple.as_ptr(), (base + i) as ffi::Py_ssize_t, item);
+            };
+            fill_column(py, col, ctx, chunk.num_rows, &mut sink)?;
+            out_row += chunk.num_rows;
+        }
+
+        Ok(tuple)
     }
 }

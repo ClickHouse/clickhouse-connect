@@ -35,8 +35,8 @@ dependencies = [
 
 [[package]]
 name = "ch-core-rs"
-version = "0.1.0"
-source = "git+https://github.com/ClickHouse/ch-core-rs?tag=v0.1.0#a012f6ea9b0636e0f09b0d4f919ed5cf97cfd4b4"
+version = "0.1.1"
+source = "git+https://github.com/ClickHouse/ch-core-rs?tag=v0.1.1#303c09fc5c064505ade7e2c7bd5a12cd308de549"
 
 [[package]]
 name = "find-msvc-tools"

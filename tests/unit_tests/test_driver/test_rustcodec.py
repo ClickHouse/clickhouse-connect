@@ -566,11 +566,13 @@ class _FakeBatch:
         self._columns = columns
         self._error = error
 
-    def to_python_columns(self, typed_numeric=False):
+    def to_python_columns(self, typed_numeric=False, tuple_columns=None):
         del typed_numeric
         if self._error is not None:
             raise self._error
-        return self._columns
+        if tuple_columns is None:
+            return self._columns
+        return [tuple(col) if flag else col for flag, col in zip(tuple_columns, self._columns)]
 
     def to_python_rows(self):
         return list(zip(*self.to_python_columns()))

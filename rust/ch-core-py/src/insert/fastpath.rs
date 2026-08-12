@@ -7,15 +7,7 @@ pub(super) fn build_plain_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
-    let column_values = ColumnValues::new(values, name)?;
-    check_row_count(name, &column_values, row_count)?;
-    if let Some(column) = try_fast_column(py, name, ch_type, values, row_count, false)? {
-        return Ok(column);
-    }
-    if wide_int_layout(ch_type).is_some() {
-        return wide_column_from_rows(py, name, ch_type, &column_values, row_count, false);
-    }
-    plain_scalar_column(py, name, ch_type, &column_values, row_count)
+    value_column(py, name, ch_type, values, row_count, false)
 }
 
 pub(super) fn plain_scalar_column<'py, R: RowAccess<'py>>(
@@ -76,15 +68,106 @@ pub(super) fn build_nullable_column(
         )));
     }
 
-    let column_values = ColumnValues::new(values, name)?;
-    check_row_count(name, &column_values, row_count)?;
-    if let Some(column) = try_fast_column(py, name, inner, values, row_count, true)? {
+    value_column(py, name, inner, values, row_count, true)
+}
+
+/// Shared plain/Nullable value column build over a resolved container.
+fn value_column(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    match ColumnSource::resolve(values, name, row_count)? {
+        ColumnSource::List(list) => value_column_from_seq(
+            py,
+            name,
+            ch_type,
+            &ListSeq(&list),
+            values,
+            row_count,
+            nullable,
+        ),
+        ColumnSource::Tuple(tuple) => value_column_from_seq(
+            py,
+            name,
+            ch_type,
+            &TupleSeq(&tuple),
+            values,
+            row_count,
+            nullable,
+        ),
+        ColumnSource::ObjectArray(seq) => {
+            if let Some(column) = try_fast_column_seq(py, name, ch_type, &seq, row_count, nullable)?
+            {
+                return Ok(column);
+            }
+            if nullable {
+                nullable_scalar_column(py, name, ch_type, &seq, row_count)
+            } else {
+                plain_scalar_column(py, name, ch_type, &seq, row_count)
+            }
+        }
+        ColumnSource::Values(column_values) => {
+            if let Some(column) =
+                try_numpy_timedelta_column(py, name, ch_type, values, row_count, nullable)?
+            {
+                return Ok(column);
+            }
+            if let Some(column) = try_buffer_column(py, name, ch_type, values, row_count, nullable)?
+            {
+                return Ok(column);
+            }
+            if wide_int_layout(ch_type).is_some() {
+                return wide_column_from_rows(
+                    py,
+                    name,
+                    ch_type,
+                    &column_values,
+                    row_count,
+                    nullable,
+                );
+            }
+            if matches!(ch_type, ChType::Decimal { .. }) {
+                return decimal_column_from_rows(
+                    name,
+                    ch_type,
+                    &column_values,
+                    row_count,
+                    nullable,
+                );
+            }
+            if nullable {
+                nullable_scalar_column(py, name, ch_type, &column_values, row_count)
+            } else {
+                plain_scalar_column(py, name, ch_type, &column_values, row_count)
+            }
+        }
+    }
+}
+
+/// Seq fast paths over an exact list or tuple; a type with no seq fast path
+/// falls back to safe indexed reads, matching the generic container path.
+fn value_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    seq: &S,
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    if let Some(column) = try_fast_column_seq(py, name, ch_type, seq, row_count, nullable)? {
         return Ok(column);
     }
-    if wide_int_layout(inner).is_some() {
-        return wide_column_from_rows(py, name, inner, &column_values, row_count, true);
+    let column_values = ColumnValues::new(values, name)?;
+    if nullable {
+        nullable_scalar_column(py, name, ch_type, &column_values, row_count)
+    } else {
+        plain_scalar_column(py, name, ch_type, &column_values, row_count)
     }
-    nullable_scalar_column(py, name, inner, &column_values, row_count)
 }
 
 /// Build a wide-integer column over generic row access with one checked data
@@ -128,6 +211,127 @@ fn wide_column_from_rows<'py, R: RowAccess<'py>>(
     }
     let validity = null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls));
     finish_wide_int_column(ch_type, data, validity)
+}
+
+/// Decimal layout for the direct-into-buffer builders: byte width plus the
+/// declared precision and scale.
+fn decimal_layout(ch_type: &ChType) -> PyResult<(usize, u8, u8)> {
+    let ChType::Decimal {
+        precision, scale, ..
+    } = ch_type
+    else {
+        return Err(PyValueError::new_err("internal decimal type mismatch"));
+    };
+    Ok((decimal_width(*precision)?, *precision, *scale))
+}
+
+fn decimal_data_buffer(name: &str, width: usize, row_count: usize) -> PyResult<Vec<u8>> {
+    let byte_len = width.checked_mul(row_count).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {name:?} Decimal byte size exceeds usize capacity"
+        ))
+    })?;
+    Ok(vec![0u8; byte_len])
+}
+
+fn finish_decimal_column(
+    data: Vec<u8>,
+    width: usize,
+    precision: u8,
+    scale: u8,
+    null_map: Option<Vec<u8>>,
+) -> Column {
+    Column::Decimal(match null_map {
+        Some(nulls) => DecimalColumn::new_nullable(
+            data,
+            width,
+            precision,
+            scale,
+            Bitmap::from_ch_null_map(&nulls),
+        ),
+        None => DecimalColumn::new(data, width, precision, scale),
+    })
+}
+
+/// Build a Decimal column over generic row access with one data allocation.
+/// Each value is stringified and its scaled integer written directly into its
+/// final row slice.
+fn decimal_column_from_rows<'py, R: RowAccess<'py>>(
+    name: &str,
+    ch_type: &ChType,
+    rows: &R,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let (width, precision, scale) = decimal_layout(ch_type)?;
+    let mut data = decimal_data_buffer(name, width, row_count)?;
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    for row in 0..row_count {
+        let value = rows.value(row)?;
+        if value.is_none() {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        let text = decimal_text(&value, name, row)?;
+        let start = row * width;
+        decimal_wire_into(&text, &mut data[start..start + width], precision, scale)
+            .map_err(|err| decimal_err(err, &text, width, precision, name, row))?;
+    }
+    Ok(finish_decimal_column(
+        data, width, precision, scale, null_map,
+    ))
+}
+
+/// Decimal equivalent of `wide_column_from_seq`. Stringification runs Python
+/// (`str` on the value), so every row holds a strong reference to its item
+/// and revalidates the mutable container size before the next borrowed read.
+fn decimal_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    ch_type: &ChType,
+    seq: &S,
+    row_count: usize,
+    nullable: bool,
+) -> PyResult<Column> {
+    let (width, precision, scale) = decimal_layout(ch_type)?;
+    let mut data = decimal_data_buffer(name, width, row_count)?;
+    let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    for row in 0..row_count {
+        // SAFETY: row < row_count, the container size the caller checked and
+        // every row revalidates below.
+        let ptr = unsafe { seq.get(row) };
+        if ptr == unsafe { ffi::Py_None() } {
+            let Some(null_map) = &mut null_map else {
+                return Err(PyValueError::new_err(format!(
+                    "column {name:?} row {row} is None but {ch_type} is not Nullable"
+                )));
+            };
+            null_map.push(1);
+            continue;
+        }
+        if let Some(null_map) = &mut null_map {
+            null_map.push(0);
+        }
+        // SAFETY: taking a strong reference keeps the current item alive
+        // across the Python code its stringification runs.
+        let value = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let text = decimal_text(&value, name, row)?;
+        let start = row * width;
+        decimal_wire_into(&text, &mut data[start..start + width], precision, scale)
+            .map_err(|err| decimal_err(err, &text, width, precision, name, row))?;
+        check_not_resized(seq, name, row_count)?;
+    }
+    Ok(finish_decimal_column(
+        data, width, precision, scale, null_map,
+    ))
 }
 
 pub(super) fn nullable_scalar_column<'py, R: RowAccess<'py>>(
@@ -180,21 +384,16 @@ pub(super) struct ColumnValues<'py> {
 
 impl<'py> ColumnValues<'py> {
     pub(super) fn new(values: &Bound<'py, PyAny>, name: &str) -> PyResult<Self> {
-        if is_string_or_bytes_like(values) {
-            return Err(PyValueError::new_err(format!(
-                "column {name:?} values must be an indexable column container, not bare str or bytes"
-            )));
-        }
-        let len = values.len().map_err(|_| {
-            PyValueError::new_err(format!(
-                "column {name:?} values must be an indexable column container"
-            ))
-        })?;
-        Ok(Self {
+        let len = checked_container_len(values, name)?;
+        Ok(Self::from_parts(values, name, len))
+    }
+
+    fn from_parts(values: &Bound<'py, PyAny>, name: &str, len: usize) -> Self {
+        Self {
             values: positional_source(values),
             len,
             name: name.to_string(),
-        })
+        }
     }
 
     fn len(&self) -> usize {
@@ -208,6 +407,120 @@ impl<'py> ColumnValues<'py> {
                 self.name
             ))
         })
+    }
+}
+
+fn checked_container_len(values: &Bound<'_, PyAny>, name: &str) -> PyResult<usize> {
+    if is_string_or_bytes_like(values) {
+        return Err(PyValueError::new_err(format!(
+            "column {name:?} values must be an indexable column container, not bare str or bytes"
+        )));
+    }
+    values.len().map_err(|_| {
+        PyValueError::new_err(format!(
+            "column {name:?} values must be an indexable column container"
+        ))
+    })
+}
+
+/// Resolved input column container. Exact lists, exact tuples, and 1-D
+/// contiguous object ndarrays feed the borrowed-pointer seq fast paths;
+/// everything else uses safe indexed `ColumnValues` access.
+pub(super) enum ColumnSource<'py> {
+    List(Bound<'py, PyList>),
+    Tuple(Bound<'py, PyTuple>),
+    ObjectArray(ObjectArraySeq<'py>),
+    Values(ColumnValues<'py>),
+}
+
+impl<'py> ColumnSource<'py> {
+    /// Classify `values`, validating the container shape and row count.
+    pub(super) fn resolve(
+        values: &Bound<'py, PyAny>,
+        name: &str,
+        row_count: usize,
+    ) -> PyResult<Self> {
+        let len = checked_container_len(values, name)?;
+        if len != row_count {
+            return Err(PyValueError::new_err(format!(
+                "column {name:?} has {len} values but row_count is {row_count}"
+            )));
+        }
+        if let Ok(list) = values.downcast_exact::<PyList>() {
+            return Ok(Self::List(list.clone()));
+        }
+        if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
+            return Ok(Self::Tuple(tuple.clone()));
+        }
+        if let Some(seq) = ObjectArraySeq::matching(values, row_count) {
+            return Ok(Self::ObjectArray(seq));
+        }
+        Ok(Self::Values(ColumnValues::from_parts(values, name, len)))
+    }
+}
+
+/// Borrowed view over the object-pointer buffer of a 1-D C-contiguous
+/// `dtype=object` ndarray. The buffer export pins the array length, so reads
+/// stay in bounds for the whole build; a NULL slot reads as None.
+pub(super) struct ObjectArraySeq<'py> {
+    py: Python<'py>,
+    view: RawBuffer<'py>,
+    len: usize,
+}
+
+impl<'py> ObjectArraySeq<'py> {
+    fn matching(values: &Bound<'py, PyAny>, row_count: usize) -> Option<Self> {
+        let view = RawBuffer::matching(
+            values,
+            b'O',
+            std::mem::size_of::<*mut ffi::PyObject>(),
+            row_count,
+        )?;
+        Some(Self {
+            py: values.py(),
+            view,
+            len: row_count,
+        })
+    }
+}
+
+impl FastSeq for ObjectArraySeq<'_> {
+    // The exported buffer cannot be resized, but Python code run from a
+    // fallback can still replace items in place, so the pointer-identity
+    // caches keyed on MUTABLE must invalidate like they do for lists.
+    const MUTABLE: bool = true;
+
+    #[inline]
+    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
+        debug_assert!(index < self.len);
+        // SAFETY: the trait contract requires index < size(); each slot holds
+        // a pointer the array owns, read fresh so in-place replacement by
+        // earlier fallbacks is observed.
+        let ptr = *self.view.data().cast::<*mut ffi::PyObject>().add(index);
+        if ptr.is_null() {
+            ffi::Py_None()
+        } else {
+            ptr
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.len
+    }
+}
+
+impl<'py> RowAccess<'py> for ObjectArraySeq<'py> {
+    fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
+        if row >= self.len {
+            return Err(PyValueError::new_err(format!(
+                "row {row} out of bounds for column of {} values",
+                self.len
+            )));
+        }
+        // SAFETY: row is in bounds for the exported buffer; the array slot
+        // holds a strong reference and from_borrowed_ptr takes its own before
+        // any Python code can run.
+        Ok(unsafe { Bound::from_borrowed_ptr(self.py, self.get(row)) })
     }
 }
 
@@ -890,31 +1203,6 @@ fn wide_column_from_seq<S: FastSeq>(
     finish_wide_int_column(ch_type, data, validity)
 }
 
-/// Fast column build for types with a per-value fast path. Returns `Ok(None)`
-/// when the type or container has no fast path; the caller falls through to
-/// the generic scalar loop.
-fn try_fast_column(
-    py: Python<'_>,
-    name: &str,
-    ch_type: &ChType,
-    values: &Bound<'_, PyAny>,
-    row_count: usize,
-    nullable: bool,
-) -> PyResult<Option<Column>> {
-    if let Ok(list) = values.downcast_exact::<PyList>() {
-        return try_fast_column_seq(py, name, ch_type, &ListSeq(list), row_count, nullable);
-    }
-    if let Ok(tuple) = values.downcast_exact::<PyTuple>() {
-        return try_fast_column_seq(py, name, ch_type, &TupleSeq(tuple), row_count, nullable);
-    }
-    if let Some(column) =
-        try_numpy_timedelta_column(py, name, ch_type, values, row_count, nullable)?
-    {
-        return Ok(Some(column));
-    }
-    try_buffer_column(py, name, ch_type, values, row_count, nullable)
-}
-
 /// Per-type dispatch over a borrowed-pointer run; runs once per column.
 pub(super) fn try_fast_column_seq<S: FastSeq>(
     py: Python<'_>,
@@ -971,6 +1259,9 @@ pub(super) fn try_fast_column_seq<S: FastSeq>(
         ChType::Enum16 { variants } => {
             enum_seq(py, seq, ch_type, variants, name, row_count, nullable).map(Some)
         }
+        ChType::Decimal { .. } => {
+            decimal_column_from_seq(py, name, ch_type, seq, row_count, nullable).map(Some)
+        }
         _ => Ok(None),
     }
 }
@@ -999,6 +1290,7 @@ fn try_buffer_column(
     }
 
     match ch_type {
+        ChType::Bool => Ok(bool_buffer_column(values, row_count, nullable)),
         ChType::Int8 => buf::<i8>(py, name, values, row_count, nullable),
         ChType::Int16 => buf::<i16>(py, name, values, row_count, nullable),
         ChType::Int32 => buf::<i32>(py, name, values, row_count, nullable),
@@ -1013,6 +1305,26 @@ fn try_buffer_column(
         ChType::Interval(_) => buf::<IntervalVal>(py, name, values, row_count, nullable),
         _ => Ok(None),
     }
+}
+
+/// Bool over a numpy bool buffer. Only format '?' with a 1-byte item is
+/// accepted (pyo3's `Element for u8` rejects '?'); numpy bool storage is
+/// already the 0/1 wire byte, so the buffer copies straight into the column.
+fn bool_buffer_column(
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    nullable: bool,
+) -> Option<Column> {
+    let buffer = RawBuffer::matching(values, b'?', 1, row_count)?;
+    // SAFETY: `matching` validated a C-contiguous buffer of row_count 1-byte
+    // items, and no Python code runs while the slice is read.
+    let bytes = unsafe { std::slice::from_raw_parts(buffer.data(), row_count) };
+    Some(Column::Bool(if nullable {
+        // A buffer holds no Python objects, so a nullable column is all-valid.
+        BoolColumn::from_wire_bytes_nullable(bytes, Bitmap::all_valid(row_count))
+    } else {
+        BoolColumn::from_wire_bytes(bytes)
+    }))
 }
 
 /// Reinterprets a `Vec` of a `#[repr(transparent)]` wrapper as its inner type,

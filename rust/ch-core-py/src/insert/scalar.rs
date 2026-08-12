@@ -1196,7 +1196,7 @@ fn enum16_value(
         .map_err(|_| integer_range_error(value, column, row, "Enum16"))
 }
 
-fn decimal_width(precision: u8) -> PyResult<usize> {
+pub(super) fn decimal_width(precision: u8) -> PyResult<usize> {
     match precision {
         1..=9 => Ok(4),
         10..=18 => Ok(8),
@@ -1208,7 +1208,7 @@ fn decimal_width(precision: u8) -> PyResult<usize> {
     }
 }
 
-fn decimal_text(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<String> {
+pub(super) fn decimal_text(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<String> {
     value
         .str()
         .and_then(|s| s.to_str().map(str::to_owned))
@@ -1219,6 +1219,42 @@ fn decimal_text(value: &Bound<'_, PyAny>, column: &str, row: usize) -> PyResult<
         })
 }
 
+/// Decimal text-to-wire failure classes; `decimal_err` renders the exact
+/// user-facing message for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DecimalError {
+    Invalid,
+    UnsupportedExponent,
+    ExceedsPrecision,
+    OverflowsWidth,
+    DoesNotFit,
+}
+
+pub(super) fn decimal_err(
+    err: DecimalError,
+    text: &str,
+    width: usize,
+    precision: u8,
+    column: &str,
+    row: usize,
+) -> PyErr {
+    match err {
+        DecimalError::Invalid => conversion_error(column, row, "Decimal"),
+        DecimalError::UnsupportedExponent => PyValueError::new_err(format!(
+            "column {column:?} row {row} Decimal value {text:?} has an unsupported exponent"
+        )),
+        DecimalError::ExceedsPrecision => PyValueError::new_err(format!(
+            "column {column:?} row {row} Decimal value {text:?} exceeds precision {precision}"
+        )),
+        DecimalError::OverflowsWidth => PyValueError::new_err(format!(
+            "column {column:?} row {row} Decimal value overflows target width"
+        )),
+        DecimalError::DoesNotFit => PyValueError::new_err(format!(
+            "column {column:?} row {row} Decimal value {text:?} does not fit in {width} bytes"
+        )),
+    }
+}
+
 fn decimal_to_le_bytes(
     text: &str,
     width: usize,
@@ -1227,161 +1263,208 @@ fn decimal_to_le_bytes(
     column: &str,
     row: usize,
 ) -> PyResult<Vec<u8>> {
-    let (negative, digits, exponent) = parse_decimal_text(text, column, row)?;
-    let shift = exponent.checked_add(i32::from(scale)).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "column {column:?} row {row} Decimal value {text:?} has an unsupported exponent"
-        ))
-    })?;
-    let first_non_zero = digits.iter().position(|&d| d != 0);
-    let mut digits = match first_non_zero {
-        Some(pos) => digits[pos..].to_vec(),
-        None => Vec::new(),
-    };
-
-    if shift >= 0 {
-        let precision = usize::from(precision);
-        let shift = usize::try_from(shift).map_err(|_| conversion_error(column, row, "Decimal"))?;
-        let new_len = digits.len().checked_add(shift).ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "column {column:?} row {row} Decimal value {text:?} has an unsupported exponent"
-            ))
-        })?;
-        if !digits.is_empty() && new_len > precision {
-            return Err(PyValueError::new_err(format!(
-                "column {column:?} row {row} Decimal value {text:?} exceeds precision {precision}"
-            )));
-        }
-        if new_len > width * 4 {
-            return Err(PyValueError::new_err(format!(
-                "column {column:?} row {row} Decimal value {text:?} does not fit in {width} bytes"
-            )));
-        }
-        digits.resize(new_len, 0);
-    } else {
-        let remove = usize::try_from(shift.unsigned_abs())
-            .map_err(|_| conversion_error(column, row, "Decimal"))?;
-        if remove >= digits.len() {
-            digits.clear();
-        } else {
-            digits.truncate(digits.len() - remove);
-        }
-    }
-    if digits.len() > usize::from(precision) {
-        return Err(PyValueError::new_err(format!(
-            "column {column:?} row {row} Decimal value {text:?} exceeds precision {precision}"
-        )));
-    }
-
-    let mut mag = vec![0u8; width];
-    for digit in digits {
-        mul_add_decimal_digit(&mut mag, digit, column, row)?;
-    }
-    if !fits_signed_width(&mag, negative) {
-        return Err(PyValueError::new_err(format!(
-            "column {column:?} row {row} Decimal value {text:?} does not fit in {width} bytes"
-        )));
-    }
-    if negative && mag.iter().any(|&b| b != 0) {
-        twos_complement_in_place(&mut mag);
-    }
-    Ok(mag)
+    let mut bytes = vec![0u8; width];
+    decimal_wire_into(text, &mut bytes, precision, scale)
+        .map_err(|err| decimal_err(err, text, width, precision, column, row))?;
+    Ok(bytes)
 }
 
-fn parse_decimal_text(text: &str, column: &str, row: usize) -> PyResult<(bool, Vec<u8>, i32)> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(conversion_error(column, row, "Decimal"));
+const POW10: [u64; 20] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
+
+/// limbs = limbs * pow + add over little-endian u64 limbs; carry out of the
+/// limb window is an overflow.
+fn limbs_mul_add(limbs: &mut [u64], pow: u64, add: u64) -> Result<(), DecimalError> {
+    let mut carry = u128::from(add);
+    for limb in limbs.iter_mut() {
+        let next = u128::from(*limb) * u128::from(pow) + carry;
+        *limb = next as u64;
+        carry = next >> 64;
+    }
+    if carry != 0 {
+        return Err(DecimalError::OverflowsWidth);
+    }
+    Ok(())
+}
+
+/// Parse decimal text and write the scaled two's-complement little-endian
+/// integer into `out` (4, 8, 16, or 32 bytes). Fractional digits beyond
+/// `scale` are truncated toward zero before accumulating. Runs no Python.
+pub(super) fn decimal_wire_into(
+    text: &str,
+    out: &mut [u8],
+    precision: u8,
+    scale: u8,
+) -> Result<(), DecimalError> {
+    let width = out.len();
+    let bytes = text.trim().as_bytes();
+    if bytes.is_empty() {
+        return Err(DecimalError::Invalid);
     }
 
-    let mut chars = text.chars().peekable();
-    let negative = match chars.peek().copied() {
-        Some('-') => {
-            chars.next();
+    let mut pos = 0;
+    let negative = match bytes[0] {
+        b'-' => {
+            pos += 1;
             true
         }
-        Some('+') => {
-            chars.next();
+        b'+' => {
+            pos += 1;
             false
         }
         _ => false,
     };
 
-    let mut digits = Vec::new();
-    let mut frac_digits = 0i32;
-    let mut seen_dot = false;
-    while let Some(ch) = chars.peek().copied() {
-        match ch {
-            '0'..='9' => {
-                digits.push(ch as u8 - b'0');
-                if seen_dot {
-                    frac_digits += 1;
-                }
-                chars.next();
-            }
-            '.' if !seen_dot => {
-                seen_dot = true;
-                chars.next();
-            }
-            'e' | 'E' => break,
-            _ => return Err(conversion_error(column, row, "Decimal")),
+    let int_start = pos;
+    while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    let int_run = &bytes[int_start..pos];
+    let mut frac_run: &[u8] = &[];
+    if pos < bytes.len() && bytes[pos] == b'.' {
+        pos += 1;
+        let frac_start = pos;
+        while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+            pos += 1;
         }
+        frac_run = &bytes[frac_start..pos];
+    }
+    if int_run.is_empty() && frac_run.is_empty() {
+        return Err(DecimalError::Invalid);
     }
 
-    if digits.is_empty() {
-        return Err(conversion_error(column, row, "Decimal"));
-    }
-
-    let exponent = if matches!(chars.peek(), Some('e' | 'E')) {
-        chars.next();
+    let mut exp10 = 0i32;
+    if pos < bytes.len() {
+        if !matches!(bytes[pos], b'e' | b'E') {
+            return Err(DecimalError::Invalid);
+        }
+        pos += 1;
         let mut exp_sign = 1i32;
-        match chars.peek().copied() {
-            Some('-') => {
+        match bytes.get(pos) {
+            Some(b'-') => {
                 exp_sign = -1;
-                chars.next();
+                pos += 1;
             }
-            Some('+') => {
-                chars.next();
+            Some(b'+') => {
+                pos += 1;
             }
             _ => {}
         }
+        if pos == bytes.len() {
+            return Err(DecimalError::Invalid);
+        }
         let mut exp = 0i32;
-        let mut seen_digit = false;
-        for ch in chars {
-            if !ch.is_ascii_digit() {
-                return Err(conversion_error(column, row, "Decimal"));
+        for &byte in &bytes[pos..] {
+            if !byte.is_ascii_digit() {
+                return Err(DecimalError::Invalid);
             }
-            seen_digit = true;
             exp = exp
                 .checked_mul(10)
-                .and_then(|v| v.checked_add((ch as u8 - b'0') as i32))
-                .ok_or_else(|| conversion_error(column, row, "Decimal"))?;
+                .and_then(|v| v.checked_add(i32::from(byte - b'0')))
+                .ok_or(DecimalError::Invalid)?;
         }
-        if !seen_digit {
-            return Err(conversion_error(column, row, "Decimal"));
-        }
-        exp_sign * exp
-    } else {
-        0
-    };
-
-    let exponent = exponent
-        .checked_sub(frac_digits)
-        .ok_or_else(|| conversion_error(column, row, "Decimal"))?;
-    Ok((negative, digits, exponent))
-}
-
-fn mul_add_decimal_digit(bytes: &mut [u8], digit: u8, column: &str, row: usize) -> PyResult<()> {
-    let mut carry = u16::from(digit);
-    for byte in bytes {
-        let next = u16::from(*byte) * 10 + carry;
-        *byte = next as u8;
-        carry = next >> 8;
+        exp10 = exp_sign * exp;
     }
-    if carry != 0 {
-        return Err(PyValueError::new_err(format!(
-            "column {column:?} row {row} Decimal value overflows target width"
-        )));
+
+    let frac_count = i32::try_from(frac_run.len()).map_err(|_| DecimalError::Invalid)?;
+    let exponent = exp10.checked_sub(frac_count).ok_or(DecimalError::Invalid)?;
+    let shift = exponent
+        .checked_add(i32::from(scale))
+        .ok_or(DecimalError::UnsupportedExponent)?;
+
+    // Significant digits: strip leading zeros across the combined runs.
+    let mut sig_int = int_run;
+    while let Some((b'0', rest)) = sig_int.split_first() {
+        sig_int = rest;
+    }
+    let mut sig_frac = frac_run;
+    if sig_int.is_empty() {
+        while let Some((b'0', rest)) = sig_frac.split_first() {
+            sig_frac = rest;
+        }
+    }
+    let sig_len = sig_int.len() + sig_frac.len();
+
+    // A non-negative shift pads with zeros; a negative shift drops fractional
+    // digits beyond the scale (truncation toward zero).
+    let precision = usize::from(precision);
+    let (keep, zeros) = if shift >= 0 {
+        let shift = usize::try_from(shift).map_err(|_| DecimalError::Invalid)?;
+        let new_len = sig_len
+            .checked_add(shift)
+            .ok_or(DecimalError::UnsupportedExponent)?;
+        if sig_len > 0 && new_len > precision {
+            return Err(DecimalError::ExceedsPrecision);
+        }
+        if new_len > width * 4 {
+            return Err(DecimalError::DoesNotFit);
+        }
+        (sig_len, shift)
+    } else {
+        let remove = usize::try_from(shift.unsigned_abs()).map_err(|_| DecimalError::Invalid)?;
+        (sig_len.saturating_sub(remove), 0)
+    };
+    if keep + zeros > precision {
+        return Err(DecimalError::ExceedsPrecision);
+    }
+
+    // Accumulate the kept digits in chunks of up to 19 (the largest power of
+    // ten a u64 holds), then fold the zero padding in as pure multiplies.
+    let limb_count = width.div_ceil(8).max(1);
+    let mut limbs = [0u64; 4];
+    let limbs = &mut limbs[..limb_count];
+    let mut chunk = 0u64;
+    let mut chunk_len = 0usize;
+    for &digit in sig_int.iter().chain(sig_frac).take(keep) {
+        chunk = chunk * 10 + u64::from(digit - b'0');
+        chunk_len += 1;
+        if chunk_len == 19 {
+            limbs_mul_add(limbs, POW10[19], chunk)?;
+            chunk = 0;
+            chunk_len = 0;
+        }
+    }
+    if chunk_len > 0 {
+        limbs_mul_add(limbs, POW10[chunk_len], chunk)?;
+    }
+    let mut zeros = zeros;
+    while zeros > 0 {
+        let step = zeros.min(19);
+        limbs_mul_add(limbs, POW10[step], 0)?;
+        zeros -= step;
+    }
+    if width < 8 && limbs[0] >> (8 * width) != 0 {
+        return Err(DecimalError::OverflowsWidth);
+    }
+
+    for (index, byte) in out.iter_mut().enumerate() {
+        *byte = (limbs[index / 8] >> ((index % 8) * 8)) as u8;
+    }
+    if !fits_signed_width(out, negative) {
+        return Err(DecimalError::DoesNotFit);
+    }
+    if negative && out.iter().any(|&b| b != 0) {
+        twos_complement_in_place(out);
     }
     Ok(())
 }
@@ -1410,5 +1493,200 @@ fn twos_complement_in_place(bytes: &mut [u8]) {
         if carry == 0 {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decimal_wire_into, DecimalError};
+
+    fn wire(text: &str, width: usize, precision: u8, scale: u8) -> Result<Vec<u8>, DecimalError> {
+        let mut out = vec![0u8; width];
+        decimal_wire_into(text, &mut out, precision, scale)?;
+        Ok(out)
+    }
+
+    fn le(value: i128, width: usize) -> Vec<u8> {
+        value.to_le_bytes()[..width].to_vec()
+    }
+
+    #[test]
+    fn scaled_values_per_width() {
+        assert_eq!(wire("1.5", 4, 9, 3), Ok(le(1_500, 4)));
+        assert_eq!(wire("-1.5", 4, 9, 3), Ok(le(-1_500, 4)));
+        assert_eq!(wire("+1.5", 4, 9, 3), Ok(le(1_500, 4)));
+        assert_eq!(wire(" 12.5 ", 4, 9, 3), Ok(le(12_500, 4)));
+        assert_eq!(wire("7", 8, 18, 6), Ok(le(7_000_000, 8)));
+        assert_eq!(
+            wire("123456789.123456", 8, 18, 6),
+            Ok(le(123_456_789_123_456, 8))
+        );
+        assert_eq!(
+            wire("-123456789012345678901234.567890123456", 16, 38, 12),
+            Ok(le(-123_456_789_012_345_678_901_234_567_890_123_456, 16))
+        );
+    }
+
+    #[test]
+    fn boundary_values() {
+        // +-(10^precision - 1) scaled
+        assert_eq!(wire("999999.999", 4, 9, 3), Ok(le(999_999_999, 4)));
+        assert_eq!(wire("-999999.999", 4, 9, 3), Ok(le(-999_999_999, 4)));
+        assert_eq!(
+            wire("999999999999.999999", 8, 18, 6),
+            Ok(le(999_999_999_999_999_999, 8))
+        );
+        let top38 = 10i128.pow(38) - 1;
+        assert_eq!(
+            wire("99999999999999999999999999.999999999999", 16, 38, 12),
+            Ok(le(top38, 16))
+        );
+        // the exact -2^(8w-1) two's-complement boundary fits; its positive
+        // counterpart does not (width deliberately narrower than precision)
+        assert_eq!(
+            wire("-2147483648", 4, 10, 0),
+            Ok(vec![0x00, 0x00, 0x00, 0x80])
+        );
+        assert_eq!(wire("2147483648", 4, 10, 0), Err(DecimalError::DoesNotFit));
+    }
+
+    #[test]
+    fn zero_forms() {
+        for text in ["0", "-0", "0.0", "-0.000", "0E-10", "0E-200"] {
+            assert_eq!(wire(text, 4, 9, 3), Ok(vec![0; 4]), "{text}");
+        }
+        assert_eq!(wire("0E+10", 8, 18, 6), Ok(vec![0; 8]));
+        // zero padded beyond the precision or width keeps the legacy errors
+        assert_eq!(wire("0E+10", 4, 9, 3), Err(DecimalError::ExceedsPrecision));
+        assert_eq!(wire("0E+200", 4, 9, 3), Err(DecimalError::DoesNotFit));
+    }
+
+    #[test]
+    fn excess_fraction_truncates_toward_zero() {
+        assert_eq!(wire("1.0005", 4, 9, 3), Ok(le(1_000, 4)));
+        assert_eq!(wire("-1.0005", 4, 9, 3), Ok(le(-1_000, 4)));
+        assert_eq!(
+            wire("123456.789999999999999999999", 4, 9, 3),
+            Ok(le(123_456_789, 4))
+        );
+        assert_eq!(wire("0.0001", 4, 9, 3), Ok(vec![0; 4]));
+        assert_eq!(wire("-0.0001", 4, 9, 3), Ok(vec![0; 4]));
+        // truncation happens before the precision check
+        assert_eq!(
+            wire("1234567890.1234", 4, 9, 3),
+            Err(DecimalError::ExceedsPrecision)
+        );
+    }
+
+    #[test]
+    fn scientific_notation() {
+        assert_eq!(wire("1E+2", 4, 9, 3), Ok(le(100_000, 4)));
+        assert_eq!(wire("1E-7", 4, 9, 3), Ok(vec![0; 4]));
+        assert_eq!(wire("-3E+1", 4, 9, 3), Ok(le(-30_000, 4)));
+        assert_eq!(wire("5e2", 4, 9, 3), Ok(le(500_000, 4)));
+        assert_eq!(wire("1.25E+3", 4, 9, 3), Ok(le(1_250_000, 4)));
+    }
+
+    #[test]
+    fn scale_zero_and_max_scale() {
+        assert_eq!(wire("123456789", 4, 9, 0), Ok(le(123_456_789, 4)));
+        assert_eq!(wire("1.9", 4, 9, 0), Ok(le(1, 4)));
+        assert_eq!(wire("-1.9", 4, 9, 0), Ok(le(-1, 4)));
+        assert_eq!(wire("0.123456789", 4, 9, 9), Ok(le(123_456_789, 4)));
+        assert_eq!(wire("1.0", 4, 9, 9), Err(DecimalError::ExceedsPrecision));
+    }
+
+    #[test]
+    fn wide_widths_match_per_digit_reference() {
+        // Reference accumulator: the per-digit byte-carry algorithm this
+        // implementation replaced.
+        fn reference(digits: &str, negative: bool, width: usize) -> Vec<u8> {
+            let mut mag = vec![0u8; width];
+            for digit in digits.bytes() {
+                let mut carry = u16::from(digit - b'0');
+                for byte in mag.iter_mut() {
+                    let next = u16::from(*byte) * 10 + carry;
+                    *byte = next as u8;
+                    carry = next >> 8;
+                }
+                assert_eq!(carry, 0);
+            }
+            if negative && mag.iter().any(|&b| b != 0) {
+                super::twos_complement_in_place(&mut mag);
+            }
+            mag
+        }
+
+        for digit_count in 1..=76usize {
+            let digits: String = (0..digit_count)
+                .map(|i| char::from(b'1' + (i % 9) as u8))
+                .collect();
+            let (int_part, frac_part) = digits.split_at(digit_count.min(46));
+            let text = if frac_part.is_empty() {
+                format!("{int_part}.0")
+            } else {
+                format!("{int_part}.{frac_part}")
+            };
+            let scaled: String = digits
+                .chars()
+                .chain(std::iter::repeat('0'))
+                .take(int_part.len() + 30)
+                .collect();
+            for negative in [false, true] {
+                let signed = if negative {
+                    format!("-{text}")
+                } else {
+                    text.clone()
+                };
+                assert_eq!(
+                    wire(&signed, 32, 76, 30),
+                    Ok(reference(&scaled, negative, 32)),
+                    "{signed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_text() {
+        for text in [
+            "",
+            " ",
+            "abc",
+            "1.2.3",
+            "1e",
+            "1e+",
+            "--5",
+            "+",
+            ".",
+            "1x",
+            "1e5x",
+            "nan",
+            "inf",
+            "1e999999999999",
+        ] {
+            assert_eq!(wire(text, 4, 9, 3), Err(DecimalError::Invalid), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn exponent_and_precision_errors() {
+        assert_eq!(
+            wire("1e2147483647", 4, 9, 3),
+            Err(DecimalError::UnsupportedExponent)
+        );
+        assert_eq!(
+            wire("1234567890", 4, 9, 3),
+            Err(DecimalError::ExceedsPrecision)
+        );
+        assert_eq!(
+            wire("1E+70", 32, 76, 30),
+            Err(DecimalError::ExceedsPrecision)
+        );
+        // magnitude overflow of a width narrower than the claimed precision
+        assert_eq!(
+            wire("9999999999", 4, 76, 0),
+            Err(DecimalError::OverflowsWidth)
+        );
     }
 }

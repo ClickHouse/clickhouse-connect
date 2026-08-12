@@ -11,7 +11,7 @@ name = "_ch_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.1.0" }
+ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.1.1" }
 # generate-import-lib synthesizes the CPython import library when
 # cross-compiling to Windows targets with no local interpreter
 pyo3 = { version = "0.23", features = ["extension-module", "generate-import-lib"] }

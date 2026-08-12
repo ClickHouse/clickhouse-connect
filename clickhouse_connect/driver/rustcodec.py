@@ -18,6 +18,7 @@ from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.rustnumpy import (
     _build_converters,
+    _contains_json_type,
     _convert_block,
     _normalize_json_shared_column,
 )
@@ -343,6 +344,9 @@ class _RustNativeTransform:
             read_source.close()
             raise
 
+        json_flags = [_contains_json_type(col_type) for col_type in col_types]
+        needs_post = any(json_flags)
+
         def normalize_json_columns(columns: list) -> list:
             return [_normalize_json_shared_column(col_type, column, context) for col_type, column in zip(col_types, columns)]
 
@@ -351,9 +355,14 @@ class _RustNativeTransform:
             # on this thread overlaps the producer's transport drain, and any decode error surfaces here
             # rather than on a later result access.
             try:
-                batch_columns = [normalize_json_columns(first.to_python_columns())]
-                for batch in blocks:
-                    batch_columns.append(normalize_json_columns(batch.to_python_columns()))
+                if needs_post:
+                    batch_columns = [normalize_json_columns(first.to_python_columns())]
+                    for batch in blocks:
+                        batch_columns.append(normalize_json_columns(batch.to_python_columns()))
+                else:
+                    batch_columns = [first.to_python_columns()]
+                    for batch in blocks:
+                        batch_columns.append(batch.to_python_columns())
             except NotImplementedError as ex:
                 read_source.close()
                 raise _unsupported_decode_error(ex) from ex
@@ -367,18 +376,27 @@ class _RustNativeTransform:
             return _BufferedQueryResult(batch_columns, names, col_types, context.column_oriented, read_source)
 
         tuple_flags = [_python_codec_tuple_container(col_type) for col_type in col_types]
+        # JSON-containing columns normalize in Python below, so their tuple wrap stays there too.
+        # None when no flag is set skips the per-call flag extraction in the binding.
+        flags = [tf and not jf for tf, jf in zip(tuple_flags, json_flags)]
+        rust_tuple_flags = flags if any(flags) else None
 
-        def match_containers(columns: list) -> list:
+        def post_process_json(columns: list) -> list:
             # Streamed blocks match the Python codec's per-column containers.
-            columns = normalize_json_columns(columns)
-            return [tuple(column) if flag else column for flag, column in zip(tuple_flags, columns)]
+            for i, json_flag in enumerate(json_flags):
+                if json_flag:
+                    normalized = _normalize_json_shared_column(col_types[i], columns[i], context)
+                    columns[i] = tuple(normalized) if tuple_flags[i] else normalized
+            return columns
 
         try:
             if context.use_numpy:
                 converters = _build_converters(col_types, context)
                 first_columns = _convert_block(first, converters)
             else:
-                first_columns = match_containers(first.to_python_columns(typed_numeric=True))
+                first_columns = first.to_python_columns(typed_numeric=True, tuple_columns=rust_tuple_flags)
+                if needs_post:
+                    first_columns = post_process_json(first_columns)
         except NotImplementedError as ex:
             read_source.close()
             raise _unsupported_decode_error(ex) from ex
@@ -414,7 +432,9 @@ class _RustNativeTransform:
             yield first_columns
             for batch in blocks:
                 try:
-                    columns = match_containers(batch.to_python_columns(typed_numeric=True))
+                    columns = batch.to_python_columns(typed_numeric=True, tuple_columns=rust_tuple_flags)
+                    if needs_post:
+                        columns = post_process_json(columns)
                 except NotImplementedError as ex:
                     read_source.close()
                     raise _unsupported_decode_error(ex) from ex

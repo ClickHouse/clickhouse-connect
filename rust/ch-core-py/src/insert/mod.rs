@@ -80,6 +80,91 @@ fn matching_native_buffer<T: Element>(
     Some(buffer)
 }
 
+/// Owned PEP 3118 view for formats pyo3's `Element` does not cover ('O'
+/// object pointers, '?' bools). `matching` accepts only a 1-D C-contiguous
+/// buffer with the exact format code, item size, and row count; any other
+/// exporter or view (strided or multi-dimensional) returns `None`. The view
+/// is released on drop.
+struct RawBuffer<'py> {
+    py: Python<'py>,
+    view: Box<ffi::Py_buffer>,
+}
+
+impl<'py> RawBuffer<'py> {
+    fn matching(
+        values: &Bound<'py, PyAny>,
+        code: u8,
+        itemsize: usize,
+        row_count: usize,
+    ) -> Option<Self> {
+        let py = values.py();
+        // SAFETY: Py_buffer is a plain C struct; PyObject_GetBuffer fills it
+        // on success and PyBUF_ND rejects non-C-contiguous exporters.
+        let mut view = Box::new(unsafe { std::mem::zeroed::<ffi::Py_buffer>() });
+        let result = unsafe {
+            ffi::PyObject_GetBuffer(
+                values.as_ptr(),
+                &mut *view,
+                ffi::PyBUF_FORMAT | ffi::PyBUF_ND,
+            )
+        };
+        if result != 0 {
+            // SAFETY: GIL held; discards the pending TypeError/BufferError.
+            unsafe { ffi::PyErr_Clear() };
+            return None;
+        }
+        // Wrapped immediately so every rejection below releases the view.
+        let buffer = Self { py, view };
+        let view = &*buffer.view;
+        if view.ndim != 1
+            || view.buf.is_null()
+            || view.itemsize != itemsize as ffi::Py_ssize_t
+            || view.shape.is_null()
+        {
+            return None;
+        }
+        // SAFETY: PyBUF_ND guarantees a shape array of ndim entries.
+        if unsafe { *view.shape } != row_count as ffi::Py_ssize_t {
+            return None;
+        }
+        if buffer.format_code() != Some(code) {
+            return None;
+        }
+        if view.buf.align_offset(itemsize) != 0 {
+            return None;
+        }
+        Some(buffer)
+    }
+
+    /// The single format character, native byte order; a NULL format string
+    /// means 'B' per the buffer protocol.
+    fn format_code(&self) -> Option<u8> {
+        if self.view.format.is_null() {
+            return Some(b'B');
+        }
+        // SAFETY: a non-null Py_buffer format is a NUL-terminated C string.
+        let bytes = unsafe { std::ffi::CStr::from_ptr(self.view.format) }.to_bytes();
+        match *bytes {
+            [code] => Some(code),
+            [b'@', code] => Some(code),
+            _ => None,
+        }
+    }
+
+    fn data(&self) -> *const u8 {
+        self.view.buf.cast()
+    }
+}
+
+impl Drop for RawBuffer<'_> {
+    fn drop(&mut self) {
+        // SAFETY: the held Python token proves the GIL, and the view was
+        // filled by a successful PyObject_GetBuffer.
+        let _ = self.py;
+        unsafe { ffi::PyBuffer_Release(&mut *self.view) };
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (column_names, column_type_names, column_data, row_count, prefix=None))]
 pub(crate) fn encode_native_block(
