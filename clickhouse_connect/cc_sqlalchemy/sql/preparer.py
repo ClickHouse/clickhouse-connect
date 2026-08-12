@@ -26,7 +26,7 @@ class ChIdentifierPreparer(IdentifierPreparer):
         return identifier
 
     def quote(self, ident: str, force: Any = None) -> str:
-        return self._escape_percents(super().quote(ident, force))
+        return self._escape_percents(super().quote(ident))
 
     def _quote_raw_identifier(self, value: str) -> str:
         """Quote raw identifier content even when it already looks quoted."""
