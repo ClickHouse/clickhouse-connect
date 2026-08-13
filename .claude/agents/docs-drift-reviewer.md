@@ -28,7 +28,8 @@ Write `docs/` and `README.md` in a direct, practical style.
 ## Scope
 In scope: `docs/*.mdx` (the Mintlify site source) and `README.md`.
 Out of scope: `CHANGELOG.md`. AGENTS.md already requires a changelog entry for user-facing changes in the same PR; that is a separate, existing workflow rule. If you notice a user-facing change with no changelog entry, mention it in your report as a flag, but do not add one yourself and do not treat its absence as your job.
-Also out of scope: `docs/navigation.json` and `docs/_meta.yml`, unless a change adds or removes an entire page. Do not touch them for ordinary content edits.
+Also out of scope: `docs/navigation.json`, unless a change adds or removes an entire page. Do not touch it for ordinary content edits.
+In scope: the capability metadata in `docs/_meta.yml`. It is the high level integration summary the docs site reads, and the `transports:`, `formats:`, and `ecosystem:` lists are the parts that matter most. If a change adds or drops support for a transport, a format, or an ecosystem integration, update the matching list. For example, a PR that introduces a TCP transport must add TCP to `transports:`. Also confirm the `quickStartCode:` path still points to a file that exists in the repo and that the sample still runs against the current API. Leave the rest of `_meta.yml` alone.
 
 ## Workflow
 1. Determine the diff. Default to comparing the current branch against `main` (`git diff main...HEAD`), plus `git status` and `git diff` for anything uncommitted. If the caller specifies a different branch, commit range, or set of files, use that instead.
