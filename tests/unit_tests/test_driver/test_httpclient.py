@@ -4,7 +4,9 @@ from datetime import timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import aiohttp
 import pytest
+from urllib3.exceptions import HTTPError
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
@@ -285,6 +287,31 @@ class TestAsyncClientErrorHandler:
         assert "UNKNOWN_TABLE" not in str(excinfo.value)
 
     @pytest.mark.asyncio
+    async def test_error_handler_with_scrub_mode(self):
+        client = self.make_client()
+        client.show_clickhouse_errors = "scrub"
+        response = self.make_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            await client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Received ClickHouse exception, code: 60" in error_msg
+        assert "Unknown table 'x'" in error_msg
+        assert "(UNKNOWN_TABLE)" in error_msg
+        assert "version" not in error_msg
+        assert "official build" not in error_msg
+        assert client.url not in error_msg
+        assert "(for url" not in error_msg
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        response.close.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_error_handler_retried_raises_operational_error(self):
         client = self.make_client()
         response = self.make_response(status=503, headers={ex_header: "159"}, data=b"timeout")
@@ -294,21 +321,46 @@ class TestAsyncClientErrorHandler:
 
         assert excinfo.value.code == 159
 
+    @pytest.mark.asyncio
+    async def test_transport_error_scrub_mode_is_generic(self, caplog):
+        client = self.make_client()
+        client.show_clickhouse_errors = "scrub"
+        error = aiohttp.ClientConnectionError("Cannot connect to host localhost:8123/?token=secret")
+        session = Mock()
+        session.closed = False
+        session.request = AsyncMock(side_effect=error)
+        client._session = session
+
+        with caplog.at_level(logging.WARNING), pytest.raises(OperationalError) as excinfo:
+            await client._raw_request(None, {"query": "SELECT 13"})
+
+        assert str(excinfo.value) == "Network Error"
+        assert excinfo.value.__cause__ is error
+        assert "localhost" not in str(excinfo.value)
+        assert "secret" not in str(excinfo.value)
+        assert any(record.levelno == logging.WARNING and "aiohttp connection error" in record.message for record in caplog.records)
+
+    def test_show_clickhouse_errors_setter_rejects_invalid(self):
+        client = self.make_client()
+        with pytest.raises(ProgrammingError, match="show_clickhouse_errors"):
+            client.show_clickhouse_errors = "redact"
+
 
 class TestHttpClientErrorHandler:
     """Test the error handling functionality of HttpClient"""
 
     def setup_method(self):
         """Set up common test fixtures"""
-        # Create a minimal HttpClient instance
-        self.client = HttpClient(
-            interface="http",
-            host="localhost",
-            port=8123,
-            username="default",
-            password="",
-            database="default",
-        )
+        # Create a minimal HttpClient instance without contacting a server
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
         self.client.url = "http://localhost:8123"
 
         # Always turn on show_clickhouse_error. Will disable in tests as needed.
@@ -423,15 +475,77 @@ class TestHttpClientErrorHandler:
         with pytest.raises(DatabaseError) as excinfo:
             self.client._error_handler(response)
 
-        # Verify the error message is generic
+        # Verify the error message is generic and does not leak host/URL
         error_msg = str(excinfo.value)
-        assert "The ClickHouse server returned an error (for url http://localhost:8123)" in error_msg
+        assert error_msg == "The ClickHouse server returned an error"
         assert "Invalid query" not in error_msg  # Should not include the body
         assert "99" not in error_msg  # Should not include the exception code
+        assert self.client.url not in error_msg
         # Numeric code is still exposed structurally, but the body-derived name is suppressed
         assert excinfo.value.code == 99
         assert excinfo.value.name is None
         response.close.assert_called_once()
+
+    def test_error_handler_with_scrub_mode(self):
+        """scrub keeps the SQL error but strips version trailer and URL"""
+        self.client.show_clickhouse_errors = "scrub"
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Received ClickHouse exception, code: 60" in error_msg
+        assert "Unknown table 'x'" in error_msg
+        assert "(UNKNOWN_TABLE)" in error_msg
+        assert "version" not in error_msg
+        assert "official build" not in error_msg
+        assert self.client.url not in error_msg
+        assert "(for url" not in error_msg
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        response.close.assert_called_once()
+
+    def test_show_clickhouse_errors_setter_coerces_scrub(self):
+        self.client.show_clickhouse_errors = "SCRUB"
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Unknown table 'x'" in error_msg
+        assert "UNKNOWN_TABLE" in error_msg
+        assert "version" not in error_msg
+        assert self.client.url not in error_msg
+
+    def test_show_clickhouse_errors_setter_rejects_invalid(self):
+        with pytest.raises(ProgrammingError, match="show_clickhouse_errors"):
+            self.client.show_clickhouse_errors = "redact"
+
+    def test_transport_error_scrub_mode_is_generic(self, caplog):
+        self.client.show_clickhouse_errors = "scrub"
+        error = HTTPError("Cannot connect to host localhost:8123/?token=secret")
+        pool_mgr = Mock()
+        pool_mgr.request.side_effect = error
+        self.client.http = pool_mgr
+
+        with caplog.at_level(logging.WARNING), pytest.raises(OperationalError) as excinfo:
+            self.client._raw_request(b"", {"query": "SELECT 13"})
+
+        assert str(excinfo.value) == "Error executing HTTP request"
+        assert excinfo.value.__cause__ is error
+        assert "localhost" not in str(excinfo.value)
+        assert "secret" not in str(excinfo.value)
+        assert any(record.levelno == logging.WARNING and "Http Driver Exception" in record.message for record in caplog.records)
 
     def test_error_handler_with_unicode_decode_error(self):
         """Test error handling when the response body has invalid Unicode"""

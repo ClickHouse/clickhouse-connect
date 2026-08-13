@@ -1,6 +1,3 @@
-import random
-import string
-
 import pytest
 
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, StreamFailureError
@@ -26,8 +23,6 @@ def test_row_stream(param_client, call, consume_stream):
 
 def test_column_block_stream(param_client, call, consume_stream):
     random_string = "randomStringUTF8(50)"
-    if not param_client.min_version("20"):
-        random_string = random.choices(string.ascii_lowercase, k=50)
     stream = call(
         param_client.query_column_block_stream,
         f"SELECT number, {random_string} FROM numbers(10000)",
@@ -49,8 +44,6 @@ def test_column_block_stream(param_client, call, consume_stream):
 
 def test_row_block_stream(param_client, call, consume_stream):
     random_string = "randomStringUTF8(50)"
-    if not param_client.min_version("20"):
-        random_string = random.choices(string.ascii_lowercase, k=50)
     stream = call(
         param_client.query_row_block_stream,
         f"SELECT number, {random_string} FROM numbers(10000)",

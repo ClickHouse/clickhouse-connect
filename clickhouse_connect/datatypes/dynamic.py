@@ -26,7 +26,12 @@ _JSON_NULL_STR = "null"
 
 logger = logging.getLogger(__name__)
 
-json_serialization_format = 0x1
+# Serialization version written in JSON insert prefixes.
+_JSON_SERIALIZATION_VERSION = 0x1
+
+# Deprecated module attribute retained for compatibility. Assigning it does not
+# change insert behavior.
+json_serialization_format = _JSON_SERIALIZATION_VERSION
 
 VariantState = namedtuple("VariantState", "discriminator_mode element_states")
 
@@ -572,15 +577,8 @@ class JSON(ClickHouseType):
         if parts:
             self._name_suffix = f"({', '.join(parts)})"
 
-    @property
-    def insert_name(self):
-        if json_serialization_format == 0:
-            return "String"
-        return super().insert_name
-
     def write_column_prefix(self, dest: bytearray):
-        if json_serialization_format > 0:
-            write_uint64(json_serialization_format, dest)
+        write_uint64(_JSON_SERIALIZATION_VERSION, dest)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext) -> JSONState:
         serialize_version = source.read_uint64()

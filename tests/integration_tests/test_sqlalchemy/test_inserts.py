@@ -6,14 +6,10 @@ from sqlalchemy.orm import Session, declarative_base
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import FixedString, LowCardinality, String, UInt64
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import engine_map
-from clickhouse_connect.driver import Client
 
 
 @fixture(scope="module", autouse=True, name="test_model")
-def test_model_fixture(test_client: Client, test_engine: Engine, test_db: str, test_table_engine: str):
-    if not test_client.min_version("22.6.1"):
-        yield None
-        return
+def test_model_fixture(test_engine: Engine, test_db: str, test_table_engine: str):
     engine_cls = engine_map[test_table_engine]
 
     Base = declarative_base(metadata=MetaData(schema=test_db))  # noqa: N806

@@ -1,22 +1,18 @@
 from datetime import time, timedelta
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from tests.integration_tests.conftest import TestConfig
 
 
-# Module-level version and cloud checks
+# Module-level cloud checks
 @pytest.fixture(autouse=True, scope="module")
-def module_setup_and_checks(test_client, test_config: TestConfig):
+def module_setup_and_checks(test_config: TestConfig):
     """Check prerequisites for Time/Time64 type tests."""
     if test_config.cloud:
         pytest.skip("Time/Time64 types require settings change, but settings are locked in cloud")
-
-    version_str = test_client.query("SELECT version()").result_rows[0][0]
-    major, minor, *_ = map(int, version_str.split("."))
-    if (major, minor) < (25, 6):
-        pytest.skip("Time and Time64 types require ClickHouse 25.6+")
 
 
 class TimeTestData:
@@ -352,6 +348,127 @@ def test_time64_time_format(param_client, call, table_context, column: str, obje
         result = call(param_client.query, f"SELECT {column} FROM {TABLE_NAME} ORDER BY id", query_formats={"Time64": "time"})
         result_values = [row[0] for row in result.result_rows]
         assert result_values == objects
+
+
+def test_time_parameter_binding(param_client, call, table_context):
+    """Bind time and timedelta parameters through client-side and server-side binding."""
+    schema = [
+        "id UInt32",
+        "t Time",
+        "t64 Time64(6)",
+        "t64_ns Time64(9)",
+        "t_nullable Nullable(Time)",
+        "t64_arr Array(Time64(6))",
+    ]
+    settings = {"enable_time_time64_type": 1}
+    with table_context(TABLE_NAME, schema, settings=settings):
+        insert = (
+            f"INSERT INTO {TABLE_NAME} (id, t, t64, t64_ns, t_nullable, t64_arr) "
+            "VALUES (%(id)s, %(t)s, %(t64)s, %(t64_ns)s, %(t_nullable)s, %(arr)s)"
+        )
+        call(
+            param_client.command,
+            insert,
+            parameters={
+                "id": 1,
+                "t": time(1, 2, 3),
+                "t64": time(1, 2, 3, 250306),
+                "t64_ns": pd.Timedelta("13s 500ns"),
+                "t_nullable": None,
+                "arr": [timedelta(seconds=13, microseconds=79), timedelta(0)],
+            },
+            settings=settings,
+        )
+        call(
+            param_client.command,
+            insert,
+            parameters={
+                "id": 2,
+                "t": timedelta(seconds=-2),
+                "t64": timedelta(seconds=-5, microseconds=-500000),
+                "t64_ns": timedelta(seconds=-2),
+                "t_nullable": timedelta(hours=26, seconds=7),
+                "arr": [],
+            },
+            settings=settings,
+        )
+
+        result = call(
+            param_client.query,
+            f"SELECT t, t64, t_nullable, t64_arr FROM {TABLE_NAME} ORDER BY id",
+            settings=settings,
+        )
+        assert [tuple(row) for row in result.result_rows] == [
+            (
+                timedelta(hours=1, minutes=2, seconds=3),
+                timedelta(hours=1, minutes=2, seconds=3, microseconds=250306),
+                None,
+                [timedelta(seconds=13, microseconds=79), timedelta(0)],
+            ),
+            (
+                timedelta(seconds=-2),
+                timedelta(seconds=-5, microseconds=-500000),
+                timedelta(hours=26, seconds=7),
+                [],
+            ),
+        ]
+
+        result = call(
+            param_client.query,
+            f"SELECT id FROM {TABLE_NAME} WHERE t = {{t:Time}}",
+            parameters={"t": time(1, 2, 3)},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [1]
+
+        result = call(
+            param_client.query,
+            f"SELECT id FROM {TABLE_NAME} WHERE t64 = {{t64:Time64(6)}}",
+            parameters={"t64": timedelta(seconds=-5, microseconds=-500000)},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [2]
+
+        result = call(
+            param_client.query,
+            f"SELECT id FROM {TABLE_NAME} WHERE t64_arr = {{arr:Array(Time64(6))}}",
+            parameters={"arr": [timedelta(seconds=13, microseconds=79), timedelta(0)]},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [1]
+
+        result = call(
+            param_client.query,
+            f"SELECT id FROM {TABLE_NAME} WHERE t_nullable = {{tn:Nullable(Time)}}",
+            parameters={"tn": timedelta(hours=26, seconds=7)},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [2]
+
+        result = call(
+            param_client.query,
+            f"SELECT id FROM {TABLE_NAME} WHERE (toString(id), t) = {{tup:Tuple(String, Time)}}",
+            parameters={"tup": ("1", time(1, 2, 3))},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [1]
+
+        # Sub-microsecond nanoseconds survive the bind, checked as raw ticks.
+        result = call(
+            param_client.query,
+            f"SELECT t64_ns FROM {TABLE_NAME} ORDER BY id",
+            query_formats={"Time64": "int"},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [13_000_000_500, -2_000_000_000]
+
+        result = call(
+            param_client.query,
+            f"SELECT id FROM {TABLE_NAME} WHERE t64_ns = {{tns:Time64(9)}}",
+            parameters={"tns": pd.Timedelta("13s 500ns")},
+            settings=settings,
+        )
+        assert [row[0] for row in result.result_rows] == [1]
 
 
 def test_negative_value_cannot_be_coerced_to_time(param_client, call, table_context):

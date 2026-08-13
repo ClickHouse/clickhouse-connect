@@ -96,12 +96,7 @@ def test_create_client_fixture(test_config: TestConfig) -> Callable:
             client_name="int_tests/test",
             **kwargs,
         )
-        if client.min_version("22.8"):
-            client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
-        if client.min_version("24.8") and (client.min_version("24.12") or not test_config.cloud):
-            client.set_client_setting("allow_experimental_json_type", 1)
-            client.set_client_setting("allow_experimental_dynamic_type", 1)
-            client.set_client_setting("allow_experimental_variant_type", 1)
+        client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
         if test_config.insert_quorum:
             client.set_client_setting("insert_quorum", test_config.insert_quorum)
         elif test_config.cloud:
@@ -182,12 +177,7 @@ def client_factory(client_mode, test_config, shared_loop):
         if client_mode == "sync":
             client = create_client(**config)
             if apply_test_settings:
-                if client.min_version("22.8"):
-                    client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
-                if client.min_version("24.8") and (client.min_version("24.12") or not test_config.cloud):
-                    client.set_client_setting("allow_experimental_json_type", 1)
-                    client.set_client_setting("allow_experimental_dynamic_type", 1)
-                    client.set_client_setting("allow_experimental_variant_type", 1)
+                client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
                 if test_config.insert_quorum:
                     client.set_client_setting("insert_quorum", test_config.insert_quorum)
                 elif test_config.cloud:
@@ -195,12 +185,7 @@ def client_factory(client_mode, test_config, shared_loop):
         else:
             client = shared_loop.run_until_complete(get_async_client(**config))
             if apply_test_settings:
-                if client.min_version("22.8"):
-                    client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
-                if client.min_version("24.8"):
-                    client.set_client_setting("allow_experimental_json_type", "1")
-                    client.set_client_setting("allow_experimental_dynamic_type", "1")
-                    client.set_client_setting("allow_experimental_variant_type", "1")
+                client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
                 if test_config.insert_quorum:
                     client.set_client_setting("insert_quorum", str(test_config.insert_quorum))
                 elif test_config.cloud:
@@ -235,12 +220,7 @@ def param_client(client_mode, test_config, shared_loop):
             settings={"allow_suspicious_low_cardinality_types": 1},
             client_name="int_tests/param_sync",
         )
-        if client.min_version("22.8"):
-            client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
-        if client.min_version("24.8") and (client.min_version("24.12") or not test_config.cloud):
-            client.set_client_setting("allow_experimental_json_type", 1)
-            client.set_client_setting("allow_experimental_dynamic_type", 1)
-            client.set_client_setting("allow_experimental_variant_type", 1)
+        client.set_client_setting("database_replicated_enforce_synchronous_settings", 1)
         if test_config.insert_quorum:
             client.set_client_setting("insert_quorum", test_config.insert_quorum)
         elif test_config.cloud:
@@ -262,12 +242,7 @@ def param_client(client_mode, test_config, shared_loop):
             )
         )
 
-        if client.min_version("22.8"):
-            client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
-        if client.min_version("24.8"):
-            client.set_client_setting("allow_experimental_json_type", "1")
-            client.set_client_setting("allow_experimental_dynamic_type", "1")
-            client.set_client_setting("allow_experimental_variant_type", "1")
+        client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
         if test_config.insert_quorum:
             client.set_client_setting("insert_quorum", str(test_config.insert_quorum))
         elif test_config.cloud:
@@ -338,12 +313,7 @@ async def test_native_async_client_fixture(test_config: TestConfig) -> AbstractA
         compress=test_config.compress,
         client_name="int_tests/native_async",
     ) as client:
-        if client.min_version("22.8"):
-            client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
-        if client.min_version("24.8"):
-            client.set_client_setting("allow_experimental_json_type", "1")
-            client.set_client_setting("allow_experimental_dynamic_type", "1")
-            client.set_client_setting("allow_experimental_variant_type", "1")
+        client.set_client_setting("database_replicated_enforce_synchronous_settings", "1")
         if test_config.insert_quorum:
             client.set_client_setting("insert_quorum", str(test_config.insert_quorum))
         elif test_config.cloud:

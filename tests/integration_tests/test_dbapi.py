@@ -1,6 +1,5 @@
 from collections.abc import Callable
 
-import pytest
 from pytest import fixture
 
 from clickhouse_connect import dbapi
@@ -52,9 +51,18 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
 
 
+def test_executemany_with_percent_identifiers(dbapi_connection, table_context: Callable):
+    with table_context("dbapi%executemany", ["value%pct UInt32"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            "INSERT INTO `dbapi%%executemany` (`value%%pct`) VALUES (%s)",
+            [(13,), (79,)],
+        )
+        cursor.execute("SELECT `value%%pct` FROM `dbapi%%executemany` ORDER BY `value%%pct`")
+        assert cursor.fetchall() == [(13,), (79,)]
+
+
 def test_description_null_ok_reflects_result_type(dbapi_connection):
-    if not dbapi_connection.client.min_version("24.8"):
-        pytest.skip("Variant and Dynamic require ClickHouse 24.8 or newer")
     cursor = dbapi_connection.cursor()
     cursor.execute(
         "SELECT "

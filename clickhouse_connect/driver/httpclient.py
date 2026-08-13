@@ -24,7 +24,14 @@ from clickhouse_connect.driver.binding import (
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
 from clickhouse_connect.driver.client import _HTTP_RESERVED_SETTING_NAMES, _HTTP_RESERVED_SETTING_PREFIXES
-from clickhouse_connect.driver.common import coerce_bool, coerce_int, dict_add, dict_copy
+from clickhouse_connect.driver.common import (
+    ShowClickHouseErrors,
+    coerce_bool,
+    coerce_int,
+    coerce_show_clickhouse_errors,
+    dict_add,
+    dict_copy,
+)
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httputil import (
     ResponseSource,  # noqa: F401  (compatibility re-export)
@@ -91,7 +98,7 @@ class HttpClient(SyncBackendClient):
         server_host_name: str | None = None,
         tz_source: TzSource | None = None,
         tz_mode: str | None = None,
-        show_clickhouse_errors: bool | None = None,
+        show_clickhouse_errors: bool | str | None = None,
         autogenerate_session_id: bool | None = None,
         autogenerate_query_id: bool | None = None,
         tls_mode: str | None = None,
@@ -251,12 +258,12 @@ class HttpClient(SyncBackendClient):
         self._backend.http_retries = value
 
     @property
-    def show_clickhouse_errors(self) -> bool:  # type: ignore[override]
+    def show_clickhouse_errors(self) -> ShowClickHouseErrors:
         return self._backend.show_clickhouse_errors
 
     @show_clickhouse_errors.setter
-    def show_clickhouse_errors(self, value: bool) -> None:
-        self._backend.show_clickhouse_errors = value
+    def show_clickhouse_errors(self, value: ShowClickHouseErrors | str | None) -> None:
+        self._backend.show_clickhouse_errors = coerce_show_clickhouse_errors(value)
 
     @property
     def _autogenerate_query_id(self) -> bool:

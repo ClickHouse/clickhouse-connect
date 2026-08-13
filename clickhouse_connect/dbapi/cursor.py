@@ -166,6 +166,12 @@ class Cursor:
             return False
         if not isinstance(data, Sequence) or len(data) == 0:
             return False
+        if "%s" in temp or "%(" in temp:
+            # Pyformat placeholders mean identifiers carry %% for literal percent
+            # signs. Server-side {name:Type} statements keep raw percents.
+            table = table.replace("%%", "%")
+            if op_columns:
+                op_columns = tuple(str(x).replace("%%", "%") for x in op_columns)
         first_row = data[0]
         col_names: list[str] | str
         data_values: Sequence[Sequence[Any]]

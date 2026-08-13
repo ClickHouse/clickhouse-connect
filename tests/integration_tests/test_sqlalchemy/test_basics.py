@@ -10,12 +10,6 @@ test_query = """
    -- 6dcd92a04feb50f14bbcf07c661680ba
    """
 
-test_query_ver19 = """
-   -- 6dcd92a04feb50f14bbcf07c661680ba
-   SELECT database, name FROM system.tables LIMIT 2
-   -- 6dcd92a04feb50f14bbcf07c661680ba
-   """
-
 
 def test_dsn_config(test_engine: Engine):
     common.set_setting("invalid_setting_action", "drop")
@@ -32,8 +26,6 @@ def test_cursor(test_engine: Engine):
     raw_conn = test_engine.raw_connection()
     cursor = raw_conn.cursor()
     sql = test_query
-    if not raw_conn.driver_connection.client.min_version("21"):
-        sql = test_query_ver19
 
     cursor.execute(sql)
     assert cursor.description[0][0] == "database"
@@ -48,8 +40,6 @@ def test_execute(test_engine: Engine):
 
     with test_engine.begin() as conn:
         sql = test_query
-        if not conn.connection.driver_connection.client.min_version("21"):
-            sql = test_query_ver19
         rows = list(row for row in conn.execute(text(sql)))
         assert len(rows) == 2
 

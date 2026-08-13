@@ -14,7 +14,6 @@ from tests.integration_tests.datasets import (
     basic_ds,
     basic_ds_columns,
     basic_ds_types,
-    basic_ds_types_ver19,
     dt_ds,
     dt_ds_columns,
     dt_ds_types,
@@ -40,8 +39,6 @@ def test_numpy_dates(param_client: Client, call, table_context: Callable):
 def test_invalid_date(param_client: Client, call):
     try:
         sql = "SELECT cast(now64(), 'DateTime64(1)')"
-        if not param_client.min_version("20"):
-            sql = "SELECT cast(now(), 'DateTime')"
         call(param_client.query_df, sql)
     except ProgrammingError as ex:
         assert "milliseconds" in str(ex)
@@ -50,9 +47,6 @@ def test_invalid_date(param_client: Client, call):
 def test_numpy_record_type(param_client: Client, call, table_context: Callable):
     dt_type = "datetime64[ns]"
     ds_types = basic_ds_types
-    if not param_client.min_version("20"):
-        dt_type = "datetime64[s]"
-        ds_types = basic_ds_types_ver19
 
     np_array = np.array(basic_ds, dtype=f"U20,int32,float,U20,{dt_type},U20")
     source_arr = np_array.copy()
@@ -69,9 +63,6 @@ def test_numpy_record_type(param_client: Client, call, table_context: Callable):
 def test_numpy_object_type(param_client: Client, call, table_context: Callable):
     dt_type = "datetime64[ns]"
     ds_types = basic_ds_types
-    if not param_client.min_version("20"):
-        dt_type = "datetime64[s]"
-        ds_types = basic_ds_types_ver19
 
     np_array = np.array(basic_ds, dtype=f"O,int32,float,O,{dt_type},O")
     np_array.dtype.names = basic_ds_columns
@@ -117,8 +108,6 @@ def test_numpy_bigint_matrix(param_client: Client, call, table_context: Callable
     matrix = source_array.reshape((5, 3))
     matrix_copy = matrix.copy()
     columns = ["col1 UInt256", "col2 Int64", "col3 Int128"]
-    if not param_client.min_version("21"):
-        columns = ["col1 UInt64", "col2 Int64", "col3 Int64"]
     with table_context("test_numpy_bigint_matrix", columns):
         call(param_client.insert, "test_numpy_bigint_matrix", matrix)
         py_result = call(param_client.query, "SELECT * FROM test_numpy_bigint_matrix").result_set
@@ -133,8 +122,6 @@ def test_numpy_bigint_object(param_client: Client, call, table_context: Callable
     np_array = np.array(source, dtype="O,uint64,datetime64[s]")
     source_arr = np_array.copy()
     columns = ["key String", "big_value UInt256", "dt DateTime"]
-    if not param_client.min_version("21"):
-        columns = ["key String", "big_value UInt64", "dt DateTime"]
     with table_context("test_numpy_bigint_object", columns):
         call(param_client.insert, "test_numpy_bigint_object", np_array)
         py_result = call(param_client.query, "SELECT * FROM test_numpy_bigint_object").result_set
@@ -145,8 +132,6 @@ def test_numpy_bigint_object(param_client: Client, call, table_context: Callable
 
 
 def test_numpy_streams(param_client: Client, call, consume_stream):
-    if not param_client.min_version("22"):
-        pytest.skip(f"generateRandom is not supported in this server version {param_client.server_version}")
     runs = os.environ.get("CLICKHOUSE_CONNECT_TEST_FUZZ", "250")
     for _ in range(int(runs) // 2):
         query_rows = random.randint(0, 5000) + 20000
@@ -169,9 +154,6 @@ def test_numpy_streams(param_client: Client, call, consume_stream):
 @pytest.mark.asyncio
 async def test_numpy_streams_async(test_native_async_client):
     """Async-only numpy streaming test."""
-    if not test_native_async_client.min_version("22"):
-        pytest.skip(f"generateRandom is not supported in this server version {test_native_async_client.server_version}")
-
     runs = os.environ.get("CLICKHOUSE_CONNECT_TEST_FUZZ", "250")
     for _ in range(int(runs) // 2):
         query_rows = random.randint(0, 5000) + 20000
