@@ -11,13 +11,176 @@ from urllib.parse import quote, urlencode
 from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import dict_copy
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.parser import parse_callable
 from clickhouse_connect.json_impl import any_to_json
 
 BS = "\\"
 must_escape = (BS, "'", "`", "\t", "\n")
-# `$` is a word character in the server lexer, so it is legal inside a query parameter name.
-external_bind_re = re.compile(r"\{([\w$]+):([^}]+)\}")
+# ClickHouse substitution names are ASCII BareWord tokens. Digit-led tokens promote to
+# a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
+_BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
+_bind_name_re = re.compile(rf"{_BIND_NAME_PATTERN}\Z")
+# Routing keeps the shipped 1.x `\w+` names in the union so decoy placeholders such as
+# `{13:Int32}` or `{idé:Int32}` still select server-side binding. `\w` cannot absorb `$`.
+external_bind_re = re.compile(rf"\{{({_BIND_NAME_PATTERN}|\w+):([^}}]+)\}}")
+_heredoc_re = re.compile(r"\$[A-Za-z0-9_]*\$")
+_heredoc_start_re = re.compile(r"(?=(\$[A-Za-z0-9_]*\$))")
+_quote_closers = {"'": "'", '"': '"', "`": "`"}
+_curly_quote_closers = {"\u2018": "\u2019", "\u201c": "\u201d"}
+
+
+def _is_valid_bind_name(name: str) -> bool:
+    return _bind_name_re.fullmatch(name) is not None
+
+
+def _is_binary_bind_name(name: str) -> bool:
+    return len(name) > 1 and name.startswith("$") and name.endswith("$")
+
+
+def _is_ascii_word_char(char: str) -> bool:
+    return char == "_" or "0" <= char <= "9" or "A" <= char <= "Z" or "a" <= char <= "z"
+
+
+def _is_ascii_bareword_char(char: str) -> bool:
+    return char == "$" or _is_ascii_word_char(char)
+
+
+def _external_bind_matches(query: str, marker_keys: set[str]) -> tuple[list[re.Match[str]], dict[str, set[int]]]:
+    matches = []
+    raw_markers: dict[str, set[int]] = {}
+    last_heredoc_starts = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)}
+    index = 0
+    end = len(query)
+    while index < end:
+        char = query[index]
+        curly_close = _curly_quote_closers.get(char)
+        if curly_close is not None:
+            close = query.find(curly_close, index + 1)
+            index = end if close == -1 else close + 1
+            continue
+
+        quote_close = _quote_closers.get(char)
+        if quote_close is not None:
+            index += 1
+            while index < end:
+                if query[index] == "\\" and index + 1 < end:
+                    index += 2
+                elif query[index] == quote_close:
+                    if index + 1 < end and query[index + 1] == quote_close:
+                        index += 2
+                    else:
+                        index += 1
+                        break
+                else:
+                    index += 1
+            continue
+
+        if query.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < end and depth:
+                if query.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif query.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            continue
+
+        line_comment = (
+            query.startswith("--", index)
+            or query.startswith("//", index)
+            or (char == "#" and index + 1 < end and query[index + 1] in (" ", "!"))
+        )
+        if line_comment:
+            newline = query.find("\n", index + 1)
+            index = end if newline == -1 else newline + 1
+            continue
+
+        if char == "$":
+            for marker_key in marker_keys:
+                if query.startswith(marker_key, index):
+                    raw_markers.setdefault(marker_key, set()).add(index)
+            opener = _heredoc_re.match(query, index)
+            if opener is not None:
+                tag = opener.group()
+                if last_heredoc_starts[tag] >= opener.end():
+                    close = query.find(tag, opener.end())
+                    index = close + len(tag)
+                    continue
+
+        if char == "{":
+            match = external_bind_re.match(query, index)
+            if match is not None:
+                match_end = match.end()
+                name_start, name_end = match.span(1)
+                # A marker inside a placeholder can still open a server heredoc, except
+                # mid-name, where the server lexes the whole name as one bareword.
+                for marker_key in marker_keys:
+                    found = query.find(marker_key, index, match_end)
+                    while found != -1:
+                        if not name_start < found < name_end:
+                            raw_markers.setdefault(marker_key, set()).add(found)
+                        found = query.find(marker_key, found + 1, match_end)
+                matches.append(match)
+                index = match_end
+                continue
+
+        if char == "_" or "A" <= char <= "Z" or "a" <= char <= "z":
+            index += 1
+            while index < end and _is_ascii_bareword_char(query[index]):
+                index += 1
+            continue
+
+        if "0" <= char <= "9":
+            index += 1
+            while index < end and "0" <= query[index] <= "9":
+                index += 1
+            # Digit-led tokens promote to a bareword through word chars only, never `$`.
+            if index < end and (query[index] == "_" or "A" <= query[index] <= "Z" or "a" <= query[index] <= "z"):
+                index += 1
+                while index < end and _is_ascii_word_char(query[index]):
+                    index += 1
+            continue
+
+        if char == "$":
+            token_end = index + 1
+            if token_end < end and _is_ascii_word_char(query[token_end]):
+                token_end += 1
+                while token_end < end and _is_ascii_bareword_char(query[token_end]):
+                    token_end += 1
+                index = token_end
+            else:
+                # Lone DollarSign token, retry heredoc detection at the next character.
+                index += 1
+            continue
+
+        index += 1
+    return matches, raw_markers
+
+
+def _binary_bind_value(value: Any) -> Any:
+    # Buffer values splice into the query bytes uncopied, so return the original object.
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, int):
+        return None
+    try:
+        memoryview(value)
+    except (TypeError, ValueError):
+        return None
+    return value
+
+
+def _heredoc_collision_error(key: str) -> ProgrammingError:
+    return ProgrammingError(
+        f"Query parameter name {key!r} also appears elsewhere in the query text, and ClickHouse "
+        "would parse the pair of names as a heredoc string. Rename the parameter or remove the "
+        "other occurrence."
+    )
 
 
 def _datetime_is_aware(value: datetime) -> bool:
@@ -150,11 +313,49 @@ def bind_query(
 
     if isinstance(parameters, dict):
         params_copy = dict_copy(parameters)
-        binary_binds = {k: v for k, v in params_copy.items() if k.startswith("$") and k.endswith("$") and len(k) > 1}
+        binary_binds = {}
+        nonbinary_marker_keys = set()
+        for key, value in params_copy.items():
+            if _is_binary_bind_name(key):
+                binary_value = _binary_bind_value(value)
+                if binary_value is not None:
+                    binary_binds[key] = binary_value
+                else:
+                    nonbinary_marker_keys.add(key)
         for key in binary_binds.keys():
             del params_copy[key]
 
-        matches = external_bind_re.findall(query)
+        # Placeholder detection and routing always use the regex over the raw query text,
+        # matching shipped 1.x semantics. The lexer scan below only validates non-buffer
+        # `$name$` keys against server heredoc parsing.
+        if nonbinary_marker_keys and any(key in query for key in nonbinary_marker_keys):
+            match_objects, raw_markers = _external_bind_matches(query, nonbinary_marker_keys)
+            for key in params_copy:
+                if key not in nonbinary_marker_keys:
+                    continue
+                placeholder_spans = [match.span(1) for match in match_objects if match.group(1) == key]
+                if len(placeholder_spans) > 1:
+                    raise ProgrammingError(
+                        f"Server-side query parameter {key!r} can appear only once because repeated "
+                        "dollar-delimited names are parsed as a heredoc string. Rename the parameter."
+                    )
+                raw_marker_starts = raw_markers.get(key, set())
+                if placeholder_spans:
+                    placeholder_start, placeholder_end = placeholder_spans[0]
+                    if any(start < placeholder_start for start in raw_marker_starts) or query.find(key, placeholder_end) != -1:
+                        raise _heredoc_collision_error(key)
+                elif raw_marker_starts:
+                    if f"{{{key}:" in query:
+                        # The user wrote a placeholder, but an earlier heredoc pairing swallowed it.
+                        raise _heredoc_collision_error(key)
+                    raise ProgrammingError(
+                        f"Binary query parameter {key!r} must be a buffer value such as bytes, bytearray, or memoryview. "
+                        "Use a valid {name:Type} placeholder for server-side binding."
+                    )
+
+        all_matches = external_bind_re.findall(query)
+        binary_names = binary_binds.keys()
+        matches = [(name, type_str) for name, type_str in all_matches if name not in binary_names]
         placeholder_names = {name for name, _ in matches}
         final_params = {}
         for k, v in params_copy.items():

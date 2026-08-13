@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Query placeholders now recognize `$` in server-valid parameter names such as `{id$x:Int32}` or `{$x$:String}`. Previously these names were missed, which omitted their server-side values and could also drop `DateTime64` precision and timezone hints. Placeholder detection is otherwise unchanged from 1.x. A `$name$` dictionary key with a buffer value such as `bytes`, `bytearray`, or `memoryview` stays a raw binary bind. A non-buffer value for such a key can bind through a single `{name:Type}` placeholder, and ambiguous or repeated uses of the name raise `ProgrammingError`. SQLAlchemy `server_side_params` accepts the same names and rejects the reserved `$name$` form. Closes [#936](https://github.com/ClickHouse/clickhouse-connect/issues/936).
+
 ## 1.7.1, 2026-08-12
 
 ### Bug Fixes
@@ -41,7 +45,6 @@
 - DB-API `Cursor.description` now reports the result type's top-level nullability instead of hardcoding `null_ok=True`, including the implicit null values supported by `Variant`, `Dynamic`, and `SimpleAggregateFunction` over a nullable element type. Existing `type_code` values are unchanged, and types whose nullability is unknown report `None`. The empty-result metadata probe also recognizes leading ClickHouse comments, including nested block comments, and is best effort, so a failed probe leaves `description` empty instead of raising after the original query succeeded. Closes [#902](https://github.com/ClickHouse/clickhouse-connect/issues/902), [#907](https://github.com/ClickHouse/clickhouse-connect/issues/907), and [#909](https://github.com/ClickHouse/clickhouse-connect/issues/909).
 - Compound values stored in JSON shared data, such as arrays of objects, heterogeneous arrays, and nested arrays, are now decoded to Python objects instead of being returned as raw bytes. `Date`, `DateTime`, and `DateTime64` values in shared data, both as scalars and inside arrays, now decode as well. Closes [#897](https://github.com/ClickHouse/clickhouse-connect/issues/897).
 - `AsyncClient` no longer tears down the aiohttp response from the parser's executor thread when a query fails mid-stream. The synchronous cleanup cancelled the producer task and closed the response directly, which raced with the event loop handling the server's connection abort and could surface an `AttributeError` from asyncio's SSL shutdown on TLS connections instead of the real `StreamFailureError`. Cleanup is now scheduled onto the event loop with `call_soon_threadsafe`.
-- A `$` in a query parameter name is now recognized. `$` is a word character in the server lexer and is legal inside a parameter name, but the client's placeholder regex excluded it, so a query whose only placeholders contained `$` looked like it had no server-side parameters at all. The client fell through to the client-side `%` formatting path, which is a no-op for a query with no `%` conversions, and sent the query with no `param_` values, so the server rejected it with `Code: 456 ... Substitution is not set` even though the caller passed the parameter. In a mixed query, where at least one other placeholder kept the server-side path active, the `$` named parameter was sent but its type hint was not matched, so `DateTime64` precision and timezone hints were silently dropped. This is the same class of silent truncation that the `_64` suffix handling fixed. The SQLAlchemy dialect's `server_side_params` bind name check mirrors the driver regex and accepts `$` as well. A `$name$` key is still claimed by the binary bind convention and is unchanged. Closes [#936](https://github.com/ClickHouse/clickhouse-connect/issues/936).
 
 ## 1.6.0, 2026-07-23
 
