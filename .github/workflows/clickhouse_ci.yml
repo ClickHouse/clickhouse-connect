@@ -26,7 +26,7 @@ jobs:
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
-        run: python setup.py develop
+        run: pip install -e . --no-deps
 
       - name: run ClickHouse Cloud tests
         env:
