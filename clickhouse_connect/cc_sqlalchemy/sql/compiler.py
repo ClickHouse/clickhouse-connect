@@ -94,6 +94,12 @@ class ChStatementCompiler(SQLCompiler):
     # SQLAlchemy 1.4 does not pass bindparam_type to bindparam_string, so stash it here.
     _ch_bind_type = None
 
+    def render_literal_value(self, value, type_):
+        rendered = super().render_literal_value(value, type_)
+        if isinstance(type_, ChSqlaType):
+            return rendered
+        return rendered.replace("\\", "\\\\")
+
     @property
     def _server_side_params(self):
         return getattr(self.dialect, "server_side_params", False)

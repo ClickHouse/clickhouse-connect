@@ -6,7 +6,9 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql.ddl import CreateTable
 
+from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Date, DateTime, String, UInt32, UInt64
+from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     GraphiteMergeTree,
     MergeTree,
@@ -19,7 +21,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     build_engine,
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
-from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification
+from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper, column_specification
 from clickhouse_connect.driver.binding import format_str
 
 dialect = ClickHouseDialect()
@@ -511,21 +513,36 @@ def test_default_kinds_are_mutually_exclusive(build_column, expected):
     assert _column_spec(build_column()) == expected
 
 
-def test_render_comment_escapes_backslashes_and_quotes():
-    from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
+@pytest.mark.parametrize(
+    "option,clause",
+    [
+        ("server_default", "DEFAULT"),
+        ("clickhouse_materialized", "MATERIALIZED"),
+        ("clickhouse_alias", "ALIAS"),
+        ("clickhouse_ttl", "TTL"),
+    ],
+)
+def test_column_string_clauses_escape_backslashes(option, clause):
+    payload = "\\' DEFAULT injected --"
+    column = db.Column("value", String, **{option: payload})
 
+    rendered = column_specification(ClickHouseDialect(dbapi=dbapi), column)
+
+    assert rendered == f"`value` String {clause} '\\\\'' DEFAULT injected --'"
+
+
+def test_render_comment_escapes_backslashes_and_quotes():
     # A backslash before a quote must not be able to terminate the string literal early.
     # Doubling only the quote is unsafe because ClickHouse treats backslash as an escape
     # character inside string literals.
-    payload = "\\'; DROP TABLE users; --"
+    payload = "\\', DROP COLUMN safe_column --"
     rendered = ClickHouseDDLHelper.render_comment(payload)
     assert rendered == format_str(payload)
-    assert rendered == "'\\\\\\'; DROP TABLE users; --'"
+    assert rendered == "'\\\\\\', DROP COLUMN safe_column --'"
     assert ClickHouseDDLHelper.render_comment(None) == "''"
 
 
-def test_create_table_comment_escapes_backslashes_and_quotes():
-    payload = "\\'; DROP TABLE users; --"
+def _create_table_comment_ddl(payload):
     table = db.Table(
         "t",
         db.MetaData(),
@@ -533,5 +550,33 @@ def test_create_table_comment_escapes_backslashes_and_quotes():
         MergeTree(order_by="id"),
         comment=payload,
     )
-    ddl = str(CreateTable(table).compile("", dialect=dialect))
+    return str(CreateTable(table).compile("", dialect=dialect))
+
+
+def _create_dictionary_comment_ddl(payload):
+    dictionary = Dictionary(
+        "d",
+        db.MetaData(),
+        db.Column("id", UInt64),
+        source="CLICKHOUSE(TABLE 'system.one')",
+        layout="FLAT",
+        lifetime="0",
+        primary_key="id",
+        comment=payload,
+    )
+    return str(CreateTable(dictionary).compile("", dialect=dialect))
+
+
+def _create_column_comment_ddl(payload):
+    return _column_spec(db.Column("value", String, comment=payload))
+
+
+@pytest.mark.parametrize(
+    "render_ddl",
+    [_create_table_comment_ddl, _create_dictionary_comment_ddl, _create_column_comment_ddl],
+)
+def test_ddl_comments_escape_backslashes_and_quotes(render_ddl):
+    payload = "\\', DROP COLUMN safe_column --"
+    ddl = render_ddl(payload)
+
     assert f"COMMENT {format_str(payload)}" in ddl

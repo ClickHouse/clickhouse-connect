@@ -53,6 +53,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
+from clickhouse_connect.driver.binding import format_str
 
 
 def test_ddl_compiler():
@@ -520,6 +521,30 @@ def test_alembic_operations_table_comments():
     assert "ALTER TABLE `olap`.`events` MODIFY COMMENT 'Application events table';" in sql
     assert "ALTER TABLE `olap`.`events` MODIFY COMMENT '';" in sql
     assert "COMMENT ON TABLE" not in sql
+
+
+def test_alembic_comment_operations_escape_backslashes_and_quotes():
+    payload = "\\', DROP COLUMN safe_column --"
+    expected = format_str(payload)
+    buffer = StringIO()
+    context = MigrationContext.configure(
+        dialect=ClickHouseDialect(),
+        opts={"as_sql": True, "output_buffer": buffer},
+    )
+    op = Operations(context)
+
+    op.create_table_comment("events", payload, schema="olap")
+    op.alter_column(
+        "events",
+        "payload",
+        schema="olap",
+        comment=payload,
+        existing_type=String(),
+    )
+
+    sql = buffer.getvalue()
+    assert f"ALTER TABLE `olap`.`events` MODIFY COMMENT {expected};" in sql
+    assert f"ALTER TABLE `olap`.`events` COMMENT COLUMN `payload` {expected};" in sql
 
 
 def test_get_table_comment_missing_table_raises_no_such_table():

@@ -3,12 +3,14 @@
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import Integer, String, TypeDecorator, bindparam, column, select, table, text, tuple_
+from sqlalchemy import Integer, String, TypeDecorator, bindparam, column, literal, select, table, text, tuple_
 from sqlalchemy.exc import CompileError
 
 from clickhouse_connect import dbapi
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String as ChString
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Time
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+from clickhouse_connect.driver.binding import format_str
 
 events = table("events", column("id", Integer), column("name", String))
 
@@ -126,3 +128,53 @@ def test_literal_binds_keep_single_percent():
     )
     assert "'pre%fix'" in sql_literal
     assert "%%" not in sql_literal
+
+
+@pytest.mark.parametrize("type_", [None, String()])
+def test_literal_binds_escape_backslashes_and_preserve_percents(type_):
+    payload = "\\', 79% AS injected --"
+    value = literal(payload) if type_ is None else literal(payload, type_=type_)
+    sql_literal = str(
+        select(value).compile(
+            dialect=ClickHouseDialect(dbapi=dbapi),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "'\\\\'', 79%% AS injected --'" in sql_literal
+    assert sql_literal.count("%") == 2
+
+
+def test_literal_binds_preserve_type_decorator_input():
+    seen = []
+
+    class TrackingString(TypeDecorator):
+        impl = String
+        cache_ok = True
+
+        def process_literal_param(self, value, dialect):
+            seen.append(value)
+            return value
+
+    payload = "path\\'segment"
+    sql_literal = str(
+        select(literal(payload, type_=TrackingString())).compile(
+            dialect=ClickHouseDialect(dbapi=dbapi),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert seen == [payload]
+    assert sql_literal == "SELECT 'path\\\\''segment' AS `anon_1`"
+
+
+def test_literal_binds_do_not_double_escape_clickhouse_types():
+    payload = "path\\'segment"
+    sql_literal = str(
+        select(literal(payload, type_=ChString())).compile(
+            dialect=ClickHouseDialect(dbapi=dbapi),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert sql_literal == f"SELECT {format_str(payload)} AS `anon_1`"

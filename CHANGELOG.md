@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- SQLAlchemy now escapes backslashes in generic `literal_binds` strings, string column clauses, and table, column, and dictionary comments. This prevents a backslash before a quote from terminating the literal early. Values without backslashes are unchanged. Values with backslashes now round-trip verbatim instead of being reinterpreted. ClickHouse-native literals are unchanged.
+
 ## 1.7.1, 2026-08-12
 
 ### Bug Fixes

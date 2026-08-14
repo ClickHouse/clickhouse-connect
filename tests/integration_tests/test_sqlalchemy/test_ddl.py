@@ -6,7 +6,7 @@ from sqlalchemy import Column, Integer, MetaData, select, text
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.orm import declarative_base
 
-from clickhouse_connect import common
+from clickhouse_connect import common, dbapi
 from clickhouse_connect.cc_sqlalchemy import final
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     UUID,
@@ -31,6 +31,9 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree, ReplacingMergeTree, engine_map
+from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
+from clickhouse_connect.driver.binding import quote_identifier
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -275,6 +278,63 @@ def test_engine_clause_string_literal_roundtrip(test_engine: Engine, test_db: st
         assert "a\\\\" in create_sql
 
         conn.execute(text("DROP TABLE IF EXISTS engine_literal_test"))
+
+
+def test_comment_literal_roundtrip(param_client, call, client_mode):
+    table_name = f"comment_literal_roundtrip_{client_mode}"
+    quoted_table = quote_identifier(table_name)
+    payload = "\\', DROP COLUMN safe_column --"
+    call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
+
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {quoted_table} (id UInt64, safe_column String) Engine MergeTree ORDER BY id",
+        )
+        call(
+            param_client.command,
+            f"ALTER TABLE {quoted_table} MODIFY COMMENT {ClickHouseDDLHelper.render_comment(payload)}",
+        )
+
+        comment = call(
+            param_client.query,
+            "SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = {name:String}",
+            parameters={"name": table_name},
+        ).result_rows
+        columns = call(
+            param_client.query,
+            "SELECT name FROM system.columns WHERE database = currentDatabase() AND table = {name:String} ORDER BY position",
+            parameters={"name": table_name},
+        ).result_rows
+
+        assert comment == [(payload,)]
+        assert columns == [("id",), ("safe_column",)]
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
+
+
+def test_server_default_literal_roundtrip(param_client, call, client_mode):
+    table_name = f"server_default_literal_roundtrip_{client_mode}"
+    quoted_table = quote_identifier(table_name)
+    payload = "default\\'value"
+    table = db.Table(
+        table_name,
+        db.MetaData(),
+        db.Column("id", UInt64),
+        db.Column("value", String, server_default=payload),
+        MergeTree(order_by="id"),
+    )
+    create_sql = str(db.schema.CreateTable(table).compile(dialect=ClickHouseDialect(dbapi=dbapi)))
+    call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
+
+    try:
+        call(param_client.command, create_sql)
+        call(param_client.insert, table_name, [[13]], column_names=["id"])
+
+        result = call(param_client.query, f"SELECT value FROM {quoted_table} WHERE id = 13")
+        assert result.result_rows == [(payload,)]
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
 
 
 def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str, test_config: TestConfig):
