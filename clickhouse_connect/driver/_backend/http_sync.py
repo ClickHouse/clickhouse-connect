@@ -83,6 +83,10 @@ class HttpSyncBackend:
         form_encode_query_params: bool = False,
     ):
         self.url = url
+        # Normalize the valid but empty path to "/". urllib3 does this for direct
+        # requests but preserves it in forwarding-proxy absolute-form, which some
+        # proxies reject. Leave an explicit proxy_path untouched.
+        self._base_url = url if "/" in url.split("://", 1)[-1] else f"{url}/"
         self.http = pool_manager
         self.owns_pool_manager = owns_pool_manager
         self.headers = headers
@@ -301,13 +305,7 @@ class HttpSyncBackend:
         if self.autogenerate_query_id and "query_id" not in final_params:
             final_params["query_id"] = str(uuid.uuid4())
 
-        # Ensure the request-target has a path. Without one, a bare authority URL
-        # (e.g. "http://host:8123?query=...") is forwarded verbatim to a
-        # forwarding HTTP proxy, which many proxies reject as malformed. Only add
-        # the "/" when the URL has no path so an explicit proxy_path is untouched.
-        authority_and_path = self.url.split("://", 1)[-1]
-        path_sep = "" if "/" in authority_and_path else "/"
-        url = f"{self.url}{path_sep}?{urlencode(final_params)}"
+        url = f"{self._base_url}?{urlencode(final_params)}"
         kwargs: dict[str, Any] = {"headers": headers, "timeout": self.timeout, "retries": self.http_retries, "preload_content": not stream}
         if self.server_host_name:
             kwargs["assert_same_host"] = False

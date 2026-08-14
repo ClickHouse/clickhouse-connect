@@ -458,9 +458,9 @@ class TestAsyncRawFilesMerge:
         assert _plan_raw_files(make_plan(form_files=files)) is files
 
 
-def make_sync_backend():
+def make_sync_backend(url="http://localhost:8123"):
     return HttpSyncBackend(
-        url="http://localhost:8123",
+        url=url,
         pool_manager=Mock(),
         owns_pool_manager=False,
         headers={},
@@ -472,9 +472,9 @@ def make_sync_backend():
     )
 
 
-def make_async_backend():
+def make_async_backend(url="http://localhost:8123"):
     return HttpAsyncBackend(
-        url="http://localhost:8123",
+        url=url,
         headers={},
         client_settings={},
         timeout=Mock(),
@@ -578,25 +578,16 @@ class TestAsyncFilesMerge:
 
 
 class TestSyncRequestTargetPath:
-    """The sync request-target must always carry a path. A bare authority URL
-    (no proxy_path) is forwarded verbatim as an absolute-form request-target to a
-    forwarding HTTP proxy, and a missing "/" (e.g. "http://host:8123?query=...")
-    is rejected as malformed by many proxies. An explicit proxy_path must be left
-    exactly as-is so path-based routing is unaffected."""
+    """The sync request-target must normalize a valid but empty path to "/".
+
+    urllib3 does this for direct requests but preserves the empty path in
+    forwarding-proxy absolute-form, which some proxies reject. An explicit
+    proxy_path must remain unchanged so path-based routing is unaffected.
+    """
 
     @staticmethod
     def _sent_url(url):
-        backend = HttpSyncBackend(
-            url=url,
-            pool_manager=Mock(),
-            owns_pool_manager=False,
-            headers={},
-            params={},
-            timeout=Mock(),
-            server_host_name=None,
-            token_provider=None,
-            autogenerate_query_id=False,
-        )
+        backend = make_sync_backend(url)
         backend.http.request = Mock(return_value=SimpleNamespace(status=200, headers={}))
         backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
         (_method, sent_url), _kwargs = backend.http.request.call_args
@@ -610,24 +601,15 @@ class TestSyncRequestTargetPath:
 
 
 class TestAsyncRequestTargetPath:
-    """Parity guard for the sync fix: the async backend must also send a request
-    URL that carries a path, so both backends stay valid through a forwarding
-    HTTP proxy. It always appends "/" and passes params separately to aiohttp."""
+    """Parity guard for the sync fix: with no proxy_path both backends send the
+    normalized request-target. The async backend always appends "/" and passes
+    params separately to aiohttp, so with an explicit proxy_path it diverges by
+    a trailing slash (tracked in #963).
+    """
 
     @staticmethod
     async def _sent_url(url):
-        backend = HttpAsyncBackend(
-            url=url,
-            headers={},
-            client_settings={},
-            timeout=Mock(),
-            connector_kwargs={},
-            ssl_context=None,
-            proxy_url=None,
-            server_host_name=None,
-            token_provider=None,
-            autogenerate_query_id=False,
-        )
+        backend = make_async_backend(url)
         response = SimpleNamespace(status=200, headers={})
         backend.session = SimpleNamespace(closed=False, request=AsyncMock(return_value=response))
         await backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
