@@ -146,6 +146,10 @@ def test_initial_settings_override_generated_defaults(client_factory):
     assert default_client.get_client_setting("date_time_input_format") == "best_effort"
 
 
+def test_server_timezone(param_client, call):
+    assert param_client.server_timezone == call(param_client.command, "SELECT timezone()")
+
+
 def test_client_init_unaffected_by_global_read_formats(client_factory, call):
     set_default_formats("String", "bytes")
     client = client_factory()

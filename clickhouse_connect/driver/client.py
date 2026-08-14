@@ -169,6 +169,11 @@ class Client(ABC):
         else:
             self._apply_server_tz = value == "server"
 
+    @property
+    def server_timezone(self) -> str:
+        """Return the timezone name reported by the connected ClickHouse server."""
+        return str(self.server_tz)
+
     def __init__(
         self,
         database: str | None,

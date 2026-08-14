@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- Added `Client.server_timezone`, which returns the timezone name reported by the connected ClickHouse server. The property is also available on `AsyncClient`.
+
 ## 1.7.1, 2026-08-12
 
 ### Bug Fixes
