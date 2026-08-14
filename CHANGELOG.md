@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Query placeholders now recognize `$` in server-valid parameter names such as `{id$x:Int32}` or `{$x$:String}`. Previously these names were missed, which omitted their server-side values and could also drop `DateTime64` precision and timezone hints. Placeholder detection is otherwise unchanged from 1.x. A `$name$` dictionary key with a buffer value such as `bytes`, `bytearray`, or `memoryview` stays a raw binary bind. A non-buffer value for such a key can bind through a single `{name:Type}` placeholder, and ambiguous or repeated uses of the name raise `ProgrammingError`. SQLAlchemy `server_side_params` accepts the same names and rejects the reserved `$name$` form. Closes [#936](https://github.com/ClickHouse/clickhouse-connect/issues/936).
+
 ## 1.7.1, 2026-08-12
 
 ### Bug Fixes

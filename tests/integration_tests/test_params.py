@@ -8,6 +8,7 @@ import pytest
 from clickhouse_connect import common
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.binding import DT64Param
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 HAS_TZSET = hasattr(time, "tzset")
 NON_UTC_HOST_TZ = "America/New_York"
@@ -150,6 +151,60 @@ def test_naive_datetime_wall_binding_live(param_client: Client, call, monkeypatc
     finally:
         common.set_setting("naive_datetime_binding", original_setting)
         _restore_process_timezone(monkeypatch, original_tz)
+
+
+@pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$1", "13_", "$x$", "foo$x$bar"])
+def test_dollar_in_param_name(param_client: Client, call, name):
+    # These names each lex as one ASCII BareWord when used once in the query.
+    result = call(param_client.query, f"SELECT {{{name}:Int32}} AS v", parameters={name: 13}).first_row
+    assert result[0] == 13
+
+
+def test_dollar_in_param_name_keeps_datetime64_precision(param_client: Client, call):
+    # The type hint is keyed by the captured placeholder name, so a missed capture drops precision.
+    dt = datetime(2023, 6, 1, 7, 40, 2, 250306)
+    result = call(
+        param_client.query,
+        "SELECT {t$x:DateTime64(6)} AS t, {a:Int32} AS a",
+        parameters={"t$x": dt, "a": 79},
+    ).first_row
+    assert result == (dt, 79)
+
+
+def test_dollar_delimited_param_name_uses_form_encoding(param_client: Client, call):
+    value = "x" * 5000
+    result = call(param_client.query, "SELECT length({$x$:String})", parameters={"$x$": value}).first_row[0]
+    assert result == len(value)
+
+
+def test_non_binary_value_for_raw_binary_marker_raises(param_client: Client, call):
+    with pytest.raises(ProgrammingError, match="must be a buffer value"):
+        call(param_client.query, "SELECT $x$ AS v", parameters={"$x$": 13})
+
+
+def test_decoy_placeholder_with_dollar_literal_routes_server_side(param_client: Client, call):
+    # The decoy matches and sends a harmless extra param, and the query routes server-side.
+    row = call(param_client.query, "SELECT '{a:String}', '100%$'", parameters={"a": "user_1"}).first_row
+    assert row == ("{a:String}", "100%$")
+
+
+def test_dollar_delimited_str_param_binds(param_client: Client, call):
+    result = call(param_client.query, "SELECT {$x$:String} AS v", parameters={"$x$": "user_1"}).first_row
+    assert result[0] == "user_1"
+
+
+def test_repeated_dollar_delimited_placeholder_raises(param_client: Client, call):
+    with pytest.raises(ProgrammingError, match="can appear only once"):
+        call(param_client.query, "SELECT {$x$:Int32} + {$x$:Int32}", parameters={"$x$": 13})
+
+
+def test_dollar_delimited_substring_does_not_conflict(param_client: Client, call):
+    row = call(
+        param_client.query,
+        "SELECT {foo$x$bar:Int32}, {$x$:Int32}",
+        parameters={"foo$x$bar": 79, "$x$": 13},
+    ).first_row
+    assert row == (79, 13)
 
 
 def test_null_in_containers(param_client: Client, call):

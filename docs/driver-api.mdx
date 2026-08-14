@@ -291,6 +291,8 @@ ClickHouse Connect Client `query*` and `command` methods accept an optional `par
 
 ClickHouse supports [server-side binding](/concepts/features/interfaces/client#cli-queries-with-parameters) for query values. The bound value is sent separately from the query as an HTTP parameter. ClickHouse Connect uses this mode when it detects an expression of the form `{<name>:<datatype>}`. Pass the values as a Python dictionary.
 
+Parameter names must be ClickHouse ASCII BareWord names. The driver accepts `$` at the start, inside, or at the end of the name when the server would accept it, such as `{$tenant_id:String}`. A dictionary key that starts and ends with `$` and has a buffer value such as `bytes`, `bytearray`, or `memoryview` is reserved for ClickHouse Connect's raw binary parameter convention. If such a key is used for a non-binary server-side parameter, keep it to a single `{name:Type}` placeholder. Repeated `$tag$` names can be parsed by ClickHouse as heredoc markers.
+
 Use Python `None` for nullable values. Nested `None` values are supported inside `Array` and `Tuple` parameters, and inside `Map` literals when `dict_parameter_format` is set to `"map"`.
 
 - Server-side binding with Python dictionary, DateTime value, and string value
