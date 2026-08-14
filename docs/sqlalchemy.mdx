@@ -78,6 +78,8 @@ engine = create_engine(
 
 In this mode every bound value must have a ClickHouse-compatible SQLAlchemy type. Supported `IN` lists become typed ClickHouse `Array` parameters. The compiler raises `CompileError` when it cannot derive a compatible type or safely process a bind.
 
+Bind names must be ClickHouse ASCII BareWord names. Names that start and end with `$` are rejected because the core driver reserves them for raw binary query parameters.
+
 ## Core queries {#sqlalchemy-core-queries}
 
 The dialect supports SQLAlchemy Core `SELECT` queries with joins, filters, ordering, limits and offsets, and `DISTINCT`.

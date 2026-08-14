@@ -2,6 +2,17 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Query placeholders now recognize `$` in server-valid parameter names such as `{id$x:Int32}` or `{$x$:String}`. Previously these names were missed, which omitted their server-side values and could also drop `DateTime64` precision and timezone hints. Placeholder detection is otherwise unchanged from 1.x. A `$name$` dictionary key with a buffer value such as `bytes`, `bytearray`, or `memoryview` stays a raw binary bind. A non-buffer value for such a key can bind through a single `{name:Type}` placeholder, and ambiguous or repeated uses of the name raise `ProgrammingError`. SQLAlchemy `server_side_params` accepts the same names and rejects the reserved `$name$` form. Closes [#936](https://github.com/ClickHouse/clickhouse-connect/issues/936).
+
+## 1.7.1, 2026-08-12
+
+### Bug Fixes
+
+- SQLAlchemy 2.1 compatibility. Identifier quoting forwarded the deprecated `force` argument to `IdentifierPreparer.quote`, which SQLAlchemy 2.1 removed, so any dialect use raised `TypeError` on 2.1.0b3. The parent call now passes only the identifier. The optional `force` parameter stays on the ClickHouse preparer for direct callers. Closes [#954](https://github.com/ClickHouse/clickhouse-connect/issues/954).
+- SQLAlchemy 1.4 compatibility. Column DDL using the `clickhouse_materialized`, `clickhouse_alias`, or `clickhouse_ttl` options raised `AttributeError` on SQLAlchemy 1.4 because it called a rendering helper that only exists in 2.0. The helper is now implemented locally. This appears to have been broken since 1.1.0.
+
 ## 1.7.0, 2026-08-11
 
 ### Improvements
