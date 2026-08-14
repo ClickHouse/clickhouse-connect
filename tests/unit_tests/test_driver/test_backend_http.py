@@ -458,9 +458,9 @@ class TestAsyncRawFilesMerge:
         assert _plan_raw_files(make_plan(form_files=files)) is files
 
 
-def make_sync_backend():
+def make_sync_backend(url="http://localhost:8123"):
     return HttpSyncBackend(
-        url="http://localhost:8123",
+        url=url,
         pool_manager=Mock(),
         owns_pool_manager=False,
         headers={},
@@ -472,9 +472,9 @@ def make_sync_backend():
     )
 
 
-def make_async_backend():
+def make_async_backend(url="http://localhost:8123"):
     return HttpAsyncBackend(
-        url="http://localhost:8123",
+        url=url,
         headers={},
         client_settings={},
         timeout=Mock(),
@@ -575,3 +575,49 @@ class TestAsyncFilesMerge:
     def test_files_only_passthrough(self):
         files = {"_f1": ("f1", b"x")}
         assert _plan_files(make_plan(form_files=files)) is files
+
+
+class TestSyncRequestTargetPath:
+    """The sync request-target must normalize a valid but empty path to "/".
+
+    urllib3 does this for direct requests but preserves the empty path in
+    forwarding-proxy absolute-form, which some proxies reject. An explicit
+    proxy_path must remain unchanged so path-based routing is unaffected.
+    """
+
+    @staticmethod
+    def _sent_url(url):
+        backend = make_sync_backend(url)
+        backend.http.request = Mock(return_value=SimpleNamespace(status=200, headers={}))
+        backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
+        (_method, sent_url), _kwargs = backend.http.request.call_args
+        return sent_url
+
+    def test_bare_authority_gets_slash(self):
+        assert self._sent_url("http://localhost:8123") == "http://localhost:8123/?database=db1"
+
+    def test_explicit_proxy_path_untouched(self):
+        assert self._sent_url("http://localhost:8123/clickhouse") == "http://localhost:8123/clickhouse?database=db1"
+
+
+class TestAsyncRequestTargetPath:
+    """Parity guard for the sync fix: with no proxy_path both backends send the
+    normalized request-target. The async backend always appends "/" and passes
+    params separately to aiohttp, so with an explicit proxy_path it diverges by
+    a trailing slash (tracked in #963).
+    """
+
+    @staticmethod
+    async def _sent_url(url):
+        backend = make_async_backend(url)
+        response = SimpleNamespace(status=200, headers={})
+        backend.session = SimpleNamespace(closed=False, request=AsyncMock(return_value=response))
+        await backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
+        _args, kwargs = backend.session.request.call_args
+        return kwargs["url"], kwargs["params"]
+
+    @pytest.mark.asyncio
+    async def test_bare_authority_sends_path(self):
+        sent_url, params = await self._sent_url("http://localhost:8123")
+        assert sent_url == "http://localhost:8123/"
+        assert params == {"database": "db1"}
