@@ -601,11 +601,7 @@ class TestSyncRequestTargetPath:
 
 
 class TestAsyncRequestTargetPath:
-    """Parity guard for the sync fix: with no proxy_path both backends send the
-    normalized request-target. The async backend always appends "/" and passes
-    params separately to aiohttp, so with an explicit proxy_path it diverges by
-    a trailing slash (tracked in #963).
-    """
+    """The async request-target must normalize only an empty path to "/"."""
 
     @staticmethod
     async def _sent_url(url):
@@ -616,8 +612,16 @@ class TestAsyncRequestTargetPath:
         _args, kwargs = backend.session.request.call_args
         return kwargs["url"], kwargs["params"]
 
+    @pytest.mark.parametrize(
+        ("url", "expected_url"),
+        [
+            ("http://localhost:8123", "http://localhost:8123/"),
+            ("http://localhost:8123/clickhouse", "http://localhost:8123/clickhouse"),
+            ("http://localhost:8123/clickhouse/", "http://localhost:8123/clickhouse/"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_bare_authority_sends_path(self):
-        sent_url, params = await self._sent_url("http://localhost:8123")
-        assert sent_url == "http://localhost:8123/"
+    async def test_request_target(self, url, expected_url):
+        sent_url, params = await self._sent_url(url)
+        assert sent_url == expected_url
         assert params == {"database": "db1"}
