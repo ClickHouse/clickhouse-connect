@@ -1,5 +1,3 @@
-import re
-
 from sqlalchemy.exc import ArgumentError, CompileError
 from sqlalchemy.sql import elements, sqltypes
 from sqlalchemy.sql.compiler import SQLCompiler
@@ -7,10 +5,7 @@ from sqlalchemy.util import memoized_property
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
-from clickhouse_connect.driver.binding import format_str
-
-# The driver's external_bind_re only recognizes \w+ placeholder names.
-_bind_name_re = re.compile(r"\w+\Z")
+from clickhouse_connect.driver.binding import _is_binary_bind_name, _is_valid_bind_name, format_str
 
 
 def _find_outermost_marker(text, markers):
@@ -117,10 +112,15 @@ class ChStatementCompiler(SQLCompiler):
         return processors
 
     def _ch_check_bind_name(self, name):
-        if not _bind_name_re.match(name):
+        if not _is_valid_bind_name(name):
             raise CompileError(
                 f"server_side_params cannot bind parameter {name!r}: ClickHouse server-side "
-                "parameter names must match [A-Za-z0-9_]. Rename the bind parameter."
+                "parameter names must be an ASCII BareWord. Rename the bind parameter."
+            )
+        if _is_binary_bind_name(name):
+            raise CompileError(
+                f"server_side_params cannot bind parameter {name!r}: names starting and ending "
+                "with '$' are reserved for binary query parameters. Rename the bind parameter."
             )
 
     def visit_bindparam(self, bindparam, **kw):

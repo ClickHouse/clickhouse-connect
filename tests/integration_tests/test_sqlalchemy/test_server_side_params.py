@@ -2,8 +2,9 @@
 
 from collections.abc import Iterator
 
+import pytest
 from pytest import fixture
-from sqlalchemy import MetaData, Table, insert, inspect, select, text, tuple_
+from sqlalchemy import Integer, MetaData, Table, bindparam, insert, inspect, select, text, tuple_
 from sqlalchemy.engine import Engine, create_engine
 
 from tests.integration_tests.conftest import TestConfig
@@ -58,6 +59,13 @@ def _ids(engine, stmt):
 def test_scalar_where(server_side_engine: Engine, ssp_table: Table):
     stmt = select(ssp_table.c.id).where(ssp_table.c.name == "user_1")
     assert _ids(server_side_engine, stmt) == [13]
+
+
+@pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$1", "13_"])
+def test_dollar_bind_names(server_side_engine: Engine, name: str):
+    stmt = select(bindparam(name, value=13, type_=Integer()))
+    with server_side_engine.connect() as conn:
+        assert conn.execute(stmt).scalar_one() == 13
 
 
 def test_scalar_matches_client_side(server_side_engine: Engine, test_engine: Engine, ssp_table: Table):
