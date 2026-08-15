@@ -98,6 +98,30 @@ def test_non_word_bind_name_raises():
         _sql(select(events.c.id).where(events.c.id == bindparam("a-b", value=13, type_=Integer())))
 
 
+@pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$1", "13_"])
+def test_dollar_bind_name_renders_server_side(name):
+    # These names each lex as one ASCII BareWord (issue #936).
+    sql = _sql(select(events.c.id).where(events.c.id == bindparam(name, value=13, type_=Integer())))
+    assert f"{{{name}:Int32}}" in sql
+
+
+@pytest.mark.parametrize("name", ["$", "$$", "$$a", "13", "13$", "13a$x", "id\N{LATIN SMALL LETTER E WITH ACUTE}"])
+def test_invalid_bareword_bind_name_raises(name):
+    with pytest.raises(CompileError, match="ASCII BareWord"):
+        _sql(select(events.c.id).where(events.c.id == bindparam(name, value=13, type_=Integer())))
+
+
+def test_binary_reserved_bind_name_raises():
+    with pytest.raises(CompileError, match="reserved for binary query parameters"):
+        _sql(select(events.c.id).where(events.c.id == bindparam("$x$", value=13, type_=Integer())))
+
+
+def test_binary_reserved_expanding_bind_name_raises():
+    values = bindparam("$x$", value=[13, 79], type_=Integer(), expanding=True)
+    with pytest.raises(CompileError, match="reserved for binary query parameters"):
+        _sql(select(events.c.id).where(events.c.id.in_(values)))
+
+
 def test_in_list_with_bind_processor_raises():
     class ProcessedString(TypeDecorator):
         impl = String

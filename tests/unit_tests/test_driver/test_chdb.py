@@ -171,6 +171,10 @@ class TestChdbQuery:
         result = client.query("SELECT {v:UInt32} + 1 AS r", parameters={"v": 7})
         assert result.result_rows == [(8,)]
 
+    def test_dollar_delimited_parameter(self, client):
+        result = client.query("SELECT {$x$:Int32}", parameters={"$x$": 13})
+        assert result.result_rows == [(13,)]
+
     def test_columns_only_probe(self, client):
         result = client.query("SELECT number, toString(number) AS s FROM numbers(10) LIMIT 0")
         assert result.result_rows == []
