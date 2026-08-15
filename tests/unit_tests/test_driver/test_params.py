@@ -3,9 +3,11 @@ import os
 import time
 import uuid
 import zoneinfo
+from array import array
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from datetime import time as dt_time
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -13,12 +15,15 @@ from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import (
     DT64Param,
+    _binary_bind_value,
     _extract_tz_from_type,
+    _is_valid_bind_name,
     bind_query,
     finalize_query,
     format_bind_value,
     format_query_value,
 )
+from clickhouse_connect.driver.exceptions import ProgrammingError
 
 HAS_TZSET = hasattr(time, "tzset")
 NON_UTC_HOST_TZ = "America/New_York"
@@ -367,6 +372,293 @@ class TestBindQuerySuffixCollision:
         query = "SELECT %(dt)s"
         q, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
         assert q == "SELECT '2026-01-01 12:00:00.250306'"
+        assert params == {}
+
+
+class TestBindQueryDollarInParamName:
+    """ClickHouse accepts dollar signs at several positions in ASCII BareWord names."""
+
+    utc = timezone.utc
+    dt = datetime(2026, 1, 1, 12, 0, 0, 250306, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$1", "13_", "$x$"])
+    def test_binds_server_side(self, name):
+        assert _is_valid_bind_name(name)
+        query = f"SELECT {{{name}:Int32}} AS v"
+        q, params = bind_query(query, {name: 13}, server_tz=self.utc)
+        assert q == query
+        assert params == {f"param_{name}": "13"}
+
+    @pytest.mark.parametrize("name", ["$", "$$", "$$a", "13$"])
+    def test_invalid_bareword_does_not_select_server_side_binding(self, name):
+        assert not _is_valid_bind_name(name)
+        query = f"SELECT {{{name}:Int32}} AS v"
+        if name == "$$":
+            with pytest.raises(ProgrammingError, match="also appears elsewhere"):
+                bind_query(query, {name: 13}, server_tz=self.utc)
+            return
+        q, params = bind_query(query, {name: 13}, server_tz=self.utc)
+        assert q == query
+        assert params == {}
+
+    @pytest.mark.parametrize("name", ["13", "id\N{LATIN SMALL LETTER E WITH ACUTE}"])
+    def test_word_name_keeps_shipped_routing(self, name):
+        # Not server-valid barewords, but shipped 1.x routing matched any \w+ name.
+        assert not _is_valid_bind_name(name)
+        query = f"SELECT {{{name}:Int32}} AS v"
+        q, params = bind_query(query, {name: 13}, server_tz=self.utc)
+        assert q == query
+        assert params == {f"param_{name}": "13"}
+
+    @pytest.mark.parametrize(
+        "type_str,expected",
+        [
+            ("DateTime64(6)", "2026-01-01 12:00:00.250306"),
+            ("Nullable(DateTime64(6))", "2026-01-01 12:00:00.250306"),
+            ("Array(DateTime64(6))", "['2026-01-01 12:00:00.250306']"),
+            ("DateTime", "2026-01-01 12:00:00"),
+        ],
+    )
+    def test_type_hint_applies(self, type_str, expected):
+        # The hint is keyed by the captured name, so a missed capture silently drops precision.
+        value = [self.dt] if type_str.startswith("Array") else self.dt
+        query = f"SELECT {{t$x:{type_str}}} AS t"
+        _, params = bind_query(query, {"t$x": value}, server_tz=self.utc)
+        assert params["param_t$x"] == expected
+
+    def test_type_hint_applies_in_mixed_query(self):
+        query = "SELECT {t$x:DateTime64(6)} AS t, {a:Int32} AS a"
+        _, params = bind_query(query, {"t$x": self.dt, "a": 79}, server_tz=self.utc)
+        assert params == {"param_t$x": "2026-01-01 12:00:00.250306", "param_a": "79"}
+
+    def test_timezone_hint_applies(self):
+        berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+        query = "SELECT {t$x:DateTime64(6, 'Europe/Berlin')} AS t"
+        _, params = bind_query(query, {"t$x": self.dt}, server_tz=self.utc)
+        assert params["param_t$x"] == self.dt.astimezone(berlin).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    @pytest.mark.parametrize("value", [b"user_1", bytearray(b"user_1"), memoryview(b"user_1"), array("B", b"user_1")])
+    def test_binary_bind_sentinel_still_wins(self, value):
+        query = "SELECT $x$ AS v"
+        q, params = bind_query(query, {"$x$": value})
+        assert q == b"SELECT $x$user_1$x$ AS v"
+        assert params == {}
+
+    def test_binary_bind_value_bytes_passthrough(self):
+        value = b"user_1"
+        assert _binary_bind_value(value) is value
+
+    def test_numpy_scalar_uses_native_buffer_bytes(self):
+        value = np.int64(13)
+        q, params = bind_query("SELECT $x$ AS v", {"$x$": value})
+        assert q == b"SELECT $x$" + memoryview(value).tobytes() + b"$x$ AS v"
+        assert params == {}
+
+    def test_binary_bind_alongside_dollar_name(self):
+        query = "SELECT $x$ AS v, {id$y:Int32} AS n"
+        q, params = bind_query(query, {"$x$": b"user_2", "id$y": 79}, server_tz=self.utc)
+        assert q == b"SELECT $x$user_2$x$ AS v, {id$y:Int32} AS n"
+        assert params == {"param_id$y": "79"}
+
+    @pytest.mark.parametrize("type_str,value,expected", [("Int32", 13, "13"), ("String", "user_1", "user_1")])
+    def test_non_binary_sentinel_binds_server_side(self, type_str, value, expected):
+        query = f"SELECT {{$x$:{type_str}}} AS v"
+        q, params = bind_query(query, {"$x$": value})
+        assert q == query
+        assert params == {"param_$x$": expected}
+
+    @pytest.mark.parametrize(
+        "query,key",
+        [
+            ("SELECT $x$ AS v", "$x$"),
+            ("SELECT $a-b$ AS v", "$a-b$"),
+            ("SELECT $x$tail AS v", "$x$"),
+            ("SELECT 13a$x$ AS raw", "$x$"),
+        ],
+    )
+    def test_non_binary_sentinel_used_as_raw_marker_raises(self, query, key):
+        with pytest.raises(ProgrammingError, match="must be a buffer value"):
+            bind_query(query, {key: 13})
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT '$x$', %(a)s",
+            "SELECT 1 -- $x$\n, %(a)s",
+            "SELECT 1 // $x$\n, %(a)s",
+            "SELECT 1 # $x$\n, %(a)s",
+            "SELECT 1 #!$x$\n, %(a)s",
+            "SELECT 1 /* outer /* $x$ */ outer */ + %(a)s",
+            "SELECT $tag$$x$$tag$, %(a)s",
+            "SELECT foo$x$bar, %(a)s",
+        ],
+    )
+    def test_non_raw_marker_without_placeholder_is_ignored(self, query):
+        q, params = bind_query(query, {"$x$": 13, "a": 79})
+        assert q == query.replace("%(a)s", "79")
+        assert params == {}
+
+    def test_non_binary_sentinel_used_as_placeholder_and_raw_marker_raises(self):
+        with pytest.raises(ProgrammingError, match="also appears elsewhere"):
+            bind_query("SELECT {$x$:Int32} AS v, $x$ AS raw", {"$x$": 13})
+
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            "'$x$', ",
+            "-- $x$\n",
+            "/* outer /* $x$ */ outer */ ",
+            "$tag$$x$$tag$, ",
+        ],
+    )
+    def test_non_executable_marker_before_placeholder_is_allowed(self, prefix):
+        query = f"SELECT {prefix}" + "{$x$:Int32}"
+        q, params = bind_query(query, {"$x$": 13})
+        assert q == query
+        assert params == {"param_$x$": "13"}
+
+    @pytest.mark.parametrize("suffix", ["'$x$'", "/* $x$ */ 1", "{foo$x$bar:Int32}"])
+    def test_exact_marker_after_placeholder_raises(self, suffix):
+        query = "SELECT {$x$:Int32}, " + suffix
+        params = {"$x$": 13, "foo$x$bar": 79}
+        with pytest.raises(ProgrammingError, match="also appears elsewhere"):
+            bind_query(query, params)
+
+    def test_executable_marker_before_placeholder_raises(self):
+        # The pair of names parses as one heredoc that swallows the written placeholder.
+        with pytest.raises(ProgrammingError, match="also appears elsewhere"):
+            bind_query("SELECT $x$, {$x$:Int32}", {"$x$": 13})
+
+    def test_dollar_run_retries_heredoc_at_next_dollar(self):
+        # The server emits a one-char DollarSign token at the first `$`, then opens the
+        # `$x$` heredoc at position 1, which closes at the placeholder name and swallows it.
+        with pytest.raises(ProgrammingError, match="also appears elsewhere"):
+            bind_query("SELECT $$x$ ok {$x$:String}", {"$x$": "user_1"})
+
+    def test_adjacent_heredoc_does_not_hide_raw_marker(self):
+        query = "SELECT $tag$user_1$tag$$x$"
+        with pytest.raises(ProgrammingError, match="must be a buffer value"):
+            bind_query(query, {"$x$": 13})
+
+    @pytest.mark.parametrize("token", ["$a$a$", "$other$x$"])
+    def test_overlapping_tag_shape_stays_one_bareword(self, token):
+        query = f"SELECT {token}, %(a)s"
+        q, params = bind_query(query, {"$x$": 13, "a": 79})
+        assert q == query.replace("%(a)s", "79")
+        assert params == {}
+
+    def test_many_distinct_unmatched_tags_keep_client_side_binding(self):
+        tags = "+".join(f"$t{index}$" for index in range(256))
+        query = f"SELECT {tags}, %(a)s"
+        q, params = bind_query(query, {"a": 79})
+        assert q == query.replace("%(a)s", "79")
+        assert params == {}
+
+    def test_repeated_non_binary_sentinel_placeholder_raises(self):
+        with pytest.raises(ProgrammingError, match="can appear only once"):
+            bind_query("SELECT {$x$:Int32} + {$x$:Int32}", {"$x$": 13})
+
+    def test_unused_non_binary_sentinel_does_not_raise(self):
+        q, params = bind_query("SELECT %(a)s", {"$x$": 13, "a": 79})
+        assert q == "SELECT 79"
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query,params",
+        [
+            # The `$x$` in the type opens a server heredoc that swallows the second placeholder.
+            ("SELECT {a:Array($x$)} AS a, {$x$:String} AS v", {"a": [13], "$x$": "user_1"}),
+            # A name starting with the marker tag gets a server heredoc check at the name start.
+            ("SELECT {$x$y:Int32}, {$x$:Int32}", {"$x$y": 79, "$x$": 13}),
+        ],
+    )
+    def test_marker_inside_other_placeholder_raises(self, query, params):
+        with pytest.raises(ProgrammingError, match="also appears elsewhere"):
+            bind_query(query, params)
+
+    def test_marker_mid_name_in_other_placeholder_binds(self):
+        # `foo$x$bar` lexes as one bareword, so the embedded tag never opens a heredoc.
+        query = "SELECT {foo$x$bar:Int32}, {$x$:Int32}"
+        q, params = bind_query(query, {"foo$x$bar": 79, "$x$": 13})
+        assert q == query
+        assert params == {"param_foo$x$bar": "79", "param_$x$": "13"}
+
+    def test_non_binary_sentinel_after_number_is_a_raw_marker(self):
+        with pytest.raises(ProgrammingError, match="must be a buffer value"):
+            bind_query("SELECT 13$x$ AS raw", {"$x$": 13})
+
+    @pytest.mark.parametrize("name", ["13a$", "13a$x", "13a$x$bar"])
+    def test_digit_led_name_never_absorbs_dollar(self, name):
+        # Digit-led tokens promote to a bareword only through [A-Za-z0-9_], never `$`.
+        assert not _is_valid_bind_name(name)
+        query = f"SELECT {{{name}:Int32}} AS v"
+        q, params = bind_query(query, {name: 13}, server_tz=self.utc)
+        assert q == query
+        assert params == {}
+
+    def test_non_binary_sentinel_after_split_bareword_is_not_raw_marker(self):
+        query = "SELECT 13$abc$x$tail, {$x$:Int32}"
+        q, params = bind_query(query, {"$x$": 13})
+        assert q == query
+        assert params == {"param_$x$": "13"}
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT '{id$x:Int32}'",
+            'SELECT "{id$x:Int32}"',
+            "SELECT `{id$x:Int32}`",
+            "SELECT 'it\\'s {id$x:Int32}'",
+            "SELECT 'it''s {id$x:Int32}'",
+            "SELECT 1 -- {id$x:Int32}",
+            "SELECT 1 /* {id$x:Int32} */",
+            "SELECT $tag${id$x:Int32}$tag$",
+            "SELECT \u2018{id$x:Int32}\u2019",
+        ],
+    )
+    def test_decoy_placeholder_routes_server_side(self, query):
+        # Detection uses the regex over the raw query text, matching shipped 1.x semantics,
+        # so decoys inside strings and comments still route server-side.
+        q, params = bind_query(query, {"id$x": 13})
+        assert q == query
+        assert params == {"param_id$x": "13"}
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT '{a:String}', '100%$'",
+            "SELECT '{13:Int32}', '100%'",
+            "SELECT '{idé:Int32}', '100%'",
+        ],
+    )
+    def test_decoy_placeholder_with_percent_literal_routes_server_side(self, query):
+        # Any shipped-1.x decoy match must keep the query off the client-side `%` path.
+        q, params = bind_query(query, {"a": "user_1"})
+        assert q == query
+        assert params == {"param_a": "user_1"}
+
+    def test_decoy_type_hint_applies_alongside_real_placeholder(self):
+        query = "SELECT '{fake$x:DateTime64(6)}', {real$x:Int32}"
+        q, params = bind_query(query, {"fake$x": self.dt, "real$x": 13}, server_tz=self.utc)
+        assert q == query
+        assert params == {"param_fake$x": "2026-01-01 12:00:00.250306", "param_real$x": "13"}
+
+    def test_hash_without_required_suffix_does_not_hide_placeholder(self):
+        query = "SELECT 1 #x {id$x:Int32}, %(a)s"
+        q, params = bind_query(query, {"id$x": 79, "a": 13})
+        assert q == query
+        assert params == {"param_id$x": "79", "param_a": "13"}
+
+    def test_binary_placeholder_match_does_not_change_client_side_classification(self):
+        query = "SELECT {$x$:String} AS v, %(a)s AS n"
+        q, params = bind_query(query, {"$x$": b"user_1", "a": 13})
+        assert q == b"SELECT {$x$user_1$x$:String} AS v, 13 AS n"
+        assert params == {}
+
+    def test_no_placeholder_still_uses_client_side_path(self):
+        query = "SELECT %(a$b)s"
+        q, params = bind_query(query, {"a$b": 79}, server_tz=self.utc)
+        assert q == "SELECT 79"
         assert params == {}
 
 
