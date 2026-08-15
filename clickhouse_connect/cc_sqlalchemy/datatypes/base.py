@@ -9,6 +9,11 @@ from clickhouse_connect.driver.binding import str_query_value
 logger = logging.getLogger(__name__)
 
 
+def _double_percent_query_value(value):
+    """Render a literal for a paramstyle that reads % as a format character, where a literal % must be doubled."""
+    return str_query_value(value).replace("%", "%%")
+
+
 class ChSqlaType:
     """
     A SQLAlchemy TypeEngine that wraps a ClickHouseType.  We don't extend TypeEngine directly, instead all concrete
@@ -80,12 +85,17 @@ class ChSqlaType:
         return None
 
     @staticmethod
-    def _cached_literal_processor(*_):
+    def _cached_literal_processor(dialect=None, *_):
         """
         Override for the SqlAlchemy TypeEngine _cached_literal_processor. We delegate to the driver format_query_value
         method and should be able to ignore literal_processor definitions in the dialect, which are verbose and
-        confusing.
+        confusing.  The rendered literal still has to follow the escaping the dialect's paramstyle expects, so a
+        literal % is doubled for pyformat exactly as SqlAlchemy's own literal processors do.  Without that, the %
+        is read as a format character when the finished query still carries a parameter to interpolate.
         """
+        preparer = getattr(dialect, "identifier_preparer", None)
+        if preparer is not None and preparer._double_percents:
+            return _double_percent_query_value
         return str_query_value
 
     def _compiler_dispatch(self, _visitor, **_):

@@ -11,9 +11,13 @@ correctly for both parameterized and non-parameterized queries.
 
 from unittest.mock import Mock
 
-from sqlalchemy import Integer, column, select, table, text
+import pytest
+from sqlalchemy import Integer, bindparam, column, literal, select, table, text
 
 from clickhouse_connect import dbapi
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String as ChString
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 from clickhouse_connect.dbapi.cursor import Cursor
@@ -115,6 +119,61 @@ def test_percent_in_identifier_survives_parameter_binding():
     final_sql = finalize_query(compiled.string, compiled.params)
     assert "`events%2026`.`value%pct`" in final_sql
     assert " = 13" in final_sql
+
+
+def _ch_literal_sql(value, type_name, dialect=None):
+    """Compile a single rendered ChSqlaType literal, with no remaining parameters."""
+    stmt = select(literal(value, type_=sqla_type_from_name(type_name), literal_execute=True))
+    return stmt.compile(dialect=dialect or _make_dialect(), compile_kwargs={"render_postcompile": True}).string
+
+
+@pytest.mark.parametrize(
+    "value,type_name,rendered",
+    [
+        ("100%", "String", "'100%%'"),
+        ("100%", "Nullable(String)", "'100%%'"),
+        ("100%", "LowCardinality(Nullable(String))", "'100%%'"),
+        (["a%b", "c%d"], "Array(String)", "['a%%b', 'c%%d']"),
+        (("a%b", "c%d"), "Tuple(String, String)", "('a%%b', 'c%%d')"),
+        ([("a%b",)], "Array(Tuple(String))", "[('a%%b')]"),
+        ({"k%1": "v%1"}, "Map(String, String)", '\'{"k%%1":"v%%1"}\''),
+    ],
+)
+def test_ch_type_literal_doubles_percent(value, type_name, rendered):
+    """A ChSqlaType literal containing % must be doubled at compile time for the pyformat paramstyle.
+
+    See https://github.com/ClickHouse/clickhouse-connect/issues/966
+    """
+    assert rendered in _ch_literal_sql(value, type_name)
+
+
+def test_ch_type_literal_percent_survives_parameter_binding():
+    """A remaining pyformat parameter must still interpolate around the literal."""
+    stmt = select(
+        literal("100%", type_=ChString(), literal_execute=True),
+        bindparam("n", 13, type_=Int32()),
+    )
+    compiled = stmt.compile(dialect=_make_dialect(), compile_kwargs={"render_postcompile": True})
+
+    final_sql = finalize_query(compiled.string, compiled.params)
+    assert "'100%'" in final_sql
+    assert "13 AS" in final_sql
+
+
+def test_ch_type_literal_percent_without_parameters():
+    """With no remaining parameters the doubled literal is unescaped by the cursor."""
+    cursor, client = _make_cursor()
+    cursor.execute(_ch_literal_sql("100%", "String"))
+
+    assert "'100%'" in client.query.call_args[0][0]
+
+
+def test_ch_type_literal_percent_single_when_double_percents_disabled():
+    """server_side_params turns off percent doubling, so the literal stays single."""
+    sql = _ch_literal_sql("100%", "String", dialect=ClickHouseDialect(dbapi=dbapi, server_side_params=True))
+
+    assert "'100%'" in sql
+    assert "%%" not in sql
 
 
 def test_quote_identifier_keeps_existing_direct_call_contract():

@@ -1,5 +1,5 @@
 from pytest import fixture
-from sqlalchemy import MetaData, Table, func, literal_column, select, text
+from sqlalchemy import MetaData, Table, bindparam, func, literal, literal_column, select, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect import common
@@ -584,3 +584,18 @@ def test_using_with_strictness_integration(test_engine: Engine, test_db: str):
         result = conn.execute(query)
         rows = result.fetchall()
         assert len(rows) == 2
+
+
+def test_percent_literal_with_remaining_parameter(test_engine: Engine):
+    """A ChSqlaType literal holding % executes alongside a remaining bound parameter.
+
+    See https://github.com/ClickHouse/clickhouse-connect/issues/966
+    """
+    with test_engine.begin() as conn:
+        query = select(
+            literal("100%", type_=String(), literal_execute=True).label("pct"),
+            bindparam("n", 13, type_=UInt32()).label("n"),
+        )
+        row = conn.execute(query).fetchone()
+        assert row.pct == "100%"
+        assert row.n == 13
