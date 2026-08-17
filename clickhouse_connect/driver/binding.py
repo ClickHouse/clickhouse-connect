@@ -28,6 +28,152 @@ _heredoc_re = re.compile(r"\$[A-Za-z0-9_]*\$")
 _heredoc_start_re = re.compile(r"(?=(\$[A-Za-z0-9_]*\$))")
 _quote_closers = {"'": "'", '"': '"', "`": "`"}
 _curly_quote_closers = {"\u2018": "\u2019", "\u201c": "\u201d"}
+_SQL_WHITESPACE = (
+    " \t\n\r\v\f"
+    "\u0085\u00a0\u180e"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u200c\u200d"
+    "\u2028\u2029\u202f\u205f\u2060\u3000\ufeff"
+)
+
+
+def _skip_quoted_token(query: str, index: int, quote: str) -> int:
+    index += 1
+    end = len(query)
+    closer = query.find(quote, index)
+    while closer != -1:
+        backslash = query.find("\\", index, closer)
+        if backslash != -1:
+            index = backslash + 2
+            if index > closer:
+                closer = query.find(quote, index)
+            continue
+        if closer + 1 < end and query[closer + 1] == quote:
+            index = closer + 2
+            closer = query.find(quote, index)
+            continue
+        return closer + 1
+    return -1
+
+
+def _skip_block_comment(query: str, index: int) -> int:
+    depth = 1
+    index += 2
+    end = len(query)
+    while index < end:
+        if query.startswith("/*", index):
+            depth += 1
+            index += 2
+        elif query.startswith("*/", index):
+            depth -= 1
+            index += 2
+            if depth == 0:
+                return index
+        else:
+            index += 1
+    return -1
+
+
+def _strip_trailing_semicolons(query: str) -> str:
+    """Remove query-final statement terminators while preserving trailing SQL trivia.
+
+    Only for queries that get a FORMAT clause appended. Must not see inline INSERT
+    data, which the server never lexes. Token rules mirror _external_bind_matches.
+    """
+    if ";" not in query:
+        return query
+
+    # _heredoc_start_re finds all overlapping starts, so every _heredoc_re match key exists.
+    heredoc_ends = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)} if "$" in query else {}
+    terminators: list[int] = []
+    index = 0
+    end = len(query)
+    while index < end:
+        char = query[index]
+        if char in _SQL_WHITESPACE:
+            index += 1
+            continue
+
+        curly_close = _curly_quote_closers.get(char)
+        if curly_close is not None:
+            close = query.find(curly_close, index + 1)
+            if close == -1:
+                return query
+            terminators.clear()
+            index = close + 1
+            continue
+
+        quote_close = _quote_closers.get(char)
+        if quote_close is not None:
+            index = _skip_quoted_token(query, index, quote_close)
+            if index == -1:
+                return query
+            terminators.clear()
+            continue
+
+        if query.startswith("/*", index):
+            index = _skip_block_comment(query, index)
+            if index == -1:
+                return query
+            continue
+
+        line_comment = (
+            query.startswith("--", index)
+            or query.startswith("//", index)
+            or (char == "#" and index + 1 < end and query[index + 1] in (" ", "!"))
+        )
+        if line_comment:
+            newline = query.find("\n", index + 1)
+            index = end if newline == -1 else newline + 1
+            continue
+
+        if char == ";":
+            terminators.append(index)
+            index += 1
+            continue
+
+        terminators.clear()
+        if char == "$":
+            opener = _heredoc_re.match(query, index)
+            if opener is not None:
+                tag = opener.group()
+                if heredoc_ends[tag] >= opener.end():
+                    close = query.find(tag, opener.end())
+                    index = close + len(tag)
+                    continue
+            index += 1
+            if index < end and _is_ascii_word_char(query[index]):
+                index += 1
+                while index < end and _is_ascii_bareword_char(query[index]):
+                    index += 1
+            continue
+
+        if char == "_" or "A" <= char <= "Z" or "a" <= char <= "z":
+            index += 1
+            while index < end and _is_ascii_bareword_char(query[index]):
+                index += 1
+            continue
+
+        if "0" <= char <= "9":
+            index += 1
+            while index < end and "0" <= query[index] <= "9":
+                index += 1
+            if index < end and (query[index] == "_" or "A" <= query[index] <= "Z" or "a" <= query[index] <= "z"):
+                index += 1
+                while index < end and _is_ascii_word_char(query[index]):
+                    index += 1
+            continue
+
+        index += 1
+
+    if not terminators:
+        return query
+    parts = []
+    start = 0
+    for position in terminators:
+        parts.append(query[start:position])
+        start = position + 1
+    parts.append(query[start:])
+    return "".join(parts)
 
 
 def _is_valid_bind_name(name: str) -> bool:

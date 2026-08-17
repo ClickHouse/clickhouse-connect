@@ -26,7 +26,7 @@ from clickhouse_connect.driver._backend.orchestration import (
     insert_context_sequence,
     run_sync,
 )
-from clickhouse_connect.driver.binding import bind_query, str_query_value
+from clickhouse_connect.driver.binding import _strip_trailing_semicolons, bind_query, str_query_value
 from clickhouse_connect.driver.common import (
     ShowClickHouseErrors,
     StreamContext,
@@ -528,10 +528,16 @@ class Client(ABC):
         fmt: str | None,
         use_database: bool,
     ) -> tuple[str | bytes, dict[str, str], QueryRuntime]:
-        """Append the format, bind parameters, and build the runtime for a raw query."""
+        """Bind parameters, append the format, and build the runtime for a raw query."""
         if fmt:
-            query += f"\n FORMAT {fmt}"
+            query = _strip_trailing_semicolons(query)
         final_query, bind_params = bind_query(query, parameters, self.server_tz)
+        if fmt:
+            suffix = f"\n FORMAT {fmt}"
+            if isinstance(final_query, bytes):
+                final_query += suffix.encode()
+            else:
+                final_query += suffix
         runtime = QueryRuntime(
             database=self.database if use_database else None,
             settings=self._validate_settings(settings or {}),

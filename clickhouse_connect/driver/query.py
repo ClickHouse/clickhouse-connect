@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 from zoneinfo import ZoneInfoNotFoundError
 
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.binding import bind_query
+from clickhouse_connect.driver.binding import _strip_trailing_semicolons, bind_query
 from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, dict_copy, empty_gen, get_rename_method
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
@@ -266,7 +266,12 @@ class QueryContext(BaseQueryContext):
         )
 
     def _update_query(self):
-        self.final_query, self.bind_params = bind_query(self.query, self.parameters, self.server_tz)
+        query = self.query
+        # The transport appends a FORMAT clause to non-insert queries, so final terminators
+        # must go before binding. Inserts keep their text since inline data is not SQL.
+        if isinstance(query, str) and ";" in query and insert_re.search(remove_sql_comments(query)) is None:
+            query = _strip_trailing_semicolons(query)
+        self.final_query, self.bind_params = bind_query(query, self.parameters, self.server_tz)
         if isinstance(self.final_query, bytes):
             # If we've embedded binary data in the query, all bets are off, and we check the original query for comments
             self.uncommented_query = remove_sql_comments(self.query)

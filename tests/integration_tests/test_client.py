@@ -313,6 +313,34 @@ def test_query_with_inline_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 13;",
+        "SELECT 13;\n",
+        "SELECT 13;\u00a0",
+        "SELECT 13; /* trailing comment */",
+        "SELECT 13; /* separator */ ;",
+    ],
+)
+def test_query_formats_with_trailing_semicolon(param_client, call, query):
+    assert call(param_client.query, query).result_rows == [(13,)]
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == b"13\n"
+
+
+def test_raw_query_binary_format_with_trailing_semicolon(param_client, call):
+    result = call(param_client.raw_query, "SELECT $value$;", parameters={"$value$": b"13"}, fmt="TabSeparated")
+    assert result == b"13\n"
+
+
+def test_inline_insert_data_keeps_semicolons(param_client, call, table_context):
+    with table_context("test_inline_semicolon_data", ["s String"]):
+        call(param_client.command, "INSERT INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_1;\n")
+        call(param_client.query, "INSERT INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_2;\n")
+        result = call(param_client.query, "SELECT s FROM test_inline_semicolon_data ORDER BY s")
+        assert result.result_rows == [("value_1;",), ("value_2;",)]
+
+
 def test_query_with_comment(param_client, call):
     result = call(
         param_client.query,
