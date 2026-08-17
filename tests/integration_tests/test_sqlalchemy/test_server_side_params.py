@@ -7,6 +7,9 @@ from pytest import fixture
 from sqlalchemy import Integer, MetaData, Table, bindparam, insert, inspect, select, text, tuple_
 from sqlalchemy.engine import Engine, create_engine
 
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String as ChString
+from clickhouse_connect.driver.binding import format_str
 from tests.integration_tests.conftest import TestConfig
 from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
 
@@ -116,3 +119,49 @@ def test_reflection_has_table(server_side_engine: Engine, test_db: str):
         inspector = inspect(conn)
         assert inspector.has_table(TABLE, schema=test_db)
         assert {c["name"] for c in inspector.get_columns(TABLE, schema=test_db)} == {"id", "name"}
+
+
+@pytest.mark.parametrize("server_side", [False, True], ids=["client-side", "server-side"])
+@pytest.mark.parametrize("remaining_bind", [False, True], ids=["no-remaining-bind", "remaining-bind"])
+def test_literal_execute_percent_roundtrip(
+    server_side: bool,
+    remaining_bind: bool,
+    test_engine: Engine,
+    server_side_engine: Engine,
+):
+    payload = "single% adjacent%% %(token)s quote'tail%"
+    literal_value = bindparam("literal_value", payload, type_=ChString(), literal_execute=True)
+    if remaining_bind:
+        statement = select(literal_value, bindparam("remaining", 13, type_=Int32()))
+        expected = (payload, 13)
+    else:
+        statement = select(literal_value)
+        expected = (payload,)
+    engine = server_side_engine if server_side else test_engine
+
+    with engine.connect() as conn:
+        row = conn.execute(statement).one()
+
+    assert tuple(row) == expected
+
+
+@pytest.mark.parametrize("no_parameters", [False, True], ids=["normal", "no-parameters"])
+def test_server_side_exec_driver_sql_decodes_pyformat_percents(server_side_engine: Engine, no_parameters: bool):
+    payload = "single% adjacent%% %(token)s quote'tail%"
+    statement = f"SELECT {format_str(payload).replace('%', '%%')}"
+
+    with server_side_engine.connect() as conn:
+        if no_parameters:
+            conn = conn.execution_options(no_parameters=True)
+        value = conn.exec_driver_sql(statement).scalar_one()
+
+    assert value == payload
+
+
+def test_server_side_compiled_text_preserves_raw_percents(server_side_engine: Engine):
+    payload = "single% adjacent%% %(token)s quote'tail%"
+
+    with server_side_engine.connect() as conn:
+        value = conn.execute(text(f"SELECT {format_str(payload)}")).scalar_one()
+
+    assert value == payload

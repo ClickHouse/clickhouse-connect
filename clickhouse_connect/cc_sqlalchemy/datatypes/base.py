@@ -82,11 +82,17 @@ class ChSqlaType:
         """
         return None
 
-    def literal_processor(self, _dialect: Dialect) -> Callable[[Any], str]:
+    def literal_processor(self, dialect: Dialect) -> Callable[[Any], str]:
         """
         Delegate SQLAlchemy literal rendering to the driver's query value formatter.
         """
-        return str_query_value
+        if not dialect.identifier_preparer._double_percents:
+            return str_query_value
+
+        def process(value: Any) -> str:
+            return str_query_value(value).replace("%", "%%")
+
+        return process
 
     def _compiler_dispatch(self, _visitor, **_):
         """
