@@ -397,6 +397,15 @@ def test_execute_unescapes_multiple_percents():
     assert actual_query == "SELECT formatDateTime(now(), '%Y-%m-%d %H:%M:%S')"
 
 
+def test_execute_preserves_raw_percents_when_not_pyformat_encoded():
+    client = create_mock_client([])
+    cursor = Cursor(client)
+
+    cursor.execute("SELECT 'single% adjacent%% %(token)s tail%'", pyformat_encoded=False)
+
+    assert client.query.call_args.args[0] == "SELECT 'single% adjacent%% %(token)s tail%'"
+
+
 def test_execute_empty_result_fetches_metadata_with_parameters():
     """Empty SELECT results should still populate description metadata."""
     client = Mock()
