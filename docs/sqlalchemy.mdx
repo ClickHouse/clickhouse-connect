@@ -113,6 +113,10 @@ with engine.connect() as conn:
     conn.execute(stmt)
 ```
 
+### Literal rendering {#sqlalchemy-literal-rendering}
+
+When SQLAlchemy inlines a bound value through `literal_binds` or `literal_execute`, ClickHouse types format it as a ClickHouse literal. This also applies through `TypeDecorator` wrappers and `with_variant()` selections. String values retain percent signs and use ClickHouse quoting even when other bound parameters remain.
+
 ### JSON subcolumns {#sqlalchemy-json-subcolumns}
 
 For a column declared or reflected as ClickHouse `JSON`, use square brackets to select one segment of a storage-backed subcolumn path at a time:
