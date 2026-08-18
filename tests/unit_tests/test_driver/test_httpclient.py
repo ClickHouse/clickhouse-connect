@@ -12,7 +12,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.asyncclient import AsyncClient
-from clickhouse_connect.driver.binding import _strip_trailing_semicolons
+from clickhouse_connect.driver.binding import _query_is_insert, _strip_trailing_semicolons
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
@@ -1490,14 +1490,18 @@ class TestRawQuerySemicolonPreparation:
                 return statement
 
         value = StatefulStatement()
-        with patch(
-            "clickhouse_connect.driver.client._strip_trailing_semicolons",
-            wraps=_strip_trailing_semicolons,
-        ) as strip:
+        with (
+            patch("clickhouse_connect.driver.client._query_is_insert", wraps=_query_is_insert) as is_insert,
+            patch(
+                "clickhouse_connect.driver.client._strip_trailing_semicolons",
+                wraps=_strip_trailing_semicolons,
+            ) as strip,
+        ):
             final_query, _, _ = self.prep("%(statement)s", parameters={"statement": value})
 
         assert final_query == expected_query
         assert value.calls == 1
+        assert is_insert.call_count == 1
         assert strip.call_count == expected_lexer_calls
 
     def test_parameter_generated_statement_is_bound_once(self):
@@ -1527,13 +1531,17 @@ class TestRawQuerySemicolonPreparation:
 
     def test_mixed_binary_select_lexes_only_the_template(self):
         query = "SELECT %(value)s + toUInt8($raw$); -- trailing"
-        with patch(
-            "clickhouse_connect.driver.client._strip_trailing_semicolons",
-            wraps=_strip_trailing_semicolons,
-        ) as strip:
+        with (
+            patch("clickhouse_connect.driver.client._query_is_insert", wraps=_query_is_insert) as is_insert,
+            patch(
+                "clickhouse_connect.driver.client._strip_trailing_semicolons",
+                wraps=_strip_trailing_semicolons,
+            ) as strip,
+        ):
             final_query, _, _ = self.prep(query, parameters={"value": 13, "$raw$": b"79"})
 
         assert final_query == b"SELECT 13 + toUInt8($raw$79$raw$) -- trailing\n FORMAT TabSeparated"
+        is_insert.assert_not_called()
         strip.assert_called_once_with(query)
 
     def test_binary_bind_with_unused_parameter_lexes_the_template(self):

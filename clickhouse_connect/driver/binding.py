@@ -245,6 +245,22 @@ def _next_keyword_is_into(query: str, index: int, heredoc_ends: dict[str, int]) 
     return False
 
 
+_INSERT_BOUNDARY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$")
+
+
+def _contains_insert_bareword(query: str) -> bool:
+    upper_query = query.upper()
+    index = upper_query.find("INSERT")
+    while index != -1:
+        keyword_end = index + 6
+        before_is_word = index > 0 and upper_query[index - 1] in _INSERT_BOUNDARY_CHARS
+        after_is_word = keyword_end < len(upper_query) and upper_query[keyword_end] in _INSERT_BOUNDARY_CHARS
+        if not before_is_word and not after_is_word:
+            return True
+        index = upper_query.find("INSERT", keyword_end)
+    return False
+
+
 def _query_is_insert(query: str) -> bool:
     """Return whether the leading statement is INSERT, including WITH prefixes.
 
@@ -272,7 +288,7 @@ def _query_is_insert(query: str) -> bool:
     else:
         return False
 
-    if "INSERT" not in query.upper():
+    if not _contains_insert_bareword(query):
         return False
     heredoc_ends = (
         {match.group(1): match.start() for match in _heredoc_start_re.finditer(query, index)} if query.find("$", index) != -1 else {}

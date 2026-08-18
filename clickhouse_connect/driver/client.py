@@ -541,7 +541,7 @@ class Client(ABC):
         """Bind parameters, append the format, and build the runtime for a raw query."""
         suffix = f"\n FORMAT {fmt}" if fmt else ""
         structure_preserving_bind = _binding_keeps_query_structure(query, parameters)
-        is_insert_template = bool(fmt and _query_is_insert(query))
+        is_insert_template = bool(fmt and structure_preserving_bind and _query_is_insert(query))
         bind_with_suffix = bool(fmt and (is_insert_template or not structure_preserving_bind))
         query_to_bind = query
         if fmt and not structure_preserving_bind and _binding_has_binary_values(parameters):

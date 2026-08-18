@@ -3,6 +3,7 @@ import pytest
 from clickhouse_connect.driver.binding import (
     MAX_URL_BIND_PARAM_LENGTH,
     _binding_keeps_query_structure,
+    _contains_insert_bareword,
     _query_is_insert,
     _strip_trailing_semicolons,
     bind_query,
@@ -206,6 +207,20 @@ def test_binding_structure_gate_matches_actual_bind_mode():
         )
         is False
     )
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("insert_value", False),
+        ("inserted_at", False),
+        ("foo$insert", False),
+        ("insert$foo", False),
+        ("INSERT", True),
+    ],
+)
+def test_contains_insert_bareword(query, expected):
+    assert _contains_insert_bareword(query) is expected
 
 
 @pytest.mark.parametrize(
