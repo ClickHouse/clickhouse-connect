@@ -195,6 +195,20 @@ class TestProbePlan:
         result = plan(context, prepped_query="SELECT * FROM t LIMIT 0\n LIMIT 100")
         assert result.body == "SELECT * FROM t LIMIT 0\n FORMAT JSON"
 
+    def test_probe_accepts_normalized_trailing_semicolon_tokens(self):
+        context = self.probe_context(
+            final_query="SELECT * FROM t LIMIT 0 /* trailing */",
+            uncommented_query="SELECT * FROM t LIMIT 0;   ",
+        )
+        result = plan(context)
+        assert result.columns_only is True
+        assert result.body == "SELECT * FROM t LIMIT 0 /* trailing */\n FORMAT JSON"
+
+    def test_probe_rejects_genuine_multi_statement_query(self):
+        context = self.probe_context(uncommented_query="SELECT * FROM t LIMIT 0; SELECT 13")
+        result = plan(context)
+        assert result.columns_only is False
+
     def test_insert_never_probes(self):
         context = make_context(final_query="INSERT INTO t LIMIT 0", is_insert=True)
         result = plan(context)

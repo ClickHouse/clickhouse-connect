@@ -2,7 +2,7 @@ import ipaddress
 import re
 import uuid
 import zoneinfo
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
 from typing import Any
@@ -73,6 +73,99 @@ def _skip_block_comment(query: str, index: int) -> int:
     return -1
 
 
+_SQL_TOKEN_INVALID = 0
+_SQL_TOKEN_TRIVIA = 1
+_SQL_TOKEN_WORD = 2
+_SQL_TOKEN_SEMICOLON = 3
+_SQL_TOKEN_OPEN_PAREN = 4
+_SQL_TOKEN_CLOSE_PAREN = 5
+_SQL_TOKEN_OTHER = 6
+
+
+def _skip_ascii_bareword(query: str, index: int) -> int:
+    end = len(query)
+    first = query[index]
+    index += 1
+    if "0" <= first <= "9":
+        while index < end and "0" <= query[index] <= "9":
+            index += 1
+        if index >= end or not (query[index] == "_" or "A" <= query[index] <= "Z" or "a" <= query[index] <= "z"):
+            return index
+        index += 1
+        while index < end and _is_ascii_word_char(query[index]):
+            index += 1
+        return index
+
+    while index < end and _is_ascii_bareword_char(query[index]):
+        index += 1
+    return index
+
+
+def _next_sql_token(query: str, index: int, heredoc_ends: dict[str, int]) -> tuple[int, int]:
+    """Return the next SQL token kind and its exclusive end offset."""
+    end = len(query)
+    char = query[index]
+    if char in _SQL_WHITESPACE:
+        index += 1
+        while index < end and query[index] in _SQL_WHITESPACE:
+            index += 1
+        return _SQL_TOKEN_TRIVIA, index
+
+    curly_close = _curly_quote_closers.get(char)
+    if curly_close is not None:
+        close = query.find(curly_close, index + 1)
+        return (_SQL_TOKEN_INVALID, end) if close == -1 else (_SQL_TOKEN_OTHER, close + 1)
+
+    quote_close = _quote_closers.get(char)
+    if quote_close is not None:
+        close = _skip_quoted_token(query, index, quote_close)
+        return (_SQL_TOKEN_INVALID, end) if close == -1 else (_SQL_TOKEN_OTHER, close)
+
+    if query.startswith("/*", index):
+        close = _skip_block_comment(query, index)
+        return (_SQL_TOKEN_INVALID, end) if close == -1 else (_SQL_TOKEN_TRIVIA, close)
+
+    if (
+        query.startswith("--", index)
+        or query.startswith("//", index)
+        or (char == "#" and index + 1 < end and query[index + 1] in (" ", "!"))
+    ):
+        newline = query.find("\n", index + 1)
+        return _SQL_TOKEN_TRIVIA, end if newline == -1 else newline + 1
+
+    if char == "{":
+        placeholder = external_bind_re.match(query, index)
+        if placeholder is not None:
+            return _SQL_TOKEN_OTHER, placeholder.end()
+
+    if char == ";":
+        return _SQL_TOKEN_SEMICOLON, index + 1
+    if char == "(":
+        return _SQL_TOKEN_OPEN_PAREN, index + 1
+    if char == ")":
+        return _SQL_TOKEN_CLOSE_PAREN, index + 1
+
+    if char == "$":
+        opener = _heredoc_re.match(query, index)
+        if opener is not None:
+            tag = opener.group()
+            if heredoc_ends.get(tag, -1) >= opener.end():
+                close = query.find(tag, opener.end())
+                return _SQL_TOKEN_OTHER, close + len(tag)
+        index += 1
+        if index < end and _is_ascii_word_char(query[index]):
+            index += 1
+            while index < end and _is_ascii_bareword_char(query[index]):
+                index += 1
+        return _SQL_TOKEN_OTHER, index
+
+    if char == "_" or "A" <= char <= "Z" or "a" <= char <= "z":
+        return _SQL_TOKEN_WORD, _skip_ascii_bareword(query, index)
+    if "0" <= char <= "9":
+        return _SQL_TOKEN_OTHER, _skip_ascii_bareword(query, index)
+    return _SQL_TOKEN_OTHER, index + 1
+
+
 def _strip_trailing_semicolons(query: str) -> str:
     """Remove query-final statement terminators while preserving trailing SQL trivia.
 
@@ -88,82 +181,19 @@ def _strip_trailing_semicolons(query: str) -> str:
     index = 0
     end = len(query)
     while index < end:
-        char = query[index]
-        if char in _SQL_WHITESPACE:
-            index += 1
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        if token == _SQL_TOKEN_INVALID:
+            return query
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
             continue
-
-        curly_close = _curly_quote_closers.get(char)
-        if curly_close is not None:
-            close = query.find(curly_close, index + 1)
-            if close == -1:
-                return query
-            terminators.clear()
-            index = close + 1
-            continue
-
-        quote_close = _quote_closers.get(char)
-        if quote_close is not None:
-            index = _skip_quoted_token(query, index, quote_close)
-            if index == -1:
-                return query
-            terminators.clear()
-            continue
-
-        if query.startswith("/*", index):
-            index = _skip_block_comment(query, index)
-            if index == -1:
-                return query
-            continue
-
-        line_comment = (
-            query.startswith("--", index)
-            or query.startswith("//", index)
-            or (char == "#" and index + 1 < end and query[index + 1] in (" ", "!"))
-        )
-        if line_comment:
-            newline = query.find("\n", index + 1)
-            index = end if newline == -1 else newline + 1
-            continue
-
-        if char == ";":
+        if token == _SQL_TOKEN_SEMICOLON:
             terminators.append(index)
-            index += 1
+            index = token_end
             continue
 
         terminators.clear()
-        if char == "$":
-            opener = _heredoc_re.match(query, index)
-            if opener is not None:
-                tag = opener.group()
-                if heredoc_ends[tag] >= opener.end():
-                    close = query.find(tag, opener.end())
-                    index = close + len(tag)
-                    continue
-            index += 1
-            if index < end and _is_ascii_word_char(query[index]):
-                index += 1
-                while index < end and _is_ascii_bareword_char(query[index]):
-                    index += 1
-            continue
-
-        if char == "_" or "A" <= char <= "Z" or "a" <= char <= "z":
-            index += 1
-            while index < end and _is_ascii_bareword_char(query[index]):
-                index += 1
-            continue
-
-        if "0" <= char <= "9":
-            index += 1
-            while index < end and "0" <= query[index] <= "9":
-                index += 1
-            if index < end and (query[index] == "_" or "A" <= query[index] <= "Z" or "a" <= query[index] <= "z"):
-                index += 1
-                while index < end and _is_ascii_word_char(query[index]):
-                    index += 1
-            continue
-
-        index += 1
+        index = token_end
 
     if not terminators:
         return query
@@ -174,6 +204,18 @@ def _strip_trailing_semicolons(query: str) -> str:
         start = position + 1
     parts.append(query[start:])
     return "".join(parts)
+
+
+def _needs_trailing_semicolon_lexer(query: str) -> bool:
+    """Return whether query-final terminators need the SQL lexer."""
+    if ";" not in query:
+        return False
+    if not query.endswith(";"):
+        return True
+    final_run = len(query) - 1
+    while final_run > 0 and query[final_run - 1] == ";":
+        final_run -= 1
+    return query.rfind(";", 0, final_run) != -1
 
 
 def _is_valid_bind_name(name: str) -> bool:
@@ -190,6 +232,73 @@ def _is_ascii_word_char(char: str) -> bool:
 
 def _is_ascii_bareword_char(char: str) -> bool:
     return char == "$" or _is_ascii_word_char(char)
+
+
+def _next_keyword_is_into(query: str, index: int, heredoc_ends: dict[str, int]) -> bool:
+    end = len(query)
+    while index < end:
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
+            continue
+        return token == _SQL_TOKEN_WORD and query[index:token_end].upper() == "INTO"
+    return False
+
+
+def _query_is_insert(query: str) -> bool:
+    """Return whether the leading statement is INSERT, including WITH prefixes.
+
+    Keywords are not reserved, so a bareword INSERT counts only when followed
+    by INTO, a pair identifiers can never legally form.
+    """
+    index = 0
+    end = len(query)
+
+    # Ordinary statements return after their first token. WITH needs the deeper scan below.
+    while index < end:
+        token, token_end = _next_sql_token(query, index, {})
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
+            continue
+        if token != _SQL_TOKEN_WORD:
+            return False
+        keyword = query[index:token_end].upper()
+        if keyword == "INSERT":
+            return _next_keyword_is_into(query, token_end, {})
+        if keyword != "WITH":
+            return False
+        index = token_end
+        break
+    else:
+        return False
+
+    if "INSERT" not in query.upper():
+        return False
+    heredoc_ends = (
+        {match.group(1): match.start() for match in _heredoc_start_re.finditer(query, index)} if query.find("$", index) != -1 else {}
+    )
+    depth = 0
+    while index < end:
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        if token == _SQL_TOKEN_INVALID:
+            return False
+        if token == _SQL_TOKEN_OPEN_PAREN:
+            depth += 1
+            index = token_end
+            continue
+        if token == _SQL_TOKEN_CLOSE_PAREN:
+            depth = max(0, depth - 1)
+            index = token_end
+            continue
+        if (
+            token == _SQL_TOKEN_WORD
+            and not depth
+            and query[index:token_end].upper() == "INSERT"
+            and _next_keyword_is_into(query, token_end, heredoc_ends)
+        ):
+            return True
+        index = token_end
+    return False
 
 
 def _external_bind_matches(query: str, marker_keys: set[str]) -> tuple[list[re.Match[str]], dict[str, set[int]]]:
@@ -319,6 +428,34 @@ def _binary_bind_value(value: Any) -> Any:
     except (TypeError, ValueError):
         return None
     return value
+
+
+def _binary_bind_values(parameters: dict[str, Any]) -> dict[str, Any]:
+    binary_binds = {}
+    for key, value in parameters.items():
+        if _is_binary_bind_name(key):
+            binary_value = _binary_bind_value(value)
+            if binary_value is not None:
+                binary_binds[key] = binary_value
+    return binary_binds
+
+
+def _server_bind_matches(query: str, binary_names: Collection[str]) -> list[tuple[str, str]]:
+    return [(name, type_str) for name, type_str in external_bind_re.findall(query) if name not in binary_names]
+
+
+def _binding_keeps_query_structure(query: str, parameters: Sequence | dict[str, Any] | None) -> bool:
+    if not parameters:
+        return True
+    if not isinstance(parameters, dict):
+        return False
+    binary_names = _binary_bind_values(parameters).keys()
+    has_server_bind = bool(_server_bind_matches(query, binary_names))
+    return has_server_bind or len(binary_names) == len(parameters) or "%" not in query
+
+
+def _binding_has_binary_values(parameters: Sequence | dict[str, Any] | None) -> bool:
+    return isinstance(parameters, dict) and bool(_binary_bind_values(parameters))
 
 
 def _heredoc_collision_error(key: str) -> ProgrammingError:
@@ -459,15 +596,11 @@ def bind_query(
 
     if isinstance(parameters, dict):
         params_copy = dict_copy(parameters)
-        binary_binds = {}
+        binary_binds = _binary_bind_values(params_copy)
         nonbinary_marker_keys = set()
-        for key, value in params_copy.items():
-            if _is_binary_bind_name(key):
-                binary_value = _binary_bind_value(value)
-                if binary_value is not None:
-                    binary_binds[key] = binary_value
-                else:
-                    nonbinary_marker_keys.add(key)
+        for key in params_copy:
+            if _is_binary_bind_name(key) and key not in binary_binds:
+                nonbinary_marker_keys.add(key)
         for key in binary_binds.keys():
             del params_copy[key]
 
@@ -499,9 +632,8 @@ def bind_query(
                         "Use a valid {name:Type} placeholder for server-side binding."
                     )
 
-        all_matches = external_bind_re.findall(query)
         binary_names = binary_binds.keys()
-        matches = [(name, type_str) for name, type_str in all_matches if name not in binary_names]
+        matches = _server_bind_matches(query, binary_names)
         placeholder_names = {name for name, _ in matches}
         final_params = {}
         for k, v in params_copy.items():
@@ -519,18 +651,18 @@ def bind_query(
             query, bound_params = finalize_query(query, final_params, server_tz), {}
         else:
             param_types = {}
-            for name, type_str in matches:
+            for name, matched_type in matches:
                 if name not in param_types:
-                    param_types[name] = type_str
+                    param_types[name] = matched_type
             bound_params = {}
             for k, v in final_params.items():
                 tz = server_tz
-                type_str = param_types.get(k)
-                if type_str is not None:
-                    hint_tz = _extract_tz_from_type(type_str)
+                param_type = param_types.get(k)
+                if param_type is not None:
+                    hint_tz = _extract_tz_from_type(param_type)
                     if hint_tz is not None:
                         tz = hint_tz
-                    v = _promote_datetime64(type_str, v)
+                    v = _promote_datetime64(param_type, v)
                 bound_params[f"param_{k}"] = format_bind_value(v, tz)
     else:
         query, bound_params = finalize_query(query, parameters, server_tz), {}

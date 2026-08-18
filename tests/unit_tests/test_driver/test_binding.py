@@ -2,6 +2,8 @@ import pytest
 
 from clickhouse_connect.driver.binding import (
     MAX_URL_BIND_PARAM_LENGTH,
+    _binding_keeps_query_structure,
+    _query_is_insert,
     _strip_trailing_semicolons,
     bind_query,
     finalize_query,
@@ -186,3 +188,55 @@ def test_bind_query_binary_only_does_not_format_percent_literal():
     query, parameters = bind_query("SELECT $value$, '100%';", {"$value$": b"13"})
     assert query == b"SELECT $value$13$value$, '100%'"
     assert parameters == {}
+
+
+def test_binding_structure_gate_matches_actual_bind_mode():
+    class Statement:
+        def __str__(self):
+            return "SELECT 13; -- trailing"
+
+    assert _binding_keeps_query_structure("SELECT {value:UInt8}", {"value": 13}) is True
+    assert _binding_keeps_query_structure("SELECT $value$", {"$value$": b"13"}) is True
+    assert _binding_keeps_query_structure("SELECT $value$", {"$value$": b"13", "unused": 79}) is True
+    assert _binding_keeps_query_structure("%($statement$)s", {"$statement$": Statement()}) is False
+    assert (
+        _binding_keeps_query_structure(
+            "%(statement)s, {$value$:String}",
+            {"statement": Statement(), "$value$": b"13"},
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("SELECT ' INSERT INTO '", False),
+        ("INSERT INTO tbl VALUES (13)", True),
+        ("/* leading */ INSERT INTO tbl VALUES (13)", True),
+        ("WITH ' INSERT INTO ' AS value SELECT value", False),
+        ("WITH $doc$ INSERT INTO $doc$ AS value SELECT value", False),
+        ("WITH value AS (SELECT 13) INSERT INTO tbl SELECT value", True),
+        ("WITH 13 AS value /* INSERT INTO */ SELECT value", False),
+        (
+            "WITH value AS (SELECT 13) INSERT/* outer /* inner */ outer */\ufeffINTO tbl SELECT value",
+            True,
+        ),
+        ("WITH $doc$/* INSERT */$doc$ AS value SELECT value", False),
+        ("WITH {SELECT:Int32} AS value INSERT INTO tbl SELECT value", True),
+        ("WITH {INSERT:Int32} AS value SELECT value", False),
+        ("WITH 13SELECT AS value INSERT INTO tbl SELECT value", True),
+        ("WITH 13INSERT AS value SELECT value", False),
+        ("INSERT /* c */ INTO tbl VALUES (13)", True),
+        ("INSERT tbl VALUES (13)", False),
+        ("WITH insert AS (SELECT 13) SELECT * FROM insert", False),
+        ("WITH 13 AS insert SELECT insert", False),
+        ("WITH (SELECT 13) AS insert SELECT insert", False),
+        ("WITH [13, insert] AS arr SELECT 13", False),
+        ("WITH {p:Int32} AS insert SELECT insert", False),
+        ("WITH 13 AS select INSERT INTO tbl SELECT 13", True),
+        ("with x as (select 13) insert into tbl select 13", True),
+    ],
+)
+def test_query_is_insert_ignores_non_sql_tokens(query, expected):
+    assert _query_is_insert(query) is expected

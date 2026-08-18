@@ -321,6 +321,7 @@ def test_query_with_inline_comment(param_client, call):
         "SELECT 13;\u00a0",
         "SELECT 13; /* trailing comment */",
         "SELECT 13; /* separator */ ;",
+        "SELECT 13; /* inner; */ ;",
     ],
 )
 def test_query_formats_with_trailing_semicolon(param_client, call, query):
@@ -328,17 +329,156 @@ def test_query_formats_with_trailing_semicolon(param_client, call, query):
     assert call(param_client.raw_query, query, fmt="TabSeparated") == b"13\n"
 
 
+def test_limit_zero_with_trailing_semicolon_comment_keeps_metadata(param_client, call):
+    result = call(param_client.query, "SELECT 13 AS value LIMIT 0; /* trailing */")
+    assert result.column_names == ("value",)
+    assert result.result_rows == []
+
+
 def test_raw_query_binary_format_with_trailing_semicolon(param_client, call):
     result = call(param_client.raw_query, "SELECT $value$;", parameters={"$value$": b"13"}, fmt="TabSeparated")
     assert result == b"13\n"
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("SELECT ' INSERT INTO '; -- trailing", b" INSERT INTO \n"),
+        ("WITH ' INSERT INTO ' AS value SELECT value; -- trailing", b" INSERT INTO \n"),
+    ],
+)
+def test_raw_insert_literal_with_trailing_semicolon_comment(param_client, call, query, expected):
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == expected
+
+
+def test_query_insert_literal_with_trailing_semicolon_comment(param_client, call):
+    query = "SELECT ' INSERT INTO '; -- trailing"
+    assert call(param_client.query, query).result_rows == [(" INSERT INTO ",)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH insert AS (SELECT 13 AS n) SELECT * FROM insert",
+        "WITH 13 AS insert SELECT insert",
+    ],
+)
+def test_query_cte_named_insert_is_not_an_insert(param_client, call, query):
+    assert call(param_client.query, query).result_rows == [(13,)]
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == b"13\n"
+
+
+def test_command_query_stream_with_trailing_semicolon_comment(param_client, call, consume_stream, table_context):
+    # Streamed entry points skip the query() command redirect, so the terminator must
+    # still come out before the transport appends a FORMAT clause.
+    with table_context("test_check_semicolon", ["s String"]):
+        call(param_client.command, "INSERT INTO test_check_semicolon (s) VALUES ('value_1')")
+        stream = call(param_client.query_rows_stream, "CHECK TABLE test_check_semicolon; -- trailing")
+        rows = []
+        consume_stream(stream, rows.append)
+        assert len(rows) == 1
+
+
+def test_server_placeholder_names_do_not_change_with_routing(param_client, call, table_context):
+    with table_context("test_placeholder_name_routing", ["s String"]):
+        call(
+            param_client.query,
+            "WITH {SELECT:Int32} AS value INSERT INTO test_placeholder_name_routing (s) FORMAT TabSeparated\nvalue_1;\n",
+            parameters={"SELECT": 13},
+        )
+        assert call(param_client.query, "SELECT s FROM test_placeholder_name_routing").result_rows == [("value_1;",)]
+
+    result = call(
+        param_client.raw_query,
+        "WITH {INSERT:Int32} AS value SELECT value; -- trailing",
+        parameters={"INSERT": 13},
+        fmt="TabSeparated",
+    )
+    assert result == b"13\n"
+
+
+def test_mixed_binary_query_with_trailing_semicolon_comment(param_client, call):
+    query = "SELECT %(value)s + toUInt8($raw$); -- trailing"
+    parameters = {"value": 13, "$raw$": b"79"}
+    assert call(param_client.query, query, parameters=parameters).result_rows == [(92,)]
+    assert call(param_client.raw_query, query, parameters=parameters, fmt="TabSeparated") == b"92\n"
+
+
+@pytest.mark.parametrize("statement", ["SELECT 13;", "SELECT 13; -- trailing"])
+def test_parameter_generated_query_terminator(param_client, call, statement):
+    class StatefulStatement:
+        calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return statement
+
+    value = StatefulStatement()
+    assert call(param_client.query, "%(statement)s", parameters={"statement": value}).result_rows == [(13,)]
+    assert value.calls == 1
+
+    value = StatefulStatement()
+    assert (
+        call(
+            param_client.raw_query,
+            "%(statement)s",
+            parameters={"statement": value},
+            fmt="TabSeparated",
+        )
+        == b"13\n"
+    )
+    assert value.calls == 1
 
 
 def test_inline_insert_data_keeps_semicolons(param_client, call, table_context):
     with table_context("test_inline_semicolon_data", ["s String"]):
         call(param_client.command, "INSERT INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_1;\n")
         call(param_client.query, "INSERT INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_2;\n")
+
+        class SqlKeyword:
+            def __str__(self):
+                return "INSERT"
+
+        call(
+            param_client.query,
+            "WITH 1 AS y %(verb)s INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_3;\n",
+            parameters={"verb": SqlKeyword()},
+        )
         result = call(param_client.query, "SELECT s FROM test_inline_semicolon_data ORDER BY s")
-        assert result.result_rows == [("value_1;",), ("value_2;",)]
+        assert result.result_rows == [("value_1;",), ("value_2;",), ("value_3;",)]
+
+
+def test_raw_inline_insert_data_keeps_semicolons(param_client, call, consume_stream, table_context):
+    # The fmt suffix lands in the data region and can add junk rows, matching main,
+    # so assertions check membership rather than the exact row set.
+    with table_context("test_raw_inline_semicolon_data", ["s String"]):
+        call(
+            param_client.raw_query,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_1;\n",
+            fmt="TabSeparated",
+        )
+        stream = call(
+            param_client.raw_stream,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_2;\n",
+            fmt="TabSeparated",
+        )
+        consume_stream(stream)
+        call(
+            param_client.raw_query,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_3;",
+            fmt="TabSeparated",
+        )
+        stream = call(
+            param_client.raw_stream,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_4;",
+            fmt="TabSeparated",
+        )
+        consume_stream(stream)
+        result = call(param_client.query, "SELECT s FROM test_raw_inline_semicolon_data")
+        assert ("value_1;",) in result.result_rows
+        assert ("value_2;",) in result.result_rows
+        assert ("value_3;",) in result.result_rows
+        assert ("value_4;",) in result.result_rows
 
 
 def test_query_with_comment(param_client, call):
