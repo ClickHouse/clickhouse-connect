@@ -1,5 +1,8 @@
 import pytest
+import sqlalchemy
 from sqlalchemy import String, TypeDecorator, bindparam, literal, select
+from sqlalchemy.exc import CompileError
+from sqlalchemy.sql import sqltypes
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
@@ -16,8 +19,16 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String as ChStri
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.driver.binding import finalize_query, format_str, str_query_value
 
-_LITERAL_PAYLOAD = "path'part"
-_PERCENT_LITERAL_PAYLOAD = "plain% %(token)s %% quote'tail%"
+_LITERAL_PAYLOAD = "path\\'part"
+_PERCENT_LITERAL_PAYLOAD = "plain% %(token)s %% quote\\'tail%"
+
+
+class DecoratedGenericString(TypeDecorator):
+    impl = String
+    cache_ok = True
+
+    def process_literal_param(self, value, dialect):
+        return f"decorated-{value}"
 
 
 class WrappedChString(TypeDecorator):
@@ -36,6 +47,54 @@ class TransformedVariantString(TypeDecorator):
 
     def process_literal_param(self, value, dialect):
         return f"transformed-{value}"
+
+
+@pytest.mark.parametrize(
+    ("type_", "prefix"),
+    [
+        (None, ""),
+        (String(), ""),
+        (DecoratedGenericString(), "decorated-"),
+    ],
+    ids=["implicit", "generic-string", "generic-type-decorator"],
+)
+@pytest.mark.parametrize("server_side", [False, True], ids=["client-side", "server-side"])
+@pytest.mark.parametrize(
+    "value",
+    ["middle\\path", "trailing\\", "backslash\\'quote% adjacent%%"],
+    ids=["middle-backslash", "trailing-backslash", "backslash-quote-percent"],
+)
+def test_generic_literal_binds_use_clickhouse_backslash_escaping(type_, prefix, server_side, value):
+    expression = literal(value) if type_ is None else literal(value, type_=type_)
+    compiled = str(
+        select(expression).compile(
+            dialect=ClickHouseDialect(dbapi=dbapi, server_side_params=server_side),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    rendered_value = f"{prefix}{value}".replace("'", "''").replace("\\", "\\\\")
+    if not server_side:
+        rendered_value = rendered_value.replace("%", "%%")
+
+    assert compiled == f"SELECT '{rendered_value}' AS `anon_1`"
+
+
+@pytest.mark.parametrize("server_side", [False, True], ids=["client-side", "server-side"])
+def test_generic_array_of_clickhouse_type_is_not_double_escaped(server_side):
+    def compile_literal():
+        return str(
+            select(literal([_LITERAL_PAYLOAD], type_=sqltypes.ARRAY(ChString()))).compile(
+                dialect=ClickHouseDialect(dbapi=dbapi, server_side_params=server_side),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+
+    if sqlalchemy.__version__.startswith("1.4."):
+        with pytest.raises(CompileError, match="No literal value renderer"):
+            compile_literal()
+        return
+
+    assert compile_literal() == f"SELECT [{format_str(_LITERAL_PAYLOAD)}] AS `anon_1`"
 
 
 @pytest.mark.parametrize(
