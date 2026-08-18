@@ -6,7 +6,9 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql.ddl import CreateTable
 
+from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Date, DateTime, String, UInt32, UInt64
+from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     GraphiteMergeTree,
     MergeTree,
@@ -509,3 +511,69 @@ def test_column_clause_order_comment_before_codec_before_ttl(build_column, expec
 def test_default_kinds_are_mutually_exclusive(build_column, expected):
     # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive; only the highest-precedence one is emitted.
     assert _column_spec(build_column()) == expected
+
+
+def _generic_literal(value, server_side):
+    rendered = value.replace("'", "''").replace("\\", "\\\\")
+    if not server_side:
+        rendered = rendered.replace("%", "%%")
+    return f"'{rendered}'"
+
+
+@pytest.mark.parametrize(
+    ("option", "clause"),
+    [
+        ("server_default", "DEFAULT"),
+        ("clickhouse_materialized", "MATERIALIZED"),
+        ("clickhouse_alias", "ALIAS"),
+        ("clickhouse_ttl", "TTL"),
+    ],
+)
+@pytest.mark.parametrize("expression", [False, True], ids=["plain", "expression"])
+@pytest.mark.parametrize("server_side", [False, True], ids=["client-side", "server-side"])
+def test_column_string_clauses_use_clickhouse_escaping(option, clause, expression, server_side):
+    value = "middle\\'value% adjacent%% trailing\\"
+    default = db.literal(value) if expression else value
+    column = db.Column("value", String, **{option: default})
+    ch_dialect = ClickHouseDialect(dbapi=dbapi, server_side_params=server_side)
+
+    assert column_specification(ch_dialect, column) == f"`value` String {clause} {_generic_literal(value, server_side)}"
+
+
+def _comment_ddl(kind, comment, ch_dialect):
+    if kind == "table":
+        table = db.Table(
+            "comment_test",
+            db.MetaData(),
+            db.Column("key", UInt64),
+            MergeTree(order_by="key"),
+            comment=comment,
+        )
+        return str(CreateTable(table).compile(dialect=ch_dialect))
+    if kind == "dictionary":
+        dictionary = Dictionary(
+            "dict_comment_test",
+            db.MetaData(),
+            db.Column("id", UInt32),
+            primary_key="id",
+            source="CLICKHOUSE(TABLE 'src')",
+            layout="FLAT",
+            lifetime="MIN 0 MAX 10",
+            comment=comment,
+        )
+        return str(CreateTable(dictionary).compile(dialect=ch_dialect))
+    column = db.Column("key", UInt64, comment=comment)
+    return column_specification(ch_dialect, column)
+
+
+@pytest.mark.parametrize("kind", ["table", "dictionary", "column"])
+@pytest.mark.parametrize("server_side", [False, True], ids=["client-side", "server-side"])
+@pytest.mark.parametrize(
+    "comment",
+    ["middle\\path", "trailing\\", "backslash\\'quote% adjacent%%"],
+    ids=["middle-backslash", "trailing-backslash", "backslash-quote-percent"],
+)
+def test_create_comments_use_statement_literal_compiler(kind, server_side, comment):
+    ch_dialect = ClickHouseDialect(dbapi=dbapi, server_side_params=server_side)
+
+    assert f"COMMENT {_generic_literal(comment, server_side)}" in _comment_ddl(kind, comment, ch_dialect)

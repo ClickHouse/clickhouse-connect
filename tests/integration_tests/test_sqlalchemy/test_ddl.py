@@ -1,4 +1,5 @@
 from enum import Enum as PyEnum
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as db
@@ -6,7 +7,7 @@ from sqlalchemy import Column, Integer, MetaData, select, text
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.orm import declarative_base
 
-from clickhouse_connect import common
+from clickhouse_connect import common, dbapi
 from clickhouse_connect.cc_sqlalchemy import final
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     UUID,
@@ -31,6 +32,8 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree, ReplacingMergeTree, engine_map
+from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+from clickhouse_connect.driver.binding import quote_identifier
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -309,3 +312,85 @@ def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str, t
         assert "QBit(Float32, 128)" in create_sql
 
         conn.execute(text("DROP TABLE IF EXISTS qbit_test"))
+
+
+def test_comment_and_default_literal_roundtrip(param_client, call, test_db: str, client_mode: str):
+    table_name = f"ddl_literal_{client_mode}_{uuid4().hex[:8]}"
+    full_table = f"{quote_identifier(test_db)}.{quote_identifier(table_name)}"
+    table_comment = "table\\'comment% adjacent%%"
+    column_comment = "column trailing\\"
+    default_value = "default\\path'part%"
+    table = db.Table(
+        table_name,
+        MetaData(schema=test_db),
+        db.Column("key", UInt64),
+        db.Column("category", String, comment=column_comment, server_default=default_value),
+        MergeTree(order_by="key"),
+        comment=table_comment,
+    )
+    create_sql = str(
+        db.schema.CreateTable(table).compile(
+            dialect=ClickHouseDialect(dbapi=dbapi, server_side_params=True),
+        )
+    )
+    call(param_client.command, f"DROP TABLE IF EXISTS {full_table}")
+
+    try:
+        call(param_client.command, create_sql)
+        call(param_client.command, f"INSERT INTO {full_table} (key) VALUES (13)")
+
+        table_rows = call(
+            param_client.query,
+            "SELECT comment FROM system.tables WHERE database = {database:String} AND name = {table:String}",
+            parameters={"database": test_db, "table": table_name},
+        ).result_rows
+        column_rows = call(
+            param_client.query,
+            "SELECT comment FROM system.columns WHERE database = {database:String} AND table = {table:String} AND name = 'category'",
+            parameters={"database": test_db, "table": table_name},
+        ).result_rows
+        default_rows = call(param_client.query, f"SELECT category FROM {full_table} WHERE key = 13").result_rows
+
+        assert table_rows == [(table_comment,)]
+        assert column_rows == [(column_comment,)]
+        assert default_rows == [(default_value,)]
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {full_table}")
+
+
+def test_comment_and_default_literal_engine_roundtrip(test_engine: Engine, test_db: str):
+    table_name = f"ddl_engine_literal_{uuid4().hex[:8]}"
+    full_table = f"{quote_identifier(test_db)}.{quote_identifier(table_name)}"
+    table_comment = "table\\'comment% adjacent%%"
+    column_comment = "column\\'comment% adjacent%%"
+    default_value = "default\\'value% adjacent%%"
+    table = db.Table(
+        table_name,
+        MetaData(schema=test_db),
+        db.Column("key", UInt64),
+        db.Column("category", String, comment=column_comment, server_default=default_value),
+        MergeTree(order_by="key"),
+        comment=table_comment,
+    )
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {full_table}"))
+        try:
+            table.create(conn)
+            conn.execute(text(f"INSERT INTO {full_table} (key) VALUES (13)"))
+
+            stored_table_comment = conn.execute(
+                text("SELECT comment FROM system.tables WHERE database = :database AND name = :table"),
+                {"database": test_db, "table": table_name},
+            ).scalar_one()
+            stored_column_comment = conn.execute(
+                text("SELECT comment FROM system.columns WHERE database = :database AND table = :table AND name = 'category'"),
+                {"database": test_db, "table": table_name},
+            ).scalar_one()
+            stored_default = conn.execute(text(f"SELECT category FROM {full_table} WHERE key = 13")).scalar_one()
+
+            assert stored_table_comment == table_comment
+            assert stored_column_comment == column_comment
+            assert stored_default == default_value
+        finally:
+            conn.execute(text(f"DROP TABLE IF EXISTS {full_table}"))
