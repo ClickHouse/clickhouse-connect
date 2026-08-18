@@ -85,9 +85,26 @@ def _resolve_ch_bind_type(sqla_type):
     return name
 
 
+def _is_ch_literal_type(sqla_type, dialect):
+    effective_type = sqla_type.dialect_impl(dialect)
+    while isinstance(effective_type, sqltypes.TypeDecorator):
+        effective_type = effective_type.type_engine(dialect).dialect_impl(dialect)
+    if isinstance(effective_type, ChSqlaType):
+        return True
+    if isinstance(effective_type, sqltypes.ARRAY):
+        return _is_ch_literal_type(effective_type.item_type, dialect)
+    return False
+
+
 class ChStatementCompiler(SQLCompiler):
     # SQLAlchemy 1.4 does not pass bindparam_type to bindparam_string, so stash it here.
     _ch_bind_type = None
+
+    def render_literal_value(self, value, type_):
+        rendered = super().render_literal_value(value, type_)
+        if "\\" not in rendered or _is_ch_literal_type(type_, self.dialect):
+            return rendered
+        return rendered.replace("\\", "\\\\")
 
     @property
     def _server_side_params(self):

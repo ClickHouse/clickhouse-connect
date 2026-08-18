@@ -115,7 +115,7 @@ with engine.connect() as conn:
 
 ### Literal rendering {#sqlalchemy-literal-rendering}
 
-When SQLAlchemy inlines a bound value through `literal_binds` or `literal_execute`, ClickHouse types format it as a ClickHouse literal. This also applies through `TypeDecorator` wrappers and `with_variant()` selections. String values retain percent signs and use ClickHouse quoting even when other bound parameters remain.
+When SQLAlchemy inlines a bound value through `literal_binds` or `literal_execute`, the dialect uses ClickHouse quoting for generic string types and ClickHouse types. This also applies through `TypeDecorator` wrappers and `with_variant()` selections. String values retain percent signs and backslashes even when other bound parameters remain.
 
 ### JSON subcolumns {#sqlalchemy-json-subcolumns}
 
@@ -298,6 +298,8 @@ with engine.connect() as conn:
 ```
 
 Reflected columns carry `server_default` for `DEFAULT` expressions and dialect-specific attributes such as `clickhouse_codec`, `clickhouse_ttl`, `clickhouse_materialized`, and `clickhouse_alias` when present.
+
+String values in `DEFAULT`, `MATERIALIZED`, `ALIAS`, and `TTL` clauses use ClickHouse string escaping. The same escaping applies to table, dictionary, and column comments, including comments emitted by Alembic.
 
 MergeTree key arguments such as `order_by`, `partition_by`, `primary_key`, `sample_by`, and `ttl` accept SQLAlchemy column and SQL expressions as well as plain strings.
 
