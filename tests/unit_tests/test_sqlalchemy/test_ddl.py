@@ -7,6 +7,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql.ddl import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Date, DateTime, String, UInt32, UInt64
+from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     GraphiteMergeTree,
     MergeTree,
@@ -509,3 +510,92 @@ def test_column_clause_order_comment_before_codec_before_ttl(build_column, expec
 def test_default_kinds_are_mutually_exclusive(build_column, expected):
     # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive; only the highest-precedence one is emitted.
     assert _column_spec(build_column()) == expected
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "path like C:\\temp",
+        "ends with a backslash\\",
+        "it's quoted",
+    ],
+)
+def test_table_comment_uses_clickhouse_escaping(comment):
+    # SQLAlchemy's generic string escaping only doubles single quotes, which leaves
+    # backslashes intact.  ClickHouse treats a backslash as an escape character, so the
+    # comment would be silently corrupted, or the statement rejected outright when the
+    # comment ends in one.
+    table = db.Table(
+        "comment_test",
+        db.MetaData(),
+        db.Column("key", UInt64),
+        MergeTree(order_by="key"),
+        comment=comment,
+    )
+    compiled = str(CreateTable(table).compile(dialect=dialect))
+    assert compiled.endswith(f" COMMENT {format_str(comment)}")
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "path like C:\\temp",
+        "ends with a backslash\\",
+        "it's quoted",
+    ],
+)
+def test_column_comment_uses_clickhouse_escaping(comment):
+    column = db.Column("key", UInt64, comment=comment)
+    assert _column_spec(column) == f"`key` UInt64 COMMENT {format_str(comment)}"
+
+
+@pytest.mark.parametrize(
+    "default",
+    [
+        "path like C:\\temp",
+        "ends with a backslash\\",
+        "it's quoted",
+    ],
+)
+def test_column_string_default_uses_clickhouse_escaping(default):
+    column = db.Column("key", String, server_default=default)
+    assert _column_spec(column) == f"`key` String DEFAULT {format_str(default)}"
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "path like C:\\temp",
+        "ends with a backslash\\",
+        "it's quoted",
+    ],
+)
+def test_dictionary_comment_uses_clickhouse_escaping(comment):
+    dictionary = Dictionary(
+        "dict_comment_test",
+        db.MetaData(),
+        db.Column("id", UInt32),
+        primary_key="id",
+        source="CLICKHOUSE(TABLE 'src')",
+        layout="FLAT",
+        lifetime="MIN 0 MAX 10",
+        comment=comment,
+    )
+    compiled = str(CreateTable(dictionary).compile(dialect=dialect))
+    assert compiled.endswith(f" COMMENT {format_str(comment)}")
+
+
+def test_ddl_literals_keep_pyformat_percent_escaping():
+    # The compiled DDL is handed to a pyformat DBAPI, so literal percent signs must stay
+    # doubled the way every other literal in the statement compiler renders them.
+    pyformat_dialect = db.create_engine("clickhouse://localhost/default").dialect
+    table = db.Table(
+        "percent_test",
+        db.MetaData(),
+        db.Column("key", UInt64, comment="100% column"),
+        MergeTree(order_by="key"),
+        comment="100% table",
+    )
+    compiled = str(CreateTable(table).compile(dialect=pyformat_dialect))
+    assert "'100%% column'" in compiled
+    assert compiled.endswith(" COMMENT '100%% table'")

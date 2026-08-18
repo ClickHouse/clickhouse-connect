@@ -5,15 +5,19 @@ from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy.exc import CompileError
-from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql.compiler import DDLCompiler
 from sqlalchemy.sql.visitors import Visitable
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable, String
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import format_str, quote_identifier
+
+# Render DDL string literals with the ClickHouse String type so escaping goes through
+# ChSqlaType.literal_processor. SQLAlchemy's generic string type only doubles single
+# quotes and leaves backslashes untouched, which ClickHouse reads as escape sequences.
+CH_STRING = String()
 
 
 def render_setting_value(value: Any) -> str:
@@ -143,7 +147,7 @@ class ChDDLCompiler(DDLCompiler):
         text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
         text += ") " + engine.compile()
         if table.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, sqltypes.STRINGTYPE)}"
+            text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, CH_STRING)}"
         return text
 
     def _visit_create_dictionary(self, create, dictionary, if_not_exists: str):
@@ -169,7 +173,7 @@ class ChDDLCompiler(DDLCompiler):
             text += f" LIFETIME({lifetime})"
 
         if dictionary.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(dictionary.comment, sqltypes.STRINGTYPE)}"
+            text += f" COMMENT {self.sql_compiler.render_literal_value(dictionary.comment, CH_STRING)}"
 
         return text
 
@@ -201,7 +205,7 @@ class ChDDLCompiler(DDLCompiler):
                 text += f" DEFAULT {default}"
         # ClickHouse requires the clause order COMMENT, then CODEC, then TTL.
         if column.comment:
-            text += f" COMMENT {self.sql_compiler.render_literal_value(column.comment, sqltypes.STRINGTYPE)}"
+            text += f" COMMENT {self.sql_compiler.render_literal_value(column.comment, CH_STRING)}"
         codec = ClickHouseDDLHelper.get_option(column, "codec")
         if codec is not None:
             codec_sql = codec if isinstance(codec, str) else ", ".join(str(item) for item in codec)
@@ -213,5 +217,5 @@ class ChDDLCompiler(DDLCompiler):
 
     def render_default_string(self, default: Visitable | str) -> str:
         if isinstance(default, str):
-            return self.sql_compiler.render_literal_value(default, sqltypes.STRINGTYPE)
+            return self.sql_compiler.render_literal_value(default, CH_STRING)
         return self.sql_compiler.process(default, literal_binds=True)

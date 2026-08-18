@@ -309,3 +309,33 @@ def test_qbit_table(test_engine: Engine, test_db: str, test_table_engine: str, t
         assert "QBit(Float32, 128)" in create_sql
 
         conn.execute(text("DROP TABLE IF EXISTS qbit_test"))
+
+
+def test_comment_and_default_literal_roundtrip(test_engine: Engine, test_db: str):
+    """Comments and string defaults must use ClickHouse escaping so they survive a round trip."""
+    common.set_setting("invalid_setting_action", "drop")
+    table_comment = "quote ' backslash C:\\temp trailing\\"
+    column_comment = "column \\ comment with a quote '"
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS comment_literal_test"))
+        metadata = MetaData(schema=test_db)
+        table = db.Table(
+            "comment_literal_test",
+            metadata,
+            db.Column("key", UInt64),
+            db.Column("category", String, comment=column_comment, server_default="C:\\default"),
+            MergeTree(order_by="key"),
+            comment=table_comment,
+        )
+        # SQLAlchemy's generic escaping leaves the backslashes untouched, which corrupts the
+        # stored comment and makes the trailing backslash close the DDL's quoted string early.
+        table.create(conn)
+
+        assert conn.execute(text("SELECT comment FROM system.tables WHERE name = 'comment_literal_test'")).scalar() == (table_comment)
+        stored_comment, stored_default = conn.execute(
+            text("SELECT comment, default_expression FROM system.columns WHERE table = 'comment_literal_test' AND name = 'category'")
+        ).one()
+        assert stored_comment == column_comment
+        assert stored_default == "'C:\\\\default'"
+
+        conn.execute(text("DROP TABLE IF EXISTS comment_literal_test"))
