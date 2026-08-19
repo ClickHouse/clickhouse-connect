@@ -371,10 +371,10 @@ def test_query_cte_named_insert_is_not_an_insert(param_client, call, query):
 def test_command_query_stream_with_trailing_semicolon_comment(param_client, call, consume_stream):
     # Streamed entry points skip the query() command redirect, so the terminator must
     # still come out before the transport appends a FORMAT clause.
-    stream = call(param_client.query_rows_stream, "SHOW POLICIES; -- trailing")
+    stream = call(param_client.query_rows_stream, "KILL QUERY WHERE query_id = 'no_such_query_id' TEST; -- trailing")
     rows = []
     consume_stream(stream, rows.append)
-    assert all(len(row) == 1 for row in rows)
+    assert rows == []
 
 
 def test_server_placeholder_names_do_not_change_with_routing(param_client, call, table_context):
