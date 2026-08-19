@@ -12,6 +12,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.binding import _query_is_insert, _strip_trailing_semicolons
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
@@ -1311,6 +1312,248 @@ class TestCommandBinaryBindGuard:
         )
         with pytest.raises(ProgrammingError, match="Binary parameter bind"):
             await client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+
+class TestRawQuerySemicolonPreparation:
+    @staticmethod
+    def prep(query, parameters=None, fmt="TabSeparated"):
+        client = Mock()
+        client.server_tz = timezone.utc
+        client.database = "default"
+        client.query_retries = 2
+        client._validate_settings.return_value = {}
+        return Client._prep_raw_query_runtime(client, query, parameters, None, fmt, True)
+
+    @pytest.mark.parametrize(
+        "query, fmt, expected_query, expected_calls",
+        [
+            ("SELECT 13", None, "SELECT 13", 0),
+            ("SELECT 13;", "TabSeparated", "SELECT 13\n FORMAT TabSeparated", 0),
+            ("SELECT 13; -- trailing", "TabSeparated", "SELECT 13 -- trailing\n FORMAT TabSeparated", 1),
+            ("SHOW TABLES; -- trailing", "TabSeparated", "SHOW TABLES -- trailing\n FORMAT TabSeparated", 1),
+            (
+                "SELECT ' INSERT INTO '; -- trailing",
+                "TabSeparated",
+                "SELECT ' INSERT INTO ' -- trailing\n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "WITH ' INSERT INTO ' AS value SELECT value; -- trailing",
+                "TabSeparated",
+                "WITH ' INSERT INTO ' AS value SELECT value -- trailing\n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "SELECT 13; /* separator */ ;",
+                "TabSeparated",
+                "SELECT 13 /* separator */ \n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "SELECT 13; /* inner; */ ;",
+                "TabSeparated",
+                "SELECT 13 /* inner; */ \n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n",
+                "TabSeparated",
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated",
+                0,
+            ),
+            (
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;",
+                "TabSeparated",
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n FORMAT TabSeparated",
+                0,
+            ),
+        ],
+    )
+    def test_lexer_routing(self, query, fmt, expected_query, expected_calls):
+        with patch(
+            "clickhouse_connect.driver.client._strip_trailing_semicolons",
+            wraps=_strip_trailing_semicolons,
+        ) as strip:
+            final_query, _, _ = self.prep(query, fmt=fmt)
+
+        assert final_query == expected_query
+        assert strip.call_count == expected_calls
+
+    def test_format_name_with_trailing_semicolon_keeps_bound_query_intact(self):
+        final_query, _, _ = self.prep("SELECT %(value)s", parameters={"value": 13}, fmt="TabSeparated;")
+        assert final_query == "SELECT 13\n FORMAT TabSeparated;"
+
+    def test_format_name_with_trailing_semicolon_keeps_payload_intact(self):
+        class SqlKeyword:
+            def __str__(self):
+                return "INSERT"
+
+        query = "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        final_query, _, _ = self.prep(query, parameters={"verb": SqlKeyword()}, fmt="TabSeparated;")
+        assert final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated;"
+
+    def test_bound_insert_payload_is_not_lexed(self):
+        class SqlKeyword:
+            def __str__(self):
+                return "INSERT"
+
+        query = "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        with patch("clickhouse_connect.driver.client._strip_trailing_semicolons") as strip:
+            final_query, _, _ = self.prep(query, parameters={"verb": SqlKeyword()})
+
+        assert final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated"
+        strip.assert_not_called()
+
+    def test_bind_completed_insert_payload_is_not_lexed(self):
+        class Raw:
+            def __str__(self):
+                return ""
+
+        query = "INSERT %sINTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        with patch("clickhouse_connect.driver.client._strip_trailing_semicolons") as strip:
+            final_query, _, _ = self.prep(query, parameters=[Raw()])
+
+        assert final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated"
+        strip.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected_query",
+        [
+            (
+                "WITH {SELECT:Int32} AS value INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n",
+                {"SELECT": 13},
+                "WITH {SELECT:Int32} AS value INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated",
+            ),
+            (
+                "WITH {INSERT:Int32} AS value SELECT value; -- trailing",
+                {"INSERT": 13},
+                "WITH {INSERT:Int32} AS value SELECT value -- trailing\n FORMAT TabSeparated",
+            ),
+        ],
+    )
+    def test_server_placeholder_names_do_not_change_routing(self, query, parameters, expected_query):
+        final_query, _, _ = self.prep(query, parameters=parameters)
+        assert final_query == expected_query
+
+    def test_with_prefixed_bound_insert_payload_is_not_lexed(self):
+        class SqlKeyword:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return "INSERT"
+
+        keyword = SqlKeyword()
+        query = "WITH 1 AS y %(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        with patch("clickhouse_connect.driver.client._strip_trailing_semicolons") as strip:
+            final_query, _, _ = self.prep(query, parameters={"verb": keyword})
+
+        assert final_query == "WITH 1 AS y INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated"
+        assert keyword.calls == 1
+        strip.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;",
+            "WITH 1 AS y %(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;",
+        ],
+    )
+    def test_generated_insert_preserves_direct_payload_semicolon(self, query):
+        class SqlKeyword:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return "INSERT"
+
+        keyword = SqlKeyword()
+        final_query, _, _ = self.prep(query, parameters={"verb": keyword})
+
+        expected_prefix = query.replace("%(verb)s", "INSERT")
+        assert final_query == f"{expected_prefix}\n FORMAT TabSeparated"
+        assert keyword.calls == 1
+
+    @pytest.mark.parametrize(
+        "statement, expected_query, expected_lexer_calls",
+        [
+            ("SELECT 13;", "SELECT 13\n FORMAT TabSeparated", 0),
+            ("SELECT 13; -- trailing", "SELECT 13 -- trailing\n FORMAT TabSeparated", 1),
+        ],
+    )
+    def test_parameter_generated_terminator_is_normalized_once(self, statement, expected_query, expected_lexer_calls):
+        class StatefulStatement:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return statement
+
+        value = StatefulStatement()
+        with (
+            patch("clickhouse_connect.driver.client._query_is_insert", wraps=_query_is_insert) as is_insert,
+            patch(
+                "clickhouse_connect.driver.client._strip_trailing_semicolons",
+                wraps=_strip_trailing_semicolons,
+            ) as strip,
+        ):
+            final_query, _, _ = self.prep("%(statement)s", parameters={"statement": value})
+
+        assert final_query == expected_query
+        assert value.calls == 1
+        assert is_insert.call_count == 1
+        assert strip.call_count == expected_lexer_calls
+
+    def test_parameter_generated_statement_is_bound_once(self):
+        class StatefulStatement:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return "SELECT 13"
+
+        statement = StatefulStatement()
+        final_query, _, _ = self.prep("%(statement)s; -- trailing", parameters={"statement": statement})
+
+        assert final_query == "SELECT 13 -- trailing\n FORMAT TabSeparated"
+        assert statement.calls == 1
+
+    def test_binary_bind_lexes_only_the_template(self):
+        query = "SELECT $value$; -- trailing"
+        with patch(
+            "clickhouse_connect.driver.client._strip_trailing_semicolons",
+            wraps=_strip_trailing_semicolons,
+        ) as strip:
+            final_query, _, _ = self.prep(query, parameters={"$value$": b"13"})
+
+        assert final_query == b"SELECT $value$13$value$ -- trailing\n FORMAT TabSeparated"
+        strip.assert_called_once_with(query)
+
+    def test_mixed_binary_select_lexes_only_the_template(self):
+        query = "SELECT %(value)s + toUInt8($raw$); -- trailing"
+        with (
+            patch("clickhouse_connect.driver.client._query_is_insert", wraps=_query_is_insert) as is_insert,
+            patch(
+                "clickhouse_connect.driver.client._strip_trailing_semicolons",
+                wraps=_strip_trailing_semicolons,
+            ) as strip,
+        ):
+            final_query, _, _ = self.prep(query, parameters={"value": 13, "$raw$": b"79"})
+
+        assert final_query == b"SELECT 13 + toUInt8($raw$79$raw$) -- trailing\n FORMAT TabSeparated"
+        is_insert.assert_not_called()
+        strip.assert_called_once_with(query)
+
+    def test_binary_bind_with_unused_parameter_lexes_the_template(self):
+        query = "SELECT toUInt8($raw$); -- trailing"
+        with patch(
+            "clickhouse_connect.driver.client._strip_trailing_semicolons",
+            wraps=_strip_trailing_semicolons,
+        ) as strip:
+            final_query, _, _ = self.prep(query, parameters={"$raw$": b"13", "unused": 79})
+
+        assert final_query == b"SELECT toUInt8($raw$13$raw$) -- trailing\n FORMAT TabSeparated"
+        strip.assert_called_once_with(query)
 
 
 class TestInsertArrowTransportSettings:
