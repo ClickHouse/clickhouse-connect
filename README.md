@@ -92,6 +92,8 @@ Then create a client with `clickhouse_connect.get_async_client()`. See the
 
 ### Kerberos Authentication
 
+Kerberos authentication is experimental.
+
 ClickHouse Connect supports Kerberos authentication through the HTTP `Negotiate` scheme against a ClickHouse server
 configured for Kerberos. Each authenticated request attempt uses a fresh preemptive Kerberos token and validates the
 successful authenticated response token to complete mutual authentication.

@@ -14,7 +14,7 @@
 
 ### Improvements
 
-- Added Kerberos authentication through the HTTP `Negotiate` scheme for both clients via the new `use_kerberos` and `kerberos_hostname_override` connection parameters, using the current process's Kerberos credential cache. This requires the new `kerberos` extra: `pip install clickhouse-connect[kerberos]`. Because ClickHouse authenticates each HTTP request independently rather than caching authentication for a session, each authenticated request attempt uses a fresh preemptive Kerberos token and validates the successful authenticated response token to complete mutual authentication. Closes [#128](https://github.com/ClickHouse/clickhouse-connect/issues/128).
+- Added Kerberos authentication through the HTTP `Negotiate` scheme for both clients via the new `use_kerberos` and `kerberos_hostname_override` connection parameters, using the current process's Kerberos credential cache. Kerberos support is experimental. This requires the new `kerberos` extra: `pip install clickhouse-connect[kerberos]`. Because ClickHouse authenticates each HTTP request independently rather than caching authentication for a session, each authenticated request attempt uses a fresh preemptive Kerberos token and validates the successful authenticated response token to complete mutual authentication. Closes [#128](https://github.com/ClickHouse/clickhouse-connect/issues/128).
 
 ## 1.7.1, 2026-08-12
 
