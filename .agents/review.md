@@ -59,7 +59,7 @@ Review client changes at the layer that owns the behavior:
 - A change to synchronous client semantics in `SyncBackendClient` needs corresponding async consideration in `AsyncClient`.
 - HTTP transport changes usually need matching checks in `HttpSyncBackend` and `HttpAsyncBackend`.
 - Synchronous backend changes must consider both `HttpSyncBackend` and `ChdbBackend`, subject to documented chDB limitations.
-- Initialization and insert-context changes must preserve the sync and async sequences in `driver/_backend/orchestration.py`.
+- Initialization and insert-context changes must preserve the sync and async sequences in `clickhouse_connect/driver/_backend/orchestration.py`.
 
 For shared HTTP client behavior, confirm that integration tests exercise both sync and async paths with the fixtures in `tests/integration_tests/conftest.py`. A sync-only test needs a concrete transport-specific reason.
 
