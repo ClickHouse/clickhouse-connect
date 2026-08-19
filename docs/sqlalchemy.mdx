@@ -82,7 +82,9 @@ Bind names must be ClickHouse ASCII BareWord names. Names that start and end wit
 
 ## Core queries {#sqlalchemy-core-queries}
 
-The dialect supports SQLAlchemy Core `SELECT` queries with joins, filters, ordering, limits and offsets, and `DISTINCT`.
+The dialect supports SQLAlchemy Core `SELECT` queries with joins, filters, ordering, limits and offsets, `DISTINCT`, and compound selects.
+
+SQLAlchemy `union()`, `intersect()`, and `except_()` compile to ClickHouse `UNION DISTINCT`, `INTERSECT DISTINCT`, and `EXCEPT DISTINCT`. Their `union_all()`, `intersect_all()`, and `except_all()` counterparts compile to the corresponding `ALL` operators. This explicit mapping preserves SQLAlchemy's duplicate semantics regardless of ClickHouse set-operation defaults.
 
 ```python
 from sqlalchemy import MetaData, Table, select
