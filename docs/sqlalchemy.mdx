@@ -192,6 +192,20 @@ The ClickHouse `Select` methods are:
 | `.ch_join(...)` | ClickHouse joins with `strictness`, `distribution`, `using`, and `cross` options |
 | `.cte(name, materialized=True)` | `WITH name AS MATERIALIZED (...)` |
 
+SQLAlchemy's `Select.with_hint()` is a table hint API. The ClickHouse dialect does not render table hints. An applicable wildcard or `clickhousedb` hint emits an `SAWarning` and leaves the generated SQL unchanged. Use `final()`, `sample()`, `prewhere()`, or `limit_by()` for those ClickHouse clauses.
+
+`Select.with_statement_hint()` is a raw tail directive API. It appends the supplied text to the end of the `SELECT` without ClickHouse-specific validation. This remains available for trusted static SQL such as `SETTINGS max_threads=1`:
+
+```python
+stmt = select(events.c.id).with_statement_hint("SETTINGS max_threads=1")
+```
+
+For ClickHouse settings, prefer execution options so the driver handles the settings separately from the SQL text:
+
+```python
+stmt = select(events.c.id).execution_options(settings={"max_threads": 1})
+```
+
 For example, a ClickHouse `GLOBAL ANY LEFT JOIN` can be chained without nesting a custom `FromClause`:
 
 ```python

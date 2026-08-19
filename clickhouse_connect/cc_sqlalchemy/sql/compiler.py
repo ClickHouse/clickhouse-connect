@@ -1,3 +1,4 @@
+from sqlalchemy import util
 from sqlalchemy.exc import ArgumentError, CompileError
 from sqlalchemy.sql import elements, sqltypes
 from sqlalchemy.sql.compiler import SQLCompiler
@@ -105,6 +106,14 @@ class ChStatementCompiler(SQLCompiler):
         if "\\" not in rendered or _is_ch_literal_type(type_, self.dialect):
             return rendered
         return rendered.replace("\\", "\\\\")
+
+    def get_select_hint_text(self, byfroms):
+        if byfroms:
+            util.warn(
+                "Select.with_hint() has no effect for the ClickHouse dialect. "
+                "Use final(), sample(), prewhere(), or limit_by() for ClickHouse SELECT modifiers."
+            )
+        return None
 
     @property
     def _server_side_params(self):
