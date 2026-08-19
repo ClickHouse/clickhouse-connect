@@ -1,6 +1,7 @@
 from sqlalchemy.exc import ArgumentError, CompileError
 from sqlalchemy.sql import elements, sqltypes
 from sqlalchemy.sql.compiler import SQLCompiler
+from sqlalchemy.sql.selectable import CompoundSelect
 from sqlalchemy.util import memoized_property
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
@@ -97,6 +98,12 @@ def _is_ch_literal_type(sqla_type, dialect):
 
 
 class ChStatementCompiler(SQLCompiler):
+    compound_keywords = SQLCompiler.compound_keywords.copy()
+    # SQLAlchemy's type hints omit these runtime attributes.
+    compound_keywords[CompoundSelect.UNION] = "UNION DISTINCT"  # type: ignore[attr-defined]
+    compound_keywords[CompoundSelect.INTERSECT] = "INTERSECT DISTINCT"  # type: ignore[attr-defined]
+    compound_keywords[CompoundSelect.EXCEPT] = "EXCEPT DISTINCT"  # type: ignore[attr-defined]
+
     # SQLAlchemy 1.4 does not pass bindparam_type to bindparam_string, so stash it here.
     _ch_bind_type = None
 
