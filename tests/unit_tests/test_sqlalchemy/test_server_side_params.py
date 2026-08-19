@@ -1,10 +1,13 @@
 """Compile-time tests for the opt-in server_side_params mode (issue #735)."""
 
+from datetime import timedelta
+
 import pytest
-from sqlalchemy import Integer, String, bindparam, column, select, table, text, tuple_
+from sqlalchemy import Integer, String, TypeDecorator, bindparam, column, select, table, text, tuple_
 from sqlalchemy.exc import CompileError
 
 from clickhouse_connect import dbapi
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Time
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
 events = table("events", column("id", Integer), column("name", String))
@@ -95,14 +98,48 @@ def test_non_word_bind_name_raises():
         _sql(select(events.c.id).where(events.c.id == bindparam("a-b", value=13, type_=Integer())))
 
 
+@pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$1", "13_"])
+def test_dollar_bind_name_renders_server_side(name):
+    # These names each lex as one ASCII BareWord (issue #936).
+    sql = _sql(select(events.c.id).where(events.c.id == bindparam(name, value=13, type_=Integer())))
+    assert f"{{{name}:Int32}}" in sql
+
+
+@pytest.mark.parametrize("name", ["$", "$$", "$$a", "13", "13$", "13a$x", "id\N{LATIN SMALL LETTER E WITH ACUTE}"])
+def test_invalid_bareword_bind_name_raises(name):
+    with pytest.raises(CompileError, match="ASCII BareWord"):
+        _sql(select(events.c.id).where(events.c.id == bindparam(name, value=13, type_=Integer())))
+
+
+def test_binary_reserved_bind_name_raises():
+    with pytest.raises(CompileError, match="reserved for binary query parameters"):
+        _sql(select(events.c.id).where(events.c.id == bindparam("$x$", value=13, type_=Integer())))
+
+
+def test_binary_reserved_expanding_bind_name_raises():
+    values = bindparam("$x$", value=[13, 79], type_=Integer(), expanding=True)
+    with pytest.raises(CompileError, match="reserved for binary query parameters"):
+        _sql(select(events.c.id).where(events.c.id.in_(values)))
+
+
 def test_in_list_with_bind_processor_raises():
-    from datetime import timedelta
+    class ProcessedString(TypeDecorator):
+        impl = String
+        cache_ok = True
 
-    from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Time
+        def process_bind_param(self, value, dialect):
+            return value.upper()
 
+    processed = table("processed", column("tag", ProcessedString()), column("id", Integer))
+    with pytest.raises(CompileError, match="bind processor"):
+        _sql(select(processed.c.id).where(processed.c.tag.in_(["user_1"])))
+
+
+def test_in_list_of_time_renders_array_placeholder():
+    # Time no longer inherits Interval's epoch bind processor, so IN lists bind natively.
     durations = table("durations", column("dur", Time()), column("id", Integer))
-    with pytest.raises(CompileError):
-        _sql(select(durations.c.id).where(durations.c.dur.in_([timedelta(seconds=5)])))
+    sql = _sql(select(durations.c.id).where(durations.c.dur.in_([timedelta(seconds=5)])))
+    assert "{dur_1:Array(Time)}" in sql
 
 
 def test_literal_binds_keep_single_percent():

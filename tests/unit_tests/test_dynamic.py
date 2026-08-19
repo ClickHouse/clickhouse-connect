@@ -1,5 +1,6 @@
 import pytest
 
+from clickhouse_connect.datatypes import dynamic
 from clickhouse_connect.datatypes.dynamic import read_dynamic_prefix, read_variant_column, typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.bytesource import ByteArraySource
@@ -21,6 +22,31 @@ def test_variant_invalid_data_size():
 
     with pytest.raises(DataError):
         v_type.data_size(["not an int"])
+
+
+def _json_insert_prefix(ch_type) -> bytes:
+    prefix = bytearray()
+    ch_type.write_column_prefix(prefix)
+    return bytes(prefix)
+
+
+def test_json_insert_uses_native_serialization():
+    json_type = get_from_name("JSON")
+
+    assert json_type.insert_name == "JSON"
+    assert _json_insert_prefix(json_type) == b"\x01\x00\x00\x00\x00\x00\x00\x00"  # serialization version 1 (UInt64 LE)
+
+    # The deprecated module attribute is inert, including for wrapped shapes.
+    original = dynamic.json_serialization_format
+    dynamic.json_serialization_format = 0
+    try:
+        assert json_type.insert_name == "JSON"
+        assert _json_insert_prefix(json_type) == b"\x01\x00\x00\x00\x00\x00\x00\x00"
+        assert get_from_name("Array(JSON)").insert_name == "Array(JSON)"
+        assert get_from_name("Map(String, JSON)").insert_name == "Map(String, JSON)"
+        assert get_from_name("Tuple(v JSON)").insert_name == "Tuple(`v` JSON)"
+    finally:
+        dynamic.json_serialization_format = original
 
 
 def test_dynamic_prefix_sorts_shared_variant():

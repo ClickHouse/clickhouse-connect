@@ -1,5 +1,3 @@
-import re
-
 from sqlalchemy.exc import ArgumentError, CompileError
 from sqlalchemy.sql import elements, sqltypes
 from sqlalchemy.sql.compiler import SQLCompiler
@@ -7,10 +5,7 @@ from sqlalchemy.util import memoized_property
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
-from clickhouse_connect.driver.binding import format_str
-
-# The driver's external_bind_re only recognizes \w+ placeholder names.
-_bind_name_re = re.compile(r"\w+\Z")
+from clickhouse_connect.driver.binding import _is_binary_bind_name, _is_valid_bind_name, format_str
 
 
 def _find_outermost_marker(text, markers):
@@ -90,9 +85,26 @@ def _resolve_ch_bind_type(sqla_type):
     return name
 
 
+def _is_ch_literal_type(sqla_type, dialect):
+    effective_type = sqla_type.dialect_impl(dialect)
+    while isinstance(effective_type, sqltypes.TypeDecorator):
+        effective_type = effective_type.type_engine(dialect).dialect_impl(dialect)
+    if isinstance(effective_type, ChSqlaType):
+        return True
+    if isinstance(effective_type, sqltypes.ARRAY):
+        return _is_ch_literal_type(effective_type.item_type, dialect)
+    return False
+
+
 class ChStatementCompiler(SQLCompiler):
     # SQLAlchemy 1.4 does not pass bindparam_type to bindparam_string, so stash it here.
     _ch_bind_type = None
+
+    def render_literal_value(self, value, type_):
+        rendered = super().render_literal_value(value, type_)
+        if "\\" not in rendered or _is_ch_literal_type(type_, self.dialect):
+            return rendered
+        return rendered.replace("\\", "\\\\")
 
     @property
     def _server_side_params(self):
@@ -111,10 +123,15 @@ class ChStatementCompiler(SQLCompiler):
         return processors
 
     def _ch_check_bind_name(self, name):
-        if not _bind_name_re.match(name):
+        if not _is_valid_bind_name(name):
             raise CompileError(
                 f"server_side_params cannot bind parameter {name!r}: ClickHouse server-side "
-                "parameter names must match [A-Za-z0-9_]. Rename the bind parameter."
+                "parameter names must be an ASCII BareWord. Rename the bind parameter."
+            )
+        if _is_binary_bind_name(name):
+            raise CompileError(
+                f"server_side_params cannot bind parameter {name!r}: names starting and ending "
+                "with '$' are reserved for binary query parameters. Rename the bind parameter."
             )
 
     def visit_bindparam(self, bindparam, **kw):

@@ -195,6 +195,20 @@ class TestProbePlan:
         result = plan(context, prepped_query="SELECT * FROM t LIMIT 0\n LIMIT 100")
         assert result.body == "SELECT * FROM t LIMIT 0\n FORMAT JSON"
 
+    def test_probe_accepts_normalized_trailing_semicolon_tokens(self):
+        context = self.probe_context(
+            final_query="SELECT * FROM t LIMIT 0 /* trailing */",
+            uncommented_query="SELECT * FROM t LIMIT 0;   ",
+        )
+        result = plan(context)
+        assert result.columns_only is True
+        assert result.body == "SELECT * FROM t LIMIT 0 /* trailing */\n FORMAT JSON"
+
+    def test_probe_rejects_genuine_multi_statement_query(self):
+        context = self.probe_context(uncommented_query="SELECT * FROM t LIMIT 0; SELECT 13")
+        result = plan(context)
+        assert result.columns_only is False
+
     def test_insert_never_probes(self):
         context = make_context(final_query="INSERT INTO t LIMIT 0", is_insert=True)
         result = plan(context)
@@ -221,7 +235,13 @@ class TestCommandPlan:
         assert result.form_files is None
         assert result.headers == {}
         assert result.params == {"param_id": "7", "database": "db1", "max_threads": "4"}
-        assert list(result.params) == ["param_id", "database", "max_threads"]
+        # Settings precede the structural params (bind params, external data, query), matching
+        # plan_query_request so a setting cannot override them.
+        assert list(result.params) == ["database", "max_threads", "param_id"]
+
+    def test_bind_params_win_over_colliding_setting(self):
+        result = command_plan(bind_params={"param_id": "13"}, runtime=QueryRuntime(settings={"param_id": "79"}))
+        assert result.params["param_id"] == "13"
 
     def test_str_data_payload(self):
         result = command_plan("INSERT INTO t FORMAT CSV", data="1\n2\n")
@@ -243,8 +263,13 @@ class TestCommandPlan:
         assert result.payload is None
         assert result.params["query"] == "SELECT count() FROM f1"
         assert result.params["_f1_format"] == "CSV"
-        assert list(result.params) == ["_f1_format", "_f1_structure", "query", "database", "max_threads"]
+        assert list(result.params) == ["database", "max_threads", "_f1_format", "_f1_structure", "query"]
         assert result.method == "POST"
+
+    def test_external_data_params_win_over_colliding_setting(self):
+        external = make_external_data()
+        result = command_plan("SELECT count() FROM f1", external_data=external, runtime=QueryRuntime(settings={"_f1_format": "TSV"}))
+        assert result.params["_f1_format"] == "CSV"
 
     def test_external_data_with_data_raises(self):
         with pytest.raises(ProgrammingError, match="external data"):
@@ -447,9 +472,9 @@ class TestAsyncRawFilesMerge:
         assert _plan_raw_files(make_plan(form_files=files)) is files
 
 
-def make_sync_backend():
+def make_sync_backend(url="http://localhost:8123"):
     return HttpSyncBackend(
-        url="http://localhost:8123",
+        url=url,
         pool_manager=Mock(),
         owns_pool_manager=False,
         headers={},
@@ -461,9 +486,9 @@ def make_sync_backend():
     )
 
 
-def make_async_backend():
+def make_async_backend(url="http://localhost:8123"):
     return HttpAsyncBackend(
-        url="http://localhost:8123",
+        url=url,
         headers={},
         client_settings={},
         timeout=Mock(),
@@ -564,3 +589,53 @@ class TestAsyncFilesMerge:
     def test_files_only_passthrough(self):
         files = {"_f1": ("f1", b"x")}
         assert _plan_files(make_plan(form_files=files)) is files
+
+
+class TestSyncRequestTargetPath:
+    """The sync request-target must normalize a valid but empty path to "/".
+
+    urllib3 does this for direct requests but preserves the empty path in
+    forwarding-proxy absolute-form, which some proxies reject. An explicit
+    proxy_path must remain unchanged so path-based routing is unaffected.
+    """
+
+    @staticmethod
+    def _sent_url(url):
+        backend = make_sync_backend(url)
+        backend.http.request = Mock(return_value=SimpleNamespace(status=200, headers={}))
+        backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
+        (_method, sent_url), _kwargs = backend.http.request.call_args
+        return sent_url
+
+    def test_bare_authority_gets_slash(self):
+        assert self._sent_url("http://localhost:8123") == "http://localhost:8123/?database=db1"
+
+    def test_explicit_proxy_path_untouched(self):
+        assert self._sent_url("http://localhost:8123/clickhouse") == "http://localhost:8123/clickhouse?database=db1"
+
+
+class TestAsyncRequestTargetPath:
+    """The async request-target must normalize only an empty path to "/"."""
+
+    @staticmethod
+    async def _sent_url(url):
+        backend = make_async_backend(url)
+        response = SimpleNamespace(status=200, headers={})
+        backend.session = SimpleNamespace(closed=False, request=AsyncMock(return_value=response))
+        await backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
+        _args, kwargs = backend.session.request.call_args
+        return kwargs["url"], kwargs["params"]
+
+    @pytest.mark.parametrize(
+        ("url", "expected_url"),
+        [
+            ("http://localhost:8123", "http://localhost:8123/"),
+            ("http://localhost:8123/clickhouse", "http://localhost:8123/clickhouse"),
+            ("http://localhost:8123/clickhouse/", "http://localhost:8123/clickhouse/"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_request_target(self, url, expected_url):
+        sent_url, params = await self._sent_url(url)
+        assert sent_url == expected_url
+        assert params == {"database": "db1"}

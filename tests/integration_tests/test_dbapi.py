@@ -49,3 +49,47 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         )
         cursor.execute("SELECT id, name FROM dbapi_executemany_dicts ORDER BY id")
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+def test_executemany_with_percent_identifiers(dbapi_connection, table_context: Callable):
+    with table_context("dbapi%executemany", ["value%pct UInt32"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            "INSERT INTO `dbapi%%executemany` (`value%%pct`) VALUES (%s)",
+            [(13,), (79,)],
+        )
+        cursor.execute("SELECT `value%%pct` FROM `dbapi%%executemany` ORDER BY `value%%pct`")
+        assert cursor.fetchall() == [(13,), (79,)]
+
+
+def test_description_null_ok_reflects_result_type(dbapi_connection):
+    cursor = dbapi_connection.cursor()
+    cursor.execute(
+        "SELECT "
+        "CAST(13, 'UInt32') AS plain, "
+        "CAST(NULL, 'Nullable(String)') AS nullable, "
+        "CAST(NULL, 'Variant(UInt32, String)') AS variant_null, "
+        "CAST(NULL, 'Dynamic') AS dynamic_null, "
+        "CAST(NULL, 'SimpleAggregateFunction(any, Nullable(UInt32))') AS aggregate_null",
+        settings={
+            "allow_experimental_variant_type": 1,
+            "allow_experimental_dynamic_type": 1,
+        },
+    )
+
+    assert cursor.fetchone() == (13, None, None, None, None)
+    assert [(item[1], item[6]) for item in cursor.description] == [
+        ("UInt32", False),
+        ("Nullable(String)", True),
+        ("Variant(String, UInt32)", True),
+        ("Dynamic", True),
+        ("SimpleAggregateFunction(any, Nullable(UInt32))", True),
+    ]
+
+
+def test_description_metadata_requery_with_leading_and_trailing_comments(dbapi_connection):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("/* leading /* nested */ comment */ SELECT 13 AS value_1 WHERE 0 -- trailing")
+
+    assert cursor.fetchall() == []
+    assert cursor.description == []

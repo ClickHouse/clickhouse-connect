@@ -9,7 +9,7 @@ from clickhouse_connect import create_client, datatypes
 from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.exceptions import DatabaseError, StreamFailureError
 from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
@@ -76,6 +76,53 @@ def test_query_error_exposes_structured_code(param_client, call):
         call(param_client.query, "SELECT * FROM does_not_exist_tbl_xyz")
     assert excinfo.value.code == 60
     assert excinfo.value.name == "UNKNOWN_TABLE"
+
+
+@pytest.mark.parametrize("mode", ["scrub", False])
+def test_query_error_show_clickhouse_errors_modes(param_client, call, test_config: TestConfig, mode):
+    original = param_client.show_clickhouse_errors
+    param_client.show_clickhouse_errors = mode
+    try:
+        with pytest.raises(DatabaseError) as excinfo:
+            call(param_client.query, "SELECT * FROM does_not_exist_tbl_937")
+    finally:
+        param_client.show_clickhouse_errors = original
+
+    error_msg = str(excinfo.value)
+    assert excinfo.value.code == 60
+    if mode == "scrub":
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        assert "UNKNOWN_TABLE" in error_msg
+        assert "version" not in error_msg.lower()
+        assert param_client.url not in error_msg
+        assert test_config.host not in error_msg
+    else:
+        assert error_msg == "The ClickHouse server returned an error"
+        assert excinfo.value.name is None
+
+
+@pytest.mark.parametrize("mode", ["scrub", False])
+def test_stream_error_show_clickhouse_errors_modes(param_client, call, consume_stream, mode):
+    original = param_client.show_clickhouse_errors
+    param_client.show_clickhouse_errors = mode
+    try:
+        with pytest.raises(StreamFailureError) as excinfo:
+            stream = call(
+                param_client.query_rows_stream,
+                "SELECT sleepEachRow(0.01), throwIf(number = 100) FROM numbers(200)",
+                settings={"max_block_size": 1, "wait_end_of_query": 0},
+            )
+            consume_stream(stream)
+    finally:
+        param_client.show_clickhouse_errors = original
+
+    error_msg = str(excinfo.value)
+    if mode == "scrub":
+        assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in error_msg
+        assert "version" not in error_msg.lower()
+        assert param_client.url not in error_msg
+    else:
+        assert error_msg == "The ClickHouse server returned an error"
 
 
 def test_client_name(param_client, client_mode):
@@ -149,45 +196,44 @@ def test_session_params(test_config: TestConfig, client_factory, call):
     result = call(client.query, "SELECT number FROM system.numbers LIMIT 5", settings={"query_id": "test_session_params"}).result_set
     assert len(result) == 5
 
-    if client.min_version("21"):
-        if test_config.host != "localhost":
-            return  # By default, the session log isn't enabled, so we only validate in environments we control
+    if test_config.host != "localhost":
+        return  # By default, the session log isn't enabled, so we only validate in environments we control
 
-        def check_session_in_log():
-            max_retries = 100
-            for _ in range(max_retries):
-                result = call(
-                    client.query,
-                    f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " + "event_time > now() - 30",
-                ).result_set
+    def check_session_in_log():
+        max_retries = 100
+        for _ in range(max_retries):
+            result = call(
+                client.query,
+                f"SELECT session_id, user FROM system.session_log WHERE session_id = '{session_id}' AND " + "event_time > now() - 30",
+            ).result_set
 
-                if len(result) > 0:
-                    assert result[0] == (session_id, test_config.username)
-                    return
+            if len(result) > 0:
+                assert result[0] == (session_id, test_config.username)
+                return
 
-                sleep(0.1)
+            sleep(0.1)
 
-            pytest.fail(f"session_id '{session_id}' did not appear in system.session_log after {max_retries * 0.1}s")
+        pytest.fail(f"session_id '{session_id}' did not appear in system.session_log after {max_retries * 0.1}s")
 
-        def check_query_in_log():
-            max_retries = 100
-            for _ in range(max_retries):
-                result = call(
-                    client.query,
-                    "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " + "event_time > now() - 30",
-                ).result_set
+    def check_query_in_log():
+        max_retries = 100
+        for _ in range(max_retries):
+            result = call(
+                client.query,
+                "SELECT query_id, user FROM system.query_log WHERE query_id = 'test_session_params' AND " + "event_time > now() - 30",
+            ).result_set
 
-                if len(result) > 0:
-                    assert result[0] == ("test_session_params", test_config.username)
-                    return
+            if len(result) > 0:
+                assert result[0] == ("test_session_params", test_config.username)
+                return
 
-                sleep(0.1)
+            sleep(0.1)
 
-            pytest.fail(f"query_id 'test_session_params' did not appear in system.query_log after {max_retries * 0.1}s")
+        pytest.fail(f"query_id 'test_session_params' did not appear in system.query_log after {max_retries * 0.1}s")
 
-        # Check both logs with smart retry logic
-        check_session_in_log()
-        check_query_in_log()
+    # Check both logs with smart retry logic
+    check_session_in_log()
+    check_query_in_log()
 
 
 def test_dsn_config(test_config: TestConfig):
@@ -267,6 +313,172 @@ def test_query_with_inline_comment(param_client, call):
     assert len(result.result_set) > 0
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 13;",
+        "SELECT 13;\n",
+        "SELECT 13;\u00a0",
+        "SELECT 13; /* trailing comment */",
+        "SELECT 13; /* separator */ ;",
+        "SELECT 13; /* inner; */ ;",
+    ],
+)
+def test_query_formats_with_trailing_semicolon(param_client, call, query):
+    assert call(param_client.query, query).result_rows == [(13,)]
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == b"13\n"
+
+
+def test_limit_zero_with_trailing_semicolon_comment_keeps_metadata(param_client, call):
+    result = call(param_client.query, "SELECT 13 AS value LIMIT 0; /* trailing */")
+    assert result.column_names == ("value",)
+    assert result.result_rows == []
+
+
+def test_raw_query_binary_format_with_trailing_semicolon(param_client, call):
+    result = call(param_client.raw_query, "SELECT $value$;", parameters={"$value$": b"13"}, fmt="TabSeparated")
+    assert result == b"13\n"
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("SELECT ' INSERT INTO '; -- trailing", b" INSERT INTO \n"),
+        ("WITH ' INSERT INTO ' AS value SELECT value; -- trailing", b" INSERT INTO \n"),
+    ],
+)
+def test_raw_insert_literal_with_trailing_semicolon_comment(param_client, call, query, expected):
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == expected
+
+
+def test_query_insert_literal_with_trailing_semicolon_comment(param_client, call):
+    query = "SELECT ' INSERT INTO '; -- trailing"
+    assert call(param_client.query, query).result_rows == [(" INSERT INTO ",)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH insert AS (SELECT 13 AS n) SELECT * FROM insert",
+        "WITH 13 AS insert SELECT insert",
+    ],
+)
+def test_query_cte_named_insert_is_not_an_insert(param_client, call, query):
+    assert call(param_client.query, query).result_rows == [(13,)]
+    assert call(param_client.raw_query, query, fmt="TabSeparated") == b"13\n"
+
+
+def test_command_query_stream_with_trailing_semicolon_comment(param_client, call, consume_stream):
+    # Streamed entry points skip the query() command redirect, so the terminator must
+    # still come out before the transport appends a FORMAT clause.
+    stream = call(param_client.query_rows_stream, "KILL QUERY WHERE query_id = 'no_such_query_id' TEST; -- trailing")
+    rows = []
+    consume_stream(stream, rows.append)
+    assert rows == []
+
+
+def test_server_placeholder_names_do_not_change_with_routing(param_client, call, table_context):
+    with table_context("test_placeholder_name_routing", ["s String"]):
+        call(
+            param_client.query,
+            "WITH {SELECT:Int32} AS value INSERT INTO test_placeholder_name_routing (s) FORMAT TabSeparated\nvalue_1;\n",
+            parameters={"SELECT": 13},
+        )
+        assert call(param_client.query, "SELECT s FROM test_placeholder_name_routing").result_rows == [("value_1;",)]
+
+    result = call(
+        param_client.raw_query,
+        "WITH {INSERT:Int32} AS value SELECT value; -- trailing",
+        parameters={"INSERT": 13},
+        fmt="TabSeparated",
+    )
+    assert result == b"13\n"
+
+
+def test_mixed_binary_query_with_trailing_semicolon_comment(param_client, call):
+    query = "SELECT %(value)s + toUInt8($raw$); -- trailing"
+    parameters = {"value": 13, "$raw$": b"79"}
+    assert call(param_client.query, query, parameters=parameters).result_rows == [(92,)]
+    assert call(param_client.raw_query, query, parameters=parameters, fmt="TabSeparated") == b"92\n"
+
+
+@pytest.mark.parametrize("statement", ["SELECT 13;", "SELECT 13; -- trailing"])
+def test_parameter_generated_query_terminator(param_client, call, statement):
+    class StatefulStatement:
+        calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return statement
+
+    value = StatefulStatement()
+    assert call(param_client.query, "%(statement)s", parameters={"statement": value}).result_rows == [(13,)]
+    assert value.calls == 1
+
+    value = StatefulStatement()
+    assert (
+        call(
+            param_client.raw_query,
+            "%(statement)s",
+            parameters={"statement": value},
+            fmt="TabSeparated",
+        )
+        == b"13\n"
+    )
+    assert value.calls == 1
+
+
+def test_inline_insert_data_keeps_semicolons(param_client, call, table_context):
+    with table_context("test_inline_semicolon_data", ["s String"]):
+        call(param_client.command, "INSERT INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_1;\n")
+        call(param_client.query, "INSERT INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_2;\n")
+
+        class SqlKeyword:
+            def __str__(self):
+                return "INSERT"
+
+        call(
+            param_client.query,
+            "WITH 1 AS y %(verb)s INTO test_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_3;\n",
+            parameters={"verb": SqlKeyword()},
+        )
+        result = call(param_client.query, "SELECT s FROM test_inline_semicolon_data ORDER BY s")
+        assert result.result_rows == [("value_1;",), ("value_2;",), ("value_3;",)]
+
+
+def test_raw_inline_insert_data_keeps_semicolons(param_client, call, consume_stream, table_context):
+    # The fmt suffix lands in the data region and can add junk rows, matching main,
+    # so assertions check membership rather than the exact row set.
+    with table_context("test_raw_inline_semicolon_data", ["s String"]):
+        call(
+            param_client.raw_query,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_1;\n",
+            fmt="TabSeparated",
+        )
+        stream = call(
+            param_client.raw_stream,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_2;\n",
+            fmt="TabSeparated",
+        )
+        consume_stream(stream)
+        call(
+            param_client.raw_query,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_3;",
+            fmt="TabSeparated",
+        )
+        stream = call(
+            param_client.raw_stream,
+            "INSERT INTO test_raw_inline_semicolon_data (s) FORMAT TabSeparated\nvalue_4;",
+            fmt="TabSeparated",
+        )
+        consume_stream(stream)
+        result = call(param_client.query, "SELECT s FROM test_raw_inline_semicolon_data")
+        assert ("value_1;",) in result.result_rows
+        assert ("value_2;",) in result.result_rows
+        assert ("value_3;",) in result.result_rows
+        assert ("value_4;",) in result.result_rows
+
+
 def test_query_with_comment(param_client, call):
     result = call(
         param_client.query,
@@ -278,6 +490,41 @@ def test_query_with_comment(param_client, call):
         """,
     )
     assert len(result.result_set) > 0
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        # the server reads a block comment as a token separator, so this is a SELECT and query_limit applies
+        ("SELECT/*c*/number FROM numbers(9)", [(0,), (1,)]),
+        # the query already has a LIMIT, so the client must not append its own
+        ("SELECT number FROM numbers(9)/*c*/LIMIT 1", [(0,)]),
+        ("SELECT number FROM numbers(9) LIMIT/*c*/1", [(0,)]),
+    ],
+)
+def test_query_with_comment_between_tokens(param_client, call, sql: str, expected: list):
+    old_limit = param_client.query_limit
+    param_client.query_limit = 2
+    try:
+        result = call(param_client.query, sql)
+    finally:
+        param_client.query_limit = old_limit
+    assert result.result_set == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT name, database FROM system.tables LIMIT/*c*/0",
+        "SELECT name, database FROM system.tables LIMIT /*c*/0",
+        "SELECT name, database FROM system.tables LIMIT 0/*c*/",
+    ],
+)
+def test_get_columns_only_with_comment(param_client, call, sql: str):
+    # a comment anywhere around the trailing LIMIT 0 still reaches the columns only metadata probe
+    result = call(param_client.query, sql)
+    assert result.column_names == ("name", "database")
+    assert len(result.result_set) == 0
 
 
 def test_insert_csv_format(param_client, call, test_table_engine: str):
@@ -318,8 +565,6 @@ def test_command_as_query(param_client, call):
 
 
 def test_show_create(param_client, call):
-    if not param_client.min_version("21"):
-        pytest.skip(f"Not supported server version {param_client.server_version}")
     result = call(param_client.query, "SHOW CREATE TABLE system.tables")
     result.close()
     assert "statement" in result.column_names
@@ -328,24 +573,23 @@ def test_show_create(param_client, call):
 def test_show_row_policies(param_client, call, table_context: Callable, test_config: TestConfig):
     if test_config.cloud:
         pytest.skip("Skipping row policy test in cloud env")
-    if not param_client.min_version("20"):
-        pytest.skip(f"Not supported server version {param_client.server_version}")
-
-    for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
-        result = call(param_client.query, statement)
-        assert result.result_rows == [[""]]
-        result.close()
 
     policy = "test_show_row_policies_policy"
-    with table_context("test_show_row_policies", ["id UInt32"]) as table:
+    table_name = "test_show_row_policies"
+    with table_context(table_name, ["id UInt32"]) as table:
         target = f"{quote_identifier(param_client.database)}.{table.table}"
         call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
         try:
-            assert call(param_client.command, f"SHOW ROW POLICIES ON {target}") == ""
-            assert call(param_client.command, f"SHOW POLICIES ON {target}") == ""
+            for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+                assert call(param_client.command, f"{statement} ON {target}") == ""
 
             call(param_client.command, f"CREATE ROW POLICY {policy} ON {target} USING id = 13 TO ALL")
-            assert policy in call(param_client.command, f"SHOW ROW POLICIES ON {target}")
+            listed = f"{policy} ON {param_client.database}.{table_name}"
+            for statement in ("SHOW ROW POLICIES", "SHOW POLICIES"):
+                assert call(param_client.command, f"{statement} ON {target}") == policy
+                result = call(param_client.query, statement)
+                assert listed in result.result_rows[0][0].splitlines()
+                result.close()
         finally:
             call(param_client.command, f"DROP ROW POLICY IF EXISTS {policy} ON {target}")
 
@@ -495,6 +739,56 @@ def test_role_setting_works(param_client: Client, test_config: TestConfig, clien
     assert res.result_rows == [([role_limited],)]
 
 
+def test_changeable_in_readonly_custom_setting(
+    param_client: Client, test_config: TestConfig, client_factory: Callable, client_mode: str, call
+):
+    """Readonly user can set CHANGEABLE_IN_READONLY custom settings via settings= (issue #530)."""
+    if test_config.cloud:
+        pytest.skip("Skipping role test in cloud mode - cannot create custom users")
+
+    # Docker test servers set custom_settings_prefixes=SQL_; skip otherwise.
+    try:
+        call(param_client.command, "SELECT 1 SETTINGS SQL_RO_probe_530='ok'")
+    except DatabaseError:
+        pytest.skip("Server does not allow SQL_ custom settings (need custom_settings_prefixes)")
+
+    # Roles and users are server global, so the sync and async runs need distinct names to
+    # stay isolated when xdist runs them in parallel.
+    role = f"ch_connect_ro_role_530_{client_mode}"
+    user = f"ch_connect_ro_user_530_{client_mode}"
+    password = "R7m!pZt9qL#x"
+    setting = "SQL_RO_my_rls_key"
+
+    try:
+        call(param_client.command, f"DROP USER IF EXISTS {user}")
+        call(param_client.command, f"DROP ROLE IF EXISTS {role}")
+
+        call(param_client.command, f"CREATE ROLE {role}")
+        # CHANGEABLE_IN_READONLY lets a readonly user set the custom setting even though it is
+        # not visible in system.settings for that user, which is what previously tripped the
+        # client into rejecting it. This mirrors the row-policy getSetting use case in #530.
+        call(param_client.command, f"ALTER ROLE {role} SETTINGS {setting} CHANGEABLE_IN_READONLY")
+        call(param_client.command, f"CREATE USER {user} IDENTIFIED BY '{password}' DEFAULT ROLE {role} SETTINGS readonly = 1")
+
+        # The readonly user cannot set the writable session defaults the factory normally applies,
+        # so opt out of them.
+        client = client_factory(username=user, password=password, apply_test_settings=False)
+
+        # Inline SETTINGS clause already works; the settings= path must match.
+        inline = call(client.query, f"SELECT getSetting('{setting}') AS v SETTINGS {setting}='tenant_1'")
+        assert inline.result_rows == [("tenant_1",)]
+
+        via_param = call(client.query, f"SELECT getSetting('{setting}') AS v", settings={setting: "tenant_1"})
+        assert via_param.result_rows == [("tenant_1",)]
+
+        # A different value takes effect per query, confirming the setting reaches the server.
+        other = call(client.query, f"SELECT getSetting('{setting}') AS v", settings={setting: "tenant_2"})
+        assert other.result_rows == [("tenant_2",)]
+    finally:
+        call(param_client.command, f"DROP USER IF EXISTS {user}")
+        call(param_client.command, f"DROP ROLE IF EXISTS {role}")
+
+
 def test_query_id_autogeneration(param_client: Client, test_table_engine: str, call):
     """Test that query_id is auto-generated for query(), command(), and insert() methods"""
     result = call(param_client.query, "SELECT 1")
@@ -603,4 +897,19 @@ def test_compression_gzip(client_factory, call, table_context):
         call(client.insert, "test_gzip", data)
 
         result = call(client.query, "SELECT COUNT(*) FROM test_gzip")
+        assert result.result_rows[0][0] == 50
+
+
+def test_compression_zstd(client_factory, call, table_context):
+    """Test that zstd compression works."""
+    client = client_factory(compress="zstd")
+
+    assert client.compression == "zstd"
+    assert client.write_compression == "zstd"
+
+    with table_context("test_zstd", ["id", "data"], ["UInt32", "String"]):
+        data = [[i, f"data_{i}" * 10] for i in range(50)]
+        call(client.insert, "test_zstd", data)
+
+        result = call(client.query, "SELECT COUNT(*) FROM test_zstd")
         assert result.result_rows[0][0] == 50

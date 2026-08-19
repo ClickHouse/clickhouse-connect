@@ -4,12 +4,15 @@ from datetime import timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import aiohttp
 import pytest
+from urllib3.exceptions import HTTPError
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import create_async_client, create_client
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.binding import _query_is_insert, _strip_trailing_semicolons
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError, ProgrammingError
 from clickhouse_connect.driver.external import ExternalData
@@ -285,6 +288,31 @@ class TestAsyncClientErrorHandler:
         assert "UNKNOWN_TABLE" not in str(excinfo.value)
 
     @pytest.mark.asyncio
+    async def test_error_handler_with_scrub_mode(self):
+        client = self.make_client()
+        client.show_clickhouse_errors = "scrub"
+        response = self.make_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            await client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Received ClickHouse exception, code: 60" in error_msg
+        assert "Unknown table 'x'" in error_msg
+        assert "(UNKNOWN_TABLE)" in error_msg
+        assert "version" not in error_msg
+        assert "official build" not in error_msg
+        assert client.url not in error_msg
+        assert "(for url" not in error_msg
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        response.close.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_error_handler_retried_raises_operational_error(self):
         client = self.make_client()
         response = self.make_response(status=503, headers={ex_header: "159"}, data=b"timeout")
@@ -294,21 +322,46 @@ class TestAsyncClientErrorHandler:
 
         assert excinfo.value.code == 159
 
+    @pytest.mark.asyncio
+    async def test_transport_error_scrub_mode_is_generic(self, caplog):
+        client = self.make_client()
+        client.show_clickhouse_errors = "scrub"
+        error = aiohttp.ClientConnectionError("Cannot connect to host localhost:8123/?token=secret")
+        session = Mock()
+        session.closed = False
+        session.request = AsyncMock(side_effect=error)
+        client._session = session
+
+        with caplog.at_level(logging.WARNING), pytest.raises(OperationalError) as excinfo:
+            await client._raw_request(None, {"query": "SELECT 13"})
+
+        assert str(excinfo.value) == "Network Error"
+        assert excinfo.value.__cause__ is error
+        assert "localhost" not in str(excinfo.value)
+        assert "secret" not in str(excinfo.value)
+        assert any(record.levelno == logging.WARNING and "aiohttp connection error" in record.message for record in caplog.records)
+
+    def test_show_clickhouse_errors_setter_rejects_invalid(self):
+        client = self.make_client()
+        with pytest.raises(ProgrammingError, match="show_clickhouse_errors"):
+            client.show_clickhouse_errors = "redact"
+
 
 class TestHttpClientErrorHandler:
     """Test the error handling functionality of HttpClient"""
 
     def setup_method(self):
         """Set up common test fixtures"""
-        # Create a minimal HttpClient instance
-        self.client = HttpClient(
-            interface="http",
-            host="localhost",
-            port=8123,
-            username="default",
-            password="",
-            database="default",
-        )
+        # Create a minimal HttpClient instance without contacting a server
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            self.client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
         self.client.url = "http://localhost:8123"
 
         # Always turn on show_clickhouse_error. Will disable in tests as needed.
@@ -423,15 +476,77 @@ class TestHttpClientErrorHandler:
         with pytest.raises(DatabaseError) as excinfo:
             self.client._error_handler(response)
 
-        # Verify the error message is generic
+        # Verify the error message is generic and does not leak host/URL
         error_msg = str(excinfo.value)
-        assert "The ClickHouse server returned an error (for url http://localhost:8123)" in error_msg
+        assert error_msg == "The ClickHouse server returned an error"
         assert "Invalid query" not in error_msg  # Should not include the body
         assert "99" not in error_msg  # Should not include the exception code
+        assert self.client.url not in error_msg
         # Numeric code is still exposed structurally, but the body-derived name is suppressed
         assert excinfo.value.code == 99
         assert excinfo.value.name is None
         response.close.assert_called_once()
+
+    def test_error_handler_with_scrub_mode(self):
+        """scrub keeps the SQL error but strips version trailer and URL"""
+        self.client.show_clickhouse_errors = "scrub"
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Received ClickHouse exception, code: 60" in error_msg
+        assert "Unknown table 'x'" in error_msg
+        assert "(UNKNOWN_TABLE)" in error_msg
+        assert "version" not in error_msg
+        assert "official build" not in error_msg
+        assert self.client.url not in error_msg
+        assert "(for url" not in error_msg
+        assert excinfo.value.code == 60
+        assert excinfo.value.name == "UNKNOWN_TABLE"
+        response.close.assert_called_once()
+
+    def test_show_clickhouse_errors_setter_coerces_scrub(self):
+        self.client.show_clickhouse_errors = "SCRUB"
+        response = create_mock_response(
+            status=404,
+            headers={ex_header: "60"},
+            data=(b"Code: 60. DB::Exception: Unknown table 'x'. (UNKNOWN_TABLE) (version 26.2.4.23 (official build))"),
+        )
+
+        with pytest.raises(DatabaseError) as excinfo:
+            self.client._error_handler(response)
+
+        error_msg = str(excinfo.value)
+        assert "Unknown table 'x'" in error_msg
+        assert "UNKNOWN_TABLE" in error_msg
+        assert "version" not in error_msg
+        assert self.client.url not in error_msg
+
+    def test_show_clickhouse_errors_setter_rejects_invalid(self):
+        with pytest.raises(ProgrammingError, match="show_clickhouse_errors"):
+            self.client.show_clickhouse_errors = "redact"
+
+    def test_transport_error_scrub_mode_is_generic(self, caplog):
+        self.client.show_clickhouse_errors = "scrub"
+        error = HTTPError("Cannot connect to host localhost:8123/?token=secret")
+        pool_mgr = Mock()
+        pool_mgr.request.side_effect = error
+        self.client.http = pool_mgr
+
+        with caplog.at_level(logging.WARNING), pytest.raises(OperationalError) as excinfo:
+            self.client._raw_request(b"", {"query": "SELECT 13"})
+
+        assert str(excinfo.value) == "Error executing HTTP request"
+        assert excinfo.value.__cause__ is error
+        assert "localhost" not in str(excinfo.value)
+        assert "secret" not in str(excinfo.value)
+        assert any(record.levelno == logging.WARNING and "Http Driver Exception" in record.message for record in caplog.records)
 
     def test_error_handler_with_unicode_decode_error(self):
         """Test error handling when the response body has invalid Unicode"""
@@ -1197,6 +1312,248 @@ class TestCommandBinaryBindGuard:
         )
         with pytest.raises(ProgrammingError, match="Binary parameter bind"):
             await client.command("SELECT $bin$", parameters={"$bin$": b"\x00\x01"}, data="extra")
+
+
+class TestRawQuerySemicolonPreparation:
+    @staticmethod
+    def prep(query, parameters=None, fmt="TabSeparated"):
+        client = Mock()
+        client.server_tz = timezone.utc
+        client.database = "default"
+        client.query_retries = 2
+        client._validate_settings.return_value = {}
+        return Client._prep_raw_query_runtime(client, query, parameters, None, fmt, True)
+
+    @pytest.mark.parametrize(
+        "query, fmt, expected_query, expected_calls",
+        [
+            ("SELECT 13", None, "SELECT 13", 0),
+            ("SELECT 13;", "TabSeparated", "SELECT 13\n FORMAT TabSeparated", 0),
+            ("SELECT 13; -- trailing", "TabSeparated", "SELECT 13 -- trailing\n FORMAT TabSeparated", 1),
+            ("SHOW TABLES; -- trailing", "TabSeparated", "SHOW TABLES -- trailing\n FORMAT TabSeparated", 1),
+            (
+                "SELECT ' INSERT INTO '; -- trailing",
+                "TabSeparated",
+                "SELECT ' INSERT INTO ' -- trailing\n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "WITH ' INSERT INTO ' AS value SELECT value; -- trailing",
+                "TabSeparated",
+                "WITH ' INSERT INTO ' AS value SELECT value -- trailing\n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "SELECT 13; /* separator */ ;",
+                "TabSeparated",
+                "SELECT 13 /* separator */ \n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "SELECT 13; /* inner; */ ;",
+                "TabSeparated",
+                "SELECT 13 /* inner; */ \n FORMAT TabSeparated",
+                1,
+            ),
+            (
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n",
+                "TabSeparated",
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated",
+                0,
+            ),
+            (
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;",
+                "TabSeparated",
+                "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n FORMAT TabSeparated",
+                0,
+            ),
+        ],
+    )
+    def test_lexer_routing(self, query, fmt, expected_query, expected_calls):
+        with patch(
+            "clickhouse_connect.driver.client._strip_trailing_semicolons",
+            wraps=_strip_trailing_semicolons,
+        ) as strip:
+            final_query, _, _ = self.prep(query, fmt=fmt)
+
+        assert final_query == expected_query
+        assert strip.call_count == expected_calls
+
+    def test_format_name_with_trailing_semicolon_keeps_bound_query_intact(self):
+        final_query, _, _ = self.prep("SELECT %(value)s", parameters={"value": 13}, fmt="TabSeparated;")
+        assert final_query == "SELECT 13\n FORMAT TabSeparated;"
+
+    def test_format_name_with_trailing_semicolon_keeps_payload_intact(self):
+        class SqlKeyword:
+            def __str__(self):
+                return "INSERT"
+
+        query = "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        final_query, _, _ = self.prep(query, parameters={"verb": SqlKeyword()}, fmt="TabSeparated;")
+        assert final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated;"
+
+    def test_bound_insert_payload_is_not_lexed(self):
+        class SqlKeyword:
+            def __str__(self):
+                return "INSERT"
+
+        query = "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        with patch("clickhouse_connect.driver.client._strip_trailing_semicolons") as strip:
+            final_query, _, _ = self.prep(query, parameters={"verb": SqlKeyword()})
+
+        assert final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated"
+        strip.assert_not_called()
+
+    def test_bind_completed_insert_payload_is_not_lexed(self):
+        class Raw:
+            def __str__(self):
+                return ""
+
+        query = "INSERT %sINTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        with patch("clickhouse_connect.driver.client._strip_trailing_semicolons") as strip:
+            final_query, _, _ = self.prep(query, parameters=[Raw()])
+
+        assert final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated"
+        strip.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected_query",
+        [
+            (
+                "WITH {SELECT:Int32} AS value INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n",
+                {"SELECT": 13},
+                "WITH {SELECT:Int32} AS value INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated",
+            ),
+            (
+                "WITH {INSERT:Int32} AS value SELECT value; -- trailing",
+                {"INSERT": 13},
+                "WITH {INSERT:Int32} AS value SELECT value -- trailing\n FORMAT TabSeparated",
+            ),
+        ],
+    )
+    def test_server_placeholder_names_do_not_change_routing(self, query, parameters, expected_query):
+        final_query, _, _ = self.prep(query, parameters=parameters)
+        assert final_query == expected_query
+
+    def test_with_prefixed_bound_insert_payload_is_not_lexed(self):
+        class SqlKeyword:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return "INSERT"
+
+        keyword = SqlKeyword()
+        query = "WITH 1 AS y %(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+        with patch("clickhouse_connect.driver.client._strip_trailing_semicolons") as strip:
+            final_query, _, _ = self.prep(query, parameters={"verb": keyword})
+
+        assert final_query == "WITH 1 AS y INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n\n FORMAT TabSeparated"
+        assert keyword.calls == 1
+        strip.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;",
+            "WITH 1 AS y %(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;",
+        ],
+    )
+    def test_generated_insert_preserves_direct_payload_semicolon(self, query):
+        class SqlKeyword:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return "INSERT"
+
+        keyword = SqlKeyword()
+        final_query, _, _ = self.prep(query, parameters={"verb": keyword})
+
+        expected_prefix = query.replace("%(verb)s", "INSERT")
+        assert final_query == f"{expected_prefix}\n FORMAT TabSeparated"
+        assert keyword.calls == 1
+
+    @pytest.mark.parametrize(
+        "statement, expected_query, expected_lexer_calls",
+        [
+            ("SELECT 13;", "SELECT 13\n FORMAT TabSeparated", 0),
+            ("SELECT 13; -- trailing", "SELECT 13 -- trailing\n FORMAT TabSeparated", 1),
+        ],
+    )
+    def test_parameter_generated_terminator_is_normalized_once(self, statement, expected_query, expected_lexer_calls):
+        class StatefulStatement:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return statement
+
+        value = StatefulStatement()
+        with (
+            patch("clickhouse_connect.driver.client._query_is_insert", wraps=_query_is_insert) as is_insert,
+            patch(
+                "clickhouse_connect.driver.client._strip_trailing_semicolons",
+                wraps=_strip_trailing_semicolons,
+            ) as strip,
+        ):
+            final_query, _, _ = self.prep("%(statement)s", parameters={"statement": value})
+
+        assert final_query == expected_query
+        assert value.calls == 1
+        assert is_insert.call_count == 1
+        assert strip.call_count == expected_lexer_calls
+
+    def test_parameter_generated_statement_is_bound_once(self):
+        class StatefulStatement:
+            calls = 0
+
+            def __str__(self):
+                self.calls += 1
+                return "SELECT 13"
+
+        statement = StatefulStatement()
+        final_query, _, _ = self.prep("%(statement)s; -- trailing", parameters={"statement": statement})
+
+        assert final_query == "SELECT 13 -- trailing\n FORMAT TabSeparated"
+        assert statement.calls == 1
+
+    def test_binary_bind_lexes_only_the_template(self):
+        query = "SELECT $value$; -- trailing"
+        with patch(
+            "clickhouse_connect.driver.client._strip_trailing_semicolons",
+            wraps=_strip_trailing_semicolons,
+        ) as strip:
+            final_query, _, _ = self.prep(query, parameters={"$value$": b"13"})
+
+        assert final_query == b"SELECT $value$13$value$ -- trailing\n FORMAT TabSeparated"
+        strip.assert_called_once_with(query)
+
+    def test_mixed_binary_select_lexes_only_the_template(self):
+        query = "SELECT %(value)s + toUInt8($raw$); -- trailing"
+        with (
+            patch("clickhouse_connect.driver.client._query_is_insert", wraps=_query_is_insert) as is_insert,
+            patch(
+                "clickhouse_connect.driver.client._strip_trailing_semicolons",
+                wraps=_strip_trailing_semicolons,
+            ) as strip,
+        ):
+            final_query, _, _ = self.prep(query, parameters={"value": 13, "$raw$": b"79"})
+
+        assert final_query == b"SELECT 13 + toUInt8($raw$79$raw$) -- trailing\n FORMAT TabSeparated"
+        is_insert.assert_not_called()
+        strip.assert_called_once_with(query)
+
+    def test_binary_bind_with_unused_parameter_lexes_the_template(self):
+        query = "SELECT toUInt8($raw$); -- trailing"
+        with patch(
+            "clickhouse_connect.driver.client._strip_trailing_semicolons",
+            wraps=_strip_trailing_semicolons,
+        ) as strip:
+            final_query, _, _ = self.prep(query, parameters={"$raw$": b"13", "unused": 79})
+
+        assert final_query == b"SELECT toUInt8($raw$13$raw$) -- trailing\n FORMAT TabSeparated"
+        strip.assert_called_once_with(query)
 
 
 class TestInsertArrowTransportSettings:

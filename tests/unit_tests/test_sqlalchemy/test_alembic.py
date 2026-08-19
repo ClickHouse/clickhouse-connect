@@ -1,5 +1,6 @@
 from io import StringIO
 from types import MappingProxyType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from alembic.autogenerate import render
@@ -52,6 +53,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
+from clickhouse_connect.driver.binding import format_str
 
 
 def test_ddl_compiler():
@@ -237,6 +239,22 @@ def test_clickhouse_impl_registration():
     assert DefaultImpl.get_by_dialect(ClickHouseDialect()) is ClickHouseImpl
     context = MigrationContext.configure(dialect_name="clickhousedb")
     assert isinstance(context.impl, ClickHouseImpl)
+
+
+def test_clickhouse_impl_current_database_uses_internal_query_formats():
+    result = Mock()
+    result.scalar.return_value = "default"
+    connection = Mock()
+    connection.execute.return_value = result
+    opts = {"include_schemas": True}
+
+    ClickHouseImpl(ClickHouseDialect(), connection, False, False, StringIO(), opts)
+
+    connection.execute.assert_called_once()
+    statement = connection.execute.call_args[0][0]
+    assert str(statement) == "SELECT currentDatabase()"
+    assert statement.get_execution_options()["query_formats"] == {"String": "string"}
+    assert opts["version_table_schema"] == "default"
 
 
 def test_render_type_uses_clickhouse_names():
@@ -503,6 +521,34 @@ def test_alembic_operations_table_comments():
     assert "ALTER TABLE `olap`.`events` MODIFY COMMENT 'Application events table';" in sql
     assert "ALTER TABLE `olap`.`events` MODIFY COMMENT '';" in sql
     assert "COMMENT ON TABLE" not in sql
+
+
+@pytest.mark.parametrize(
+    "comment",
+    ["middle\\path", "trailing\\", "backslash\\'quote% adjacent%%"],
+    ids=["middle-backslash", "trailing-backslash", "backslash-quote-percent"],
+)
+def test_alembic_comment_operations_use_clickhouse_escaping(comment):
+    buffer = StringIO()
+    context = MigrationContext.configure(
+        dialect=ClickHouseDialect(),
+        opts={"as_sql": True, "output_buffer": buffer},
+    )
+    op = Operations(context)
+
+    op.create_table_comment("events", comment, schema="olap")
+    op.alter_column(
+        "events",
+        "payload",
+        schema="olap",
+        comment=comment,
+        existing_type=String(),
+    )
+
+    rendered = format_str(comment)
+    sql = buffer.getvalue()
+    assert f"ALTER TABLE `olap`.`events` MODIFY COMMENT {rendered};" in sql
+    assert f"ALTER TABLE `olap`.`events` COMMENT COLUMN `payload` {rendered};" in sql
 
 
 def test_get_table_comment_missing_table_raises_no_such_table():

@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.6-alpine}'
+    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.8-alpine}'
     container_name: 'clickhouse-connect-clickhouse-server'
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: 1
@@ -34,7 +34,6 @@ services:
       - './.docker/clickhouse/single_node_tls/config.xml:/etc/clickhouse-server/config.xml'
       - './.docker/clickhouse/single_node_tls/users.xml:/etc/clickhouse-server/users.xml'
       - './.docker/clickhouse/single_node_tls/docker_related_config.xml:/etc/clickhouse-server/config.d/docker_related_config.xml'
-
   # Both kerberos services are opt-in (profiles: [kerberos]), started only by
   # tests/integration_tests/kerberos_manage.py (see test_kerberos.py's kerberos_env fixture),
   # since they need an extra host-side step (obtaining a real Kerberos ticket) that Docker Compose
@@ -54,7 +53,7 @@ services:
       - 'kerberos_kdc_data:/var/kerberos/krb5kdc'
 
   kerberos_clickhouse:
-    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.6-alpine}'
+    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.8-alpine}'
     container_name: 'clickhouse-connect-kerberos-clickhouse-server'
     profiles: ['kerberos']
     depends_on:

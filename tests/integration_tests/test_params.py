@@ -1,20 +1,43 @@
+import os
+import time
 from collections.abc import Callable
 from datetime import date, datetime
 
+import pytest
+
+from clickhouse_connect import common
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.binding import DT64Param
+from clickhouse_connect.driver.exceptions import ProgrammingError
+
+HAS_TZSET = hasattr(time, "tzset")
+NON_UTC_HOST_TZ = "America/New_York"
+
+
+def _force_process_timezone(monkeypatch, tz_name: str) -> str | None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", tz_name)
+    time.tzset()
+    return original_tz
+
+
+def _restore_process_timezone(monkeypatch, original_tz: str | None) -> None:
+    if original_tz is None:
+        monkeypatch.delenv("TZ", raising=False)
+    else:
+        monkeypatch.setenv("TZ", original_tz)
+    time.tzset()
 
 
 def test_params(param_client: Client, call, table_context: Callable):
     result = call(param_client.query, "SELECT name, database FROM system.tables WHERE database = {db:String}", parameters={"db": "system"})
     assert result.first_item["database"] == "system"
-    if param_client.min_version("21"):
-        result = call(
-            param_client.query,
-            "SELECT name, {col:String} FROM system.tables WHERE table ILIKE {t:String}",
-            parameters={"t": "%rr%", "col": "database"},
-        )
-        assert "rr" in result.first_item["name"]
+    result = call(
+        param_client.query,
+        "SELECT name, {col:String} FROM system.tables WHERE table ILIKE {t:String}",
+        parameters={"t": "%rr%", "col": "database"},
+    )
+    assert "rr" in result.first_item["name"]
 
     first_date = datetime.strptime("Jun 1 2005  1:33PM", "%b %d %Y %I:%M%p").replace(tzinfo=param_client.server_tz)
     second_date = datetime.strptime("Dec 25 2022  5:00AM", "%b %d %Y %I:%M%p").replace(tzinfo=param_client.server_tz)
@@ -63,10 +86,8 @@ def test_params(param_client: Client, call, table_context: Callable):
     assert tp_params == result[0]
 
     num_params = {"p_0": 2, "p_1": 100523.55}
-    result = call(
-        param_client.query, "SELECT count() FROM system.tables WHERE total_rows > %(p_0)d and total_rows < %(p_1)f", parameters=num_params
-    )
-    assert result.first_row[0] > 0
+    result = call(param_client.query, "SELECT %(p_0)d < %(p_1)f", parameters=num_params)
+    assert result.first_row[0] == 1
 
 
 def test_datetime_64_params(param_client: Client, call):
@@ -99,3 +120,121 @@ def test_datetime_64_params(param_client: Client, call):
 
     result = call(param_client.query, "SELECT {a1:Array(DateTime64(6))}", parameters={"a1": dt_values}).first_row
     assert result[0] == dt_values
+
+
+@pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
+def test_naive_datetime_wall_binding_live(param_client: Client, call, monkeypatch):
+    original_tz = _force_process_timezone(monkeypatch, NON_UTC_HOST_TZ)
+    original_setting = common.get_setting("naive_datetime_binding")
+    common.set_setting("naive_datetime_binding", "wall")
+    try:
+        naive = datetime(2025, 1, 1, 12, 0, 0, 250306)
+        dt = naive.replace(microsecond=0)
+        query = "SELECT {dt:DateTime('UTC')}, {dt64:DateTime64(6, 'UTC')}, {items:Array(Tuple(DateTime('UTC'), DateTime64(6, 'UTC')))}"
+        row = call(
+            param_client.query,
+            query,
+            parameters={"dt": dt, "dt64": naive, "items": [(dt, naive)]},
+            query_tz="UTC",
+        ).first_row
+        assert row == (dt, naive, [(dt, naive)])
+
+        row = call(
+            param_client.query,
+            "SELECT toString({dt:DateTime}), formatDateTime({dt_berlin:DateTime('Europe/Berlin')}, '%F %T', 'Europe/Berlin')",
+            parameters={"dt": dt, "dt_berlin": dt},
+            query_tz="UTC",
+        ).first_row
+        assert row == ("2025-01-01 12:00:00", "2025-01-01 12:00:00")
+    finally:
+        common.set_setting("naive_datetime_binding", original_setting)
+        _restore_process_timezone(monkeypatch, original_tz)
+
+
+@pytest.mark.parametrize("name", ["id$x", "$x", "id$", "a$$b", "$1", "13_", "$x$", "foo$x$bar"])
+def test_dollar_in_param_name(param_client: Client, call, name):
+    # These names each lex as one ASCII BareWord when used once in the query.
+    result = call(param_client.query, f"SELECT {{{name}:Int32}} AS v", parameters={name: 13}).first_row
+    assert result[0] == 13
+
+
+def test_dollar_in_param_name_keeps_datetime64_precision(param_client: Client, call):
+    # The type hint is keyed by the captured placeholder name, so a missed capture drops precision.
+    dt = datetime(2023, 6, 1, 7, 40, 2, 250306)
+    result = call(
+        param_client.query,
+        "SELECT {t$x:DateTime64(6)} AS t, {a:Int32} AS a",
+        parameters={"t$x": dt, "a": 79},
+    ).first_row
+    assert result == (dt, 79)
+
+
+def test_dollar_delimited_param_name_uses_form_encoding(param_client: Client, call):
+    value = "x" * 5000
+    result = call(param_client.query, "SELECT length({$x$:String})", parameters={"$x$": value}).first_row[0]
+    assert result == len(value)
+
+
+def test_non_binary_value_for_raw_binary_marker_raises(param_client: Client, call):
+    with pytest.raises(ProgrammingError, match="must be a buffer value"):
+        call(param_client.query, "SELECT $x$ AS v", parameters={"$x$": 13})
+
+
+def test_decoy_placeholder_with_dollar_literal_routes_server_side(param_client: Client, call):
+    # The decoy matches and sends a harmless extra param, and the query routes server-side.
+    row = call(param_client.query, "SELECT '{a:String}', '100%$'", parameters={"a": "user_1"}).first_row
+    assert row == ("{a:String}", "100%$")
+
+
+def test_dollar_delimited_str_param_binds(param_client: Client, call):
+    result = call(param_client.query, "SELECT {$x$:String} AS v", parameters={"$x$": "user_1"}).first_row
+    assert result[0] == "user_1"
+
+
+def test_repeated_dollar_delimited_placeholder_raises(param_client: Client, call):
+    with pytest.raises(ProgrammingError, match="can appear only once"):
+        call(param_client.query, "SELECT {$x$:Int32} + {$x$:Int32}", parameters={"$x$": 13})
+
+
+def test_dollar_delimited_substring_does_not_conflict(param_client: Client, call):
+    row = call(
+        param_client.query,
+        "SELECT {foo$x$bar:Int32}, {$x$:Int32}",
+        parameters={"foo$x$bar": 79, "$x$": 13},
+    ).first_row
+    assert row == (79, 13)
+
+
+def test_null_in_containers(param_client: Client, call):
+    result = call(
+        param_client.query,
+        "SELECT {t:Tuple(String, Nullable(String), Int32)}",
+        parameters={"t": ("user_1", None, 79)},
+    ).first_row
+    assert result[0] == ("user_1", None, 79)
+
+    result = call(
+        param_client.query,
+        "SELECT {a:Array(Nullable(String))}",
+        parameters={"a": ["user_1", None]},
+    ).first_row
+    assert result[0] == ["user_1", None]
+
+    result = call(
+        param_client.query,
+        "SELECT {a:Array(Tuple(String, Nullable(String)))}",
+        parameters={"a": [("user_1", None)]},
+    ).first_row
+    assert result[0] == [("user_1", None)]
+
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        result = call(
+            param_client.query,
+            "SELECT {m:Map(String, Nullable(String))}",
+            parameters={"m": {"user_1": None}},
+        ).first_row
+        assert result[0] == {"user_1": None}
+    finally:
+        common.set_setting("dict_parameter_format", original)

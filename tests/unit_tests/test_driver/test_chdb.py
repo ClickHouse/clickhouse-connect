@@ -171,6 +171,10 @@ class TestChdbQuery:
         result = client.query("SELECT {v:UInt32} + 1 AS r", parameters={"v": 7})
         assert result.result_rows == [(8,)]
 
+    def test_dollar_delimited_parameter(self, client):
+        result = client.query("SELECT {$x$:Int32}", parameters={"$x$": 13})
+        assert result.result_rows == [(13,)]
+
     def test_columns_only_probe(self, client):
         result = client.query("SELECT number, toString(number) AS s FROM numbers(10) LIMIT 0")
         assert result.result_rows == []
@@ -257,6 +261,35 @@ class TestChdbStreaming:
             for _ in stream:
                 pass
         assert client.command("SELECT 1") == 1
+
+    @pytest.mark.parametrize(
+        "mode,expected,forbidden",
+        [
+            ("scrub", "ILLEGAL_DIVISION", "version"),
+            (False, "The ClickHouse server returned an error", "ILLEGAL_DIVISION"),
+        ],
+    )
+    def test_mid_stream_failure_honors_show_clickhouse_errors(self, client, mode, expected, forbidden):
+        from clickhouse_connect.driver.exceptions import StreamFailureError
+
+        original = client.show_clickhouse_errors
+        client.show_clickhouse_errors = mode
+        try:
+            with (
+                pytest.raises(StreamFailureError) as exc_info,
+                client.query_rows_stream(
+                    "SELECT number, intDiv(1, number - 5000) AS x FROM numbers(100000)",
+                    settings={"max_block_size": 100},
+                ) as stream,
+            ):
+                for _ in stream:
+                    pass
+        finally:
+            client.show_clickhouse_errors = original
+
+        error_msg = str(exc_info.value)
+        assert expected in error_msg
+        assert forbidden not in error_msg
 
 
 class TestChdbCommand:
