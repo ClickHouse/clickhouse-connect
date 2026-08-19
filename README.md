@@ -92,8 +92,9 @@ Then create a client with `clickhouse_connect.get_async_client()`. See the
 
 ### Kerberos Authentication
 
-ClickHouse Connect supports Kerberos/SPNEGO ("Negotiate") authentication against a ClickHouse server configured for
-Kerberos.
+ClickHouse Connect supports Kerberos authentication through the HTTP `Negotiate` scheme against a ClickHouse server
+configured for Kerberos. Each authenticated request attempt uses a fresh preemptive Kerberos token and validates the
+successful authenticated response token to complete mutual authentication.
 
 Install the system Kerberos client and development packages first (needed to build the `gssapi`/`krb5` Python
 packages):
@@ -111,21 +112,31 @@ sudo pacman -S gcc krb5
 
 Then install the optional dependency:
 
-```
+```bash
 pip install clickhouse-connect[kerberos]
 ```
 
-Create a client with `use_kerberos=True` instead of a username/password:
+Obtain a Kerberos ticket first, for example by running `kinit`. The client uses the current process's Kerberos
+credential cache. It does not acquire a ticket from a username and password.
+
+Create a synchronous client with `use_kerberos=True`:
 
 ```python
 import clickhouse_connect
 
-client = clickhouse_connect.get_client(host='localhost', use_kerberos=True)
+client = clickhouse_connect.get_client(host="localhost", use_kerberos=True)
 ```
+
+The same options work with `await clickhouse_connect.get_async_client(...)`. Install both extras with
+`pip install "clickhouse-connect[async,kerberos]"` for async use.
 
 If the hostname you connect through doesn't match the server's Kerberos service principal name (for example,
 connecting via an IP address or load balancer), pass `kerberos_hostname_override` with the principal's actual
 hostname.
+
+Do not combine Kerberos authentication with `username`, `password`, `access_token`, `token_provider`, or
+`client_cert`. Each authenticated HTTP request attempt sends a fresh preemptive token. Every successful authenticated
+response must contain a `WWW-Authenticate: Negotiate <token>` response header that completes mutual authentication.
 
 ### Complete Documentation
 

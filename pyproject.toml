@@ -33,7 +33,7 @@ ignore = [
 
 [tool.mypy]
 files = ["clickhouse_connect"]
-python_version = "3.12"
+python_version = "3.10"
 
 [[tool.mypy.overrides]]
 # Dependencies that may be absent from the checking environment or lack type stubs, and the compiled Cython modules.
@@ -67,4 +67,4 @@ log_cli = true
 log_cli_level = "INFO"
 env_files = ["test.env"]
 asyncio_default_fixture_loop_scope = "session"
-addopts = "-n 4 --dist=loadgroup"
+addopts = "-n 4"

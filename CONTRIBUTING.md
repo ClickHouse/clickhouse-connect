@@ -153,7 +153,7 @@ back down afterward) is handled automatically by a fixture in
 Run from the repo root:
 
 ```bash
-CLICKHOUSE_CONNECT_TEST_KERBEROS=1 pytest tests/integration_tests/test_kerberos.py
+CLICKHOUSE_CONNECT_TEST_KERBEROS=1 pytest --dist=loadgroup tests/integration_tests/test_kerberos.py
 ```
 
 To stand up (or tear down) the same environment by hand, outside of pytest -- for example, to poke at it manually

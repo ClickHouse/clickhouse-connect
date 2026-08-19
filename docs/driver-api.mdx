@@ -28,6 +28,8 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `password` | str | `""` | Password for `username`. Do not combine user/password authentication with token authentication. |
 | `access_token` | str or None | `None` | ClickHouse Cloud JWT access token. Mutually exclusive with `token_provider` and user/password authentication. |
 | `token_provider` | callable or None | `None` | Callable that supplies a JWT initially and after an authentication rejection. An async provider may be used with `get_async_client`. |
+| `use_kerberos` | bool or boolean string | `False` | Use Kerberos authentication through HTTP `Negotiate`. Supported by the synchronous and async HTTP clients. |
+| `kerberos_hostname_override` | str or None | `None` | Hostname used in the Kerberos service principal when it differs from `host`. The default principal is `HTTP/<host>`. |
 | `database` | str or None | User default | Default database. Passing `None` requests the server default for the user. |
 | `secure` | bool or str | `False` | Enable HTTPS/TLS. `interface="https"` also selects HTTPS, as does port 443 or 8443 when `interface` is not set. |
 | `dsn` | str or None | `None` | Connection URL. Explicit keyword arguments take precedence over values parsed from the DSN. Percent-encode reserved characters in credentials and database names. |
@@ -53,6 +55,41 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `rename_response_column` | str or None | `None` | Column renaming strategy: `"remove_prefix"`, `"to_camelcase"`, `"to_camelcase_without_prefix"`, `"to_underscore"`, or `"to_underscore_without_prefix"`. |
 
 The async factory also accepts `connector_limit=100`, `connector_limit_per_host=20`, and `keepalive_timeout=30.0` to configure its aiohttp connection pool. It does not accept `pool_mgr`. The synchronous chDB backend accepts `path` and `chdb_options`; see [Embedded chDB backend](#embedded-chdb-backend).
+
+### Kerberos authentication {#kerberos-authentication}
+
+Kerberos authentication is available for both `get_client` and `get_async_client`. Install the `kerberos` extra and the Kerberos client libraries required by your operating system:
+
+```bash
+pip install "clickhouse-connect[kerberos]"
+```
+
+For the async client, install both optional dependencies with `pip install "clickhouse-connect[async,kerberos]"`.
+
+Obtain a Kerberos ticket before creating the client, for example by running `kinit`. ClickHouse Connect uses the current process's Kerberos credential cache. It does not acquire a ticket from the `username` or `password` arguments.
+
+```python
+import clickhouse_connect
+
+client = clickhouse_connect.get_client(
+    host="clickhouse.example.com",
+    use_kerberos=True,
+)
+```
+
+The default service principal is `HTTP/<host>`. When the connection hostname is an IP address, load balancer, or proxy that differs from the ClickHouse server principal, set `kerberos_hostname_override`:
+
+```python
+client = clickhouse_connect.get_client(
+    host="127.0.0.1",
+    use_kerberos=True,
+    kerberos_hostname_override="clickhouse.example.com",
+)
+```
+
+Each authenticated HTTP request attempt sends a fresh preemptive Kerberos token. The client also requires a `WWW-Authenticate: Negotiate <token>` header on every successful authenticated response and validates that token to complete mutual authentication. It raises `OperationalError` if the response token is missing, malformed, rejected, or does not complete the Kerberos context.
+
+Do not combine `use_kerberos=True` with `username`, `password`, `access_token`, `token_provider`, or `client_cert`. Kerberos authentication supports the HTTP and HTTPS clients only. It does not support the chDB backend.
 
 ### HTTPS/TLS arguments {#httpstls-arguments}
 

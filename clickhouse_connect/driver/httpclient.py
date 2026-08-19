@@ -81,8 +81,6 @@ class HttpClient(SyncBackendClient):
         database: str | None,
         access_token: str | None = None,
         token_provider: Callable[[], str] | None = None,
-        use_kerberos: bool | str = False,
-        kerberos_hostname_override: str | None = None,
         compress: bool | str = True,
         query_limit: int = 0,
         query_retries: int = 2,
@@ -109,6 +107,8 @@ class HttpClient(SyncBackendClient):
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
+        use_kerberos: bool | str = False,
+        kerberos_hostname_override: str | None = None,
     ):
         """
         Create an HTTP ClickHouse Connect client
@@ -154,19 +154,20 @@ class HttpClient(SyncBackendClient):
             else:
                 pool = default_pool_manager()
 
-        if token_provider:
-            access_token = token_provider()
         use_kerberos = coerce_bool(use_kerberos)
         kerberos_hostname: str | None = None
         if use_kerberos:
-            if access_token or token_provider or username or client_cert:
+            if access_token or token_provider or username or password or client_cert:
                 raise ProgrammingError("Cannot combine use_kerberos with access_token, token_provider, username/password, or client_cert")
             check_kerberos()
             kerberos_hostname = kerberos_hostname_override or host
-        elif access_token:
-            client_headers["Authorization"] = f"Bearer {access_token}"
-        elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
-            client_headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
+        else:
+            if token_provider:
+                access_token = token_provider()
+            if access_token:
+                client_headers["Authorization"] = f"Bearer {access_token}"
+            elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
+                client_headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
 
         self._reported_libs: set[str] = set()
         client_headers["User-Agent"] = common.build_client_name(client_name)

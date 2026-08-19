@@ -38,7 +38,7 @@ from clickhouse_connect.driver._backend.models import Capabilities, CommandExecu
 from clickhouse_connect.driver.common import ShowClickHouseErrors, dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.httputil import ResponseSource, all_managers, check_conn_expiration, get_response_data
-from clickhouse_connect.driver.kerberos import negotiate_auth_header
+from clickhouse_connect.driver.kerberos import KerberosAuthContext
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver._backend.contracts import SyncBackend
@@ -292,9 +292,6 @@ class HttpSyncBackend:
         if isinstance(data, str):
             data = data.encode()
         headers = dict_copy(self.headers, headers)
-        if self.use_kerberos:
-            assert self.kerberos_hostname is not None
-            headers["Authorization"] = negotiate_auth_header(self.kerberos_hostname)
         attempts = 0
         auth_retried = False
         final_params = {}
@@ -314,7 +311,12 @@ class HttpSyncBackend:
             final_params["query_id"] = str(uuid.uuid4())
 
         url = f"{self._base_url}?{urlencode(final_params)}"
-        kwargs: dict[str, Any] = {"headers": headers, "timeout": self.timeout, "retries": self.http_retries, "preload_content": not stream}
+        kwargs: dict[str, Any] = {
+            "headers": headers,
+            "timeout": self.timeout,
+            "retries": 0 if self.use_kerberos else self.http_retries,
+            "preload_content": not stream,
+        }
         if self.server_host_name:
             kwargs["assert_same_host"] = False
             kwargs["headers"].update({"Host": self.server_host_name})
@@ -336,6 +338,11 @@ class HttpSyncBackend:
                 # throw an error instead, but in most cases this more helpful error will be thrown first
                 self._active_session = query_session
             try:
+                kerberos_context = None
+                if self.use_kerberos:
+                    assert self.kerberos_hostname is not None
+                    kerberos_context = KerberosAuthContext(self.kerberos_hostname)
+                    headers["Authorization"] = kerberos_context.authorization_header
                 response: HTTPResponse = cast(HTTPResponse, cast(PoolManager, self.http).request(method, url, **kwargs))
             except HTTPError as ex:
                 # Always allow at least one retry on a clean connection error so a single stale
@@ -368,11 +375,18 @@ class HttpSyncBackend:
                 if query_session:
                     self._active_session = None  # Make sure we always clear this
             if 200 <= response.status < 300 and not response.headers.get(ex_header):
+                if kerberos_context is not None:
+                    try:
+                        kerberos_context.validate_response(response.headers.get("WWW-Authenticate"))
+                    except Exception:
+                        response.close()
+                        raise
                 return response
             if response.status in retryable_http_statuses:
                 if attempts > retries:
                     self.error_handler(response, True)
                 logger.debug("Retrying requests with status code %d", response.status)
+                response.close()
             elif self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
                 body = kwargs.get("body")
                 if retry_body is None and not (body is None or isinstance(body, (bytes, bytearray, str))):

@@ -7,7 +7,7 @@ exercise validation and request/header wiring rather than a real GSSAPI handshak
 
 import base64
 from inspect import signature
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -130,14 +130,15 @@ class TestKerberosConstruction:
             client = await create_async_client(interface="http", host="h", port=8123, generic_args={"use_kerberos": True})
         assert client.use_kerberos is True
 
-    def test_use_kerberos_in_httpclient_signature(self):
-        # Guards the generic_args routing the construction tests depend on.
-        assert "use_kerberos" in signature(HttpClient).parameters
-        assert "kerberos_hostname_override" in signature(HttpClient).parameters
+    def test_httpclient_signature_preserves_positional_parameters(self):
+        parameters = list(signature(HttpClient).parameters)
+        assert parameters[8] == "compress"
+        assert parameters[-2:] == ["use_kerberos", "kerberos_hostname_override"]
 
-    def test_use_kerberos_in_asyncclient_signature(self):
-        assert "use_kerberos" in signature(AsyncClient).parameters
-        assert "kerberos_hostname_override" in signature(AsyncClient).parameters
+    def test_asyncclient_signature_preserves_positional_parameters(self):
+        parameters = list(signature(AsyncClient).parameters)
+        assert parameters[8] == "compress"
+        assert parameters[-2:] == ["use_kerberos", "kerberos_hostname_override"]
 
     def test_real_http_client_sets_kerberos_hostname_from_host(self, fake_spnego):
         with patch.object(Client, "_init_common_settings"):
@@ -160,45 +161,105 @@ class TestKerberosConstruction:
             )
         assert client._backend.kerberos_hostname == "chnode1.example.com"
 
+    def test_direct_httpclient_rejects_kerberos_with_password(self, fake_spnego):
+        with pytest.raises(ProgrammingError):
+            HttpClient("http", "chnode1", 8123, "", "secret", None, use_kerberos=True)
 
-class TestNegotiateAuthHeader:
-    def test_builds_negotiate_header(self, fake_spnego):
-        header = kerberos_module.negotiate_auth_header("chnode1.example.com")
-        assert header == "Negotiate " + base64.b64encode(b"fake-token").decode()
-        fake_spnego.client.assert_called_once_with(hostname="chnode1.example.com", service="HTTP")
+    def test_direct_httpclient_rejects_provider_without_calling_it(self, fake_spnego):
+        provider = MagicMock(return_value="token")
+
+        with pytest.raises(ProgrammingError):
+            HttpClient("http", "chnode1", 8123, "", "", None, token_provider=provider, use_kerberos=True)
+
+        provider.assert_not_called()
+
+    def test_direct_asyncclient_rejects_kerberos_with_password(self, fake_spnego):
+        with pytest.raises(ProgrammingError):
+            AsyncClient("http", "chnode1", 8123, "", "secret", None, use_kerberos=True)
+
+
+class TestKerberosAuthContext:
+    def test_builds_kerberos_negotiate_header(self, fake_spnego):
+        context = kerberos_module.KerberosAuthContext("chnode1.example.com")
+
+        assert context.authorization_header == "Negotiate " + base64.b64encode(b"fake-token").decode()
+        fake_spnego.client.assert_called_once_with(
+            hostname="chnode1.example.com",
+            service="HTTP",
+            protocol="kerberos",
+        )
+
+    def test_validates_server_token_with_same_context(self, fake_spnego):
+        spnego_context = fake_spnego.client.return_value
+        spnego_context.step.side_effect = [b"request-token", None]
+        spnego_context.complete = True
+        context = kerberos_module.KerberosAuthContext("chnode1.example.com")
+
+        context.validate_response("Negotiate " + base64.b64encode(b"response-token").decode())
+
+        assert spnego_context.step.call_args_list == [call(), call(b"response-token")]
+
+    @pytest.mark.parametrize(
+        "authenticate_header",
+        [None, "", "Basic abc", "Negotiate", "Negotiate !!!"],
+    )
+    def test_rejects_missing_or_malformed_server_token(self, fake_spnego, authenticate_header):
+        context = kerberos_module.KerberosAuthContext("chnode1.example.com")
+
+        with pytest.raises(OperationalError, match="mutual authentication failed"):
+            context.validate_response(authenticate_header)
+
+    def test_rejects_incomplete_mutual_authentication(self, fake_spnego):
+        fake_spnego.client.return_value.complete = False
+        context = kerberos_module.KerberosAuthContext("chnode1.example.com")
+
+        with pytest.raises(OperationalError, match="did not complete"):
+            context.validate_response("Negotiate " + base64.b64encode(b"response-token").decode())
 
     def test_missing_pyspnego(self):
         with patch.object(options_module, "spnego", None, create=True):
             with pytest.raises(NotSupportedError):
-                kerberos_module.negotiate_auth_header("host")
+                kerberos_module.KerberosAuthContext("host")
 
-    def test_negotiation_failure_wraps_and_preserves_pyspnego_message(self):
-        # Real message captured from pyspnego with no 'gssapi'/'krb5' installed: its own Context
-        # annotations already explain the actual cause, so it is surfaced as-is rather than reinterpreted.
-        raw_message = (
-            "SpnegoError (1): SpnegoError (16): Operation not supported or available, Context: No username "
-            "or password was specified and the credential cache did not exist or contained no credentials, "
-            "Context: Unable to negotiate common mechanism"
-        )
-
+    def test_negotiation_failure_preserves_pyspnego_message(self):
         class _FakeSpnegoError(Exception):
             pass
 
         fake = MagicMock()
         fake.exceptions.SpnegoError = _FakeSpnegoError
-        fake.client.return_value.step.side_effect = _FakeSpnegoError(raw_message)
+        fake.client.return_value.step.side_effect = _FakeSpnegoError("credential cache is unavailable")
 
         with patch.object(options_module, "spnego", fake, create=True):
-            with pytest.raises(OperationalError) as exc_info:
-                kerberos_module.negotiate_auth_header("chnode1.example.com")
+            with pytest.raises(OperationalError, match="credential cache is unavailable") as exc_info:
+                kerberos_module.KerberosAuthContext("chnode1.example.com")
 
-        assert raw_message in str(exc_info.value)
-        assert exc_info.value.__cause__ is not None  # original SpnegoError preserved via chaining
+        assert exc_info.value.__cause__ is not None
+
+    def test_missing_system_kerberos_support_is_operational_error(self):
+        fake = MagicMock()
+        fake.exceptions.SpnegoError = RuntimeError
+        fake.client.side_effect = ImportError("GSSAPI support is unavailable")
+
+        with patch.object(options_module, "spnego", fake, create=True):
+            with pytest.raises(OperationalError, match="GSSAPI support is unavailable"):
+                kerberos_module.KerberosAuthContext("chnode1.example.com")
 
 
-def _build_sync_kerberos_client(hostname="chnode1.example.com"):
-    client = HttpClient.__new__(HttpClient)
-    client._backend = HttpSyncBackend(
+def _response(status=200, authenticate_header="Negotiate response-token"):
+    response = MagicMock()
+    response.status = status
+    response.headers = {"WWW-Authenticate": authenticate_header} if authenticate_header is not None else {}
+    return response
+
+
+def _kerberos_attempt(header):
+    context = MagicMock()
+    context.authorization_header = header
+    return context
+
+
+def _build_sync_kerberos_backend(hostname="chnode1.example.com"):
+    return HttpSyncBackend(
         url="http://localhost:8123",
         pool_manager=MagicMock(),
         owns_pool_manager=False,
@@ -211,46 +272,49 @@ def _build_sync_kerberos_client(hostname="chnode1.example.com"):
         use_kerberos=True,
         kerberos_hostname=hostname,
     )
-    client.url = "http://localhost:8123"
-    client.params = client._backend.params
-    return client
-
-
-def _ok_response():
-    r = MagicMock()
-    r.status = 200
-    r.headers = {}
-    return r
 
 
 class TestSyncKerberosRequest:
-    def test_sends_fresh_negotiate_header_per_request(self):
-        client = _build_sync_kerberos_client()
-        sent_auth = []
+    def test_retry_uses_fresh_context_and_validates_success(self):
+        backend = _build_sync_kerberos_backend()
+        responses = iter([_response(503), _response()])
+        request_kwargs = []
 
-        def fake_request(method, url, **kwargs):
-            sent_auth.append(kwargs["headers"].get("Authorization"))
-            return _ok_response()
+        def request(method, url, **kwargs):
+            request_kwargs.append(dict(kwargs, headers=dict(kwargs["headers"])))
+            return next(responses)
 
-        client.http = MagicMock()
-        client.http.request = fake_request
+        backend.http.request.side_effect = request
+        first_context = _kerberos_attempt("Negotiate request-1")
+        second_context = _kerberos_attempt("Negotiate request-2")
 
-        headers_seq = iter(["Negotiate aaa", "Negotiate bbb"])
-        with patch("clickhouse_connect.driver._backend.http_sync.negotiate_auth_header", side_effect=lambda h: next(headers_seq)):
-            client._raw_request(b"SELECT 1", {})
-            client._raw_request(b"SELECT 2", {})
+        with patch(
+            "clickhouse_connect.driver._backend.http_sync.KerberosAuthContext",
+            side_effect=[first_context, second_context],
+        ) as context_factory:
+            response = backend.request(b"SELECT 13", {}, retries=1)
 
-        assert sent_auth == ["Negotiate aaa", "Negotiate bbb"]
+        assert response.status == 200
+        assert [kwargs["headers"]["Authorization"] for kwargs in request_kwargs] == [
+            "Negotiate request-1",
+            "Negotiate request-2",
+        ]
+        assert [kwargs["retries"] for kwargs in request_kwargs] == [0, 0]
+        assert context_factory.call_args_list == [call("chnode1.example.com"), call("chnode1.example.com")]
+        first_context.validate_response.assert_not_called()
+        second_context.validate_response.assert_called_once_with("Negotiate response-token")
 
-    def test_hostname_passed_to_negotiate(self):
-        client = _build_sync_kerberos_client(hostname="override.example.com")
-        client.http = MagicMock()
-        client.http.request = MagicMock(return_value=_ok_response())
+    def test_success_without_server_token_fails(self):
+        backend = _build_sync_kerberos_backend()
+        backend.http.request.return_value = _response(authenticate_header=None)
+        context = _kerberos_attempt("Negotiate request-token")
+        context.validate_response.side_effect = OperationalError("missing server token")
 
-        with patch("clickhouse_connect.driver._backend.http_sync.negotiate_auth_header", return_value="Negotiate xyz") as mock_negotiate:
-            client._raw_request(b"SELECT 1", {})
+        with patch("clickhouse_connect.driver._backend.http_sync.KerberosAuthContext", return_value=context):
+            with pytest.raises(OperationalError, match="missing server token"):
+                backend.request(b"SELECT 13", {})
 
-        mock_negotiate.assert_called_once_with("override.example.com")
+        backend.http.request.return_value.close.assert_called_once()
 
 
 class _FakeAsyncLease:
@@ -267,32 +331,18 @@ class _FakeAsyncLease:
 
 class _FakeAsyncSession:
     def __init__(self, responses):
-        self._seq = iter(responses)
+        self._responses = iter(responses)
         self.closed = False
         self.headers = {}
-        self.sent_auth = []
+        self.request_kwargs = []
 
     async def request(self, **kwargs):
-        self.sent_auth.append(kwargs["headers"].get("Authorization"))
-        return next(self._seq)
+        self.request_kwargs.append(dict(kwargs, headers=dict(kwargs["headers"])))
+        return next(self._responses)
 
 
-def _fake_async_response(status=200):
-    r = MagicMock()
-    r.status = status
-    r.headers = {}
-
-    async def _read():
-        return b""
-
-    r.read = _read
-    r.close = MagicMock()
-    return r
-
-
-def _build_async_kerberos_client(hostname="chnode1.example.com", responses=None):
-    client = AsyncClient.__new__(AsyncClient)
-    client._backend = HttpAsyncBackend(
+def _build_async_kerberos_backend(responses, hostname="chnode1.example.com", use_kerberos=True):
+    backend = HttpAsyncBackend(
         url="http://localhost:8123",
         headers={},
         client_settings={},
@@ -303,20 +353,48 @@ def _build_async_kerberos_client(hostname="chnode1.example.com", responses=None)
         server_host_name=None,
         token_provider=None,
         autogenerate_query_id=False,
-        use_kerberos=True,
-        kerberos_hostname=hostname,
+        use_kerberos=use_kerberos,
+        kerberos_hostname=hostname if use_kerberos else None,
     )
-    session = _FakeAsyncSession(responses if responses is not None else [_fake_async_response(200)])
-    client._backend.session_lease = _FakeAsyncLease(session)
-    return client, session
+    session = _FakeAsyncSession(responses)
+    backend.session_lease = _FakeAsyncLease(session)
+    return backend, session
 
 
 class TestAsyncKerberosRequest:
     @pytest.mark.asyncio
-    async def test_sends_negotiate_header(self):
-        client, session = _build_async_kerberos_client()
-        with patch("clickhouse_connect.driver._backend.http_async.negotiate_auth_header", return_value="Negotiate xyz") as mock_negotiate:
-            resp = await client._raw_request(b"SELECT 1", {})
-        assert resp.status == 200
-        assert session.sent_auth == ["Negotiate xyz"]
-        mock_negotiate.assert_called_once_with("chnode1.example.com")
+    @pytest.mark.parametrize(
+        ("use_kerberos", "expected_method"),
+        [(False, "GET"), (True, "POST")],
+    )
+    async def test_get_method_replay_protection(self, use_kerberos, expected_method):
+        backend, session = _build_async_kerberos_backend([_response()], use_kerberos=use_kerberos)
+        context = _kerberos_attempt("Negotiate request-token")
+
+        with patch("clickhouse_connect.driver._backend.http_async.KerberosAuthContext", return_value=context):
+            await backend.request(b"", {}, method="GET")
+
+        assert session.request_kwargs[0]["method"] == expected_method
+        assert ("allow_redirects" in session.request_kwargs[0]) is use_kerberos
+
+    @pytest.mark.asyncio
+    async def test_retry_uses_fresh_context_and_validates_success(self):
+        backend, session = _build_async_kerberos_backend([_response(503), _response()])
+        first_context = _kerberos_attempt("Negotiate request-1")
+        second_context = _kerberos_attempt("Negotiate request-2")
+
+        with patch(
+            "clickhouse_connect.driver._backend.http_async.KerberosAuthContext",
+            side_effect=[first_context, second_context],
+        ) as context_factory:
+            response = await backend.request(b"SELECT 13", {}, retries=1)
+
+        assert response.status == 200
+        assert [kwargs["headers"]["Authorization"] for kwargs in session.request_kwargs] == [
+            "Negotiate request-1",
+            "Negotiate request-2",
+        ]
+        assert all(kwargs["allow_redirects"] is False for kwargs in session.request_kwargs)
+        assert context_factory.call_args_list == [call("chnode1.example.com"), call("chnode1.example.com")]
+        first_context.validate_response.assert_not_called()
+        second_context.validate_response.assert_called_once_with("Negotiate response-token")

@@ -38,7 +38,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
 from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import ShowClickHouseErrors, dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
-from clickhouse_connect.driver.kerberos import negotiate_auth_header
+from clickhouse_connect.driver.kerberos import KerberosAuthContext
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
@@ -450,9 +450,6 @@ class HttpAsyncBackend:
             final_params["query_id"] = str(uuid.uuid4())
 
         req_headers = dict_copy(self.headers, headers)
-        if self.use_kerberos:
-            assert self.kerberos_hostname is not None
-            req_headers["Authorization"] = negotiate_auth_header(self.kerberos_hostname)
         if self.server_host_name:
             req_headers["Host"] = self.server_host_name
         query_session = final_params.get("session_id")
@@ -482,9 +479,22 @@ class HttpAsyncBackend:
                 lease.acquire()
             lease_released = False
             try:
+                kerberos_context = None
+                if self.use_kerberos:
+                    assert self.kerberos_hostname is not None
+                    kerberos_context = KerberosAuthContext(self.kerberos_hostname)
+                    req_headers["Authorization"] = kerberos_context.authorization_header
                 # Construct full URL (aiohttp doesn't have base_url)
                 url = self._base_url
-                request_kwargs = {"method": method, "url": url, "params": final_params, "headers": req_headers}
+                request_method = "POST" if self.use_kerberos and method == "GET" else method
+                request_kwargs: dict[str, Any] = {
+                    "method": request_method,
+                    "url": url,
+                    "params": final_params,
+                    "headers": req_headers,
+                }
+                if self.use_kerberos:
+                    request_kwargs["allow_redirects"] = False
                 if self.server_host_name and self.ssl_context is not None:
                     request_kwargs["ssl"] = self.ssl_context
                     request_kwargs["server_hostname"] = self.server_host_name
@@ -515,6 +525,12 @@ class HttpAsyncBackend:
 
                 response = await session.request(**request_kwargs)
                 if 200 <= response.status < 300 and not response.headers.get(ex_header):
+                    if kerberos_context is not None:
+                        try:
+                            kerberos_context.validate_response(response.headers.get("WWW-Authenticate"))
+                        except Exception:
+                            response.close()
+                            raise
                     # Caller releases lease after consuming the body.
                     response._lease_release = _one_shot(lease.release)  # type: ignore[attr-defined]
                     lease_released = True

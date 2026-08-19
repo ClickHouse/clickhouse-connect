@@ -296,6 +296,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Start ClickHouse 25.8 in Docker
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: '25.8'
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -309,15 +314,27 @@ jobs:
       - name: Add Kerberos ClickHouse instance to /etc/hosts
         run: sudo echo "127.0.0.1 server1.clickhouse.test" | sudo tee -a /etc/hosts
       - name: Install Test Dependencies
-        run: pip install -r tests/test_requirements.txt
+        run: |
+          pip install -r tests/test_requirements.txt
+          pip install "pyspnego[kerberos]>=0.10"
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"
-        run: python setup.py develop
+        run: pip install -e . --no-deps
       - name: Run tests
         env:
           CLICKHOUSE_CONNECT_TEST_KERBEROS: '1'
-        run: pytest tests/integration_tests/test_kerberos.py
+        run: pytest --dist=loadgroup tests/integration_tests/test_kerberos.py
+      - name: Stop Kerberos services
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-kerberos
+        run: docker compose -f docker-compose.yml --profile kerberos down --volumes --remove-orphans
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-ci
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   check-secret:
     runs-on: ubuntu-latest

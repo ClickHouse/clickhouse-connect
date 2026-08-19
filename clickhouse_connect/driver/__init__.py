@@ -204,8 +204,8 @@ def create_client(
     :param token_provider: A callable returning a JWT access token (ClickHouse Cloud feature). Called for the initial token and
       again to refresh it whenever the server rejects the current one.
       Should not be set if `access_token` or `username`/`password` are used.
-    :param use_kerberos: Use Kerberos/SPNEGO ("Negotiate") authentication against a ClickHouse server configured for
-      Kerberos, using the current process's Kerberos credential cache (equivalent to having run `kinit` beforehand).
+    :param use_kerberos: Use Kerberos authentication through the HTTP `Negotiate` scheme against a ClickHouse server
+      configured for Kerberos, using the current process's Kerberos credential cache (equivalent to having run `kinit` beforehand).
       Requires the kerberos extra: pip install clickhouse-connect[kerberos]. Cannot be combined with `access_token`,
       `token_provider`, `username`/`password`, or `client_cert`.
     :param kerberos_hostname_override: Override the hostname used to build the Kerberos service principal name
@@ -371,8 +371,8 @@ async def create_async_client(
     :param token_provider: A callable returning a JWT access token. Called for the initial token and
       again to refresh it whenever the server rejects the current one. Because multiple in-flight requests
       may each trigger a refresh concurrently, the callable must be safe to invoke in parallel.
-    :param use_kerberos: Use Kerberos/SPNEGO ("Negotiate") authentication against a ClickHouse server configured for
-      Kerberos, using the current process's Kerberos credential cache (equivalent to having run `kinit` beforehand).
+    :param use_kerberos: Use Kerberos authentication through the HTTP `Negotiate` scheme against a ClickHouse server
+      configured for Kerberos, using the current process's Kerberos credential cache (equivalent to having run `kinit` beforehand).
       Requires the kerberos extra: pip install clickhouse-connect[kerberos]. Cannot be combined with `access_token`,
       `token_provider`, `username`/`password`, or `client_cert`.
     :param kerberos_hostname_override: Override the hostname used to build the Kerberos service principal name

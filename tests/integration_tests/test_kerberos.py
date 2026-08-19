@@ -15,7 +15,7 @@ def _kerberos_enabled():
     return coerce_bool(os.environ.get("CLICKHOUSE_CONNECT_TEST_KERBEROS", "False"))
 
 
-# All tests here must land on the same xdist worker (see --dist=loadgroup in pyproject.toml):
+# All tests here must land on the same xdist worker. The dedicated CI job uses --dist=loadgroup:
 # kerberos_env below does real docker compose/kinit side effects that must run exactly once, not
 # once per worker.
 pytestmark = [
@@ -99,8 +99,7 @@ def test_kerberos_multiple_sequential_requests(client_factory, call):
     # ClickHouse authenticates each HTTP request independently (no session carryover), so a
     # fresh Negotiate token must be generated and accepted on every single request, not just
     # the first one on a connection. Headers are captured at the actual transport call
-    # (urllib3/aiohttp), not from negotiate_auth_header's return value, so this confirms what was
-    # truly sent over the wire rather than just what the header builder produced.
+    # (urllib3/aiohttp), so this confirms what was truly sent over the wire.
     client = client_factory(
         host=kerberos_manage.CLICKHOUSE_HOST,
         port=kerberos_manage.CLICKHOUSE_PORT,

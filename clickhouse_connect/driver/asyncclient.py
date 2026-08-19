@@ -129,8 +129,6 @@ class AsyncClient(Client):
         database: str | None = None,
         access_token: str | None = None,
         token_provider: Callable[[], str | Awaitable[str]] | None = None,
-        use_kerberos: bool | str = False,
-        kerberos_hostname_override: str | None = None,
         compress: bool | str = True,
         connect_timeout: int = 10,
         send_receive_timeout: int = 300,
@@ -159,6 +157,8 @@ class AsyncClient(Client):
         form_encode_query_params: bool = False,
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
+        use_kerberos: bool | str = False,
+        kerberos_hostname_override: str | None = None,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
@@ -186,7 +186,7 @@ class AsyncClient(Client):
         # Auth headers follow the sync client: mutual TLS headers are set
         # independently, and a bearer token wins over basic auth.
         if use_kerberos:
-            if access_token or token_provider or username or client_cert:
+            if access_token or token_provider or username or password or client_cert:
                 raise ProgrammingError("Cannot combine use_kerberos with access_token, token_provider, username/password, or client_cert")
             check_kerberos()
             kerberos_hostname = kerberos_hostname_override or host
