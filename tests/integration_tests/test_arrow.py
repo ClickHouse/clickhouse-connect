@@ -66,6 +66,19 @@ def test_arrow_stream(param_client: Client, call, table_context, consume_stream)
         assert total_rows == 1000000
 
 
+def test_arrow_queries_with_trailing_semicolon(param_client: Client, call, consume_stream):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+
+    table = call(param_client.query_arrow, "SELECT 13;")
+    assert table.column(0).to_pylist() == [13]
+
+    batches = []
+    stream = call(param_client.query_arrow_stream, "SELECT 79; -- trailing comment")
+    consume_stream(stream, batches.append)
+    assert [value for batch in batches for value in batch.column(0).to_pylist()] == [79]
+
+
 def test_arrow_map(param_client: Client, call, table_context: Callable):
     if not arrow:
         pytest.skip("PyArrow package not available")

@@ -4,6 +4,7 @@ from datetime import timedelta, timezone
 import pyarrow as pa
 import pytest
 
+from clickhouse_connect.driver import query as query_module
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -33,6 +34,292 @@ def test_copy_context():
     assert context_copy.settings["max_execution_time"] == 120
     assert context_copy.settings["max_bytes_for_external_group_by"] == 25165824
     assert context_copy.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_2'"
+
+
+@pytest.mark.parametrize(
+    "query, expected_calls",
+    [
+        ("SELECT 13", 0),
+        ("SELECT 13;", 0),
+        ("SELECT 'value_1;';", 1),
+        ("SELECT 13; -- trailing", 1),
+        ("SELECT 13; /* separator */ ;", 1),
+        ("SELECT 13; /* inner; */ ;", 1),
+        ("SELECT ' INSERT INTO '; -- trailing", 1),
+        ("INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n", 0),
+        ("CREATE TABLE tbl (value UInt8) ENGINE Memory;\n", 1),
+        ("CREATE TABLE tbl (value UInt8) ENGINE Memory;", 0),
+        ("SHOW POLICIES; -- trailing", 1),
+    ],
+)
+def test_query_context_trailing_semicolon_lexer_routing(monkeypatch, query, expected_calls):
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    QueryContext(query)
+    assert len(calls) == expected_calls
+
+
+@pytest.mark.parametrize(
+    "query, expected_calls",
+    [("SELECT 13", 1), ("SELECT 13;", 1), ("SELECT 13; -- trailing", 1)],
+)
+def test_query_context_avoids_common_duplicate_comment_scans(monkeypatch, query, expected_calls):
+    remove_comments = query_module.remove_sql_comments
+    calls = []
+
+    def track_remove_comments(sql):
+        calls.append(sql)
+        return remove_comments(sql)
+
+    monkeypatch.setattr(query_module, "remove_sql_comments", track_remove_comments)
+    QueryContext(query)
+    assert len(calls) == expected_calls
+
+
+def test_query_context_does_not_route_quoted_insert_literal_as_insert():
+    context = QueryContext("SELECT ' INSERT INTO '; -- trailing")
+    assert context.is_insert is False
+    assert context.final_query == "SELECT ' INSERT INTO ' -- trailing"
+
+
+def test_query_context_strips_command_terminators_for_streamed_entry_points():
+    context = QueryContext("SHOW POLICIES; -- trailing")
+    assert context.is_command is True
+    assert context.final_query == "SHOW POLICIES -- trailing"
+
+    context = QueryContext("CHECK TABLE tbl; -- trailing")
+    assert context.is_command is True
+    assert context.final_query == "CHECK TABLE tbl -- trailing"
+
+
+@pytest.mark.parametrize(
+    "query, parameters, expected_insert, expected_query",
+    [
+        (
+            "WITH {SELECT:Int32} AS value INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n",
+            {"SELECT": 13},
+            True,
+            "WITH {SELECT:Int32} AS value INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n",
+        ),
+        (
+            "WITH {INSERT:Int32} AS value SELECT value; -- trailing",
+            {"INSERT": 13},
+            False,
+            "WITH {INSERT:Int32} AS value SELECT value -- trailing",
+        ),
+    ],
+)
+def test_query_context_ignores_server_placeholder_names_when_routing(query, parameters, expected_insert, expected_query):
+    context = QueryContext(query, parameters=parameters)
+    assert context.is_insert is expected_insert
+    assert context.final_query == expected_query
+
+
+def test_query_context_reuses_server_bind_template_classification(monkeypatch):
+    remove_comments = query_module.remove_sql_comments
+    calls = []
+
+    def track_remove_comments(sql):
+        calls.append(sql)
+        return remove_comments(sql)
+
+    monkeypatch.setattr(query_module, "remove_sql_comments", track_remove_comments)
+    QueryContext("SELECT {value:UInt8}; -- trailing", parameters={"value": 13})
+    assert len(calls) == 1
+
+
+def test_query_context_classifies_bound_insert_before_lexing(monkeypatch):
+    class SqlKeyword:
+        def __str__(self):
+            return "INSERT"
+
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    query = "%(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+    context = QueryContext(query, parameters={"verb": SqlKeyword()})
+
+    assert context.is_insert is True
+    assert context.final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+    assert calls == []
+
+
+def test_query_context_preserves_bind_completed_insert_payload(monkeypatch):
+    class Raw:
+        def __str__(self):
+            return ""
+
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    query = "INSERT %sINTO tbl FORMAT TabSeparated\nvalue_1;\n"
+    context = QueryContext(query, parameters=[Raw()])
+
+    assert context.is_insert is True
+    assert context.final_query == "INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+    assert calls == []
+
+
+def test_query_context_preserves_with_prefixed_bound_insert_payload(monkeypatch):
+    class SqlKeyword:
+        calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return "INSERT"
+
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    keyword = SqlKeyword()
+    query = "WITH 1 AS y %(verb)s INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+    context = QueryContext(query, parameters={"verb": keyword})
+
+    assert context.is_insert is True
+    assert context.final_query == "WITH 1 AS y INSERT INTO tbl FORMAT TabSeparated\nvalue_1;\n"
+    assert keyword.calls == 1
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "statement, expected_query, expected_lexer_calls",
+    [
+        ("SELECT 13;", "SELECT 13", 0),
+        ("SELECT 13; -- trailing", "SELECT 13 -- trailing", 1),
+    ],
+)
+def test_query_context_normalizes_parameter_generated_terminator_once(monkeypatch, statement, expected_query, expected_lexer_calls):
+    class StatefulStatement:
+        calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return statement
+
+    strip = query_module._strip_trailing_semicolons
+    lexer_calls = []
+
+    def track_strip(sql):
+        lexer_calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    value = StatefulStatement()
+    context = QueryContext("%(statement)s", parameters={"statement": value})
+
+    assert context.final_query == expected_query
+    assert value.calls == 1
+    assert len(lexer_calls) == expected_lexer_calls
+
+
+def test_query_context_binds_parameter_generated_statement_once():
+    class StatefulStatement:
+        calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return "SELECT 13"
+
+    statement = StatefulStatement()
+    context = QueryContext("%(statement)s; -- trailing", parameters={"statement": statement})
+
+    assert context.final_query == "SELECT 13 -- trailing"
+    assert statement.calls == 1
+
+
+def test_query_context_binary_bind_lexes_only_the_template(monkeypatch):
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    query = "SELECT $value$; -- trailing"
+    context = QueryContext(query, parameters={"$value$": b"13"})
+
+    assert context.final_query == b"SELECT $value$13$value$ -- trailing"
+    assert calls == [query]
+
+
+def test_query_context_mixed_binary_and_client_bind_skips_unsafe_normalization(monkeypatch):
+    class StatefulStatement:
+        calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return "SELECT 13; -- trailing\n"
+
+    value = StatefulStatement()
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return sql
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    context = QueryContext(
+        "%(statement)s $value$",
+        parameters={"statement": value, "$value$": b"payload"},
+    )
+
+    assert context.final_query == b"SELECT 13; -- trailing\n $value$payload$value$"
+    assert value.calls == 1
+    assert calls == []
+
+
+def test_query_context_mixed_binary_select_normalizes_template(monkeypatch):
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    query = "SELECT %(value)s + toUInt8($raw$); -- trailing"
+    context = QueryContext(query, parameters={"value": 13, "$raw$": b"79"})
+
+    assert context.final_query == b"SELECT 13 + toUInt8($raw$79$raw$) -- trailing"
+    assert calls == [query]
+
+
+def test_query_context_binary_bind_with_unused_parameter_normalizes_template(monkeypatch):
+    strip = query_module._strip_trailing_semicolons
+    calls = []
+
+    def track_strip(sql):
+        calls.append(sql)
+        return strip(sql)
+
+    monkeypatch.setattr(query_module, "_strip_trailing_semicolons", track_strip)
+    query = "SELECT toUInt8($raw$); -- trailing"
+    context = QueryContext(query, parameters={"$raw$": b"13", "unused": 79})
+
+    assert context.final_query == b"SELECT toUInt8($raw$13$raw$) -- trailing"
+    assert calls == [query]
 
 
 @pytest.mark.parametrize(

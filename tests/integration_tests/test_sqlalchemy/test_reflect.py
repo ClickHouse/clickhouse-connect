@@ -1,7 +1,8 @@
 import pytest
 import sqlalchemy as db
 from sqlalchemy import MetaData, Table, inspect, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import NoResultFound
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Geometry, Point, SimpleAggregateFunction, UInt32
@@ -80,6 +81,71 @@ def test_table_exists(test_engine: Engine):
     inspector = inspect(test_engine)
     assert inspector.has_table(table_name="columns", schema="system")
     assert not inspector.has_table(table_name="nope", schema="fake_db")
+
+
+def test_direct_inspector_reflection(test_engine: Engine, monkeypatch):
+    common.set_setting("invalid_setting_action", "drop")
+
+    inspector = inspect(test_engine)
+    pool_events = []
+
+    def record_checkout(*_args):
+        pool_events.append("checkout")
+
+    def record_checkin(*_args):
+        pool_events.append("checkin")
+
+    db.event.listen(test_engine, "checkout", record_checkout)
+    db.event.listen(test_engine, "checkin", record_checkin)
+    try:
+        assert "name" in {column["name"] for column in inspector.get_columns("tables", schema="system")}
+        assert pool_events == ["checkout", "checkin"]
+
+        pool_events.clear()
+        with pytest.raises(NoResultFound):
+            inspector.get_columns("missing_reflection_table", schema="system")
+        assert pool_events == ["checkout", "checkin"]
+
+        inspector_class = type(inspector)
+        original_get_columns = inspector_class.get_columns
+        dispatched_binds = []
+
+        def tracking_get_columns(self, table_name, schema=None, **kwargs):
+            dispatched_binds.append(self.bind)
+            return original_get_columns(self, table_name, schema, **kwargs)
+
+        monkeypatch.setattr(inspector_class, "get_columns", tracking_get_columns)
+        pool_events.clear()
+        table = Table("tables", MetaData(schema="system"))
+        inspector.reflect_table(table)
+        assert "name" in table.columns
+        assert pool_events == ["checkout", "checkin"]
+        assert len(dispatched_binds) == 1
+        assert isinstance(dispatched_binds[0], Connection)
+
+        with test_engine.connect() as connection:
+            pool_events.clear()
+            inspector = inspect(connection)
+            assert "name" in {column["name"] for column in inspector.get_columns("tables", schema="system")}
+            table = Table("tables", MetaData(schema="system"))
+            inspector.reflect_table(table)
+            assert "name" in table.columns
+            assert pool_events == []
+            assert not connection.closed
+    finally:
+        db.event.remove(test_engine, "checkout", record_checkout)
+        db.event.remove(test_engine, "checkin", record_checkin)
+
+
+def test_reflection_column_filters(test_engine: Engine):
+    common.set_setting("invalid_setting_action", "drop")
+
+    table = Table("tables", MetaData(schema="system"), autoload_with=test_engine, include_columns=["name"])
+    assert [column.name for column in table.columns] == ["name"]
+
+    table = Table("tables", MetaData(schema="system"))
+    inspect(test_engine).reflect_table(table, ["name", "engine"], ["engine"], True)
+    assert [column.name for column in table.columns] == ["name"]
 
 
 def test_get_schema_names(test_engine: Engine):
