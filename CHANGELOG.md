@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.7.2, 2026-08-19
+
 ### Bug Fixes
 
 - SQLAlchemy inspectors bound to an `Engine` can now call `get_columns()` and `reflect_table()` directly on SQLAlchemy 2.x. These methods now acquire and reuse one connection for each reflection operation, while inspectors already bound to a `Connection` continue to reuse it. Table reflection also honors positional `include_columns` and `exclude_columns` filters passed by SQLAlchemy instead of silently reflecting every column. Closes [#967](https://github.com/ClickHouse/clickhouse-connect/issues/967).
