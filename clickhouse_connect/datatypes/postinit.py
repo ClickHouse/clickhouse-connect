@@ -18,8 +18,10 @@ point = "Tuple(Float64, Float64)"
 ring = f"Array({point})"
 polygon = f"Array({ring})"
 multi_polygon = f"Array({polygon})"
+geometry = "Variant(LineString, MultiLineString, MultiPolygon, Point, Polygon, Ring)"
 
 geometric.POINT_DATA_TYPE = registry.get_from_name(point)
 geometric.RING_DATA_TYPE = registry.get_from_name(ring)
 geometric.POLYGON_DATA_TYPE = registry.get_from_name(polygon)
 geometric.MULTI_POLYGON_DATA_TYPE = registry.get_from_name(multi_polygon)
+geometric.GEOMETRY_DATA_TYPE = registry.get_from_name(geometry)

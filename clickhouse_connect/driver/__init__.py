@@ -265,6 +265,14 @@ def create_client(
       instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
       avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
       when this is True. Only available for query operations (not inserts). Default: False
+    :param native_codec: selects the codec for client-managed FORMAT Native query and insert paths. 'python' (default)
+      uses the Python/Cython codec. 'rust' prefers the compiled _ch_core codec and routes unsupported options or types
+      to Python. 'rust_strict' raises instead of routing. It covers query, query_np, query_df, their block and row
+      stream variants, and inserts including insert_df. Falls back to the common setting 'native_codec', which can be
+      seeded by the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable. Does not affect the Arrow methods
+      (query_arrow, query_df_arrow, insert_arrow), raw, JSON, or caller-provided byte streams. The rust codecs
+      require the separate clickhouse-connect-core wheel, installed via the rust extra:
+      pip install clickhouse-connect[rust]. Ignored for interface="chdb".
     :return: ClickHouse Connect Client instance
     """
     if _is_chdb_target(interface, dsn):
@@ -418,6 +426,14 @@ async def create_async_client(
       instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
       avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
       when this is True. Only available for query operations (not inserts). Default: False
+    :param native_codec: selects the codec for client-managed FORMAT Native query and insert paths. 'python' (default)
+      uses the Python/Cython codec. 'rust' prefers the compiled _ch_core codec and routes unsupported options or types
+      to Python. 'rust_strict' raises instead of routing. It covers query, query_np, query_df, their block and row
+      stream variants, and inserts including insert_df. Falls back to the common setting 'native_codec', which can be
+      seeded by the CLICKHOUSE_CONNECT_NATIVE_CODEC environment variable. Does not affect the Arrow methods
+      (query_arrow, query_df_arrow, insert_arrow), raw, JSON, or caller-provided byte streams. The rust codecs
+      require the separate clickhouse-connect-core wheel, installed via the rust extra:
+      pip install clickhouse-connect[rust].
     :return: ClickHouse Connect AsyncClient instance
     """
     if _is_chdb_target(interface, dsn):

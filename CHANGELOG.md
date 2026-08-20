@@ -2,6 +2,16 @@
 
 ## UNRELEASED
 
+## 1.8.0rc2, 2026-08-20
+
+Follow-up release candidate to 1.8.0rc1, rebased on 1.7.2 so all bug fixes from that stable release are included. The optional Rust codec itself is unchanged.
+
+## 1.8.0rc1, 2026-08-12
+
+### Improvements
+
+- Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Results and dtypes match the Python codec, and the Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
+
 ## 1.7.2, 2026-08-19
 
 ### Bug Fixes
@@ -63,6 +73,8 @@
 - `AsyncClient` initialization no longer overwrites user-supplied session settings with generated defaults. A client created with `settings={'date_time_input_format': 'basic'}` previously had that value replaced by the generated `best_effort` default. User settings now always win, matching the sync client.
 - An `AsyncClient` created with both client certificates and an access token now sends the mutual TLS authentication headers and the `Authorization: Bearer` header together, matching the sync client. The certificates previously suppressed the token at construction, while the `token_provider` option re-added its token right after initialization, so the two async token paths disagreed with each other. The server resolves the credential precedence.
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
+- Explicit NaN and infinity values in nullable `BFloat16` row inserts are now stored instead of being written as 0.
+- Inserting an `Array(Dynamic)` column no longer raises `ZeroDivisionError` when a sampled row holds an empty array. The insert block size estimate now treats an empty sample as minimal instead of dividing by its length.
 
 ### Improvements
 - Async clients now emit URL query parameters in the same order as the sync client on every request. The parameter names and values are unchanged, so this is only visible to systems that match or sign the exact request URL.

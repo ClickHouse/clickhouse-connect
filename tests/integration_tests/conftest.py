@@ -8,11 +8,12 @@ from contextlib import AbstractAsyncContextManager
 from subprocess import PIPE, Popen
 from typing import NamedTuple
 
+import pytest
 import pytest_asyncio
 from pytest import fixture
 
 from clickhouse_connect import common, get_async_client
-from clickhouse_connect.driver import Client, create_client
+from clickhouse_connect.driver import AsyncClient, Client, create_client
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.httpclient import HttpClient
@@ -31,11 +32,21 @@ class TestConfig(NamedTuple):
     compress: str
     insert_quorum: int
     proxy_address: str
+    native_codec: str
     __test__ = False
 
 
 class TestException(BaseException):
     pass
+
+
+def type_available(client: Client | AsyncClient, data_type: str) -> None:
+    if client.get_client_setting(f"allow_experimental_{data_type}_type") is None:
+        return
+    setting_def = client.server_settings.get(f"allow_experimental_{data_type}_type", None)
+    if setting_def is not None and setting_def.value == "1":
+        return
+    pytest.skip(f"New {data_type.upper()} type not available in this version: {client.server_version}")
 
 
 def make_client_config(test_config: TestConfig, **kwargs):
@@ -75,7 +86,11 @@ def test_config_fixture() -> Iterator[TestConfig]:
     compress = os.environ.get("CLICKHOUSE_CONNECT_TEST_COMPRESS", "True")
     insert_quorum = int(os.environ.get("CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM", "0"))
     proxy_address = os.environ.get("CLICKHOUSE_CONNECT_TEST_PROXY_ADDR", "")
-    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum, proxy_address)
+    # The native_codec common-setting default is env-seeded at import time, so fixture-created
+    # clients already pick up this env value without any per-fixture wiring. This field is for
+    # tests that want to read the configured codec.
+    native_codec = os.environ.get("CLICKHOUSE_CONNECT_NATIVE_CODEC", "python")
+    yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum, proxy_address, native_codec)
 
 
 @fixture(scope="session", name="test_db")

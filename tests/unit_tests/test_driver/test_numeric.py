@@ -1,4 +1,5 @@
 import unittest
+from math import copysign, isnan
 from unittest.mock import Mock
 
 import numpy as np
@@ -92,6 +93,24 @@ class TestBFloat16(unittest.TestCase):
 
         expected = np.array(expected, dtype=np.float32)
         self.assertTrue(np.all(out == expected))
+
+    def test_nullable_special_values_are_preserved(self):
+        data_in = [None, -0.0, float("inf"), float("-inf"), float("nan")]
+        null_map = bytes([1, 0, 0, 0, 0])
+        dest = bytearray(null_map)
+        self.null_bf16._write_column_binary(data_in, dest, self.ins_ctx)
+
+        # Little-endian bf16 words: null 0x0000, -0.0 0x8000, inf 0x7F80, -inf 0xFF80, nan 0x7FC0.
+        expected_words = b"\x00\x00\x00\x80\x80\x7f\x80\xff\xc0\x7f"
+        self.assertEqual(bytes(dest), null_map + expected_words)
+
+        source = create_test_source(bytes(dest))
+        out = self.null_bf16._read_nullable_column(source, len(data_in), self.qry_ctx, None)
+
+        self.assertIsNone(out[0])
+        self.assertEqual(copysign(1.0, out[1]), -1.0)
+        self.assertEqual(out[2:4], [float("inf"), float("-inf")])
+        self.assertTrue(isnan(out[4]))
 
     def test_encoded_size(self):
         "Test we only encode 2 bytes per float"
