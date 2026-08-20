@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+## 1.8.0rc2, 2026-08-20
+
+Follow-up release candidate to 1.8.0rc1, rebased on 1.7.2 so all bug fixes from that stable release are included. The optional Rust codec itself is unchanged.
+
 ## 1.8.0rc1, 2026-08-12
 
 ### Improvements
