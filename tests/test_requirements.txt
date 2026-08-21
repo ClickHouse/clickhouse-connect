@@ -3,7 +3,7 @@ setuptools
 certifi
 aiohttp>=3.9.0
 sqlalchemy>=2.0,<3.0
-alembic>=1.16
+alembic>=1.18
 cython==3.2.5
 pyarrow
 pytest
@@ -25,4 +25,3 @@ pyjwt[crypto]==2.10.1
 pre-commit==4.3.0
 ruff==0.15.8
 mypy==2.1.0
- 
