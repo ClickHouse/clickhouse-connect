@@ -55,7 +55,7 @@ It is normally unnecessary to override a write format, but the methods in `click
 | DateTime              | datetime.datetime       | int               | Integer values are interpreted as epoch seconds.                                                            |
 | DateTime64            | datetime.datetime       | int               | Integer values are interpreted as ticks at the column precision.                                            |
 | Time                  | datetime.timedelta      | int, string, time | Integer values are interpreted as seconds.                                                                  |
-| Time64                | datetime.timedelta      | int, string, time | Integer values are interpreted as ticks at the column precision.                                            |
+| Time64                | datetime.timedelta      | int, string, time | Scales 0 through 9 are supported. Integer values are interpreted as ticks at the column precision. NumPy timedelta values and DataFrame inserts work at every scale. Python time types are limited to microseconds. |
 | IPv4                  | `ipaddress.IPv4Address` | string            | Properly formatted strings can be inserted as IPv4 addresses                                                |
 | IPv6                  | `ipaddress.IPv6Address` | string            | Properly formatted strings can be inserted as IPv6 addresses                                                |
 | Tuple                 | dict or tuple           |                   |                                                                                                             |

@@ -140,6 +140,30 @@ def test_variant_leading_nulls(param_client: Client, call, table_context: Callab
         assert result[4][1] is None
 
 
+def test_variant_non_canonical_type_names(param_client: Client, call, table_context: Callable):
+    # Client-declared member order must not drive insert discriminators. The server
+    # sorts Variant members byte-wise by type name, so this spelling canonicalizes
+    # to Variant(Array(UInt32), String, UInt64).
+    with table_context("variant_non_canonical", ["key Int32", "v1 Variant(UInt64, String, Array(UInt32))"]):
+        data = [[1, 13], [2, "user_1"], [3, [79, 113]], [4, None]]
+        call(
+            param_client.insert,
+            "variant_non_canonical",
+            data,
+            column_names=["key", "v1"],
+            column_type_names=["Int32", "Variant(UInt64, String, Array(UInt32))"],
+        )
+        result = call(param_client.query, "SELECT key, v1, variantType(v1) FROM variant_non_canonical ORDER BY key").result_set
+        assert result[0][1] == 13
+        assert result[0][2] == "UInt64"
+        assert result[1][1] == "user_1"
+        assert result[1][2] == "String"
+        assert result[2][1] == [79, 113]
+        assert result[2][2] == "Array(UInt32)"
+        assert result[3][1] is None
+        assert result[3][2] == "None"
+
+
 def test_dynamic_nested(param_client: Client, call, table_context: Callable):
     with table_context("nested_dynamics", ["m2 Map(String, Dynamic)"], order_by="()"):
         data = [({"k4": "string8", "k5": 5000},)]

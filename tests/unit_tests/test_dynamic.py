@@ -5,6 +5,7 @@ from clickhouse_connect.datatypes.dynamic import read_dynamic_prefix, read_varia
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.bytesource import ByteArraySource
 from clickhouse_connect.driver.exceptions import DataError
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 
 
@@ -22,6 +23,23 @@ def test_variant_invalid_data_size():
 
     with pytest.raises(DataError):
         v_type.data_size(["not an int"])
+
+
+def test_variant_canonical_order_drives_discriminators():
+    v_type = get_from_name("Variant(UInt8, String)")
+
+    assert v_type.name == "Variant(String, UInt8)"
+    assert [element.name for element in v_type.element_types] == ["String", "UInt8"]
+    assert v_type._resolve_disc("user_1") == (0, "user_1")
+    assert v_type._resolve_disc(13) == (1, 13)
+
+    dest = bytearray()
+    v_type.write_column_data(["user_1", 13, None], dest, InsertContext("", [], []))
+    assert dest == b"\x00\x01\xff\x06user_1\x0d"
+
+    source = ByteArraySource(dest)
+    state = dynamic.VariantState(0, [None, None])
+    assert v_type.read_column_data(source, 3, QueryContext(), state) == ["user_1", 13, None]
 
 
 def _json_insert_prefix(ch_type) -> bytes:

@@ -3,7 +3,7 @@ from typing import Any
 from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType
-from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
 from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
@@ -86,13 +86,18 @@ class SimpleAggregateFunction(ClickHouseType):
     _slots = ("element_type",)
 
     def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
-        self._name_suffix = type_def.arg_str
+        element_name = _canonicalize_variant_name(type_def.values[1], self.element_type)
+        canonical_type_def = TypeDef(type_def.wrappers, type_def.keys, (type_def.values[0], element_name))
+        super().__init__(canonical_type_def)
+        self._name_suffix = canonical_type_def.arg_str
         self.byte_size = self.element_type.byte_size
-        self.np_type = self.element_type.np_type
         self.python_type = self.element_type.python_type
         self.nano_divisor = self.element_type.nano_divisor
+
+    @property
+    def np_type(self) -> str:  # type: ignore[override]
+        return self.element_type.np_type
 
     def _data_size(self, sample: Collection[Any]) -> int:
         return self.element_type.data_size(sample)
@@ -111,4 +116,16 @@ class SimpleAggregateFunction(ClickHouseType):
 
 
 class AggregateFunction(UnsupportedType):
-    pass
+    def __init__(self, type_def: TypeDef):
+        values = tuple(_canonicalize_argument(value) for value in type_def.values)
+        super().__init__(TypeDef(type_def.wrappers, type_def.keys, values) if values != type_def.values else type_def)
+
+
+def _canonicalize_argument(value: Any) -> Any:
+    """Canonicalize an AggregateFunction argument, leaving anything that is not a type alone."""
+    if not isinstance(value, str) or "Variant" not in value:
+        return value
+    try:
+        return _canonicalize_variant_name(value, get_from_name(value))
+    except Exception:  # noqa: BLE001 - a non-type argument keeps its original spelling
+        return value

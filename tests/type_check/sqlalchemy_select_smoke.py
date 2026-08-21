@@ -45,6 +45,15 @@ assert_type(materialized, sa.CTE)
 assert_type(cc_sa.cte(sa.select(book.c.id), "ranked", materialized=True), sa.CTE)
 
 json_payload = sa.column("payload", JSON())
+configured_json = JSON(
+    typed_paths={"request.id": UInt32, "attributes": "Variant(String, Array(String))"},
+    max_dynamic_paths=256,
+    max_dynamic_types=16,
+    skip_paths=["internal.debug"],
+    skip_regexps=[r"^private\."],
+)
+assert_type(configured_json, JSON)
+assert_type(JSON(user_id=UInt32), JSON)
 untyped_json_path = cc_sa.json_subcolumn(json_payload, "severity")
 assert_type(untyped_json_path, ColumnElement[object])
 typed_json_path = cc_sa.json_subcolumn(json_payload, "request_id", type_=UInt32())

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.datatypes.temporal import Time, Time64
@@ -335,7 +336,50 @@ class TestTime64DataType(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_invalid_scale_raises(self):
         with self.assertRaises(ProgrammingError):
-            Time64(TypeDef(values=(2,)))
+            Time64(TypeDef(values=(10,)))
+
+    def test_non_numpy_scales_are_valid(self):
+        for scale in range(10):
+            time_type = self.make(scale)
+            self.assertEqual(time_type.name, f"Time64({scale})")
+        self.assertEqual(self.make(0).np_type, "timedelta64[s]")
+        with self.assertRaises(ProgrammingError):
+            _ = self.make(2).np_type
+
+    def test_string_native_round_trip_all_scales(self):
+        for scale in range(10):
+            time_type = self.make(scale)
+            value = "012:34:56" if scale == 0 else f"012:34:56.{('13' * 5)[:scale]}"
+            dest = bytearray()
+            with patch(f"{Time64.__module__}.write_array", _dummy_write_array):
+                time_type._write_column_binary([value], dest, SimpleNamespace(column_name="c"))
+
+            ticks = array.array("q")
+            ticks.frombytes(dest)
+            source = MagicMock()
+            source.read_array.return_value = ticks
+            with patch.object(time_type, "read_format", return_value="string"):
+                result = time_type._read_column_binary(source, 1, self.base_read_ctx, None)
+
+            self.assertEqual(result, [value])
+
+    def test_timedelta_native_writes_preserve_all_scales(self):
+        for scale in range(10):
+            expected = 1234 * 10**scale // 1000
+            time_type = self.make(scale)
+            for value, ticks in (
+                (np.timedelta64(1234, "ms"), expected),
+                (np.timedelta64(-1234, "ms"), -expected),
+                (timedelta(milliseconds=1234), expected),
+                (timedelta(milliseconds=-1234), -expected),
+            ):
+                dest = bytearray()
+                with patch(f"{Time64.__module__}.write_array", _dummy_write_array):
+                    time_type._write_column_binary([value], dest, SimpleNamespace(column_name="c"))
+
+                actual = array.array("q")
+                actual.frombytes(dest)
+                self.assertEqual(actual.tolist(), [ticks])
 
     # ------------------------------------------------------------------
     # datetime.time conversions
@@ -384,6 +428,26 @@ class TestTime64DataType(unittest.TestCase):
         with patch(f"{Time64.__module__}.write_array", _dummy_write_array):
             t6._write_column_binary(column, dest, SimpleNamespace(column_name="c"))
         self.assertEqual(dest, array.array("q", expected).tobytes())
+
+
+@pytest.mark.parametrize(
+    "scale, value, expected",
+    [
+        (9, np.timedelta64(2, "h"), 7_200 * 10**9),
+        (3, np.timedelta64(1500, "ms"), 1500),
+        (3, np.timedelta64(-1500, "ms"), -1500),
+        (9, np.timedelta64(1500, "ps"), 1),
+        (9, np.timedelta64(-1500, "ps"), -1),
+    ],
+)
+def test_time64_np_timedelta_to_ticks_exact(scale, value, expected):
+    assert Time64(TypeDef(values=(scale,)))._timedelta_to_ticks(value) == expected
+
+
+def test_time64_np_timedelta_out_of_range_raises():
+    t9 = Time64(TypeDef(values=(9,)))
+    with pytest.raises(ValueError):
+        t9._timedelta_to_ticks(np.timedelta64(213504, "D"))
 
 
 if __name__ == "__main__":
