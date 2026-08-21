@@ -7,7 +7,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql.ddl import CreateTable
 
 from clickhouse_connect import dbapi
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Date, DateTime, String, UInt32, UInt64
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Date, DateTime, DateTime64, String, UInt32, UInt64
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     GraphiteMergeTree,
@@ -25,6 +25,17 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specificatio
 from clickhouse_connect.driver.binding import format_str
 
 dialect = ClickHouseDialect()
+
+
+class DialectDateTime(db.TypeDecorator):
+    impl = db.DateTime
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "clickhousedb":
+            return dialect.type_descriptor(DateTime64(6, "UTC"))
+        return self.impl
+
 
 replicated_mt_ddl = """\
 CREATE TABLE `replicated_mt_test` (`key` UInt64) Engine ReplicatedMergeTree('/clickhouse/tables/repl_mt_test',\
@@ -272,6 +283,24 @@ def _engine_ddl(name, columns, engine):
     metadata = db.MetaData()
     table = db.Table(name, metadata, *columns, engine)
     return str(CreateTable(table).compile("", dialect=dialect))
+
+
+@pytest.mark.parametrize(
+    "type_factory",
+    [
+        DialectDateTime,
+        lambda: db.DateTime().with_variant(DateTime64(6, "UTC"), "clickhousedb"),
+    ],
+    ids=["type-decorator", "variant"],
+)
+def test_column_type_uses_clickhouse_dialect(type_factory):
+    ddl = _engine_ddl(
+        "events",
+        [db.Column("created_at", type_factory())],
+        MergeTree(order_by="created_at"),
+    )
+
+    assert ddl == "CREATE TABLE `events` (`created_at` DateTime64(6, 'UTC')) Engine MergeTree ORDER BY created_at"
 
 
 @pytest.mark.parametrize(
