@@ -534,6 +534,8 @@ def test_alembic_json_type_hints_round_trip_live(test_engine: Engine, test_db: s
     )
 
     with test_engine.connect() as conn:
+        # Time64 typed paths need the type gate enabled on servers before 26.x.
+        conn = conn.execution_options(settings={"enable_time_time64_type": 1})
         config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
         revision = command.revision(config, message="create json events", autogenerate=True)
         assert revision is not None
