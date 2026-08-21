@@ -44,6 +44,13 @@ def test_mapping():
     assert issubclass(sqla_type_map["DateTime"], DateTime)
 
 
+def test_all_matches_schema_types():
+    from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
+    from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
+
+    assert sqltypes.__all__ == sorted(schema_types) + ["LowCardinality", "Nullable"]
+
+
 def test_sqla():
     int16 = sqla_type_from_name("Int16")
     assert "Int16" == int16._compiler_dispatch(None)

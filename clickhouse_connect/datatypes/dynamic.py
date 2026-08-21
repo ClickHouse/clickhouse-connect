@@ -534,6 +534,11 @@ class JSON(ClickHouseType):
     shared_data_type: ClickHouseType
     max_dynamic_paths = 0
     max_dynamic_types = 0
+    typed_paths: list[str]
+    typed_types: list[ClickHouseType]
+    skips: list[str]
+    skip_paths: list[str]
+    skip_regexps: list[str]
 
     def __init__(self, type_def: TypeDef):
         limits: dict[str, int] = {}

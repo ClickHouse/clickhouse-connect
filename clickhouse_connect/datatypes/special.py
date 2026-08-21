@@ -3,7 +3,7 @@ from typing import Any
 from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType
-from clickhouse_connect.datatypes.registry import canonicalize_variant_name, get_from_name
+from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
 from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
@@ -87,7 +87,7 @@ class SimpleAggregateFunction(ClickHouseType):
 
     def __init__(self, type_def: TypeDef):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
-        element_name = canonicalize_variant_name(type_def.values[1], self.element_type)
+        element_name = _canonicalize_variant_name(type_def.values[1], self.element_type)
         canonical_type_def = TypeDef(type_def.wrappers, type_def.keys, (type_def.values[0], element_name))
         super().__init__(canonical_type_def)
         self._name_suffix = canonical_type_def.arg_str
@@ -119,6 +119,6 @@ class AggregateFunction(UnsupportedType):
     def __init__(self, type_def: TypeDef):
         values = (
             type_def.values[0],
-            *(canonicalize_variant_name(value, get_from_name(value)) for value in type_def.values[1:]),
+            *(_canonicalize_variant_name(value, get_from_name(value)) for value in type_def.values[1:]),
         )
         super().__init__(TypeDef(type_def.wrappers, type_def.keys, values) if values != type_def.values else type_def)

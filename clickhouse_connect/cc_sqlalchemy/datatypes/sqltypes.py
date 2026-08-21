@@ -28,7 +28,7 @@ from sqlalchemy.types import (
     String as SqlaString,
 )
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, schema_types, sqla_type_from_name
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import json_subcolumn
 from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, LC_TYPE_DEF, NULLABLE_TYPE_DEF, TypeDef
 from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8
@@ -425,7 +425,7 @@ def Nullable(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N80
     if callable(element):
         return element(type_def=NULLABLE_TYPE_DEF)
     orig = element.type_def
-    wrappers = orig if "Nullable" in orig.wrappers else orig.wrappers + ("Nullable",)
+    wrappers = orig.wrappers if "Nullable" in orig.wrappers else orig.wrappers + ("Nullable",)
     return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
@@ -434,7 +434,7 @@ def LowCardinality(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noq
     if callable(element):
         return element(type_def=LC_TYPE_DEF)
     orig = element.type_def
-    wrappers = orig if "LowCardinality" in orig.wrappers else ("LowCardinality",) + orig.wrappers
+    wrappers = orig.wrappers if "LowCardinality" in orig.wrappers else ("LowCardinality",) + orig.wrappers
     return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
@@ -1080,4 +1080,58 @@ class QBit(ChSqlaType, UserDefinedType):  # type: ignore[misc]
         super().__init__(type_def)
 
 
-__all__ = sorted(schema_types) + ["LowCardinality", "Nullable"]
+# Static so type checkers can resolve the public surface. test_types.py asserts parity with schema_types.
+__all__ = [
+    "AggregateFunction",
+    "Array",
+    "Bool",
+    "Boolean",
+    "Date",
+    "Date32",
+    "DateTime",
+    "DateTime64",
+    "Decimal",
+    "Decimal128",
+    "Decimal256",
+    "Decimal32",
+    "Decimal64",
+    "Enum",
+    "Enum16",
+    "Enum8",
+    "FixedString",
+    "Float32",
+    "Float64",
+    "IPv4",
+    "IPv6",
+    "Int128",
+    "Int16",
+    "Int256",
+    "Int32",
+    "Int64",
+    "Int8",
+    "JSON",
+    "LineString",
+    "Map",
+    "MultiLineString",
+    "MultiPolygon",
+    "Nested",
+    "Nothing",
+    "Point",
+    "Polygon",
+    "QBit",
+    "Ring",
+    "SimpleAggregateFunction",
+    "String",
+    "Time",
+    "Time64",
+    "Tuple",
+    "UInt128",
+    "UInt16",
+    "UInt256",
+    "UInt32",
+    "UInt64",
+    "UInt8",
+    "UUID",
+    "LowCardinality",
+    "Nullable",
+]

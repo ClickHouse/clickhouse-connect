@@ -660,15 +660,19 @@ class Time64(TimeBase):
     __slots__ = ("scale", "precision", "unit")
     _array_type = "q"
     byte_size = 8
+    scale: int
+    precision: int
+    unit: str | None
 
     def __init__(self, type_def):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
-        self.scale = type_def.values[0]
-        if not isinstance(self.scale, int) or self.scale < 0 or self.scale > 9:
-            raise ProgrammingError(f"Unsupported Time64 scale {self.scale}; expected a value from 0 through 9.")
-        self.precision = 10**self.scale
-        self.unit = np_date_types.get(self.scale)
+        scale = type_def.values[0]
+        if not isinstance(scale, int) or scale < 0 or scale > 9:
+            raise ProgrammingError(f"Unsupported Time64 scale {scale}; expected a value from 0 through 9.")
+        self.scale = scale
+        self.precision = 10**scale
+        self.unit = np_date_types.get(scale)
 
     @property
     def pandas_dtype(self):

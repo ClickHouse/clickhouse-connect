@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 type_cache: dict[str, ClickHouseType] = {}
 
 
-def canonicalize_variant_name(type_name: str, ch_type: ClickHouseType) -> str:
+def _canonicalize_variant_name(type_name: str, ch_type: ClickHouseType) -> str:
     """Use the parsed name when a descendant Variant needs canonical ordering."""
     quote: str | None = None
     pos = 0
