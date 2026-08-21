@@ -1,9 +1,11 @@
 from datetime import time, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -489,3 +491,80 @@ def test_over_24h_value_cannot_be_coerced_to_time(param_client, call, table_cont
 
         with pytest.raises(ValueError, match="outside valid range"):
             call(param_client.query, f"SELECT t FROM {TABLE_NAME}", query_formats={"Time": "time"})
+
+
+EXTENDED_SCALE_TABLE = "temp_time64_extended_scale_test"
+
+
+@pytest.mark.parametrize("scale", [0, 1, 2, 4, 5, 7, 8])
+def test_time64_extended_scales(param_client, call, table_context, scale: int):
+    """Round-trip the Time64 scales that have no NumPy time unit."""
+    frac_us = 0 if scale == 0 else 100_000 if scale == 1 else 120_000
+    pos_us = (3723 * 1_000_000) + frac_us
+    neg_us = -(5 * 1_000_000 + frac_us)
+    if scale >= 6:
+        expected_ticks = [pos_us * 10 ** (scale - 6), neg_us * 10 ** (scale - 6)]
+    else:
+        divisor = 10 ** (6 - scale)
+        expected_ticks = [pos_us // divisor, -(-neg_us // divisor)]
+    expected_deltas = [timedelta(microseconds=pos_us), timedelta(microseconds=neg_us)]
+
+    schema = ["id UInt32", f"t Time64({scale})", f"tn Nullable(Time64({scale}))"]
+    with table_context(EXTENDED_SCALE_TABLE, schema, settings={"enable_time_time64_type": 1}):
+        call(
+            param_client.insert,
+            EXTENDED_SCALE_TABLE,
+            [[0, timedelta(microseconds=pos_us), None], [1, timedelta(microseconds=neg_us), timedelta(microseconds=pos_us)]],
+        )
+        call(
+            param_client.insert,
+            EXTENDED_SCALE_TABLE,
+            [[2, np.timedelta64(pos_us, "us"), None], [3, np.timedelta64(neg_us, "us"), np.timedelta64(pos_us, "us")]],
+        )
+
+        result = call(param_client.query, f"SELECT t, tn FROM {EXTENDED_SCALE_TABLE} ORDER BY id")
+        assert [row[0] for row in result.result_rows] == expected_deltas * 2
+        assert [row[1] for row in result.result_rows] == [None, expected_deltas[0]] * 2
+
+        result = call(param_client.query, f"SELECT t FROM {EXTENDED_SCALE_TABLE} ORDER BY id", query_formats={"Time64": "int"})
+        assert [row[0] for row in result.result_rows] == expected_ticks * 2
+
+
+def test_time64_extended_scale_insert_df(param_client, call, table_context):
+    """DataFrame inserts work for Time64 scales without a NumPy time unit."""
+    schema = ["id UInt32", "t Time64(2)", "tn Nullable(Time64(2))"]
+    with table_context(EXTENDED_SCALE_TABLE, schema, settings={"enable_time_time64_type": 1}):
+        df = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "t": pd.to_timedelta(["00:00:05.12", "-00:00:07.89"]),
+                "tn": pd.to_timedelta([None, "00:00:01.5"]),
+            }
+        )
+        call(param_client.insert_df, EXTENDED_SCALE_TABLE, df)
+
+        result = call(param_client.query, f"SELECT t, tn FROM {EXTENDED_SCALE_TABLE} ORDER BY id")
+        assert [row[0] for row in result.result_rows] == [
+            timedelta(seconds=5, milliseconds=120),
+            timedelta(seconds=-8, milliseconds=110),
+        ]
+        assert [row[1] for row in result.result_rows] == [None, timedelta(seconds=1, milliseconds=500)]
+
+
+@pytest.mark.parametrize("values", [["00:00:05.12", None], [None, "00:00:05.12"], [None, None]])
+def test_time64_nat_into_non_nullable_insert_df_rejected(param_client, call, table_context, values):
+    """NaT aimed at a non-nullable Time64 column reports the NaT rather than emitting a short block."""
+    table = "temp_time64_nat_non_nullable_test"
+    with table_context(table, ["id UInt32", "t Time64(3)"], settings={"enable_time_time64_type": 1}):
+        df = pd.DataFrame({"id": [1, 2], "t": pd.to_timedelta(values)})
+        with pytest.raises(ValueError, match="NaT out of range"):
+            call(param_client.insert_df, table, df)
+
+
+def test_datetime64_unsupported_numpy_scale_insert_df_rejected(param_client, call, table_context):
+    """The Time64 insert fallback must not bypass DateTime64 precision checks."""
+    table = "temp_datetime64_unsupported_numpy_scale_test"
+    with table_context(table, ["ts DateTime64(8, 'UTC')"]):
+        df = pd.DataFrame({"ts": [pd.Timestamp("2026-08-21 12:34:56.123456789", tz="UTC")]})
+        with pytest.raises(ProgrammingError, match=r"Cannot use DateTime64\(8, 'UTC'\) as a numpy or Pandas datatype"):
+            call(param_client.insert_df, table, df)

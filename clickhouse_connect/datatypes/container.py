@@ -4,8 +4,8 @@ from collections.abc import Collection, Sequence
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
-from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
+from clickhouse_connect.driver.binding import _format_identifier
 from clickhouse_connect.driver.common import first_value, must_swap
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
@@ -14,6 +14,13 @@ from clickhouse_connect.driver.types import ByteSource
 from clickhouse_connect.json_impl import any_to_json
 
 logger = logging.getLogger(__name__)
+
+
+def _nested_identifier(name: str) -> str:
+    if name and ("A" <= name[0] <= "Z" or "a" <= name[0] <= "z" or name[0] == "_"):
+        if all("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "_$" for char in name[1:]):
+            return name
+    return _format_identifier(name)
 
 
 class Array(ClickHouseType):
@@ -25,8 +32,9 @@ class Array(ClickHouseType):
         return self._insert_name
 
     def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
         self.element_type = get_from_name(type_def.values[0])
+        element_name = _canonicalize_variant_name(type_def.values[0], self.element_type)
+        super().__init__(TypeDef(type_def.wrappers, type_def.keys, (element_name,)) if element_name != type_def.values[0] else type_def)
         self._name_suffix = f"({self.element_type.name})"
         self._insert_name = f"Array({self.element_type.insert_name})"
 
@@ -101,19 +109,26 @@ class Tuple(ClickHouseType):
         return self._insert_name
 
     def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
         self.element_names = type_def.keys
         self.element_types = [get_from_name(name) for name in type_def.values]
+        element_values = tuple(
+            _canonicalize_variant_name(name, element_type) for name, element_type in zip(type_def.values, self.element_types)
+        )
+        super().__init__(TypeDef(type_def.wrappers, type_def.keys, element_values) if element_values != type_def.values else type_def)
         if self.element_names:
-            self._name_suffix = f"({', '.join(quote_identifier(k) + ' ' + str(v) for k, v in zip(type_def.keys, type_def.values))})"
+            self._name_suffix = f"({', '.join(_format_identifier(key) + ' ' + value for key, value in zip(type_def.keys, element_values))})"
+        elif element_values:
+            self._name_suffix = f"({', '.join(element_values)})"
         else:
-            self._name_suffix = type_def.arg_str
+            self._name_suffix = "()"
         if self.element_names:
             self._insert_name = (
-                f"Tuple({', '.join(quote_identifier(k) + ' ' + v.insert_name for k, v in zip(type_def.keys, self.element_types))})"
+                f"Tuple({', '.join(_format_identifier(k) + ' ' + v.insert_name for k, v in zip(type_def.keys, self.element_types))})"
             )
-        else:
+        elif self.element_types:
             self._insert_name = f"Tuple({', '.join(v.insert_name for v in self.element_types)})"
+        else:
+            self._insert_name = "Tuple()"
 
     def _data_size(self, sample: Collection) -> int:
         if len(sample) == 0:
@@ -133,6 +148,8 @@ class Tuple(ClickHouseType):
         return [e_type.read_column_prefix(source, ctx) for e_type in self.element_types]
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any):
+        if not self.element_types:
+            return tuple(() for _ in range(num_rows))
         columns = []
         e_names = self.element_names
         for ix, e_type in enumerate(self.element_types):
@@ -179,10 +196,14 @@ class Map(ClickHouseType):
         return self._insert_name
 
     def __init__(self, type_def: TypeDef):
-        super().__init__(type_def)
         self.key_type = get_from_name(type_def.values[0])
         self.value_type = get_from_name(type_def.values[1])
-        self._name_suffix = type_def.arg_str
+        element_values = (
+            _canonicalize_variant_name(type_def.values[0], self.key_type),
+            _canonicalize_variant_name(type_def.values[1], self.value_type),
+        )
+        super().__init__(TypeDef(type_def.wrappers, type_def.keys, element_values) if element_values != type_def.values else type_def)
+        self._name_suffix = f"({', '.join(element_values)})"
         self._insert_name = f"Map({self.key_type.insert_name}, {self.value_type.insert_name})"
 
     def _data_size(self, sample: Collection) -> int:
@@ -226,11 +247,14 @@ class Nested(ClickHouseType):
     python_type = Sequence[dict]
 
     def __init__(self, type_def):
-        super().__init__(type_def)
         self.element_names = type_def.keys
         self.tuple_array = get_from_name(f"Array(Tuple({','.join(type_def.values)}))")
         self.element_types = self.tuple_array.element_type.element_types
-        cols = [f"{x[0]} {x[1].name}" for x in zip(type_def.keys, self.element_types)]
+        element_values = tuple(
+            _canonicalize_variant_name(name, element_type) for name, element_type in zip(type_def.values, self.element_types)
+        )
+        super().__init__(TypeDef(type_def.wrappers, type_def.keys, element_values) if element_values != type_def.values else type_def)
+        cols = [f"{_nested_identifier(x[0])} {x[1].name}" for x in zip(type_def.keys, self.element_types)]
         self._name_suffix = f"({', '.join(cols)})"
 
     def _data_size(self, sample: Collection) -> int:

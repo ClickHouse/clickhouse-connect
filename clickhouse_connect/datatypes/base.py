@@ -25,12 +25,12 @@ class TypeDef(NamedTuple):
     Immutable tuple that contains all additional information needed to construct a particular ClickHouseType
     """
 
-    wrappers: tuple = ()
-    keys: tuple = ()
-    values: tuple = ()
+    wrappers: tuple[str, ...] = ()
+    keys: tuple[Any, ...] = ()
+    values: tuple[Any, ...] = ()
 
     @property
-    def arg_str(self):
+    def arg_str(self) -> str:
         return f"({', '.join(str(v) for v in self.values)})" if self.values else ""
 
 
