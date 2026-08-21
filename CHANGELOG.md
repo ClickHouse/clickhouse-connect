@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Compatibility
+
+- SQLAlchemy: the `alembic` extra now requires `alembic>=1.18`. Earlier versions satisfied the package metadata but failed when importing the ClickHouse Alembic integration because the priority-dispatch API it uses was added in Alembic 1.18. See [#983](https://github.com/ClickHouse/clickhouse-connect/pull/983).
+
 ### Bug Fixes
 
 - SQLAlchemy column DDL now compiles `TypeDecorator` and `with_variant()` types through the active ClickHouse dialect. Dialect-aware types such as a decorator that selects `DateTime64(6, 'UTC')` no longer fall back to generic `DATETIME` in `CREATE TABLE` and related column DDL. Closes [#984](https://github.com/ClickHouse/clickhouse-connect/issues/984).
