@@ -8,6 +8,7 @@
 
 ### Bug Fixes
 
+- Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).
 - SQLAlchemy column DDL now compiles `TypeDecorator` and `with_variant()` types through the active ClickHouse dialect. Dialect-aware types such as a decorator that selects `DateTime64(6, 'UTC')` no longer fall back to generic `DATETIME` in `CREATE TABLE` and related column DDL. Closes [#984](https://github.com/ClickHouse/clickhouse-connect/issues/984).
 
 ## 1.7.2, 2026-08-19

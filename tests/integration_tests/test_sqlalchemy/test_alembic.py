@@ -19,6 +19,7 @@ from clickhouse_connect.cc_sqlalchemy.alembic import (
     ClickHouseIndex,
     ClickHouseProjection,
 )
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     Boolean,
     DateTime64,
@@ -478,6 +479,45 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
         assert "index_granularity = 1024" in engine_full
         rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`alembic_version`")).fetchall()
         assert rows
+
+
+def test_alembic_named_container_types_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+    table_name = ch_name("alembic_named_containers")
+    nested_type = sqla_type_from_name("Nested(a String, b UInt32)")
+    named_tuple_type = sqla_type_from_name("Tuple(a String, b UInt32)")
+    array_tuple_type = sqla_type_from_name("Array(Tuple(a String, b UInt32))")
+    metadata = MetaData(schema=test_db)
+    Table(
+        table_name,
+        metadata,
+        Column("id", UInt32, nullable=False),
+        Column("nested_value", nested_type, nullable=False),
+        Column("tuple_value", named_tuple_type, nullable=False),
+        Column("array_tuple_value", array_tuple_type, nullable=False),
+        MergeTree(order_by="id"),
+    )
+
+    with test_engine.connect().execution_options(settings={"flatten_nested": 0}) as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create named containers", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        contents = Path(revision.path).read_text(encoding="utf-8")
+        assert "from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name" in contents
+        assert contents.count("sqla_type_from_name(") == 3
+        command.upgrade(config, "head")
+
+        reflected = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
+        assert reflected.c.nested_value.type.name == nested_type.name
+        assert reflected.c.tuple_value.type.name == named_tuple_type.name
+        assert reflected.c.array_tuple_value.type.name == array_tuple_type.name
+
+        noop_revision = command.revision(config, message="named containers noop", autogenerate=True)
+        assert noop_revision is not None
+        assert not isinstance(noop_revision, list)
+        noop_contents = Path(noop_revision.path).read_text(encoding="utf-8")
+        assert "pass" in noop_contents
+        assert "alter_column" not in noop_contents
 
 
 def test_alembic_autogenerate_text_expression_ttl_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):

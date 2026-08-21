@@ -13,6 +13,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_typ
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array as ChSqlaArray
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Enum as ChSqlaEnum
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Map as ChSqlaMap
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nested as ChSqlaNested
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
@@ -42,8 +43,22 @@ def _reject_standard_index() -> None:
     raise CommandError(_STANDARD_INDEX_MESSAGE)
 
 
+def _contains_named_container(type_obj: ChSqlaType) -> bool:
+    if isinstance(type_obj, ChSqlaNested) or (isinstance(type_obj, ChSqlaTuple) and type_obj.type_def.keys):
+        return True
+    if isinstance(type_obj, ChSqlaArray):
+        nested_types = type_obj.type_def.values[:1]
+    elif isinstance(type_obj, (ChSqlaMap, ChSqlaTuple)):
+        nested_types = type_obj.type_def.values
+    else:
+        return False
+    return any(_contains_named_container(sqla_type_from_name(str(name))) for name in nested_types)
+
+
 def _render_ch_type(type_obj):
     """Render a ChSqlaType as valid Python source for autogen migrations"""
+    if _contains_named_container(type_obj):
+        return f"sqla_type_from_name({type_obj.name!r})"
     wrappers = type_obj.type_def.wrappers
     if isinstance(type_obj, ChSqlaEnum):
         keys = list(type_obj.type_def.keys)
