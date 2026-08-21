@@ -225,7 +225,7 @@ def create_client(
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally.
 
-    :param kwargs -- Recognized keyword arguments (used by the HTTP client), see below
+    :param kwargs: Recognized keyword arguments (used by the HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
       compression method (lz4).  A str of 'lz4', 'zstd', 'br', or 'gzip' can be used to use a specific compression type
@@ -244,24 +244,24 @@ def create_client(
       applicable intermediate certificates
     :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
       is not included the Client Certificate key file
-    :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
+    :param session_id: ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
       is True, the client will generate a UUID1 session id
-    :param pool_mgr Optional urllib3 PoolManager for this client.  Useful for creating separate connection
+    :param pool_mgr: Optional urllib3 PoolManager for this client.  Useful for creating separate connection
       pools for multiple client endpoints for applications with many clients
-    :param http_proxy  http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
-    :param https_proxy https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
-    :param server_host_name  This is the server host name that will be checked against a TLS certificate for
+    :param http_proxy: http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
+    :param https_proxy: https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
+    :param server_host_name: This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
-    :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
+    :param tz_source: Controls how the client determines the fallback timezone for DateTime columns without an
       explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
       uses the server timezone. "local" always uses the local timezone.
-    :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+    :param tz_mode: Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
-    :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
-    :param form_encode_query_params  If True, always send query parameters as form-encoded data in the request body
+    :param autogenerate_session_id: If set, this will override the 'autogenerate_session_id' common setting.
+    :param form_encode_query_params: If True, always send query parameters as form-encoded data in the request body
       instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
       avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
       when this is True. Only available for query operations (not inserts). Default: False
@@ -381,7 +381,7 @@ async def create_async_client(
     :param connector_limit: Maximum number of allowable connections to the server
     :param connector_limit_per_host: Maximum number of connections per host
     :param keepalive_timeout: Time limit on idle keepalive connections
-    :param kwargs -- Recognized keyword arguments (used by the async HTTP client), see below
+    :param kwargs: Recognized keyword arguments (used by the async HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
       compression method (lz4).  A str of 'lz4', 'zstd', 'br', or 'gzip' can be used to use a specific compression type
@@ -399,22 +399,22 @@ async def create_async_client(
       applicable intermediate certificates
     :param client_cert_key: File path to the private key for the Client Certificate.  Required if the private key
       is not included the Client Certificate key file
-    :param session_id ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
+    :param session_id: ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
       is True, the client will generate a UUID1 session id
-    :param http_proxy  http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
-    :param https_proxy https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
-    :param server_host_name  This is the server host name that will be checked against a TLS certificate for
+    :param http_proxy: http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
+    :param https_proxy: https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
+    :param server_host_name: This is the server host name that will be checked against a TLS certificate for
       validity.  This option can be used if using an ssh_tunnel or other indirect means to an ClickHouse server
       where the `host` argument refers to the tunnel or proxy and not the actual ClickHouse server
-    :param tz_source Controls how the client determines the fallback timezone for DateTime columns without an
+    :param tz_source: Controls how the client determines the fallback timezone for DateTime columns without an
       explicit timezone. "auto" (default) auto-detects based on DST safety of server timezone. "server" always
       uses the server timezone. "local" always uses the local timezone.
-    :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+    :param tz_mode: Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
       naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
       match the server's column definition which means timezone-aware when the column defines a timezone and naive
       for bare DateTime columns.
-    :param autogenerate_session_id  If set, this will override the 'autogenerate_session_id' common setting.
-    :param form_encode_query_params  If True, always send query parameters as form-encoded data in the request body
+    :param autogenerate_session_id: If set, this will override the 'autogenerate_session_id' common setting.
+    :param form_encode_query_params: If True, always send query parameters as form-encoded data in the request body
       instead of as URL parameters. When False, large parameter payloads are still automatically sent as form data to
       avoid exceeding URL length limits, except for queries using binary parameter binds, which are only form-encoded
       when this is True. Only available for query operations (not inserts). Default: False

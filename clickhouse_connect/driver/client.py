@@ -619,7 +619,7 @@ class Client(ABC):
         :param parameters: Optional dictionary used to format the query
         :param settings: Optional dictionary of ClickHouse settings (key/string values)
         :param fmt: ClickHouse output format
-        :param use_database  Send the database parameter to ClickHouse so the command will be executed in the client
+        :param use_database: Send the database parameter to ClickHouse so the command will be executed in the client
          database context.
         :param external_data: External data to send with the query.
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
@@ -777,9 +777,9 @@ class Client(ABC):
           UTC datetimes, "naive_utc" returns naive UTC datetimes, and "schema" returns datetimes matching the
           server's column definition.
         :param use_na_values: Deprecated alias for use_advanced_dtypes
-        :param as_pandas Return the result columns as pandas.Series objects
-        :param streaming Marker used to correctly configure streaming queries
-        :param external_data ClickHouse "external data" to send with query
+        :param as_pandas: Return the result columns as pandas.Series objects
+        :param streaming: Marker used to correctly configure streaming queries
+        :param external_data: ClickHouse "external data" to send with query
         :param use_extended_dtypes:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
           pandas.NA and pandas.NaT for ClickHouse NULL values, as well as extended Pandas dtypes such as IntegerArray
           and StringArray.  Defaulted to True for query_df methods
