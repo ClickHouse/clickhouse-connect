@@ -20,11 +20,15 @@ from clickhouse_connect.cc_sqlalchemy.alembic import (
     ClickHouseProjection,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
+    JSON,
+    Array,
     Boolean,
     DateTime64,
     Int32,
     Int64,
+    Map,
     String,
+    Tuple,
     UInt32,
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
@@ -478,6 +482,79 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
         assert "index_granularity = 1024" in engine_full
         rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`alembic_version`")).fetchall()
         assert rows
+
+
+def test_alembic_json_type_hints_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+    table_name = ch_name("alembic_json_events")
+    json_type = JSON(
+        typed_paths={
+            "event.id": UInt32,
+            "SKIP": "Array(String)",
+            "a` b,c)": "UInt64",
+            "boolean_alias": "Boolean",
+            "boolean_class": Boolean,
+            "details": "Tuple(id UInt32, label Nullable(String))",
+            "double_quoted": 'JSON("child" UInt32)',
+            "generic_enum": "Enum('low' = -129, 'high' = 128)",
+            "literal%2Edot": "String",
+            "named_nested": 'Map(String, Nested("path one" UInt32))',
+            "named_tuple": "Tuple(`path one` UInt32)",
+            "nested": "json(SKIP REGEXP 'x(y)')",
+            "nested_paren_path": "Array(JSON(`a)b` UInt32))",
+            "nested_skip_case": "JSON(SKIP string)",
+            "space path": "UInt32",
+            "simple_time": "SimpleAggregateFunction(any, Time64(2))",
+            "time_scale": "Time64(0)",
+            "`typed`": "UInt64",
+            '"typed"': "String",
+            "variant": "Variant(UInt32, String)",
+            "variant_array": "Array(Variant(UInt32, String))",
+            "variant_duplicate": "Array(Variant(UInt32, UInt32))",
+            "variant_map": "Map(String, Variant(UInt32, String))",
+            "variant_tuple": "Tuple(value Variant(UInt32, String), count UInt8)",
+        },
+        max_dynamic_paths=13,
+        max_dynamic_types=79,
+        skip_paths=["ignored", "REGEXPfoo", "REGEXP_foo", "`skipped`", '"skipped"'],
+        skip_regexps=[r"^private value,\(test\)'\\end$", "a' = b"],
+    )
+    array_json_type = Array(JSON(typed_paths={"path one": UInt32}))
+    tuple_json_type = Tuple(JSON(skip_regexps=["path one"]))
+    map_json_type = Map(String, JSON(skip_paths=["path one"]))
+    metadata = MetaData(schema=test_db)
+    Table(
+        table_name,
+        metadata,
+        Column("id", UInt32, nullable=False),
+        Column("payload", json_type, nullable=False),
+        Column("array_payload", array_json_type, nullable=False),
+        Column("tuple_payload", tuple_json_type, nullable=False),
+        Column("map_payload", map_json_type, nullable=False),
+        MergeTree(order_by="id"),
+    )
+
+    with test_engine.connect() as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create json events", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        contents = Path(revision.path).read_text(encoding="utf-8")
+        assert "JSON(typed_paths={" in contents
+        assert "'SKIP': 'Array(String)'" in contents
+        command.upgrade(config, "head")
+
+        reflected = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
+        assert reflected.c.payload.type.name == json_type.name
+        assert reflected.c.array_payload.type.name == array_json_type.name
+        assert reflected.c.tuple_payload.type.name == tuple_json_type.name
+        assert reflected.c.map_payload.type.name == map_json_type.name
+
+        noop_revision = command.revision(config, message="json events noop", autogenerate=True)
+        assert noop_revision is not None
+        assert not isinstance(noop_revision, list)
+        noop_contents = Path(noop_revision.path).read_text(encoding="utf-8")
+        assert "pass" in noop_contents
+        assert "alter_column" not in noop_contents
 
 
 def test_alembic_autogenerate_text_expression_ttl_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):

@@ -368,10 +368,10 @@ client.query(
 | DateTime              | datetime.datetime       | int               | The integer format returns epoch seconds.                                                                         |
 | DateTime64            | datetime.datetime       | int               | The integer format returns ticks at the column precision. Python `datetime` is limited to microseconds.           |
 | Time                  | datetime.timedelta      | int, string, time | The integer format returns seconds. The `time` format is limited to values that fit `datetime.time`.              |
-| Time64                | datetime.timedelta      | int, string, time | The integer format returns ticks at the column precision. Python `timedelta` is limited to microseconds.           |
+| Time64                | datetime.timedelta      | int, string, time | Scales 0 through 9 are supported. The integer format returns ticks at the column precision. Python `timedelta` is limited to microseconds. |
 | IPv4                  | `ipaddress.IPv4Address` | string, int       | IP addresses can be read as strings or integers.                                                                  |
 | IPv6                  | `ipaddress.IPv6Address` | string            | IP addresses can be read as strings and properly formatted can be inserted as IP addresses                        |
-| Tuple                 | dict or tuple           | tuple, dict, json | Named tuples return dictionaries by default; unnamed tuples return tuples.                                        |
+| Tuple                 | dict or tuple           | tuple, dict, json | Named tuples return dictionaries by default; unnamed tuples return tuples. A root `Tuple()` value returns `()`.    |
 | Map                   | dict                    | -                 |                                                                                                                   |
 | Nested                | Sequence[dict]          | -                 |                                                                                                                   |
 | UUID                  | uuid.UUID               | string            | UUIDs can be read as strings formatted as per RFC 4122<br/>                                                       |
@@ -379,6 +379,8 @@ client.query(
 | Variant               | object                  | typed             | `typed` returns `TypedVariant(value, type_name)` so the originating member type is preserved.                     |
 | Dynamic               | object                  | -                 | Returns the matching Python type for the ClickHouse datatype stored for the value                                 |
 | QBit                  | list[float]             | -                 | NumPy is used automatically for faster bit transposition when installed.                                          |
+
+`query_np`, `query_np_stream`, `query_df`, and `query_df_stream` support `Time64` scales 0, 3, 6, and 9. Other scales raise `ProgrammingError` because they do not have a matching NumPy time unit. Use a standard Python query with the `int` or `string` read format to preserve those precisions.
 
 ## External data {#external-data}
 
