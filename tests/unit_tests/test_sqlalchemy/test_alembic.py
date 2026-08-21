@@ -333,6 +333,34 @@ def test_render_type_non_enum_containers_use_clickhouse_names():
     assert context.impl.render_type(types.Array(types.DateTime64(3, "UTC")), None) == "Array(DateTime64(3, 'UTC'))"
 
 
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "Nested(a String, b UInt32)",
+        "Nested(state Enum8('it\\'s' = 1, 'ok' = 2), value UInt32)",
+        "Tuple(a String, b UInt32)",
+        "Tuple(`field name` String, b UInt32)",
+        "Array(Nested(a String, b UInt32))",
+        "Array(Tuple(a String, b UInt32))",
+        "Array(Array(Tuple(a String, b UInt32)))",
+        "Tuple(String, Tuple(a String, b UInt32))",
+        "Tuple(a Array(Tuple(id UInt32, value String)), b Nullable(String))",
+        "Map(String, Tuple(a String, b UInt32))",
+        "Nullable(Tuple(a String, b UInt32))",
+    ],
+)
+def test_render_type_named_containers_emit_lossless_python(type_name):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    type_obj = sqla_type_from_name(type_name)
+
+    rendered = context.impl.render_type(type_obj, None)
+
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(rendered, namespace)
+    assert rebuilt.name == type_obj.name
+
+
 def test_render_type_json_emits_valid_round_trip_python():
     context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
     json_types = [
@@ -939,11 +967,13 @@ def test_clickhouse_writer_adds_template_imports():
     assert "from clickhouse_connect import cc_sqlalchemy" in directive.imports
     assert any("ddl.tableengine import *" in value for value in directive.imports)
     assert any("datatypes.sqltypes import *" in value for value in directive.imports)
+    assert "from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name" in directive.imports
 
     downgrade_only = _Directive(downgrade_ops=_Ops())
     clickhouse_writer(None, None, [downgrade_only])
     assert any("ddl.tableengine import *" in value for value in downgrade_only.imports)
     assert any("datatypes.sqltypes import *" in value for value in downgrade_only.imports)
+    assert "from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name" in downgrade_only.imports
 
 
 def test_set_type_nullable_accepts_type_classes():
