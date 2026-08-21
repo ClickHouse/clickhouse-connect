@@ -167,7 +167,7 @@ class InsertContext(BaseQueryContext):
                 elif d_type_kind in ("i", "u") and not df_col.hasnans:
                     data.append(df_col.to_list())
                     continue
-            elif d_type_kind == "m" and df_col.hasnans:
+            elif d_type_kind == "m" and df_col.hasnans and ch_type.nullable:
                 # to_numpy na_value does not replace NaT in timedelta64 columns
                 nat_mask = options.pd.isnull(df_col).to_numpy()
                 obj_col = df_col.to_numpy(dtype=object)

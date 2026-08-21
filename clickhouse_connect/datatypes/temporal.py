@@ -736,7 +736,13 @@ class Time64(TimeBase):
             if total_us < 0:
                 ticks = -ticks
         else:
-            unit, step = options.np.datetime_data(td.dtype)
+            dtype = getattr(td, "dtype", None)
+            if dtype is None:
+                raise TypeError(
+                    f"Unsupported value type '{type(td).__name__}' for {self.__class__.__name__}. "
+                    "Expected 'int', 'str', 'time', or 'timedelta'."
+                )
+            unit, step = options.np.datetime_data(dtype)
             ratio = _NP_TIMEDELTA_NS_RATIO.get(unit)
             if ratio is None:
                 raise ProgrammingError(f"Unsupported numpy timedelta64 unit '{unit}' for {self.name}")

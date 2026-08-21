@@ -214,6 +214,27 @@ def test_variant_order_is_canonical_through_containers(type_name, expected_name)
 
 
 @pytest.mark.parametrize(
+    "type_name",
+    [
+        "AggregateFunction(1, sumMap, Array(UInt8), Array(UInt64))",
+        "AggregateFunction(1, minMap, Array(UInt8), Array(UInt64))",
+        "AggregateFunction(1, maxMap, Array(UInt8), Array(UInt64))",
+        "AggregateFunction(1, sumMapWithOverflow, Array(UInt8), Array(UInt64))",
+        "AggregateFunction(1, sumMapFiltered([1, 2]), Array(UInt8), Array(UInt64))",
+    ],
+)
+def test_versioned_aggregate_function_parses(type_name):
+    """The server prefixes a state version for the *Map aggregates, so arguments are not all type names."""
+    assert get_from_name(type_name).name == type_name
+
+
+def test_versioned_aggregate_function_still_canonicalizes_variant():
+    ch_type = get_from_name("AggregateFunction(1, sumMap, Array(UInt8), Variant(UInt32, String))")
+
+    assert ch_type.name == "AggregateFunction(1, sumMap, Array(UInt8), Variant(String, UInt32))"
+
+
+@pytest.mark.parametrize(
     "type_name, expected_name, expected_values",
     [
         ("Array(Decimal32(2))", "Array(Decimal(9, 2))", ("Decimal32(2)",)),

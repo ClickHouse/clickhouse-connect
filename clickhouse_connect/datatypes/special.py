@@ -117,8 +117,15 @@ class SimpleAggregateFunction(ClickHouseType):
 
 class AggregateFunction(UnsupportedType):
     def __init__(self, type_def: TypeDef):
-        values = (
-            type_def.values[0],
-            *(_canonicalize_variant_name(value, get_from_name(value)) for value in type_def.values[1:]),
-        )
+        values = tuple(_canonicalize_argument(value) for value in type_def.values)
         super().__init__(TypeDef(type_def.wrappers, type_def.keys, values) if values != type_def.values else type_def)
+
+
+def _canonicalize_argument(value: Any) -> Any:
+    """Canonicalize an AggregateFunction argument, leaving anything that is not a type alone."""
+    if not isinstance(value, str) or "Variant" not in value:
+        return value
+    try:
+        return _canonicalize_variant_name(value, get_from_name(value))
+    except Exception:  # noqa: BLE001 - a non-type argument keeps its original spelling
+        return value

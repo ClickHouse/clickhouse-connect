@@ -551,6 +551,16 @@ def test_time64_extended_scale_insert_df(param_client, call, table_context):
         assert [row[1] for row in result.result_rows] == [None, timedelta(seconds=1, milliseconds=500)]
 
 
+@pytest.mark.parametrize("values", [["00:00:05.12", None], [None, "00:00:05.12"], [None, None]])
+def test_time64_nat_into_non_nullable_insert_df_rejected(param_client, call, table_context, values):
+    """NaT aimed at a non-nullable Time64 column reports the NaT rather than emitting a short block."""
+    table = "temp_time64_nat_non_nullable_test"
+    with table_context(table, ["id UInt32", "t Time64(3)"], settings={"enable_time_time64_type": 1}):
+        df = pd.DataFrame({"id": [1, 2], "t": pd.to_timedelta(values)})
+        with pytest.raises(ValueError, match="NaT out of range"):
+            call(param_client.insert_df, table, df)
+
+
 def test_datetime64_unsupported_numpy_scale_insert_df_rejected(param_client, call, table_context):
     """The Time64 insert fallback must not bypass DateTime64 precision checks."""
     table = "temp_datetime64_unsupported_numpy_scale_test"
