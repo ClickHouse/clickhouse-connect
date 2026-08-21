@@ -456,6 +456,12 @@ class TimeBase(ClickHouseType, registered=False):
             converter_map[options.np.timedelta64] = self._timedelta_to_ticks
             converter_map[options.np.int64] = self._numerical_to_ticks
         converter = converter_map.get(expected_type, None)
+        if converter is None:
+            # Subclasses such as pandas Timedelta miss the exact type lookup
+            for base, base_converter in converter_map.items():
+                if isinstance(first, base):
+                    converter = base_converter
+                    break
 
         if converter is None:
             raise TypeError(
