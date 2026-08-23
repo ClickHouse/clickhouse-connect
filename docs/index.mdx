@@ -68,6 +68,35 @@ ClickHouse Connect can also be installed from source:
 * `git clone` the [GitHub repository](https://github.com/ClickHouse/clickhouse-connect).
 * Change to the project root and run `pip install .`. The build system installs Cython automatically to compile the optional C extensions.
 
+### Source build modes {#source-build-modes}
+
+Source builds support three modes. Cython itself is always required unless the build is explicitly skipped: a missing Cython or a `cythonize()` failure fails the build in the default and required modes.
+
+| Mode | Command | Behavior |
+| --- | --- | --- |
+| Default | `pip install .` | Attempts to compile the C extensions. If the compiler or linker fails, the build falls back to a pure Python install. |
+| Pure Python | `CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install .` | Builds pure Python without attempting the extensions. |
+| Required | `CLICKHOUSE_CONNECT_REQUIRE_C=1 pip install .` | Fails the build if the extensions cannot be compiled. Recommended for CI and for building redistributable wheels. |
+
+Setting both `CLICKHOUSE_CONNECT_SKIP_CYTHON=1` and `CLICKHOUSE_CONNECT_REQUIRE_C=1` is an error.
+
+```bash
+CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install .   # explicit pure Python build
+CLICKHOUSE_CONNECT_REQUIRE_C=1 pip install .     # extension build failure is fatal
+```
+
+A default-mode fallback produces a `py3-none-any` wheel that contains no extensions. `pip` may cache such a wheel when it was built from an index sdist and reuse it for later installs, even after the build environment is fixed. Clear it with:
+
+```bash
+pip cache remove clickhouse-connect
+```
+
+To check whether an installed copy has the extensions, import them directly:
+
+```bash
+python -c "import clickhouse_connect.driverc.buffer, clickhouse_connect.driverc.dataconv, clickhouse_connect.driverc.npconv"
+```
+
 The installed version is available as `clickhouse_connect.__version__`.
 
 ## Support policy {#support-policy}
