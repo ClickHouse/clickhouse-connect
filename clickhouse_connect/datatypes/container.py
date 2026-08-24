@@ -190,6 +190,9 @@ class Tuple(ClickHouseType):
 class Map(ClickHouseType):
     _slots = "key_type", "value_type", "_insert_name"
     python_type = dict
+    # A ClickHouse Map may hold the same key more than once, which a dict cannot
+    # represent. The tuple format returns every pair instead.
+    valid_formats = "tuple", "native"
 
     @property
     def insert_name(self):
@@ -225,10 +228,12 @@ class Map(ClickHouseType):
         total_rows = 0 if len(offsets) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx, read_state[0])
         values = self.value_type.read_column_data(source, total_rows, ctx, read_state[1])
+        as_tuples = self.read_format(ctx) == "tuple"
         column = []
         prev = 0
         for offset in offsets:
-            column.append(dict(zip(keys[prev:offset], values[prev:offset])))
+            pairs = zip(keys[prev:offset], values[prev:offset])
+            column.append(list(pairs) if as_tuples else dict(pairs))
             prev = offset
         return column
 

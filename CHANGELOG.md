@@ -11,6 +11,7 @@
 - Generic `Enum` definitions are accepted and canonicalized to `Enum8` or `Enum16` by value range.
 - Root `Tuple()` query results now decode as empty tuples.
 - Type name parsing now handles double quoted identifiers and quoted string literals uniformly. Some type names that previously failed to parse now parse.
+- `Map` columns accept a `tuple` read format that returns every key/value pair as a list of tuples. ClickHouse stores a `Map` as `Array(Tuple(key, value))` and permits repeated keys, which the default `dict` representation silently collapses. The default read format stays `native` and still returns a `dict`, so existing behavior is unchanged. Enable it per query with `query_formats={'Map': 'tuple'}` or globally with `set_read_format('Map', 'tuple')`. Closes [#949](https://github.com/ClickHouse/clickhouse-connect/issues/949).
 
 ### Bug Fixes
 

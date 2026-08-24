@@ -1,7 +1,12 @@
+import struct
 from datetime import timedelta, timezone
+
+import pytest
 
 from clickhouse_connect.datatypes.container import Nested
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
+from clickhouse_connect.driver.buffer import ResponseBuffer
+from clickhouse_connect.driver.query import QueryContext
 
 
 def test_enum_parse():
@@ -58,3 +63,49 @@ def test_datetime_fixed_offset_negative_timezone():
 def test_datetime64_fixed_offset_timezone():
     dt64_type = gfn("DateTime64(3, 'Fixed/UTC+05:30:00')")
     assert dt64_type.tzinfo == timezone(timedelta(hours=5, minutes=30))
+
+
+def _read_column(type_name: str, payload: bytes, query_formats=None):
+    """Read a single row of `type_name` out of its native bytes."""
+    ch_type = gfn(type_name)
+    ctx = QueryContext(query_formats=query_formats)
+    source = ResponseBuffer(type("_Src", (), {"gen": iter([payload])})())
+    state = ch_type.read_column_prefix(source, ctx)
+    return ch_type.read_column_data(source, 1, ctx, state)[0]
+
+
+def _lstr(text: str) -> bytes:
+    encoded = text.encode()
+    return bytes([len(encoded)]) + encoded
+
+
+# One map holding two pairs that share a key, which ClickHouse permits: server
+# side a Map is an Array(Tuple(key, value)) and is never deduplicated.
+_DUP_MAP = struct.pack("Q", 2) + _lstr("k") + _lstr("k") + _lstr("1") + _lstr("2")
+_DUP_PAIRS = [("k", "1"), ("k", "2")]
+
+MAP_SHAPES = [
+    ("Map(String, String)", _DUP_MAP, {"k": "2"}, _DUP_PAIRS),
+    ("Array(Map(String, String))", struct.pack("Q", 1) + _DUP_MAP, [{"k": "2"}], [_DUP_PAIRS]),
+    (
+        "Map(String, Map(String, String))",
+        struct.pack("Q", 1) + _lstr("a") + _DUP_MAP,
+        {"a": {"k": "2"}},
+        [("a", _DUP_PAIRS)],
+    ),
+]
+
+
+@pytest.mark.parametrize("type_name, payload, native, tuples", MAP_SHAPES)
+def test_map_native_format_collapses_duplicate_keys(type_name, payload, native, tuples):
+    """The default stays a dict, so existing behavior is unchanged."""
+    assert _read_column(type_name, payload) == native
+
+
+@pytest.mark.parametrize("type_name, payload, native, tuples", MAP_SHAPES)
+def test_map_tuple_format_keeps_duplicate_keys(type_name, payload, native, tuples):
+    assert _read_column(type_name, payload, {"Map": "tuple"}) == tuples
+
+
+def test_map_tuple_format_is_declared_valid():
+    assert "tuple" in gfn("Map(String, String)").valid_formats
