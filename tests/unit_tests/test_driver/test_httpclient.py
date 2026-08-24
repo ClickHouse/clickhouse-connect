@@ -1602,3 +1602,46 @@ class TestInsertArrowTransportSettings:
             await client.insert_arrow("some_table", Mock(), transport_settings=transport)
         assert raw_insert.call_args.kwargs.get("transport_settings") == transport
         assert transport not in raw_insert.call_args.args
+
+
+class TestIPv6HostBrackets:
+    """RFC 3986 3.2.2: an IPv6 literal in a URI authority must be bracketed."""
+
+    @staticmethod
+    def _url(host: str) -> str:
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host=host,
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        return client.url
+
+    def test_ipv6_host_is_bracketed(self):
+        # Without the brackets the first colon of the address reads as the
+        # port separator, so the client never reaches the server.
+        assert self._url("2001:db8::1") == "http://[2001:db8::1]:8123"
+        assert self._url("::1") == "http://[::1]:8123"
+
+    def test_already_bracketed_host_is_left_alone(self):
+        assert self._url("[2001:db8::1]") == "http://[2001:db8::1]:8123"
+
+    def test_names_and_ipv4_are_unchanged(self):
+        assert self._url("localhost") == "http://localhost:8123"
+        assert self._url("127.0.0.1") == "http://127.0.0.1:8123"
+        assert self._url("play.clickhouse.com") == "http://play.clickhouse.com:8123"
+
+    def test_async_client_uri_is_bracketed_too(self):
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = AsyncClient(
+                interface="http",
+                host="2001:db8::1",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        assert client.uri == "http://[2001:db8::1]:8123"

@@ -54,6 +54,7 @@ from clickhouse_connect.driver.common import (
     coerce_bool,
     coerce_show_clickhouse_errors,
     dict_copy,  # noqa: F401  (compatibility re-export)
+    format_uri_host,
 )
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
@@ -163,7 +164,7 @@ class AsyncClient(Client):
         proxy_path = proxy_path.lstrip("/")
         if proxy_path:
             proxy_path = "/" + proxy_path
-        self.uri = f"{interface}://{host}:{port}{proxy_path}"
+        self.uri = f"{interface}://{format_uri_host(host)}:{port}{proxy_path}"
         self.url = self.uri
         self._rename_response_column = rename_response_column
         self._initial_settings = settings
