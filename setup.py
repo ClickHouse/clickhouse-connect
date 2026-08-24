@@ -83,7 +83,6 @@ def run_setup(try_c: bool = True):
             "async": ["aiohttp>=3.9.0"],
             "chdb": ["chdb>=4.1.7"],
         },
-        tests_require=["pytest"],
         entry_points={
             "sqlalchemy.dialects": [
                 "clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect",
@@ -93,7 +92,6 @@ def run_setup(try_c: bool = True):
         classifiers=[
             "Development Status :: 5 - Production/Stable",
             "Intended Audience :: Developers",
-            "License :: OSI Approved :: Apache Software License",
             "Programming Language :: Python :: 3.10",
             "Programming Language :: Python :: 3.11",
             "Programming Language :: Python :: 3.12",
