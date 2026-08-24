@@ -121,7 +121,7 @@ When SQLAlchemy inlines a bound value through `literal_binds` or `literal_execut
 
 ### JSON type hints {#sqlalchemy-json-type-hints}
 
-Declare typed JSON paths with the `typed_paths` mapping. A path type can be a ClickHouse SQLAlchemy type class, a configured instance, or a ClickHouse type name string. Type name strings support types without a SQLAlchemy constructor, including `Variant` and `Dynamic`, and preserve names in a named `Tuple`.
+Declare typed JSON paths with the `typed_paths` mapping. A path type can be a ClickHouse SQLAlchemy type class, a configured instance, or a ClickHouse type name string. Type name strings support types without a SQLAlchemy constructor, such as `Dynamic`, and can still be used for complex configured type expressions. They preserve names in a named `Tuple`.
 
 Type name strings can contain configured nested JSON types such as ``Array(JSON(`child` UInt32))``. Recognized ClickHouse type names are case-insensitive in these strings and are emitted with their canonical capitalization. A string must contain one complete type expression. Trailing text and malformed nested JSON arguments are rejected.
 
@@ -327,6 +327,8 @@ ClickHouse does not support recursive materialized CTEs. The SQLAlchemy helpers 
 ## DDL and reflection {#sqlalchemy-ddl-reflection}
 
 ClickHouse Connect provides ClickHouse data types, table engines, dictionary constructs, database DDL, and table reflection.
+
+Standalone `Variant` columns can be declared with `Variant(String, UInt32)` or `Variant(elements=[String, UInt32])`. Member types can be type classes or configured instances. The constructor uses ClickHouse's canonical member order. Reflected `Variant` columns use the same SQLAlchemy type, so Alembic autogenerate can compare them without repeated type changes.
 
 ```python
 import sqlalchemy as db

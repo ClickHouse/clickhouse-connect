@@ -31,6 +31,7 @@ from sqlalchemy.types import (
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import json_subcolumn
 from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, LC_TYPE_DEF, NULLABLE_TYPE_DEF, TypeDef
+from clickhouse_connect.datatypes.dynamic import Variant as ChVariant
 from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8
 from clickhouse_connect.datatypes.numeric import Enum16 as ChEnum16
 from clickhouse_connect.datatypes.registry import get_from_name, type_map
@@ -516,6 +517,36 @@ class Tuple(ChSqlaType, UserDefinedType):  # type: ignore[misc]
     def adapt(self, cls, **kw):
         # Bypass SA's constructor_copy: it can't see keyword-only args behind *args and
         # would produce an empty Tuple. Copy state directly.
+        inst = cls.__new__(cls)
+        inst.__dict__.update(self.__dict__)
+        return inst
+
+
+class Variant(ChSqlaType, UserDefinedType):  # type: ignore[misc]
+    python_type = object
+
+    def __init__(
+        self,
+        *args: ChSqlaType | type[ChSqlaType],
+        elements: Sequence[ChSqlaType | type[ChSqlaType]] | None = None,
+        type_def: TypeDef | None = None,
+    ):
+        """Variant(String, UInt32) variadic form or Variant(elements=[String, UInt32]) list form, not both."""
+        if type_def is None:
+            if args and elements is not None:
+                raise ArgumentError("Cannot specify both positional elements and the 'elements' kwarg")
+            if args:
+                elements = args
+            if not elements:
+                raise ArgumentError("Variant requires at least one member type")
+            values = [element() if callable(element) else element for element in elements or ()]
+            type_def = TypeDef(values=tuple(value.name for value in values))
+        elif not type_def.values:
+            raise ArgumentError("Variant requires at least one member type")
+        super().__init__(type_def)
+        self.type_def = cast(ChVariant, self.ch_type).type_def
+
+    def adapt(self, cls, **kw):
         inst = cls.__new__(cls)
         inst.__dict__.update(self.__dict__)
         return inst
@@ -1132,6 +1163,7 @@ __all__ = [
     "UInt64",
     "UInt8",
     "UUID",
+    "Variant",
     "LowCardinality",
     "Nullable",
 ]

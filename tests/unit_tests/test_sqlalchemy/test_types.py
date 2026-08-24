@@ -30,6 +30,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     Tuple,
     UInt32,
     UInt64,
+    Variant,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime as ChDateTime
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
@@ -173,6 +174,58 @@ def test_tuple_adapt_preserves_type_def():
     adapted = source.adapt(type(source))
     assert adapted.type_def == source.type_def
     assert adapted.name == source.name
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_class, expected_name",
+    [
+        ("Variant(UInt32, String)", Variant, "Variant(String, UInt32)"),
+        ("vArIaNt(UInt64, String)", Variant, "Variant(String, UInt64)"),
+        ("aRrAy(Variant(UInt32, String))", Array, "Array(Variant(String, UInt32))"),
+        ("Tuple(Variant(UInt32, String), UInt64)", Tuple, "Tuple(Variant(String, UInt32), UInt64)"),
+        (
+            "Array(Tuple(Variant(UInt32, String), UInt64))",
+            Array,
+            "Array(Tuple(Variant(String, UInt32), UInt64))",
+        ),
+        ("Nullable(Variant(UInt32, String))", Variant, "Nullable(Variant(String, UInt32))"),
+    ],
+)
+def test_variant_reflection_factory(type_name, expected_class, expected_name):
+    variant = sqla_type_from_name(type_name)
+
+    assert variant.__class__ is expected_class
+    assert variant.name == expected_name
+
+
+def test_variant_constructor_canonicalizes_members():
+    variant = Variant(UInt32, String(), UInt32)
+
+    assert variant.name == "Variant(String, UInt32)"
+    assert variant.type_def.values == ("String", "UInt32")
+    assert variant.python_type is object
+    assert Variant(elements=[UInt64, String]).name == "Variant(String, UInt64)"
+
+
+def test_variant_both_positional_and_kwarg_raises():
+    with pytest.raises(ArgumentError):
+        Variant(UInt32, elements=[String])
+
+
+def test_variant_requires_member_types():
+    with pytest.raises(ArgumentError, match="at least one"):
+        Variant()
+    with pytest.raises(ArgumentError, match="at least one"):
+        Variant(elements=[])
+
+
+def test_variant_copy_adapt_and_dialect_impl_preserve_members():
+    source = Variant(UInt32, String)
+
+    for copied in (source.copy(), source.adapt(Variant), source.dialect_impl(ClickHouseDialect())):
+        assert copied.__class__ is Variant
+        assert copied.name == source.name
+        assert copied.type_def == source.type_def
 
 
 @pytest.mark.parametrize(

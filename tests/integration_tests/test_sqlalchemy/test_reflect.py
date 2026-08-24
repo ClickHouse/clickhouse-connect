@@ -5,7 +5,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import NoResultFound
 
 from clickhouse_connect import common
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Point, SimpleAggregateFunction, UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Point, SimpleAggregateFunction, UInt32, Variant
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 
 
@@ -48,6 +48,26 @@ def test_types_reflection(test_engine: Engine, test_db: str):
         assert table.columns.key.type.__class__ == UInt32
         assert table.columns.pt.type.__class__ == Point
         assert "MergeTree" in table.engine.name
+
+
+def test_variant_reflection(test_engine: Engine, test_db: str):
+    table_name = "sqlalchemy_variant_reflection_test"
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
+        conn.execute(text(f"CREATE TABLE {test_db}.{table_name} (id UInt32, value Variant(UInt32, String)) ENGINE MergeTree ORDER BY id"))
+
+    try:
+        columns = inspect(test_engine).get_columns(table_name, schema=test_db)
+        reflected_type = next(column["type"] for column in columns if column["name"] == "value")
+        assert reflected_type.__class__ is Variant
+        assert reflected_type.name == "Variant(String, UInt32)"
+
+        table = Table(table_name, MetaData(schema=test_db), autoload_with=test_engine)
+        assert table.c.value.type.__class__ is Variant
+        assert table.c.value.type.name == "Variant(String, UInt32)"
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
 
 
 def test_table_exists(test_engine: Engine):
