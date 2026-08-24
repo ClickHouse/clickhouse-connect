@@ -14,6 +14,7 @@
 
 ### Bug Fixes
 
+- Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).
 - The client now sorts and deduplicates `Variant` members to the server's canonical order. Previously a client-declared `Variant` type with non-canonical member order wrote native insert data under the wrong member types.
 - `Time64` negative timedelta inserts previously stored incorrect values. `Time64` NumPy timedelta inserts previously stored wrong magnitudes. Both now store correct tick values, and out-of-range NumPy values are rejected instead of incorrectly wrapping.
 - Pandas `Timedelta` values in `Time` and `Time64` row inserts now convert like `timedelta`. Nullable timedelta DataFrame columns now insert missing values as `NULL` on Pandas 3 instead of raising `TypeError`.
