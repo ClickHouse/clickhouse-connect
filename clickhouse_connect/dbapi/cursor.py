@@ -14,6 +14,12 @@ from clickhouse_connect.driver.query import remove_sql_comments
 logger = logging.getLogger(__name__)
 
 insert_re = re.compile(r"^\s*INSERT\s+INTO\s+(.*$)", re.IGNORECASE)
+# The block writer carries one value per named column, so it can only take a
+# values list of bare parameter slots: pyformat placeholders or a server side
+# {name:Type} binding. Anything else in there, a function call or a literal,
+# has to be evaluated by the server.
+_PLACEHOLDER = r"%s|%\([^)]*\)s|\{[^{}]*\}"
+placeholders_only_re = re.compile(rf"\(\s*(?:{_PLACEHOLDER})\s*(?:,\s*(?:{_PLACEHOLDER})\s*)*\)\s*;?\s*")
 str_type = get_from_name("String")
 int_type = get_from_name("Int32")
 _IMPLICIT_NULLABLE_BASE_TYPES = frozenset(("Dynamic", "Variant"))
@@ -164,7 +170,15 @@ class Cursor:
             _, op_columns, temp = parse_callable(temp)
         else:
             op_columns = None
-        if "VALUES" not in temp.upper():
+        values_idx = temp.upper().find("VALUES")
+        if values_idx < 0:
+            return False
+        # A values list that is not placeholders-only must keep the original
+        # statement so the server evaluates it, which is what the row by row
+        # path in executemany already does. A bare VALUES with no list at all
+        # is what the SQLAlchemy dialect emits, and carries nothing to lose.
+        values_text = temp[values_idx + len("VALUES") :].strip()
+        if values_text and not placeholders_only_re.fullmatch(values_text):
             return False
         if not isinstance(data, Sequence) or len(data) == 0:
             return False

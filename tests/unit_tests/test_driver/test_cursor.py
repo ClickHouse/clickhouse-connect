@@ -637,3 +637,44 @@ def test_executemany_generator_falls_through_to_row_by_row():
 
     client.insert.assert_not_called()
     assert client.query.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "values_list",
+    [
+        "(%s, hex(%s))",  # function wrapping a placeholder, counts still match
+        "(%s, hex(unhex('AB')))",  # expression consuming no placeholder
+        "(%s, now())",
+        "(%s, 'literal')",
+        "(1, 2)",
+    ],
+)
+def test_executemany_expression_values_skip_bulk_insert(values_list):
+    """A values list holding anything but placeholders has to reach the server
+    as SQL, otherwise the expression is dropped and the raw parameter is
+    written straight into the column.
+    """
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.executemany(f"INSERT INTO test_table (v1, v2) VALUES {values_list}", [(1, "AB")])
+
+    client.insert.assert_not_called()
+    client.query.assert_called()
+
+
+@pytest.mark.parametrize(
+    "values_list",
+    ["(%s, %s)", "(%s,%s)", "( %s , %s )", "(%(v1)s, %(v2)s)", "(%s, %s);"],
+)
+def test_executemany_placeholder_values_still_bulk_insert(values_list):
+    """Placeholders-only values lists keep the fast path."""
+    client = Mock()
+    cursor = Cursor(client)
+    rows = [{"v1": 13, "v2": "user_1"}] if "%(" in values_list else [(13, "user_1")]
+
+    cursor.executemany(f"INSERT INTO test_table (v1, v2) VALUES {values_list}", rows)
+
+    client.insert.assert_called_once()
+    client.query.assert_not_called()
