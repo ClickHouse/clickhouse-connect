@@ -170,7 +170,11 @@ def parse_columns(expr: str, preserve_names: bool = False):
                     label = ""
                     continue
                 elif char == ")":
-                    columns.append(label.rstrip() if preserve_names and named and names[-1].upper() == "SKIP" else label)
+                    # An empty argument list contributes no column.  Appending
+                    # here produced a phantom column with an empty type name,
+                    # which get_from_name later rejects.
+                    if label or named or columns:
+                        columns.append(label.rstrip() if preserve_names and named and names[-1].upper() == "SKIP" else label)
                     break
             if char in ("'", '"', "`"):
                 quote = char

@@ -462,3 +462,25 @@ def test_remove_comments_no_space_after_dashes():
 )
 def test_remove_comments_separates_tokens(sql: str, expected: str):
     assert remove_sql_comments(sql) == expected
+
+
+def test_parse_columns_empty_argument_list():
+    # An empty argument list has no columns.  Returning ('',) here produced a
+    # phantom column whose type name was the empty string.
+    assert parse_columns("()") == ((), ())
+    assert parse_columns("()", preserve_names=True) == ((), ())
+
+
+def test_parse_columns_non_empty_argument_lists_unchanged():
+    assert parse_columns("(Int32)") == ((), ("Int32",))
+    assert parse_columns("(a String, b Int32)") == (("a", "b"), ("String", "Int32"))
+    assert parse_columns("(Tuple(String), Int32)") == ((), ("Tuple(String)", "Int32"))
+
+
+def test_empty_parameterized_types_resolve():
+    # Variant() raised "Unrecognized ClickHouse type base:  name: " because the
+    # phantom column was passed to get_from_name.  Tuple() only worked because
+    # registry.parse_name special-cases the literal string.
+    assert get_from_name("Variant()").name == "Variant()"
+    assert get_from_name("Tuple()").name == "Tuple()"
+    assert get_from_name("Nested()").name == "Nested()"
