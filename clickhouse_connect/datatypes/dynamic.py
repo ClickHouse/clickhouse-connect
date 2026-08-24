@@ -50,7 +50,12 @@ def _nest_value(target: dict, path: str, value) -> None:
     item = target
     for key in chain[:-1]:
         child = item.get(key)
-        if child is None:
+        if not isinstance(child, dict):
+            if child is not None and value is None:
+                # A shallower path already holds a scalar here and this deeper
+                # path holds nothing, so there is nothing to nest.  Keep the
+                # scalar instead of replacing it with an all-null container.
+                return
             child = {}
             item[key] = child
         item = child

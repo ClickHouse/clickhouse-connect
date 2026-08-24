@@ -89,3 +89,32 @@ def test_dynamic_prefix_sorts_shared_variant():
 
     column = read_variant_column(source, 1, ctx, state.variant_types, state.variant_states)
     assert column == [100]
+
+
+def _nest_all(pairs):
+    target = {}
+    for path, value in pairs:
+        dynamic._nest_value(target, path, value)
+    return target
+
+
+def test_nest_value_overlapping_path_deeper_holds_nothing():
+    # JSON(a Int64, a.b Nullable(Int64)) with the row {"a":5}.  typed_paths is
+    # sorted, so "a" is written before "a.b" and the walk used to hit the int.
+    assert _nest_all([("a", 5), ("a.b", None)]) == {"a": 5}
+
+
+def test_nest_value_overlapping_path_deeper_holds_value():
+    # Same column with {"a":5,"a.b":7}.  A scalar and an object cannot share a
+    # key, so the deeper path wins, matching the later-write-wins order below.
+    assert _nest_all([("a", 5), ("a.b", 7)]) == {"a": {"b": 7}}
+
+
+def test_nest_value_scalar_written_last_still_wins():
+    assert _nest_all([("a.b", None), ("a", 5)]) == {"a": 5}
+    assert _nest_all([("a.b", 7), ("a", 5)]) == {"a": 5}
+
+
+def test_nest_value_non_overlapping_paths_unchanged():
+    assert _nest_all([("a.b", None)]) == {"a": {"b": None}}
+    assert _nest_all([("a.b.c", 1), ("a.b.d", 2)]) == {"a": {"b": {"c": 1, "d": 2}}}
