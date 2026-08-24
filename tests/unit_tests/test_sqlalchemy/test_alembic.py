@@ -333,6 +333,66 @@ def test_render_type_non_enum_containers_use_clickhouse_names():
     assert context.impl.render_type(types.Array(types.DateTime64(3, "UTC")), None) == "Array(DateTime64(3, 'UTC'))"
 
 
+def test_render_and_compare_variant_type():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    variant = sqla_type_from_name("Variant(UInt32, String, UInt32)")
+
+    rendered = context.impl.render_type(variant, None)
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    rebuilt = eval(rendered, namespace)
+
+    assert rendered == "sqla_type_from_name('Variant(String, UInt32)')"
+    assert rebuilt.name == variant.name
+
+    inspector_column = Column("value", sqla_type_from_name("Variant(UInt32, String)"), nullable=False)
+    matching_column = Column("value", sqla_type_from_name("Variant(String, UInt32, UInt32)"), nullable=False)
+    different_column = Column("value", sqla_type_from_name("Variant(String, UInt64)"), nullable=False)
+    assert context.impl.compare_type(inspector_column, matching_column) is False
+    assert context.impl.compare_type(inspector_column, different_column) is True
+
+
+@pytest.mark.parametrize(
+    "variant_type",
+    [
+        sqla_type_from_name("Variant(Enum8('low' = 1, 'high' = 2), UInt32)"),
+        sqla_type_from_name("Array(Variant(Enum8('low' = 1, 'high' = 2), UInt32))"),
+        sqla_type_from_name("Map(String, Variant(UInt32, String))"),
+        sqla_type_from_name("Tuple(Variant(UInt32, String), UInt64)"),
+        sqla_type_from_name("Array(Tuple(Variant(UInt32, String), UInt64))"),
+        sqla_type_from_name("Variant(BFloat16, String)"),
+        sqla_type_from_name("Array(Variant(BFloat16, String))"),
+        sqla_type_from_name("Map(String, Variant(BFloat16, String))"),
+        sqla_type_from_name("Tuple(Variant(BFloat16, String), UInt64)"),
+        sqla_type_from_name("Variant(Tuple(label String, count UInt32), UInt64)"),
+        sqla_type_from_name("Array(Variant(Tuple(label String, count UInt32), UInt64))"),
+    ],
+    ids=[
+        "enum",
+        "array-enum",
+        "map",
+        "tuple",
+        "array-tuple",
+        "bfloat16",
+        "array-bfloat16",
+        "map-bfloat16",
+        "tuple-bfloat16",
+        "named-tuple",
+        "array-named-tuple",
+    ],
+)
+def test_render_variant_types_use_reflection_factory(variant_type):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+
+    rendered = context.impl.render_type(variant_type, None)
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(compile(rendered, "<migration>", "eval"), namespace)
+
+    assert "sqla_type_from_name(" in rendered
+    assert "Variant(" in rendered
+    assert rebuilt.name == variant_type.name
+
+
 @pytest.mark.parametrize(
     "type_name",
     [

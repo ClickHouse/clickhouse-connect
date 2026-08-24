@@ -48,7 +48,21 @@ def test_all_matches_schema_types():
     from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
     from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
 
-    assert sqltypes.__all__ == sorted(schema_types) + ["LowCardinality", "Nullable"]
+    public_schema_types = [name for name in schema_types if sqla_type_map[name].__name__ == name]
+    private_schema_types = set(schema_types) - set(public_schema_types)
+
+    assert private_schema_types == {"Variant"}
+    assert sqltypes.__all__ == sorted(public_schema_types) + ["LowCardinality", "Nullable"]
+
+
+def test_variant_is_reflection_only():
+    from clickhouse_connect.cc_sqlalchemy import types
+    from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
+
+    assert not hasattr(sqltypes, "Variant")
+    assert not hasattr(types, "Variant")
+    with pytest.raises(ImportError):
+        exec("from clickhouse_connect.cc_sqlalchemy.types import Variant")
 
 
 def test_sqla():
@@ -173,6 +187,55 @@ def test_tuple_adapt_preserves_type_def():
     adapted = source.adapt(type(source))
     assert adapted.type_def == source.type_def
     assert adapted.name == source.name
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_class, expected_name",
+    [
+        ("Variant(UInt32, String)", sqla_type_map["Variant"], "Variant(String, UInt32)"),
+        ("vArIaNt(UInt64, String)", sqla_type_map["Variant"], "Variant(String, UInt64)"),
+        ("aRrAy(Variant(UInt32, String))", Array, "Array(Variant(String, UInt32))"),
+        ("Tuple(Variant(UInt32, String), UInt64)", Tuple, "Tuple(Variant(String, UInt32), UInt64)"),
+        (
+            "Array(Tuple(Variant(UInt32, String), UInt64))",
+            Array,
+            "Array(Tuple(Variant(String, UInt32), UInt64))",
+        ),
+        ("Nullable(Variant(UInt32, String))", sqla_type_map["Variant"], "Nullable(Variant(String, UInt32))"),
+    ],
+)
+def test_variant_reflection_factory(type_name, expected_class, expected_name):
+    variant = sqla_type_from_name(type_name)
+
+    assert variant.__class__ is expected_class
+    assert variant.name == expected_name
+
+
+def test_variant_subclass_does_not_replace_schema_registration():
+    from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
+
+    original_variant = sqla_type_map["Variant"]
+    original_schema_types = schema_types.copy()
+    original_type_map = dict(sqla_type_map)
+
+    try:
+        type("_DerivedVariant", (original_variant,), {})
+        assert sqla_type_map["Variant"] is original_variant
+        assert schema_types.count("Variant") == original_schema_types.count("Variant")
+    finally:
+        schema_types[:] = original_schema_types
+        sqla_type_map.clear()
+        sqla_type_map.update(original_type_map)
+
+
+def test_variant_copy_adapt_and_dialect_impl_preserve_members():
+    source = sqla_type_from_name("Variant(UInt32, String)")
+    variant_class = type(source)
+
+    for copied in (source.copy(), source.adapt(variant_class), source.dialect_impl(ClickHouseDialect())):
+        assert copied.__class__ is variant_class
+        assert copied.name == source.name
+        assert copied.type_def == source.type_def
 
 
 @pytest.mark.parametrize(

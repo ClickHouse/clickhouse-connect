@@ -17,6 +17,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Map as ChSqlaMap
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nested as ChSqlaNested
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import _Variant as ChSqlaVariant
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -59,6 +60,8 @@ def _contains_named_container(type_obj: ChSqlaType) -> bool:
 
 def _render_ch_type(type_obj):
     """Render a ChSqlaType as valid Python source for autogen migrations"""
+    if isinstance(type_obj, ChSqlaVariant):
+        return f"sqla_type_from_name({type_obj.name!r})"
     if _contains_named_container(type_obj):
         return f"sqla_type_from_name({type_obj.name!r})"
     wrappers = type_obj.type_def.wrappers
