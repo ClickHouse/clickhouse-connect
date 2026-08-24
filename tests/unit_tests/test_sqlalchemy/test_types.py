@@ -30,7 +30,6 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     Tuple,
     UInt32,
     UInt64,
-    Variant,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime as ChDateTime
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
@@ -49,7 +48,21 @@ def test_all_matches_schema_types():
     from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
     from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
 
-    assert sqltypes.__all__ == sorted(schema_types) + ["LowCardinality", "Nullable"]
+    public_schema_types = [name for name in schema_types if sqla_type_map[name].__name__ == name]
+    private_schema_types = set(schema_types) - set(public_schema_types)
+
+    assert private_schema_types == {"Variant"}
+    assert sqltypes.__all__ == sorted(public_schema_types) + ["LowCardinality", "Nullable"]
+
+
+def test_variant_is_reflection_only():
+    from clickhouse_connect.cc_sqlalchemy import types
+    from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
+
+    assert not hasattr(sqltypes, "Variant")
+    assert not hasattr(types, "Variant")
+    with pytest.raises(ImportError):
+        exec("from clickhouse_connect.cc_sqlalchemy.types import Variant")
 
 
 def test_sqla():
@@ -179,8 +192,8 @@ def test_tuple_adapt_preserves_type_def():
 @pytest.mark.parametrize(
     "type_name, expected_class, expected_name",
     [
-        ("Variant(UInt32, String)", Variant, "Variant(String, UInt32)"),
-        ("vArIaNt(UInt64, String)", Variant, "Variant(String, UInt64)"),
+        ("Variant(UInt32, String)", sqla_type_map["Variant"], "Variant(String, UInt32)"),
+        ("vArIaNt(UInt64, String)", sqla_type_map["Variant"], "Variant(String, UInt64)"),
         ("aRrAy(Variant(UInt32, String))", Array, "Array(Variant(String, UInt32))"),
         ("Tuple(Variant(UInt32, String), UInt64)", Tuple, "Tuple(Variant(String, UInt32), UInt64)"),
         (
@@ -188,7 +201,7 @@ def test_tuple_adapt_preserves_type_def():
             Array,
             "Array(Tuple(Variant(String, UInt32), UInt64))",
         ),
-        ("Nullable(Variant(UInt32, String))", Variant, "Nullable(Variant(String, UInt32))"),
+        ("Nullable(Variant(UInt32, String))", sqla_type_map["Variant"], "Nullable(Variant(String, UInt32))"),
     ],
 )
 def test_variant_reflection_factory(type_name, expected_class, expected_name):
@@ -198,32 +211,29 @@ def test_variant_reflection_factory(type_name, expected_class, expected_name):
     assert variant.name == expected_name
 
 
-def test_variant_constructor_canonicalizes_members():
-    variant = Variant(UInt32, String(), UInt32)
+def test_variant_subclass_does_not_replace_schema_registration():
+    from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
 
-    assert variant.name == "Variant(String, UInt32)"
-    assert variant.type_def.values == ("String", "UInt32")
-    assert variant.python_type is object
-    assert Variant(elements=[UInt64, String]).name == "Variant(String, UInt64)"
+    original_variant = sqla_type_map["Variant"]
+    original_schema_types = schema_types.copy()
+    original_type_map = dict(sqla_type_map)
 
-
-def test_variant_both_positional_and_kwarg_raises():
-    with pytest.raises(ArgumentError):
-        Variant(UInt32, elements=[String])
-
-
-def test_variant_requires_member_types():
-    with pytest.raises(ArgumentError, match="at least one"):
-        Variant()
-    with pytest.raises(ArgumentError, match="at least one"):
-        Variant(elements=[])
+    try:
+        type("_DerivedVariant", (original_variant,), {})
+        assert sqla_type_map["Variant"] is original_variant
+        assert schema_types.count("Variant") == original_schema_types.count("Variant")
+    finally:
+        schema_types[:] = original_schema_types
+        sqla_type_map.clear()
+        sqla_type_map.update(original_type_map)
 
 
 def test_variant_copy_adapt_and_dialect_impl_preserve_members():
-    source = Variant(UInt32, String)
+    source = sqla_type_from_name("Variant(UInt32, String)")
+    variant_class = type(source)
 
-    for copied in (source.copy(), source.adapt(Variant), source.dialect_impl(ClickHouseDialect())):
-        assert copied.__class__ is Variant
+    for copied in (source.copy(), source.adapt(variant_class), source.dialect_impl(ClickHouseDialect())):
+        assert copied.__class__ is variant_class
         assert copied.name == source.name
         assert copied.type_def == source.type_def
 

@@ -14,7 +14,7 @@
 
 ### Bug Fixes
 
-- SQLAlchemy can now construct and reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
+- SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
 - Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).
 - The client now sorts and deduplicates `Variant` members to the server's canonical order. Previously a client-declared `Variant` type with non-canonical member order wrote native insert data under the wrong member types.
 - `Time64` negative timedelta inserts previously stored incorrect values. `Time64` NumPy timedelta inserts previously stored wrong magnitudes. Both now store correct tick values, and out-of-range NumPy values are rejected instead of incorrectly wrapping.

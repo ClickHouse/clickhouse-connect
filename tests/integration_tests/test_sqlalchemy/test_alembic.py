@@ -31,7 +31,6 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     String,
     Tuple,
     UInt32,
-    Variant,
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
@@ -527,7 +526,7 @@ def test_alembic_named_container_types_round_trip_live(test_engine: Engine, test
 
 def test_alembic_variant_type_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
     table_name = ch_name("alembic_variant")
-    variant_type = Variant(UInt32, String, UInt32)
+    variant_type = sqla_type_from_name("Variant(UInt32, String, UInt32)")
     metadata = MetaData(schema=test_db)
     Table(
         table_name,
@@ -543,11 +542,11 @@ def test_alembic_variant_type_round_trip_live(test_engine: Engine, test_db: str,
         assert revision is not None
         assert not isinstance(revision, list)
         contents = Path(revision.path).read_text(encoding="utf-8")
-        assert "Variant(String, UInt32)" in contents
+        assert "sqla_type_from_name('Variant(String, UInt32)')" in contents
         command.upgrade(config, "head")
 
         reflected = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
-        assert reflected.c.value.type.__class__ is Variant
+        assert reflected.c.value.type.__class__ is type(variant_type)
         assert reflected.c.value.type.name == variant_type.name
 
         noop_revision = command.revision(config, message="variant noop", autogenerate=True)

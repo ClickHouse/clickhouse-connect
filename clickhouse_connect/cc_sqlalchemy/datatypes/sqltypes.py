@@ -522,27 +522,11 @@ class Tuple(ChSqlaType, UserDefinedType):  # type: ignore[misc]
         return inst
 
 
-class Variant(ChSqlaType, UserDefinedType):  # type: ignore[misc]
+class _Variant(ChSqlaType, UserDefinedType):  # type: ignore[misc]
+    _schema_name = "Variant"
     python_type = object
 
-    def __init__(
-        self,
-        *args: ChSqlaType | type[ChSqlaType],
-        elements: Sequence[ChSqlaType | type[ChSqlaType]] | None = None,
-        type_def: TypeDef | None = None,
-    ):
-        """Variant(String, UInt32) variadic form or Variant(elements=[String, UInt32]) list form, not both."""
-        if type_def is None:
-            if args and elements is not None:
-                raise ArgumentError("Cannot specify both positional elements and the 'elements' kwarg")
-            if args:
-                elements = args
-            if not elements:
-                raise ArgumentError("Variant requires at least one member type")
-            values = [element() if callable(element) else element for element in elements or ()]
-            type_def = TypeDef(values=tuple(value.name for value in values))
-        elif not type_def.values:
-            raise ArgumentError("Variant requires at least one member type")
+    def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
         self.type_def = cast(ChVariant, self.ch_type).type_def
 
@@ -1163,7 +1147,6 @@ __all__ = [
     "UInt64",
     "UInt8",
     "UUID",
-    "Variant",
     "LowCardinality",
     "Nullable",
 ]

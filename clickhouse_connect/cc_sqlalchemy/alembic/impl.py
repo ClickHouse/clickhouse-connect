@@ -17,7 +17,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Map as ChSqlaMap
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nested as ChSqlaNested
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Variant as ChSqlaVariant
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import _Variant as ChSqlaVariant
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -51,7 +51,7 @@ def _contains_named_container(type_obj: ChSqlaType) -> bool:
         return True
     if isinstance(type_obj, ChSqlaArray):
         nested_types = type_obj.type_def.values[:1]
-    elif isinstance(type_obj, (ChSqlaMap, ChSqlaTuple, ChSqlaVariant)):
+    elif isinstance(type_obj, (ChSqlaMap, ChSqlaTuple)):
         nested_types = type_obj.type_def.values
     else:
         return False
@@ -60,6 +60,8 @@ def _contains_named_container(type_obj: ChSqlaType) -> bool:
 
 def _render_ch_type(type_obj):
     """Render a ChSqlaType as valid Python source for autogen migrations"""
+    if isinstance(type_obj, ChSqlaVariant):
+        return f"sqla_type_from_name({type_obj.name!r})"
     if _contains_named_container(type_obj):
         return f"sqla_type_from_name({type_obj.name!r})"
     wrappers = type_obj.type_def.wrappers
@@ -75,9 +77,6 @@ def _render_ch_type(type_obj):
     elif isinstance(type_obj, ChSqlaTuple):
         elements = ", ".join(_render_inner(v) for v in type_obj.type_def.values)
         rendered = f"Tuple({elements})"
-    elif isinstance(type_obj, ChSqlaVariant):
-        elements = ", ".join(_render_inner(v) for v in type_obj.type_def.values)
-        rendered = f"Variant({elements})"
     elif isinstance(type_obj, ChSqlaJSON):
         ch_type = cast(ChJSON, type_obj.ch_type)
         args = []
