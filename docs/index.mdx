@@ -68,6 +68,32 @@ ClickHouse Connect can also be installed from source:
 * `git clone` the [GitHub repository](https://github.com/ClickHouse/clickhouse-connect).
 * Change to the project root and run `pip install .`. The build system installs Cython automatically to compile the optional C extensions.
 
+### Source build modes {#source-build-modes}
+
+Source builds support three modes. Default and required modes fail if Cython is unavailable or `cythonize()` fails. Skip mode does not import Cython.
+
+| Mode | Command | Behavior |
+| --- | --- | --- |
+| Default | `pip install .` | Attempts to compile the C extensions. If the compiler or linker fails, the build falls back to a pure Python install. |
+| Pure Python | `CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install .` | Builds pure Python without attempting the extensions. |
+| Required | `CLICKHOUSE_CONNECT_REQUIRE_C=1 pip install .` | Fails the build if the extensions cannot be compiled. Recommended for CI and for building redistributable wheels. |
+
+Setting both `CLICKHOUSE_CONNECT_SKIP_CYTHON=1` and `CLICKHOUSE_CONNECT_REQUIRE_C=1` is an error.
+
+Default fallback wheels contain no compiled extensions but retain platform and interpreter tags. Only skip mode produces `py3-none-any`. `pip` can cache a fallback wheel built from an index sdist and reuse it for a compatible Python and platform after the compiler is fixed. Clear it with:
+
+```bash
+pip cache remove clickhouse_connect
+```
+
+Check whether all three extension modules are present. This prints `True` when they are:
+
+```bash
+python -c "from importlib.util import find_spec; print(all(find_spec(m) for m in ('clickhouse_connect.driverc.buffer', 'clickhouse_connect.driverc.dataconv', 'clickhouse_connect.driverc.npconv')))"
+```
+
+Importing `clickhouse_connect.driverc.npconv` directly also requires NumPy to be installed.
+
 The installed version is available as `clickhouse_connect.__version__`.
 
 ## Support policy {#support-policy}

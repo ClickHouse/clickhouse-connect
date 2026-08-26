@@ -1,37 +1,58 @@
 import os
 import re
 
-from setuptools import find_packages, setup
+from setuptools import Extension, find_packages, setup
 
-c_modules = []
+SKIP_CYTHON_ENV = "CLICKHOUSE_CONNECT_SKIP_CYTHON"
+REQUIRE_C_ENV = "CLICKHOUSE_CONNECT_REQUIRE_C"
 
-skip_cython = os.environ.get("CLICKHOUSE_CONNECT_SKIP_CYTHON") == "1"
+skip_cython = os.environ.get(SKIP_CYTHON_ENV) == "1"
+require_c = os.environ.get(REQUIRE_C_ENV) == "1"
+
+if skip_cython and require_c:
+    raise RuntimeError(
+        f"{SKIP_CYTHON_ENV}=1 and {REQUIRE_C_ENV}=1 are mutually exclusive. "
+        f"Set {SKIP_CYTHON_ENV}=1 for a pure Python build, or {REQUIRE_C_ENV}=1 to require the C extensions."
+    )
+
+c_modules: list[Extension] = []
+pure_hint = "" if require_c else f" Set {SKIP_CYTHON_ENV}=1 to request a pure Python build explicitly."
 
 if skip_cython:
-    print("CLICKHOUSE_CONNECT_SKIP_CYTHON set, not building C extensions")
+    print(f"{SKIP_CYTHON_ENV} set, not building C extensions")
 else:
     try:
         from Cython import __version__ as cython_version
         from Cython.Build import cythonize
-
-        print(f"Using Cython {cython_version} to build cython modules")
-        c_modules = cythonize("clickhouse_connect/driverc/*.pyx", language_level="3str")
     except ImportError as ex:
-        print("Cython Install Failed, Not Building C Extensions: ", ex)
-        cythonize = None
+        raise RuntimeError(
+            f"Cython is required to build the C extensions ({type(ex).__name__}: {ex}). Fix the build environment.{pure_hint}"
+        ) from ex
+
+    print(f"Using Cython {cython_version} to build cython modules")
+    try:
+        c_modules = cythonize(
+            [
+                Extension(
+                    "clickhouse_connect.driverc.*",
+                    ["clickhouse_connect/driverc/*.pyx"],
+                    optional=not require_c,
+                )
+            ],
+            language_level="3str",
+        )
     except Exception as ex:
-        print("Cython Build Failed, Not Building C Extensions: ", ex)
-        cythonize = None
+        raise RuntimeError(
+            f"Preparing the Cython extensions failed ({type(ex).__name__}: {ex}). Fix the build environment.{pure_hint}"
+        ) from ex
+
+    # `cythonize()` regenerates the extension objects, so reassert the flag that decides whether a
+    # compiler or linker failure is fatal (`CLICKHOUSE_CONNECT_REQUIRE_C=1`) or falls back to pure Python.
+    for c_module in c_modules:
+        c_module.optional = not require_c
 
 
-def run_setup(try_c: bool = True):
-    if try_c:
-        kwargs = {
-            "ext_modules": c_modules,
-        }
-    else:
-        kwargs = {}
-
+def run_setup():
     project_dir = os.path.abspath(os.path.dirname(__file__))
     with open(os.path.join(project_dir, "README.md"), encoding="utf-8") as read_me:
         long_desc = read_me.read()
@@ -100,13 +121,8 @@ def run_setup(try_c: bool = True):
             "Programming Language :: Python :: 3.13",
             "Programming Language :: Python :: 3.14",
         ],
-        **kwargs,
+        ext_modules=c_modules,
     )
 
 
-try:
-    run_setup()
-
-except (OSError, Exception, SystemExit) as e:
-    print(f"Unable to compile C extensions for faster performance due to {e}, will use pure Python")
-    run_setup(False)
+run_setup()
