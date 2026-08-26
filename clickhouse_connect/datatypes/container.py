@@ -3,7 +3,7 @@ import logging
 from collections.abc import Collection, Sequence
 from typing import Any
 
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
 from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
 from clickhouse_connect.driver.binding import _format_identifier
 from clickhouse_connect.driver.common import first_value, must_swap
@@ -26,6 +26,7 @@ def _nested_identifier(name: str) -> str:
 class Array(ClickHouseType):
     __slots__ = ("element_type", "_insert_name")
     python_type = list
+    _type_args = _TypeArgs(1, 1, nested=(0,))
 
     @property
     def insert_name(self):
@@ -102,6 +103,7 @@ class Array(ClickHouseType):
 class Tuple(ClickHouseType):
     _slots = "element_names", "element_types", "_insert_name"
     python_type = tuple
+    _type_args = _TypeArgs(0, None, variadic_nested=0)
     valid_formats = "tuple", "dict", "json", "native"  # native is 'tuple' for unnamed tuples, and dict for named tuples
 
     @property
@@ -190,6 +192,7 @@ class Tuple(ClickHouseType):
 class Map(ClickHouseType):
     _slots = "key_type", "value_type", "_insert_name"
     python_type = dict
+    _type_args = _TypeArgs(2, 2, nested=(0, 1))
 
     @property
     def insert_name(self):
@@ -245,6 +248,7 @@ class Map(ClickHouseType):
 class Nested(ClickHouseType):
     __slots__ = "tuple_array", "element_names", "element_types"
     python_type = Sequence[dict]
+    _type_args = _TypeArgs(1, None, variadic_nested=0)
 
     def __init__(self, type_def):
         self.element_names = type_def.keys
