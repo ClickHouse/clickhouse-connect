@@ -14,6 +14,7 @@
 
 ### Bug Fixes
 
+- Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
 - SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
 - Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).
 - The client now sorts and deduplicates `Variant` members to the server's canonical order. Previously a client-declared `Variant` type with non-canonical member order wrote native insert data under the wrong member types.
