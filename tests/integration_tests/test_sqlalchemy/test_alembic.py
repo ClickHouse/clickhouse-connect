@@ -524,6 +524,44 @@ def test_alembic_named_container_types_round_trip_live(test_engine: Engine, test
         assert "alter_column" not in noop_contents
 
 
+def test_alembic_aggregate_function_types_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
+    table_name = ch_name("alembic_aggregate_functions")
+    aggregate_types = {
+        "last_value": sqla_type_from_name("SimpleAggregateFunction(anyLast, UInt32)"),
+        "unique_state": sqla_type_from_name("AggregateFunction(uniq, UInt32)"),
+        "sum_state": sqla_type_from_name("AggregateFunction(sum, UInt64)"),
+        "latest_state": sqla_type_from_name("AggregateFunction(argMax, Tuple(value String, score UInt32), UInt32)"),
+    }
+    metadata = MetaData(schema=test_db)
+    Table(
+        table_name,
+        metadata,
+        Column("id", UInt32, nullable=False),
+        *(Column(name, type_obj, nullable=False) for name, type_obj in aggregate_types.items()),
+        MergeTree(order_by="id"),
+    )
+
+    with test_engine.connect() as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create aggregate functions", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        contents = Path(revision.path).read_text(encoding="utf-8")
+        assert contents.count("sqla_type_from_name(") == len(aggregate_types)
+        command.upgrade(config, "head")
+
+        reflected = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
+        for name, type_obj in aggregate_types.items():
+            assert reflected.c[name].type.name == type_obj.name
+
+        noop_revision = command.revision(config, message="aggregate functions noop", autogenerate=True)
+        assert noop_revision is not None
+        assert not isinstance(noop_revision, list)
+        noop_contents = Path(noop_revision.path).read_text(encoding="utf-8")
+        assert "pass" in noop_contents
+        assert "alter_column" not in noop_contents
+
+
 def test_alembic_variant_type_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
     table_name = ch_name("alembic_variant")
     variant_type = sqla_type_from_name("Variant(UInt32, String, UInt32)")

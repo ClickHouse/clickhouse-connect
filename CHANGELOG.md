@@ -15,6 +15,7 @@
 
 ### Bug Fixes
 
+- Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
 - SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
 - Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).
 - Source builds no longer swallow unrelated packaging errors and retry them as a pure Python build. The extensions are now declared optional so setuptools handles the fallback, and a new `CLICKHOUSE_CONNECT_REQUIRE_C=1` makes an extension build failure fatal for CI and redistributable wheels. The default fallback now covers only compiler and linker failures, and a missing Cython outside skip mode fails the build. A default-mode fallback wheel keeps its platform and interpreter tags instead of being tagged `py3-none-any`. `CLICKHOUSE_CONNECT_SKIP_CYTHON=1` still skips the extensions entirely, and setting both flags is an error. Closes [#994](https://github.com/ClickHouse/clickhouse-connect/issues/994).

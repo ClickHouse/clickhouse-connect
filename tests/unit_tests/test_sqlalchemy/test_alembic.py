@@ -421,6 +421,36 @@ def test_render_type_named_containers_emit_lossless_python(type_name):
     assert rebuilt.name == type_obj.name
 
 
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "SimpleAggregateFunction(anyLast, UInt32)",
+        "simpleaggregatefunction(anyLast, UInt32)",
+        "AggregateFunction(uniq, UInt32)",
+        "AGGREGATEFUNCTION(uniq, UInt32)",
+        "Array(SimpleAggregateFunction(anyLast, UInt32))",
+        "Map(String, AggregateFunction(uniq, UInt32))",
+        "Tuple(SimpleAggregateFunction(anyLast, UInt32), AggregateFunction(uniq, UInt32))",
+        "Array(Tuple(SimpleAggregateFunction(sum, UInt64), AggregateFunction(max, UInt32)))",
+        "Nullable(SimpleAggregateFunction(anyLast, UInt32))",
+        "Nullable(AggregateFunction(uniq, UInt32))",
+        "AggregateFunction(argMax, Tuple(value String, score UInt32), UInt32)",
+        "SimpleAggregateFunction(min, UInt32)",
+    ],
+)
+def test_render_type_aggregate_functions_emit_lossless_python(type_name):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    type_obj = sqla_type_from_name(type_name)
+
+    rendered = context.impl.render_type(type_obj, None)
+
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(compile(rendered, "<migration>", "eval"), namespace)
+    assert "sqla_type_from_name(" in rendered
+    assert rebuilt.name == type_obj.name
+
+
 def test_render_type_json_emits_valid_round_trip_python():
     context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
     json_types = [
