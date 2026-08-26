@@ -1,12 +1,16 @@
 import logging
 from typing import Any
 
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, type_map
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs, type_map
 from clickhouse_connect.driver.exceptions import InternalError
 from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 
 logger = logging.getLogger(__name__)
 type_cache: dict[str, ClickHouseType] = {}
+_WRAPPER_TYPE_ARGS = {
+    "LowCardinality": _TypeArgs(1, 1, nested=(0,)),
+    "Nullable": _TypeArgs(1, 1, nested=(0,)),
+}
 
 
 def _canonicalize_variant_name(type_name: str, ch_type: ClickHouseType) -> str:

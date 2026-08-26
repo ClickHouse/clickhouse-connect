@@ -1,7 +1,47 @@
 from datetime import timedelta, timezone
 
+from clickhouse_connect.datatypes.base import _TypeArgs, type_map
 from clickhouse_connect.datatypes.container import Nested
+from clickhouse_connect.datatypes.registry import _WRAPPER_TYPE_ARGS
 from clickhouse_connect.datatypes.registry import get_from_name as gfn
+
+
+def test_type_argument_metadata():
+    expected = {
+        "AggregateFunction": _TypeArgs(1, None, variadic_nested=1),
+        "Array": _TypeArgs(1, 1, nested=(0,)),
+        "DateTime": _TypeArgs(0, 1),
+        "DateTime64": _TypeArgs(1, 2, integer_bounds=((0, 0, 9),)),
+        "Decimal": _TypeArgs(2, 2, integer_bounds=((0, 1, 76), (1, 0, 76))),
+        "Decimal32": _TypeArgs(1, 1, integer_bounds=((0, 0, 9),)),
+        "Decimal64": _TypeArgs(1, 1, integer_bounds=((0, 0, 18),)),
+        "Decimal128": _TypeArgs(1, 1, integer_bounds=((0, 0, 38),)),
+        "Decimal256": _TypeArgs(1, 1, integer_bounds=((0, 0, 76),)),
+        "Dynamic": _TypeArgs(0, 1, integer_bounds=(("max_types", 0, 254),)),
+        "Enum": _TypeArgs(1, None, integer_bounds=(("value", -32768, 32767),)),
+        "Enum8": _TypeArgs(1, None, integer_bounds=(("value", -128, 127),)),
+        "Enum16": _TypeArgs(1, None, integer_bounds=(("value", -32768, 32767),)),
+        "FixedString": _TypeArgs(1, 1, integer_bounds=((0, 1, None),)),
+        "JSON": _TypeArgs(
+            0,
+            None,
+            integer_bounds=(("max_dynamic_paths", 0, 10000), ("max_dynamic_types", 0, 254)),
+        ),
+        "Map": _TypeArgs(2, 2, nested=(0, 1)),
+        "Nested": _TypeArgs(1, None, variadic_nested=0),
+        "QBit": _TypeArgs(2, 2, nested=(0,), integer_bounds=((1, 1, None),)),
+        "SimpleAggregateFunction": _TypeArgs(2, 2, nested=(1,)),
+        "Time64": _TypeArgs(1, 1, integer_bounds=((0, 0, 9),)),
+        "Tuple": _TypeArgs(0, None, variadic_nested=0),
+        "Variant": _TypeArgs(1, None, variadic_nested=0),
+    }
+
+    assert {name: type_map[name]._type_args for name in expected} == expected
+    assert _WRAPPER_TYPE_ARGS == {
+        "LowCardinality": _TypeArgs(1, 1, nested=(0,)),
+        "Nullable": _TypeArgs(1, 1, nested=(0,)),
+    }
+    assert type_map["String"]._type_args == _TypeArgs()
 
 
 def test_enum_parse():

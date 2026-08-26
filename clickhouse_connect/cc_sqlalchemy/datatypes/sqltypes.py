@@ -30,53 +30,44 @@ from sqlalchemy.types import (
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import json_subcolumn
-from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, LC_TYPE_DEF, NULLABLE_TYPE_DEF, TypeDef
+from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, LC_TYPE_DEF, NULLABLE_TYPE_DEF, TypeDef, _TypeArgs
 from clickhouse_connect.datatypes.dynamic import Variant as ChVariant
 from clickhouse_connect.datatypes.numeric import Enum8 as ChEnum8
 from clickhouse_connect.datatypes.numeric import Enum16 as ChEnum16
-from clickhouse_connect.datatypes.registry import get_from_name, type_map
+from clickhouse_connect.datatypes.registry import _WRAPPER_TYPE_ARGS, get_from_name, type_map
+from clickhouse_connect.datatypes.vector import QBit as ChQBit
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import _format_identifier, format_str
 from clickhouse_connect.driver.common import decimal_prec, unescape_identifier
-from clickhouse_connect.driver.exceptions import ClickHouseError
+from clickhouse_connect.driver.exceptions import ClickHouseError, InternalError
 from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 
 _T = TypeVar("_T")
 
-_PARAMETERIZED_TYPE_NAMES = frozenset(
-    {
-        "aggregatefunction",
-        "array",
-        "datetime",
-        "datetime64",
-        "decimal",
-        "decimal32",
-        "decimal64",
-        "decimal128",
-        "decimal256",
-        "dynamic",
-        "enum",
-        "enum8",
-        "enum16",
-        "fixedstring",
-        "json",
-        "lowcardinality",
-        "map",
-        "nested",
-        "nullable",
-        "qbit",
-        "simpleaggregatefunction",
-        "time64",
-        "tuple",
-        "variant",
-    }
-)
-_ZERO_ARGUMENT_TYPE_NAMES = frozenset(name.lower() for name in type_map) - _PARAMETERIZED_TYPE_NAMES
+_TYPE_ARGS = {name.lower(): ch_type._type_args for name, ch_type in type_map.items()}
+_TYPE_ARGS.update({name.lower(): type_args for name, type_args in _WRAPPER_TYPE_ARGS.items()})
+_ZERO_ARGUMENT_TYPE_NAMES = frozenset(name for name, type_args in _TYPE_ARGS.items() if type_args.min_args == 0 and type_args.max_args == 0)
 _CANONICAL_TYPE_NAMES = {name.lower(): name for name in type_map}
 _CANONICAL_TYPE_NAMES.update({"boolean": "Bool", "enum": "Enum", "lowcardinality": "LowCardinality", "nullable": "Nullable"})
 _INTERNAL_CODEC_TYPE_NAMES = frozenset({"shareddatastring", "sharedvariant"})
-_EMPTY_PARENTHESES_TYPE_NAMES = _ZERO_ARGUMENT_TYPE_NAMES | frozenset({"datetime", "dynamic", "json", "time", "tuple"})
-_DECIMAL_SCALE_MAX = {32: 9, 64: 18, 128: 38, 256: 76}
+
+
+def _has_valid_arity(type_args: _TypeArgs, arg_count: int) -> bool:
+    return arg_count >= type_args.min_args and (type_args.max_args is None or arg_count <= type_args.max_args)
+
+
+def _integer_bounds(type_args: _TypeArgs, index: int | str) -> tuple[int | None, int | None]:
+    bounds = type_args.bounds_for(index)
+    if bounds is None:
+        raise InternalError(f"Missing integer bounds for type argument {index!r}")
+    return bounds
+
+
+def _is_integer_in_bounds(value: object, bounds: tuple[int | None, int | None]) -> bool:
+    if not isinstance(value, int):
+        return False
+    minimum, maximum = bounds
+    return (minimum is None or value >= minimum) and (maximum is None or value <= maximum)
 
 
 class Int8(ChSqlaType, Integer):  # type: ignore[misc]
@@ -669,7 +660,8 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
             return "Tuple()"
         if type_base == "decimal" and not args:
             return "Decimal(10, 0)"
-        if not args and type_base in _EMPTY_PARENTHESES_TYPE_NAMES:
+        type_args = _TYPE_ARGS.get(type_base)
+        if not args and type_args is not None and type_args.min_args == 0:
             return canonical_base
         if type_base == "datetime" and args and isinstance(args[0], int):
             if args[0] == 0:
@@ -688,9 +680,9 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                 canonical_base = "Time64"
                 type_base = "time64"
 
-        if type_base in ("array", "nullable", "lowcardinality", "map", "variant"):
-            values = [JSON._canonicalize_type_spelling(str(value)) for value in args]
-        elif type_base in ("tuple", "nested"):
+        type_args = _TYPE_ARGS.get(type_base)
+
+        if type_base in ("tuple", "nested"):
             names, raw_values = parse_columns(type_name[opening:], preserve_names=True)
             if names and len(names) != len(raw_values):
                 if type_base == "nested":
@@ -714,24 +706,23 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                 if not quoted_name and path.upper() == "SKIP":
                     if JSON._starts_regexp_directive(value):
                         value = f"REGEXP {value[6:].lstrip()}"
-                elif not quoted_name and path in ("max_dynamic_paths", "max_dynamic_types"):
+                elif not quoted_name and type_args is not None and type_args.bounds_for(path) is not None:
                     pass
                 else:
                     value = JSON._canonicalize_type_spelling(value)
                 values.append(f"{name} {value}")
-        elif type_base in ("simpleaggregatefunction", "aggregatefunction"):
-            values = [str(args[0])] if args else []
-            values.extend(JSON._canonicalize_type_spelling(str(value)) for value in args[1:])
-        elif type_base == "qbit" and args:
-            values = [JSON._canonicalize_type_spelling(str(args[0]))]
-            values.extend(str(value) for value in args[1:])
         elif type_base in ("decimal32", "decimal64", "decimal128", "decimal256") and len(args) == 1:
-            size = int(type_base[7:])
-            return f"Decimal({_DECIMAL_SCALE_MAX[size]}, {args[0]})"
+            _, max_scale = _integer_bounds(_TYPE_ARGS[type_base], 0)
+            return f"Decimal({max_scale}, {args[0]})"
         elif type_base in ("enum", "enum8", "enum16"):
             return canonical_base + type_name[opening:]
         elif type_base == "decimal" and len(args) == 1:
             values = [str(args[0]), "0"]
+        elif type_args is not None:
+            nested_indexes = type_args.nested_indexes(len(args))
+            values = [
+                JSON._canonicalize_type_spelling(str(value)) if index in nested_indexes else str(value) for index, value in enumerate(args)
+            ]
         else:
             values = [str(value) for value in args]
         return f"{canonical_base}({', '.join(values)})"
@@ -746,6 +737,7 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
 
         type_base = base.lower()
         opening = type_name.find("(")
+        type_args = _TYPE_ARGS.get(type_base)
         if type_base in _INTERNAL_CODEC_TYPE_NAMES:
             raise ArgumentError(f"{base} is an internal codec type and cannot be used in DDL")
         if type_base in _ZERO_ARGUMENT_TYPE_NAMES:
@@ -753,16 +745,17 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                 return
             raise ArgumentError(f"{base} does not accept these constructor arguments")
         nested_types: Sequence[str | int]
-        expected_arity = {"array": 1, "nullable": 1, "lowcardinality": 1, "map": 2}.get(type_base)
-        if expected_arity is not None:
-            if len(args) != expected_arity:
+        if type_args is not None and type_args.min_args == type_args.max_args and type_args.nested == tuple(range(type_args.min_args)):
+            expected_arity = type_args.min_args
+            if not _has_valid_arity(type_args, len(args)):
                 argument = "argument" if expected_arity == 1 else "arguments"
                 raise ArgumentError(f"{base} requires exactly {expected_arity} type {argument}")
-            nested_types = args
+            nested_types = tuple(args[index] for index in type_args.nested_indexes(len(args)))
         elif type_base in ("tuple", "variant", "nested"):
             if type_base == "tuple" and not args:
                 raise ArgumentError("Tuple() is not supported as a JSON typed path")
-            if opening == -1 or not args:
+            assert type_args is not None
+            if opening == -1 or not _has_valid_arity(type_args, len(args)):
                 raise ArgumentError(f"{base} requires constructor arguments")
             names, nested_types = parse_columns(type_name[opening:])
             if type_base == "tuple" and names and len(names) != len(nested_types):
@@ -771,9 +764,11 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                 raise ArgumentError("Nested requires a name for every element")
             if type_base == "variant" and names:
                 raise ArgumentError("Variant members cannot be named")
+            nested_types = tuple(nested_types[index] for index in type_args.nested_indexes(len(nested_types)))
         elif type_base == "json":
             if opening == -1 or not args:
                 return
+            assert type_args is not None
             names, values = parse_columns(type_name[opening:], preserve_names=True)
             if len(names) != len(values):
                 raise ArgumentError("JSON type arguments must be named")
@@ -797,12 +792,14 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                     if unescaped_skip_path.lower() == "regexp":
                         raise ArgumentError("JSON skip path 'REGEXP' conflicts with the SKIP REGEXP syntax")
                     continue
-                if not quoted_name and path in ("max_dynamic_paths", "max_dynamic_types"):
+                bounds = type_args.bounds_for(path)
+                if not quoted_name and bounds is not None:
                     try:
                         limit = int(value)
                     except (TypeError, ValueError):
                         raise ArgumentError(f"{path} must be an integer") from None
-                    maximum = 10000 if path == "max_dynamic_paths" else 254
+                    _, maximum = bounds
+                    assert maximum is not None
                     JSON._validate_limit(path, limit, maximum)
                     continue
                 json_nested_types.append(value)
@@ -810,42 +807,58 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
         elif type_base == "datetime":
             if opening == -1:
                 return
-            if len(args) != 1 or not isinstance(args[0], str) or not JSON._is_string_literal(args[0]):
+            assert type_args is not None
+            if len(args) != type_args.max_args or not isinstance(args[0], str) or not JSON._is_string_literal(args[0]):
                 raise ArgumentError("DateTime accepts one quoted timezone name")
             return
         elif type_base == "datetime64":
-            if len(args) not in (1, 2):
+            assert type_args is not None
+            if not _has_valid_arity(type_args, len(args)):
                 raise ArgumentError("DateTime64 requires a precision and optional quoted timezone name")
             precision = args[0]
-            if not isinstance(precision, int) or precision < 0 or precision > 9:
+            if not _is_integer_in_bounds(precision, _integer_bounds(type_args, 0)):
                 raise ArgumentError("DateTime64 precision must be an integer from 0 through 9")
             if len(args) == 2 and (not isinstance(args[1], str) or not JSON._is_string_literal(args[1])):
                 raise ArgumentError("DateTime64 timezone must be a quoted string literal")
             return
         elif type_base == "time64":
-            if len(args) != 1 or not isinstance(args[0], int) or args[0] < 0 or args[0] > 9:
+            assert type_args is not None
+            if not _has_valid_arity(type_args, len(args)) or not _is_integer_in_bounds(args[0], _integer_bounds(type_args, 0)):
                 raise ArgumentError("Time64 requires one precision value from 0 through 9")
             return
         elif type_base == "decimal":
-            if len(args) != 2 or any(not isinstance(arg, int) for arg in args):
+            assert type_args is not None
+            if not _has_valid_arity(type_args, len(args)) or any(not isinstance(arg, int) for arg in args):
                 raise ArgumentError("Decimal requires integer precision and scale arguments")
             precision = args[0]
             scale = args[1]
             assert isinstance(precision, int)
             assert isinstance(scale, int)
-            if precision < 1 or precision > 76 or scale < 0 or scale > precision:
+            if (
+                not _is_integer_in_bounds(precision, _integer_bounds(type_args, 0))
+                or not _is_integer_in_bounds(scale, _integer_bounds(type_args, 1))
+                or scale > precision
+            ):
                 raise ArgumentError("Decimal precision and scale are out of range")
             return
         elif type_base in ("decimal32", "decimal64", "decimal128", "decimal256"):
-            size = int(type_base[7:])
-            if len(args) != 1 or not isinstance(args[0], int) or args[0] < 0 or args[0] > _DECIMAL_SCALE_MAX[size]:
-                raise ArgumentError(f"{base} requires one scale from 0 through {_DECIMAL_SCALE_MAX[size]}")
+            assert type_args is not None
+            bounds = _integer_bounds(type_args, 0)
+            _, maximum = bounds
+            if not _has_valid_arity(type_args, len(args)) or not _is_integer_in_bounds(args[0], bounds):
+                raise ArgumentError(f"{base} requires one scale from 0 through {maximum}")
             return
         elif type_base == "qbit":
-            if len(args) != 2 or args[0] not in ("BFloat16", "Float32", "Float64") or not isinstance(args[1], int) or args[1] <= 0:
+            assert type_args is not None
+            if (
+                not _has_valid_arity(type_args, len(args))
+                or args[0] not in ChQBit._ELEMENT_BITS
+                or not _is_integer_in_bounds(args[1], _integer_bounds(type_args, 1))
+            ):
                 raise ArgumentError("QBit requires a supported floating-point type and positive integer dimension")
             return
         elif type_base in ("enum", "enum8", "enum16"):
+            assert type_args is not None
             try:
                 enum_keys, enum_values = parse_enum(type_name)
             except (IndexError, TypeError, ValueError):
@@ -854,33 +867,42 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                 raise ArgumentError(f"{base} requires one or more name and integer value pairs")
             if len(set(enum_keys)) != len(enum_keys) or len(set(enum_values)) != len(enum_values):
                 raise ArgumentError(f"{base} names and values must be unique")
-            minimum, maximum = (-128, 127) if type_base == "enum8" else (-32768, 32767)
-            if any(value < minimum or value > maximum for value in enum_values):
+            minimum, maximum = _integer_bounds(type_args, "value")
+            if any(not _is_integer_in_bounds(value, (minimum, maximum)) for value in enum_values):
                 raise ArgumentError(f"{base} values must be from {minimum} through {maximum}")
             return
         elif type_base == "dynamic":
             if opening == -1:
                 return
-            if len(args) != 1 or not isinstance(args[0], str):
+            assert type_args is not None
+            if len(args) != type_args.max_args or not isinstance(args[0], str):
                 raise ArgumentError("Dynamic accepts one max_types setting")
             setting, separator, value = args[0].partition("=")
-            if separator != "=" or setting.strip() != "max_types":
+            bounds = type_args.bounds_for(setting.strip())
+            if separator != "=" or bounds is None:
                 raise ArgumentError("Dynamic accepts one max_types setting")
             try:
                 max_types = int(value.strip())
             except ValueError:
                 raise ArgumentError("Dynamic max_types must be an integer") from None
-            if max_types < 0 or max_types > 254:
-                raise ArgumentError("Dynamic max_types must be from 0 through 254")
+            minimum, maximum = bounds
+            if not _is_integer_in_bounds(max_types, (minimum, maximum)):
+                raise ArgumentError(f"Dynamic max_types must be from {minimum} through {maximum}")
             return
         elif type_base == "simpleaggregatefunction":
-            if len(args) != 2 or not isinstance(args[0], str) or not args[0]:
+            assert type_args is not None
+            if not _has_valid_arity(type_args, len(args)) or not isinstance(args[0], str) or not args[0]:
                 raise ArgumentError("SimpleAggregateFunction requires one function and one result type")
-            nested_types = args[1:]
+            nested_types = tuple(args[index] for index in type_args.nested_indexes(len(args)))
         elif type_base == "aggregatefunction":
             raise ArgumentError("AggregateFunction is not supported as a JSON typed path")
         elif type_base == "fixedstring":
-            if len(args) != 1 or isinstance(args[0], bool) or not isinstance(args[0], int) or args[0] <= 0:
+            assert type_args is not None
+            if (
+                not _has_valid_arity(type_args, len(args))
+                or isinstance(args[0], bool)
+                or not _is_integer_in_bounds(args[0], _integer_bounds(type_args, 0))
+            ):
                 raise ArgumentError("FixedString requires a positive integer size")
             return
         else:
