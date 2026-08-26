@@ -4,7 +4,7 @@ from collections.abc import Collection, Sequence
 from typing import Any
 from urllib.parse import unquote
 
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
 from clickhouse_connect.datatypes.binary_value import _decode_binary_value
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.string import String
@@ -97,6 +97,7 @@ class Variant(ClickHouseType):
     __slots__ = ("element_types", "_python_map", "_name_index")
     python_type = object
     valid_formats = "typed", "native"
+    _type_args = _TypeArgs(1, None, variadic_nested=0)
 
     def __init__(self, type_def: TypeDef):
         elements_by_name = {ch_type.name: ch_type for ch_type in (get_from_name(name) for name in type_def.values)}
@@ -251,6 +252,7 @@ def read_dynamic_prefix(_, source: ByteSource, ctx: QueryContext) -> DynamicStat
 
 class Dynamic(ClickHouseType):
     python_type = object
+    _type_args = _TypeArgs(0, 1, integer_bounds=(("max_types", 0, 254),))
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext) -> DynamicState:
         return read_dynamic_prefix(self, source, ctx)
@@ -539,6 +541,11 @@ class JSON(ClickHouseType):
     skips: list[str]
     skip_paths: list[str]
     skip_regexps: list[str]
+    _type_args = _TypeArgs(
+        0,
+        None,
+        integer_bounds=(("max_dynamic_paths", 0, 10000), ("max_dynamic_types", 0, 254)),
+    )
 
     def __init__(self, type_def: TypeDef):
         limits: dict[str, int] = {}
