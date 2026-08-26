@@ -843,8 +843,9 @@ class JSON(ChSqlaType, UserDefinedType):  # type: ignore[misc]
             return
         elif type_base in ("decimal32", "decimal64", "decimal128", "decimal256"):
             assert type_args is not None
-            _, maximum = _integer_bounds(type_args, 0)
-            if not _has_valid_arity(type_args, len(args)) or not _is_integer_in_bounds(args[0], _integer_bounds(type_args, 0)):
+            bounds = _integer_bounds(type_args, 0)
+            _, maximum = bounds
+            if not _has_valid_arity(type_args, len(args)) or not _is_integer_in_bounds(args[0], bounds):
                 raise ArgumentError(f"{base} requires one scale from 0 through {maximum}")
             return
         elif type_base == "qbit":
