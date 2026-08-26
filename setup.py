@@ -16,6 +16,7 @@ if skip_cython and require_c:
     )
 
 c_modules: list[Extension] = []
+pure_hint = "" if require_c else f" Set {SKIP_CYTHON_ENV}=1 to request a pure Python build explicitly."
 
 if skip_cython:
     print(f"{SKIP_CYTHON_ENV} set, not building C extensions")
@@ -24,10 +25,7 @@ else:
         from Cython import __version__ as cython_version
         from Cython.Build import cythonize
     except ImportError as ex:
-        raise RuntimeError(
-            "Cython is required to build the C extensions. Fix the build environment, "
-            f"or set {SKIP_CYTHON_ENV}=1 to request a pure Python build explicitly."
-        ) from ex
+        raise RuntimeError(f"Cython is required to build the C extensions. Fix the build environment.{pure_hint}") from ex
 
     print(f"Using Cython {cython_version} to build cython modules")
     try:
@@ -42,10 +40,7 @@ else:
             language_level="3str",
         )
     except Exception as ex:
-        raise RuntimeError(
-            "Preparing the Cython extensions failed. Fix the build environment, "
-            f"or set {SKIP_CYTHON_ENV}=1 to request a pure Python build explicitly."
-        ) from ex
+        raise RuntimeError(f"Preparing the Cython extensions failed. Fix the build environment.{pure_hint}") from ex
 
     # `cythonize()` regenerates the extension objects, so reassert the flag that decides whether a
     # compiler or linker failure is fatal (`CLICKHOUSE_CONNECT_REQUIRE_C=1`) or falls back to pure Python.

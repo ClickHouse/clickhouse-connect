@@ -70,7 +70,7 @@ ClickHouse Connect can also be installed from source:
 
 ### Source build modes {#source-build-modes}
 
-Source builds support three modes. Cython itself is always required unless the build is explicitly skipped: a missing Cython or a `cythonize()` failure fails the build in the default and required modes.
+Source builds support three modes. Default and required modes fail if Cython is unavailable or `cythonize()` fails. Skip mode does not import Cython.
 
 | Mode | Command | Behavior |
 | --- | --- | --- |
@@ -80,22 +80,19 @@ Source builds support three modes. Cython itself is always required unless the b
 
 Setting both `CLICKHOUSE_CONNECT_SKIP_CYTHON=1` and `CLICKHOUSE_CONNECT_REQUIRE_C=1` is an error.
 
-```bash
-CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install .   # explicit pure Python build
-CLICKHOUSE_CONNECT_REQUIRE_C=1 pip install .     # extension build failure is fatal
-```
-
-A default-mode fallback produces a `py3-none-any` wheel that contains no extensions. `pip` may cache such a wheel when it was built from an index sdist and reuse it for later installs, even after the build environment is fixed. Clear it with:
+Default fallback wheels contain no compiled extensions but retain platform and interpreter tags. Only skip mode produces `py3-none-any`. `pip` can cache a fallback wheel built from an index sdist and reuse it for a compatible Python and platform after the compiler is fixed. Clear it with:
 
 ```bash
-pip cache remove clickhouse-connect
+pip cache remove clickhouse_connect
 ```
 
-To check whether an installed copy has the extensions, import them directly:
+Check whether all three extension modules are present. This prints `True` when they are:
 
 ```bash
-python -c "import clickhouse_connect.driverc.buffer, clickhouse_connect.driverc.dataconv, clickhouse_connect.driverc.npconv"
+python -c "from importlib.util import find_spec; print(all(find_spec(m) for m in ('clickhouse_connect.driverc.buffer', 'clickhouse_connect.driverc.dataconv', 'clickhouse_connect.driverc.npconv')))"
 ```
+
+Importing `clickhouse_connect.driverc.npconv` directly also requires NumPy to be installed.
 
 The installed version is available as `clickhouse_connect.__version__`.
 
