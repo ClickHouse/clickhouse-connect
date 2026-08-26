@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- SQLAlchemy JSON typed-path validation now reads ClickHouse type arity and numeric bounds from shared driver metadata. Invalid hints that combine a wrong outer argument count with a malformed surplus nested argument now report the outer arity error instead of the nested parsing error. Accepted hints and canonical type names are unchanged. Closes [#990](https://github.com/ClickHouse/clickhouse-connect/issues/990).
 - SQLAlchemy `JSON` columns can now declare ClickHouse typed paths with `typed_paths={...}` or simple keyword shorthand, plus dynamic path and type limits and plain and regular expression skip rules. JSON arguments use the same canonical ordering as server reflection. Alembic autogeneration renders configured JSON types as valid Python and round-trips them without a follow-up type migration. Closes [#981](https://github.com/ClickHouse/clickhouse-connect/issues/981).
 - Driver `JSON` type names now use the server's canonical argument ordering, omit explicit default limits, and expose decoded `skip_paths` and `skip_regexps`. This changes the `.name` and skips values reflected to all driver users.
 - `Time64` now accepts every server-valid precision from 0 through 9 for parsing, reflection, native queries, and DataFrame inserts. NumPy and Pandas queries remain limited to precisions 0, 3, 6, and 9 and raise `ProgrammingError` otherwise.

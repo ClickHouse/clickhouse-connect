@@ -44,6 +44,21 @@ def test_mapping():
     assert issubclass(sqla_type_map["DateTime"], DateTime)
 
 
+def test_type_argument_metadata_drives_sqlalchemy_classification():
+    from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
+    from clickhouse_connect.datatypes.registry import _WRAPPER_TYPE_ARGS, type_map
+
+    for name, ch_type in type_map.items():
+        assert sqltypes._TYPE_ARGS[name.lower()] is ch_type._type_args
+    for name, type_args in _WRAPPER_TYPE_ARGS.items():
+        assert sqltypes._TYPE_ARGS[name.lower()] is type_args
+
+    expected_zero_argument_names = {
+        name.lower() for name, ch_type in type_map.items() if ch_type._type_args.min_args == 0 and ch_type._type_args.max_args == 0
+    }
+    assert sqltypes._ZERO_ARGUMENT_TYPE_NAMES == expected_zero_argument_names
+
+
 def test_all_matches_schema_types():
     from clickhouse_connect.cc_sqlalchemy.datatypes import sqltypes
     from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
@@ -331,6 +346,7 @@ def test_json_typed_path_type_hints(type_hint, expected):
         ("Enum('low' = -129, 'high' = 128)", "Enum16('low' = -129, 'high' = 128)"),
         ("Enum('low' = -32768, 'high' = 32767)", "Enum16('low' = -32768, 'high' = 32767)"),
         ("QBit(Float32, 13)", "QBit(Float32, 13)"),
+        ("qBiT(fLoAt32, 13)", "QBit(Float32, 13)"),
         ("Dynamic()", "Dynamic"),
         ("Dynamic(max_types=0)", "Dynamic(max_types=0)"),
         ("Dynamic(max_types=13)", "Dynamic(max_types=13)"),
@@ -339,6 +355,23 @@ def test_json_typed_path_type_hints(type_hint, expected):
 )
 def test_json_typed_path_accepts_valid_parameterized_scalars(type_hint, expected):
     assert JSON(typed_paths={"value": type_hint}).name == f"JSON(`value` {expected})"
+
+
+@pytest.mark.parametrize(
+    "type_hint, expected",
+    [
+        ("Decimal64(18)", "Decimal(18, 18)"),
+        ("Dynamic(max_types=254)", "Dynamic(max_types=254)"),
+    ],
+)
+def test_json_type_argument_metadata_accepts_boundary_values(type_hint, expected):
+    assert JSON(typed_paths={"value": type_hint}).name == f"JSON(`value` {expected})"
+
+
+@pytest.mark.parametrize("type_hint", ["Decimal64(19)", "Dynamic(max_types=255)"])
+def test_json_type_argument_metadata_rejects_out_of_range_values(type_hint):
+    with pytest.raises(ArgumentError):
+        JSON(typed_paths={"value": type_hint})
 
 
 @pytest.mark.parametrize(

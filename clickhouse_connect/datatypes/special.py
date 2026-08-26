@@ -2,7 +2,7 @@ from collections.abc import Collection, MutableSequence, Sequence
 from typing import Any
 from uuid import UUID as PYUUID
 
-from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType
+from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType, _TypeArgs
 from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
 from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
@@ -84,6 +84,7 @@ class Nothing(ArrayType):
 
 class SimpleAggregateFunction(ClickHouseType):
     _slots = ("element_type",)
+    _type_args = _TypeArgs(2, 2, nested=(1,))
 
     def __init__(self, type_def: TypeDef):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])
@@ -116,6 +117,8 @@ class SimpleAggregateFunction(ClickHouseType):
 
 
 class AggregateFunction(UnsupportedType):
+    _type_args = _TypeArgs(1, None, variadic_nested=1)
+
     def __init__(self, type_def: TypeDef):
         values = tuple(_canonicalize_argument(value) for value in type_def.values)
         super().__init__(TypeDef(type_def.wrappers, type_def.keys, values) if values != type_def.values else type_def)
