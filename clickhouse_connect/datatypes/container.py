@@ -193,6 +193,7 @@ class Tuple(ClickHouseType):
                     raise ctx.data_error("Tuple() values must be empty tuples")
             if self.nullable:
                 dest += bytes([1 if x is None else 0 for x in column])
+            # ClickHouse SerializationTuple uses ASCII '0' per row, not a NUL byte.
             dest += b"0" * len(column)
             return
         if self.element_names and isinstance(first_value(column, self.nullable), dict):
