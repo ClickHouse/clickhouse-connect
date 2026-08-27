@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.8.0rc3, 2026-08-27
+
 ### Improvements
 
 - SQLAlchemy JSON typed-path validation now reads ClickHouse type arity and numeric bounds from shared driver metadata. Invalid hints that combine a wrong outer argument count with a malformed surplus nested argument now report the outer arity error instead of the nested parsing error. Accepted hints and canonical type names are unchanged. Closes [#990](https://github.com/ClickHouse/clickhouse-connect/issues/990).
