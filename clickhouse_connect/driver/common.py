@@ -1,5 +1,6 @@
 import array
 import asyncio
+import ipaddress
 import logging
 import struct
 import sys
@@ -11,6 +12,24 @@ from clickhouse_connect.driver.exceptions import DataError, ProgrammingError, St
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
+
+
+def format_uri_host(host: str) -> str:
+    """Bracket a bare IPv6 literal so it can be used in a URI authority.
+
+    RFC 3986 3.2.2 requires the brackets, without them the first colon of the
+    address reads as the port separator.  Host names and already bracketed
+    hosts are not valid arguments to ip_address, and an IPv4 literal parses but
+    is not an IPv6Address, so all three are returned unchanged.  A zone id such
+    as fe80::1%lo0 does parse as an IPv6Address and is bracketed.
+    """
+    try:
+        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
+            return f"[{host}]"
+    except ValueError:
+        pass
+    return host
+
 
 must_swap = sys.byteorder == "big"
 int_size = array.array("i").itemsize
