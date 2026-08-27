@@ -170,7 +170,8 @@ def parse_columns(expr: str, preserve_names: bool = False):
                     label = ""
                     continue
                 elif char == ")":
-                    columns.append(label.rstrip() if preserve_names and named and names[-1].upper() == "SKIP" else label)
+                    if label:
+                        columns.append(label.rstrip() if preserve_names and named and names[-1].upper() == "SKIP" else label)
                     break
             if char in ("'", '"', "`"):
                 quote = char

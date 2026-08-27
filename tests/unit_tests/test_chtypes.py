@@ -84,6 +84,13 @@ def test_named_tuple():
     assert tuple_type.name == "Tuple(`key` Int64, `value` String)"
 
 
+def test_empty_tuple():
+    # Tuple() is a valid ClickHouse type; parse_columns("()") must not produce a
+    # phantom empty-string element that causes InternalError on get_from_name("").
+    tuple_type = gfn("Tuple()")
+    assert tuple_type.name == "Tuple()"
+
+
 def test_datetime_fixed_offset_timezone():
     """DateTime('Fixed/UTC+05:30:00') is emitted by ClickHouse servers without IANA tzdb."""
     dt_type = gfn("DateTime('Fixed/UTC+05:30:00')")
