@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Generator, Iterable, Sequence
-from datetime import timezone, tzinfo
+from datetime import timedelta, timezone, tzinfo
 from math import log
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -176,14 +176,27 @@ class InsertContext(BaseQueryContext):
                         enum_values.append(value)
                 data.append(enum_values)
                 continue
+            try:
+                np_type = ch_type.np_type
+            except ProgrammingError:
+                if ch_type.python_type is not timedelta:
+                    raise
+                # Time64 scales with no NumPy equivalent insert through the object path
+                np_type = "O"
             if ch_type.python_type is int:
                 if d_type_kind == "f":
                     df_col = df_col.round().astype(ch_type.base_type)
                 elif d_type_kind in ("i", "u") and not df_col.hasnans:
                     data.append(df_col.to_list())
                     continue
-            elif "datetime" in ch_type.np_type and (options.pd_time_test(df_col) or "datetime64" in str(df_col.dtype)):
-                np_col = df_col.to_numpy(dtype=ch_type.np_type)
+            elif d_type_kind == "m" and df_col.hasnans and ch_type.nullable:
+                # to_numpy na_value does not replace NaT in timedelta64 columns
+                nat_mask = options.pd.isnull(df_col).to_numpy()
+                obj_col = df_col.to_numpy(dtype=object)
+                data.append([None if nat_mask[i] else obj_col[i] for i in range(len(obj_col))])
+                continue
+            elif "datetime" in np_type and (options.pd_time_test(df_col) or "datetime64" in str(df_col.dtype)):
+                np_col = df_col.to_numpy(dtype=np_type)
                 int_col = np_col.astype("int64")
                 if df_col.hasnans:
                     nat_mask = options.pd.isnull(df_col).to_numpy()
@@ -194,14 +207,14 @@ class InsertContext(BaseQueryContext):
                 self.column_formats[col_name] = "int"
                 continue
             if ch_type.nullable:
-                if d_type_kind == "O" or ch_type.np_type == "O":
+                if d_type_kind == "O" or np_type == "O":
                     data.append(df_col.to_numpy(dtype=object, na_value=None))
                     continue
                 if "Float" in ch_type.base_type:
                     data.append([None if options.pd.isnull(x) else x for x in df_col])
                     continue
                 df_col = df_col.replace({options.np.nan: None})
-            if ch_type.np_type == "O":
+            if np_type == "O":
                 data.append(df_col.to_numpy(dtype=object, na_value=None))
             else:
                 data.append(df_col.to_numpy(copy=False))

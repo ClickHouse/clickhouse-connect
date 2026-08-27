@@ -7,7 +7,9 @@ import pytest
 from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.string import String
+from clickhouse_connect.datatypes.temporal import Time64
 from clickhouse_connect.driver import rustnumpy
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.query import QueryContext
 
 
@@ -209,6 +211,7 @@ def test_nullable_interval_extended_dtype_returns_pandas_int64(monkeypatch, type
     ("type_name", "dtype", "ticks"),
     [
         ("Time", "timedelta64[s]", [-5, 0, 90_000]),
+        ("Time64(0)", "timedelta64[s]", [-5, 0, 3_723]),
         ("Time64(3)", "timedelta64[ms]", [-5_500, 0, 3_723_123]),
         ("Time64(6)", "timedelta64[us]", [-5_500_000, 1, 3_723_123_456]),
         ("Time64(9)", "timedelta64[ns]", [-5_500_000_000, 1, 3_723_123_456_789]),
@@ -237,6 +240,7 @@ def test_time_converter_uses_native_timedelta_dtype(monkeypatch, type_name, dtyp
     ("type_name", "dtype"),
     [
         ("Nullable(Time)", "timedelta64[s]"),
+        ("Nullable(Time64(0))", "timedelta64[s]"),
         ("Nullable(Time64(3))", "timedelta64[ms]"),
         ("Nullable(Time64(6))", "timedelta64[us]"),
         ("Nullable(Time64(9))", "timedelta64[ns]"),
@@ -281,6 +285,7 @@ def test_nullable_time64_query_np_preserves_nanosecond_scalars(monkeypatch):
     ("type_name", "rows", "unit"),
     [
         ("Array(Time)", [[], [-5], [13, 79]], "s"),
+        ("Array(Time64(0))", [[], [-5], [13, 79]], "s"),
         ("Array(Time64(3))", [[], [-5], [13, 79]], "ms"),
         ("Array(Time64(6))", [[], [-5], [13, 79]], "us"),
         ("Array(Time64(9))", [[], [-5], [13, 79]], "ns"),
@@ -292,7 +297,7 @@ def test_array_time_converter_slices_flat_values(monkeypatch, type_name, rows, u
     pa = pytest.importorskip("pyarrow")
     ch_type = get_from_name(type_name)
     depth, leaf = rustnumpy._array_time_leaf(ch_type)
-    arrow_type = pa.int32() if unit == "s" else pa.int64()
+    arrow_type = pa.int64() if isinstance(leaf, Time64) else pa.int32()
     for _ in range(depth):
         arrow_type = pa.large_list(arrow_type)
     wire = pa.array(rows, type=arrow_type)
@@ -327,6 +332,27 @@ def test_array_nullable_time_converter_null_policy(monkeypatch):
     assert np.isnat(result[0][0])
     assert result[0][0].dtype == np.dtype("timedelta64[ns]")
     assert result[0][1] == np.timedelta64(1, "ns")
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "Time64(2)",
+        "Nullable(Time64(2))",
+        "Array(Time64(2))",
+        "Tuple(Time64(2), Nullable(Time64(2)))",
+        "Map(String, Time64(2))",
+        "Nested(v Time64(2))",
+        "Variant(String, Time64(2))",
+        "JSON(`v` Time64(2))",
+    ],
+)
+@pytest.mark.parametrize("as_pandas", [False, True])
+def test_time64_unsupported_numpy_scale_raises_programming_error(type_name, as_pandas):
+    context = QueryContext(use_numpy=True, as_pandas=as_pandas)
+
+    with pytest.raises(ProgrammingError, match=r"Cannot use .*Time64\(2\).* as a numpy or Pandas datatype"):
+        rustnumpy._build_converter(get_from_name(type_name), context)
 
 
 def test_low_card_time_converter_decodes_dictionary(monkeypatch):
@@ -366,6 +392,71 @@ def test_nested_time64_converter_preserves_nanoseconds():
     ]
 
 
+def test_nested_data_type_time64_converter_preserves_units_and_extended_nulls():
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    ch_type = get_from_name("Nested(v Time64(0), n Nullable(Time64(0)), i Nullable(Int64))")
+
+    class _Batch:
+        @staticmethod
+        def column_data(_index, *, raw_time_ticks):
+            assert raw_time_ticks is True
+            return [[{"v": -5, "n": None, "i": None}, {"v": 13, "n": 79, "i": 13}]]
+
+    np_context = QueryContext(use_numpy=True)
+    result = rustnumpy._make_nested_time_convert(ch_type, np_context)(None, _Batch(), 0)
+    assert result == [
+        [
+            {"v": np.timedelta64(-5, "s"), "n": None, "i": None},
+            {"v": np.timedelta64(13, "s"), "n": np.timedelta64(79, "s"), "i": 13},
+        ]
+    ]
+
+    pd_context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+    result = rustnumpy._make_nested_time_convert(ch_type, pd_context)(None, _Batch(), 0)
+    assert result[0][0]["v"] == np.timedelta64(-5, "s")
+    assert np.isnat(result[0][0]["n"])
+    assert result[0][0]["n"].dtype == np.dtype("timedelta64[s]")
+    assert result[0][0]["i"] is pd.NA
+    assert result[0][1] == {"v": np.timedelta64(13, "s"), "n": np.timedelta64(79, "s"), "i": 13}
+
+
+def test_json_typed_time64_converter_preserves_dotted_path_units_and_shared_data(monkeypatch):
+    np = pytest.importorskip("numpy")
+    ch_type = get_from_name("JSON(`v` Time64(0), `nested.t` Nullable(Time64(0)), `items` Array(Time64(0)), `plain` Int64)")
+    original_segments = rustnumpy.dynamic_module._json_path_segments
+    prepared_paths = []
+
+    def track_segments(path):
+        prepared_paths.append(path)
+        return original_segments(path)
+
+    monkeypatch.setattr(rustnumpy.dynamic_module, "_json_path_segments", track_segments)
+
+    class _Batch:
+        @staticmethod
+        def column_data(_index, *, raw_time_ticks):
+            assert raw_time_ticks is True
+            return [
+                {"v": -5, "nested": {"t": None}, "items": [13, 79], "plain": 13, "shared": _COMPOUND_JSON_CELL},
+                {"v": 79, "nested": {"t": 13}, "items": [], "plain": 79, "shared": _COMPOUND_JSON_CELL},
+            ]
+
+    context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+    result = rustnumpy._make_nested_time_convert(ch_type, context)(None, _Batch(), 0)
+
+    assert result[0]["v"] == np.timedelta64(-5, "s")
+    assert np.isnat(result[0]["nested"]["t"])
+    assert result[0]["nested"]["t"].dtype == np.dtype("timedelta64[s]")
+    assert result[0]["items"] == [np.timedelta64(13, "s"), np.timedelta64(79, "s")]
+    assert result[0]["shared"] == [np.uint8(1), np.uint8(2), np.uint8(3)]
+    assert all(type(value) is np.uint8 for value in result[0]["shared"])
+    assert result[1]["v"] == np.timedelta64(79, "s")
+    assert result[1]["nested"]["t"] == np.timedelta64(13, "s")
+    assert result[1]["shared"] == [np.uint8(1), np.uint8(2), np.uint8(3)]
+    assert sorted(prepared_paths) == ["items", "nested.t", "v"]
+
+
 @pytest.mark.parametrize(
     ("type_name", "expected"),
     [
@@ -375,6 +466,7 @@ def test_nested_time64_converter_preserves_nanoseconds():
         ("Array(Nullable(DateTime64(3, 'UTC')))", True),
         ("Tuple(Time, Nullable(Int64))", True),
         ("Tuple(String, Nullable(Time))", False),
+        ("Nested(t Time64(0), n Nullable(Int64))", True),
     ],
 )
 def test_needs_refinalize_only_gates_transforming_leaves(type_name, expected):

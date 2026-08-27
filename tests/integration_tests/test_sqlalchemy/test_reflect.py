@@ -5,6 +5,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import NoResultFound
 
 from clickhouse_connect import common
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Geometry, Point, SimpleAggregateFunction, UInt32
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.driver.exceptions import DatabaseError
@@ -74,6 +75,27 @@ def test_geometry_reflection(test_engine: Engine, test_db: str, test_client):
             assert table.columns.geometry.type.name == "Geometry"
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.sqlalchemy_geometry_test"))
+
+
+def test_variant_reflection(test_engine: Engine, test_db: str):
+    table_name = "sqlalchemy_variant_reflection_test"
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
+        conn.execute(text(f"CREATE TABLE {test_db}.{table_name} (id UInt32, value Variant(UInt32, String)) ENGINE MergeTree ORDER BY id"))
+
+    try:
+        variant_type = sqla_type_from_name("Variant(UInt32, String)")
+        columns = inspect(test_engine).get_columns(table_name, schema=test_db)
+        reflected_type = next(column["type"] for column in columns if column["name"] == "value")
+        assert reflected_type.__class__ is type(variant_type)
+        assert reflected_type.name == "Variant(String, UInt32)"
+
+        table = Table(table_name, MetaData(schema=test_db), autoload_with=test_engine)
+        assert table.c.value.type.__class__ is type(variant_type)
+        assert table.c.value.type.name == "Variant(String, UInt32)"
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
 
 
 def test_table_exists(test_engine: Engine):

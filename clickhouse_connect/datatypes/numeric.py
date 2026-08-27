@@ -5,7 +5,7 @@ from collections.abc import MutableSequence, Sequence
 from math import isinf, isnan, nan
 from typing import Any
 
-from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, _TypeArgs
 from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import array_type, decimal_prec, decimal_size, first_value, write_array
@@ -314,6 +314,7 @@ class Enum(ClickHouseType):
     _array_type = "b"
     valid_formats = "native", "int"
     python_type = str
+    _type_args = _TypeArgs(1, None, integer_bounds=(("value", -32768, 32767),))
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -344,6 +345,7 @@ class Enum(ClickHouseType):
 class Enum8(Enum):
     _array_type = "b"
     byte_size = 1
+    _type_args = _TypeArgs(1, None, integer_bounds=(("value", -128, 127),))
 
 
 class Enum16(Enum):
@@ -355,6 +357,7 @@ class Decimal(ClickHouseType):
     __slots__ = "prec", "scale", "_mult", "_zeros", "byte_size", "_array_type"
     python_type = decimal.Decimal
     dec_size = 0
+    _type_args = _TypeArgs(2, 2, integer_bounds=((0, 1, 76), (1, 0, 76)))
 
     @classmethod
     def build(cls: type["Decimal"], type_def: TypeDef):
@@ -443,18 +446,22 @@ class BigDecimal(Decimal, registered=False):
 
 class Decimal32(Decimal):
     dec_size = 32
+    _type_args = _TypeArgs(1, 1, integer_bounds=((0, 0, 9),))
 
 
 class Decimal64(Decimal):
     dec_size = 64
+    _type_args = _TypeArgs(1, 1, integer_bounds=((0, 0, 18),))
 
 
 class Decimal128(BigDecimal):
     dec_size = 128
+    _type_args = _TypeArgs(1, 1, integer_bounds=((0, 0, 38),))
 
 
 class Decimal256(BigDecimal):
     dec_size = 256
+    _type_args = _TypeArgs(1, 1, integer_bounds=((0, 0, 76),))
 
 
 class Interval(Int64, registered=False):

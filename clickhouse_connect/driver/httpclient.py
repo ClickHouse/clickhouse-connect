@@ -31,6 +31,7 @@ from clickhouse_connect.driver.common import (
     coerce_show_clickhouse_errors,
     dict_add,
     dict_copy,
+    format_uri_host,
 )
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httputil import (
@@ -116,7 +117,7 @@ class HttpClient(SyncBackendClient):
         proxy_path = proxy_path.lstrip("/")
         if proxy_path:
             proxy_path = "/" + proxy_path
-        self.url = f"{interface}://{host}:{port}{proxy_path}"
+        self.url = f"{interface}://{format_uri_host(host)}:{port}{proxy_path}"
         client_headers: dict[str, str] = {}
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)

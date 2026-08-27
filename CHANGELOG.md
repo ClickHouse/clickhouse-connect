@@ -2,6 +2,34 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- SQLAlchemy JSON typed-path validation now reads ClickHouse type arity and numeric bounds from shared driver metadata. Invalid hints that combine a wrong outer argument count with a malformed surplus nested argument now report the outer arity error instead of the nested parsing error. Accepted hints and canonical type names are unchanged. Closes [#990](https://github.com/ClickHouse/clickhouse-connect/issues/990).
+- SQLAlchemy `JSON` columns can now declare ClickHouse typed paths with `typed_paths={...}` or simple keyword shorthand, plus dynamic path and type limits and plain and regular expression skip rules. JSON arguments use the same canonical ordering as server reflection. Alembic autogeneration renders configured JSON types as valid Python and round-trips them without a follow-up type migration. Closes [#981](https://github.com/ClickHouse/clickhouse-connect/issues/981).
+- Driver `JSON` type names now use the server's canonical argument ordering, omit explicit default limits, and expose decoded `skip_paths` and `skip_regexps`. This changes the `.name` and skips values reflected to all driver users.
+- `Time64` now accepts every server-valid precision from 0 through 9 for parsing, reflection, native queries, and DataFrame inserts. NumPy and Pandas queries remain limited to precisions 0, 3, 6, and 9 and raise `ProgrammingError` otherwise.
+- `Dynamic` type names now preserve the `max_types` argument.
+- Generic `Enum` definitions are accepted and canonicalized to `Enum8` or `Enum16` by value range.
+- Type name parsing now handles double quoted identifiers and quoted string literals uniformly. Some type names that previously failed to parse now parse.
+
+### Bug Fixes
+
+- Rust codec NumPy and Pandas queries now support `Time64(0)` with second resolution, including typed JSON paths. Unsupported statically declared `Time64` scales, including nullable, container, `Nested`, `Variant`, and typed JSON types, now raise the same `ProgrammingError` as the Python codec instead of leaking a `KeyError`. The remaining `Dynamic(Time64)` cell type and validation limitations are documented.
+- Empty `Tuple()` definitions no longer parse as if they contain a phantom element, and their columns now consume and emit the Native format's per-row marker bytes. Root, nested, named, array-wrapped, and nullable empty tuples now query and insert without misaligning adjacent columns, corrupting values, or failing insert block sizing. Closes [#971](https://github.com/ClickHouse/clickhouse-connect/issues/971).
+- Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
+- SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
+- Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).
+- Source builds no longer swallow unrelated packaging errors and retry them as a pure Python build. The extensions are now declared optional so setuptools handles the fallback, and a new `CLICKHOUSE_CONNECT_REQUIRE_C=1` makes an extension build failure fatal for CI and redistributable wheels. The default fallback now covers only compiler and linker failures, and a missing Cython outside skip mode fails the build. A default-mode fallback wheel keeps its platform and interpreter tags instead of being tagged `py3-none-any`. `CLICKHOUSE_CONNECT_SKIP_CYTHON=1` still skips the extensions entirely, and setting both flags is an error. Closes [#994](https://github.com/ClickHouse/clickhouse-connect/issues/994).
+- The client now sorts and deduplicates `Variant` members to the server's canonical order. Previously a client-declared `Variant` type with non-canonical member order wrote native insert data under the wrong member types.
+- `Time64` negative timedelta inserts previously stored incorrect values. `Time64` NumPy timedelta inserts previously stored wrong magnitudes. Both now store correct tick values, and out-of-range NumPy values are rejected instead of incorrectly wrapping.
+- Pandas `Timedelta` values in `Time` and `Time64` row inserts now convert like `timedelta`. Nullable timedelta DataFrame columns now insert missing values as `NULL` on Pandas 3 instead of raising `TypeError`.
+- SQLAlchemy column DDL now compiles `TypeDecorator` and `with_variant()` types through the active ClickHouse dialect. Dialect-aware types such as a decorator that selects `DateTime64(6, 'UTC')` no longer fall back to generic `DATETIME` in `CREATE TABLE` and related column DDL. Closes [#984](https://github.com/ClickHouse/clickhouse-connect/issues/984).
+- IPv6 hosts are now bracketed when building the connection URI, so `get_client(host="2001:db8::1")` connects instead of producing an unusable URI where the first colon of the address reads as the port separator. Applies to both the sync and async clients. Closes [#998](https://github.com/ClickHouse/clickhouse-connect/issues/998).
+
+### Compatibility
+
+- SQLAlchemy: the `alembic` extra now requires `alembic>=1.18`. Earlier versions satisfied the package metadata but failed when importing the ClickHouse Alembic integration because the priority-dispatch API it uses was added in Alembic 1.18. See [#983](https://github.com/ClickHouse/clickhouse-connect/pull/983).
+
 ## 1.8.0rc2, 2026-08-20
 
 Follow-up release candidate to 1.8.0rc1, rebased on 1.7.2 so all bug fixes from that stable release are included. The optional Rust codec itself is unchanged.
@@ -11,6 +39,8 @@ Follow-up release candidate to 1.8.0rc1, rebased on 1.7.2 so all bug fixes from 
 ### Improvements
 
 - Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Results and dtypes match the Python codec, and the Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
+- Added native query and insert support for the ClickHouse `Geometry` type. Point values use 2-tuples and the other geometry members use nested lists. SQLAlchemy reflection exposes the public `Geometry` type.
+- Added support for all ClickHouse `Interval*` types as signed 64-bit counts in the interval type's unit.
 
 ## 1.7.2, 2026-08-19
 

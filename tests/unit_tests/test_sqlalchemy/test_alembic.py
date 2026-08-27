@@ -9,7 +9,7 @@ from alembic.ddl.impl import DefaultImpl
 from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
 from alembic.util import CommandError
-from sqlalchemy import Column, Index, Integer, MetaData, String, Table, literal_column, text
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, TypeDecorator, literal_column, text
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import CreateTable
 
@@ -42,6 +42,7 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.alembic.utils import make_include_object
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     CollapsingMergeTree,
@@ -330,6 +331,311 @@ def test_render_type_non_enum_containers_use_clickhouse_names():
     assert context.impl.render_type(types.Tuple(types.UInt32, types.String), None) == "Tuple(UInt32, String)"
     assert context.impl.render_type(types.Array(types.Nullable(types.String)), None) == "Array(Nullable(String))"
     assert context.impl.render_type(types.Array(types.DateTime64(3, "UTC")), None) == "Array(DateTime64(3, 'UTC'))"
+
+
+def test_render_and_compare_variant_type():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    variant = sqla_type_from_name("Variant(UInt32, String, UInt32)")
+
+    rendered = context.impl.render_type(variant, None)
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    rebuilt = eval(rendered, namespace)
+
+    assert rendered == "sqla_type_from_name('Variant(String, UInt32)')"
+    assert rebuilt.name == variant.name
+
+    inspector_column = Column("value", sqla_type_from_name("Variant(UInt32, String)"), nullable=False)
+    matching_column = Column("value", sqla_type_from_name("Variant(String, UInt32, UInt32)"), nullable=False)
+    different_column = Column("value", sqla_type_from_name("Variant(String, UInt64)"), nullable=False)
+    assert context.impl.compare_type(inspector_column, matching_column) is False
+    assert context.impl.compare_type(inspector_column, different_column) is True
+
+
+@pytest.mark.parametrize(
+    "variant_type",
+    [
+        sqla_type_from_name("Variant(Enum8('low' = 1, 'high' = 2), UInt32)"),
+        sqla_type_from_name("Array(Variant(Enum8('low' = 1, 'high' = 2), UInt32))"),
+        sqla_type_from_name("Map(String, Variant(UInt32, String))"),
+        sqla_type_from_name("Tuple(Variant(UInt32, String), UInt64)"),
+        sqla_type_from_name("Array(Tuple(Variant(UInt32, String), UInt64))"),
+        sqla_type_from_name("Variant(BFloat16, String)"),
+        sqla_type_from_name("Array(Variant(BFloat16, String))"),
+        sqla_type_from_name("Map(String, Variant(BFloat16, String))"),
+        sqla_type_from_name("Tuple(Variant(BFloat16, String), UInt64)"),
+        sqla_type_from_name("Variant(Tuple(label String, count UInt32), UInt64)"),
+        sqla_type_from_name("Array(Variant(Tuple(label String, count UInt32), UInt64))"),
+    ],
+    ids=[
+        "enum",
+        "array-enum",
+        "map",
+        "tuple",
+        "array-tuple",
+        "bfloat16",
+        "array-bfloat16",
+        "map-bfloat16",
+        "tuple-bfloat16",
+        "named-tuple",
+        "array-named-tuple",
+    ],
+)
+def test_render_variant_types_use_reflection_factory(variant_type):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+
+    rendered = context.impl.render_type(variant_type, None)
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(compile(rendered, "<migration>", "eval"), namespace)
+
+    assert "sqla_type_from_name(" in rendered
+    assert "Variant(" in rendered
+    assert rebuilt.name == variant_type.name
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "Nested(a String, b UInt32)",
+        "Nested(state Enum8('it\\'s' = 1, 'ok' = 2), value UInt32)",
+        "Tuple(a String, b UInt32)",
+        "Tuple(`field name` String, b UInt32)",
+        "Array(Nested(a String, b UInt32))",
+        "Array(Tuple(a String, b UInt32))",
+        "Array(Array(Tuple(a String, b UInt32)))",
+        "Tuple(String, Tuple(a String, b UInt32))",
+        "Tuple(a Array(Tuple(id UInt32, value String)), b Nullable(String))",
+        "Map(String, Tuple(a String, b UInt32))",
+        "Nullable(Tuple(a String, b UInt32))",
+    ],
+)
+def test_render_type_named_containers_emit_lossless_python(type_name):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    type_obj = sqla_type_from_name(type_name)
+
+    rendered = context.impl.render_type(type_obj, None)
+
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(rendered, namespace)
+    assert rebuilt.name == type_obj.name
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "SimpleAggregateFunction(anyLast, UInt32)",
+        "simpleaggregatefunction(anyLast, UInt32)",
+        "AggregateFunction(uniq, UInt32)",
+        "AGGREGATEFUNCTION(uniq, UInt32)",
+        "Array(SimpleAggregateFunction(anyLast, UInt32))",
+        "Map(String, AggregateFunction(uniq, UInt32))",
+        "Tuple(SimpleAggregateFunction(anyLast, UInt32), AggregateFunction(uniq, UInt32))",
+        "Array(Tuple(SimpleAggregateFunction(sum, UInt64), AggregateFunction(max, UInt32)))",
+        "Nullable(SimpleAggregateFunction(anyLast, UInt32))",
+        "Nullable(AggregateFunction(uniq, UInt32))",
+        "AggregateFunction(argMax, Tuple(value String, score UInt32), UInt32)",
+        "SimpleAggregateFunction(min, UInt32)",
+    ],
+)
+def test_render_type_aggregate_functions_emit_lossless_python(type_name):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    type_obj = sqla_type_from_name(type_name)
+
+    rendered = context.impl.render_type(type_obj, None)
+
+    namespace = {"sqla_type_from_name": sqla_type_from_name}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+    rebuilt = eval(compile(rendered, "<migration>", "eval"), namespace)
+    assert "sqla_type_from_name(" in rendered
+    assert rebuilt.name == type_obj.name
+
+
+def test_render_type_json_emits_valid_round_trip_python():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    json_types = [
+        types.JSON(),
+        types.JSON(max_dynamic_paths=0, max_dynamic_types=254),
+        types.JSON(
+            typed_paths={
+                "SKIP": "Array(Tuple(id UInt32, value Nullable(String)))",
+                "`quoted`": "UInt32",
+                '"quoted"': "String",
+                "a`b": "Variant(UInt32, String)",
+                "literal%2Edot": "Dynamic",
+                "nested": "JSON(`child` UInt64)",
+            },
+            max_dynamic_paths=13,
+            max_dynamic_types=79,
+            skip_paths=["ignored.path", "space path", "`skipped`", '"skipped"'],
+            skip_regexps=["^private\\.", "quote'backslash\\", r"space value,\(test\)'\\end"],
+        ),
+    ]
+    namespace = {}
+    exec("from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import *", namespace)
+
+    for json_type in json_types:
+        rendered = context.impl.render_type(json_type, None)
+        rebuilt = eval(rendered, namespace)
+        if isinstance(rebuilt, type):
+            rebuilt = rebuilt()
+        assert rebuilt.name == json_type.name
+
+
+def test_compare_type_normalizes_json_constructor_and_reflection():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column(
+        "payload",
+        sqla_type_from_name(
+            "JSON(max_dynamic_types = 79, max_dynamic_paths = 13, `event.id` UInt32, SKIP `ignored`, SKIP REGEXP '^private\\\\.')"
+        ),
+        nullable=False,
+    )
+    metadata_column = Column(
+        "payload",
+        types.JSON(
+            typed_paths={"event.id": types.UInt32},
+            max_dynamic_paths=13,
+            max_dynamic_types=79,
+            skip_paths=["ignored"],
+            skip_regexps=["^private\\."],
+        ),
+        nullable=False,
+    )
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+@pytest.mark.parametrize(
+    "inspector_type, wrapped_type",
+    [
+        (types.DateTime64(3, "UTC"), types.DateTime64(3, "UTC")),
+        (types.Decimal(10, 2), types.Decimal(10, 2)),
+    ],
+    ids=["datetime64", "decimal"],
+)
+def test_compare_type_normalizes_type_decorator_spacing(inspector_type, wrapped_type):
+    class WrappedClickHouseType(TypeDecorator):
+        impl = wrapped_type
+        cache_ok = True
+
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("value", inspector_type, nullable=False)
+    metadata_column = Column("value", WrappedClickHouseType(), nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+def test_compare_type_normalizes_nested_type_spacing():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("value", sqla_type_from_name("Tuple(a Map(String,UInt32))"), nullable=False)
+    metadata_column = Column("value", sqla_type_from_name("Tuple(a Map(String, UInt32))"), nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+def test_compare_type_normalizes_variant_order_inside_json():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("payload", sqla_type_from_name("JSON(`value` Variant(String, UInt32))"), nullable=False)
+    metadata_column = Column("payload", types.JSON(typed_paths={"value": "Variant(UInt32, String)"}), nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+@pytest.mark.parametrize("declared_hint", ["Boolean", "bOoLeAn", types.Boolean, types.Boolean()])
+def test_compare_type_normalizes_boolean_alias_inside_json(declared_hint):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("payload", sqla_type_from_name("JSON(`value` Bool)"), nullable=False)
+    metadata_column = Column("payload", types.JSON(typed_paths={"value": declared_hint}), nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+def test_compare_type_normalizes_generic_enum_inside_json():
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column(
+        "payload",
+        sqla_type_from_name("JSON(`value` Enum16('low' = -129, 'high' = 128))"),
+        nullable=False,
+    )
+    metadata_column = Column(
+        "payload",
+        types.JSON(typed_paths={"value": "Enum('low' = -129, 'high' = 128)"}),
+        nullable=False,
+    )
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+@pytest.mark.parametrize(
+    "reflected_hint, declared_hint",
+    [
+        ("Array(Variant(String, UInt32))", "Array(Variant(UInt32, String))"),
+        ("Array(Variant(UInt32))", "Array(Variant(UInt32, UInt32))"),
+        ("Variant(Decimal(9, 2))", "Variant(Decimal32(2), Decimal(9, 2))"),
+        ("Map(String, Variant(String, UInt32))", "Map(String, Variant(UInt32,String))"),
+        ("Tuple(Variant(String, UInt32), Nullable(UInt8))", "Tuple(Variant(UInt32, String), Nullable(UInt8))"),
+        (
+            "Tuple(value Variant(String, UInt32), count UInt8)",
+            "Tuple(value Variant(UInt32, String), count UInt8)",
+        ),
+        (
+            "SimpleAggregateFunction(any, Variant(String, UInt32))",
+            "SimpleAggregateFunction(any, Variant(UInt32, String))",
+        ),
+        ("Map(String, Nested(`path one` UInt32))", 'Map(String, Nested("path one" UInt32))'),
+    ],
+)
+def test_compare_type_normalizes_variant_order_in_nested_json_hints(reflected_hint, declared_hint):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("payload", sqla_type_from_name(f"JSON(`value` {reflected_hint})"), nullable=False)
+    metadata_column = Column("payload", types.JSON(typed_paths={"value": declared_hint}), nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+@pytest.mark.parametrize(
+    "inspector_type, metadata_type",
+    [
+        (types.JSON(typed_paths={"path one": types.UInt32}), types.JSON(typed_paths={"pathone": types.UInt32})),
+        (types.JSON(skip_paths=["path one"]), types.JSON(skip_paths=["pathone"])),
+        (types.JSON(skip_regexps=["path one"]), types.JSON(skip_regexps=["pathone"])),
+        (types.JSON(skip_regexps=["a' = b"]), types.JSON(skip_regexps=["a'b"])),
+    ],
+    ids=["typed-path", "skip-path", "skip-regexp", "escaped-quote-regexp"],
+)
+def test_compare_type_preserves_semantic_json_spaces(inspector_type, metadata_type):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("payload", inspector_type, nullable=False)
+    metadata_column = Column("payload", metadata_type, nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is True
+
+
+@pytest.mark.parametrize(
+    "inspector_type, metadata_type",
+    [
+        (
+            types.Array(types.JSON(typed_paths={"path one": types.UInt32})),
+            types.Array(types.JSON(typed_paths={"pathone": types.UInt32})),
+        ),
+        (
+            types.Tuple(types.JSON(skip_regexps=["path one"])),
+            types.Tuple(types.JSON(skip_regexps=["pathone"])),
+        ),
+        (
+            types.Map(types.String, types.JSON(skip_paths=["path one"])),
+            types.Map(types.String, types.JSON(skip_paths=["pathone"])),
+        ),
+    ],
+    ids=["array-typed-path", "tuple-skip-regexp", "map-skip-path"],
+)
+def test_compare_type_preserves_semantic_spaces_in_nested_json(inspector_type, metadata_type):
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
+    inspector_column = Column("payload", inspector_type, nullable=False)
+    metadata_column = Column("payload", metadata_type, nullable=False)
+
+    assert context.impl.compare_type(inspector_column, metadata_column) is True
 
 
 def test_explicit_nullable_column_renders_nullable_type():
@@ -751,11 +1057,13 @@ def test_clickhouse_writer_adds_template_imports():
     assert "from clickhouse_connect import cc_sqlalchemy" in directive.imports
     assert any("ddl.tableengine import *" in value for value in directive.imports)
     assert any("datatypes.sqltypes import *" in value for value in directive.imports)
+    assert "from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name" in directive.imports
 
     downgrade_only = _Directive(downgrade_ops=_Ops())
     clickhouse_writer(None, None, [downgrade_only])
     assert any("ddl.tableengine import *" in value for value in downgrade_only.imports)
     assert any("datatypes.sqltypes import *" in value for value in downgrade_only.imports)
+    assert "from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name" in downgrade_only.imports
 
 
 def test_set_type_nullable_accepts_type_classes():

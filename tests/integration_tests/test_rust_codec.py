@@ -262,6 +262,82 @@ def test_rust_codec_variant_round_trip_parity(client_factory, call, client_mode)
         call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
 
 
+def test_rust_codec_main_type_overlap(client_factory, call, client_mode):
+    client = client_factory(native_codec="rust_strict")
+    type_available(client, "variant")
+    client.set_client_setting("allow_experimental_variant_type", 1)
+    table = f"rc_main_type_overlap_{client_mode}"
+    schema = (
+        "id UInt8, root Tuple(), items Array(Tuple()), "
+        "wrapped Tuple(empty Tuple(), sentinel UInt8), value Variant(String, UInt32, Array(UInt32)), "
+        "status Enum8('low' = 1, 'high' = 2)"
+    )
+    names = ["id", "root", "items", "wrapped", "value", "status"]
+    type_names = [
+        "UInt8",
+        "Tuple()",
+        "Array(Tuple())",
+        "Tuple(Tuple(), UInt8)",
+        "Variant(UInt32, String, Array(UInt32))",
+        "Enum('low' = 1, 'high' = 2)",
+    ]
+    rows = [
+        [1, (), [(), ()], ((), 13), typed_variant(13, "UInt32"), "low"],
+        [2, (), [], ((), 79), "user_2", "high"],
+        [3, (), [()], ((), 80), typed_variant([13, 79], "Array(UInt32)"), "low"],
+    ]
+    try:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} ({schema}) ENGINE Memory")
+        call(client.insert, table, rows, column_names=names, column_type_names=type_names)
+
+        result = call(client.query, f"SELECT * FROM {table} ORDER BY id")
+        assert result.result_rows == [
+            (1, (), [(), ()], {"empty": (), "sentinel": 13}, 13, "low"),
+            (2, (), [], {"empty": (), "sentinel": 79}, "user_2", "high"),
+            (3, (), [()], {"empty": (), "sentinel": 80}, [13, 79], "low"),
+        ]
+        assert [ch_type.name for ch_type in result.column_types] == [
+            "UInt8",
+            "Tuple()",
+            "Array(Tuple())",
+            "Tuple(`empty` Tuple(), `sentinel` UInt8)",
+            "Variant(Array(UInt32), String, UInt32)",
+            "Enum8('low' = 1, 'high' = 2)",
+        ]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rust_codec_nullable_empty_tuple(client_factory, call, client_mode, test_config):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    client = client_factory(native_codec="rust_strict")
+    setting = call(
+        client.query,
+        "SELECT name FROM system.settings WHERE name = 'allow_experimental_nullable_tuple_type'",
+    ).first_row
+    if setting is None:
+        pytest.skip("Server does not support Nullable(Tuple(...))")
+
+    table = f"rc_nullable_empty_tuple_{client_mode}"
+    try:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(
+            client.command,
+            f"CREATE TABLE {table} (value Nullable(Tuple()), sentinel UInt8) ENGINE Memory",
+            settings={"allow_experimental_nullable_tuple_type": 1},
+        )
+        call(client.insert, table, [[None, 13], [(), 79], [None, 80]])
+        assert call(client.query, f"SELECT * FROM {table} ORDER BY sentinel").result_rows == [
+            (None, 13),
+            ((), 79),
+            (None, 80),
+        ]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
 DYNAMIC_QUERY = """
     SELECT id, d, s, [d, CAST('tail', 'Dynamic')] AS a,
            tuple(d, id) AS t, map('v', d) AS m
@@ -628,6 +704,125 @@ def test_rust_codec_time_parity(client_factory, call, test_config):
             rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
             python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
             pd.testing.assert_frame_equal(rust_df, python_df)
+
+
+def test_rust_codec_time64_zero_numpy_parity(client_factory, call, test_config):
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+
+    version_client = client_factory(native_codec="python")
+    if not version_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    settings = {"enable_json_type": 1, "enable_time_time64_type": 1, "flatten_nested": 0}
+    rust_client = client_factory(native_codec="rust_strict", settings=settings)
+    python_client = client_factory(native_codec="python", settings=settings)
+
+    scalar_query = "SELECT CAST(v AS Time64(0)) AS c FROM values('v String', ('-000:00:05'), ('000:00:00'), ('001:02:03'))"
+    rust_np = call(rust_client.query_np, scalar_query)
+    python_np = call(python_client.query_np, scalar_query)
+    assert rust_np.dtype == python_np.dtype == np.dtype("timedelta64[s]")
+    np.testing.assert_array_equal(rust_np, python_np)
+
+    nullable_query = "SELECT CAST(v AS Nullable(Time64(0))) AS c FROM values('v Nullable(String)', ('-000:00:05'), (NULL), ('000:00:13'))"
+    rust_np = call(rust_client.query_np, nullable_query)
+    python_np = call(python_client.query_np, nullable_query)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+
+    container_query = (
+        "SELECT [CAST('-000:00:05' AS Time64(0)), CAST('000:00:13' AS Time64(0))] AS a, "
+        "tuple(CAST('000:00:13' AS Time64(0)), CAST(NULL AS Nullable(Time64(0)))) AS t, "
+        "[tuple(CAST('-000:00:05' AS Time64(0)), CAST(NULL AS Nullable(Time64(0))))] AS n, "
+        "CAST([tuple(CAST('-000:00:05' AS Time64(0)), CAST(NULL AS Nullable(Time64(0))))] "
+        "AS Nested(v Time64(0), n Nullable(Time64(0)))) AS nested_value"
+    )
+    rust_np = call(rust_client.query_np, container_query)
+    python_np = call(python_client.query_np, container_query)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+
+    nested_query = (
+        "SELECT CAST([tuple(CAST('-000:00:05' AS Time64(0)), CAST(NULL AS Nullable(Time64(0))))] "
+        "AS Nested(v Time64(0), n Nullable(Time64(0)))) AS c"
+    )
+    nested_result = call(rust_client.query, nested_query)
+    assert nested_result.column_types[0].base_type == "Nested"
+    rust_np = call(rust_client.query_np, nested_query)
+    python_np = call(python_client.query_np, nested_query)
+    np.testing.assert_array_equal(rust_np, python_np)
+    nested_item = rust_np.flatten()[0]
+    assert isinstance(nested_item["v"], np.timedelta64)
+    assert nested_item["v"].dtype == np.dtype("timedelta64[s]")
+
+    json_query = (
+        'SELECT CAST(\'{"v":"-000:00:05","nested":{"t":"000:00:13"},'
+        '"shared":[{"value":13},{"value":79}]}\' AS JSON(max_dynamic_paths=0, '
+        "`v` Time64(0), `nested.t` Nullable(Time64(0)))) AS c"
+    )
+    rust_np = call(rust_client.query_np, json_query)
+    python_np = call(python_client.query_np, json_query)
+    np.testing.assert_array_equal(rust_np, python_np)
+    json_item = rust_np.flatten()[0]
+    assert isinstance(json_item["v"], np.timedelta64)
+    assert json_item["v"].dtype == np.dtype("timedelta64[s]")
+    assert isinstance(json_item["nested"]["t"], np.timedelta64)
+    assert json_item["nested"]["t"].dtype == np.dtype("timedelta64[s]")
+    assert json_item["shared"] == [{"value": np.int64(13)}, {"value": np.int64(79)}]
+    assert all(type(item["value"]) is np.int64 for item in json_item["shared"])
+
+    for query in (scalar_query, nullable_query, container_query, nested_query):
+        for use_extended_dtypes in (False, True):
+            rust_df = call(rust_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            python_df = call(python_client.query_df, query, use_extended_dtypes=use_extended_dtypes)
+            pd.testing.assert_frame_equal(rust_df, python_df)
+
+    # The Python query_df path stringifies compound JSON shared data. Keep the Rust path decoded,
+    # matching query_np and the Rust codec's JSON shared-data contract.
+    for use_extended_dtypes in (False, True):
+        rust_df = call(rust_client.query_df, json_query, use_extended_dtypes=use_extended_dtypes)
+        json_df_item = rust_df.iloc[0, 0]
+        assert isinstance(json_df_item["v"], np.timedelta64)
+        assert json_df_item["v"].dtype == np.dtype("timedelta64[s]")
+        assert isinstance(json_df_item["nested"]["t"], np.timedelta64)
+        assert json_df_item["nested"]["t"].dtype == np.dtype("timedelta64[s]")
+        assert json_df_item["shared"] == [{"value": np.int64(13)}, {"value": np.int64(79)}]
+        assert all(type(item["value"]) is np.int64 for item in json_df_item["shared"])
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT CAST('000:00:13.12' AS Time64(2)) AS c",
+        "SELECT CAST('000:00:13.12' AS Nullable(Time64(2))) AS c",
+        "SELECT [CAST('000:00:13.12' AS Time64(2))] AS c",
+        "SELECT tuple(CAST('000:00:13.12' AS Time64(2)), CAST(NULL AS Nullable(Time64(2)))) AS c",
+        "SELECT CAST([tuple(CAST('000:00:13.12' AS Time64(2)))] AS Nested(v Time64(2))) AS c",
+        "SELECT CAST(CAST('000:00:13.12' AS Time64(2)) AS Variant(String, Time64(2))) AS c",
+        'SELECT CAST(\'{"v":"000:00:13.12"}\' AS JSON(`v` Time64(2))) AS c',
+    ],
+    ids=["scalar", "nullable", "array", "tuple", "nested", "variant", "json"],
+)
+@pytest.mark.parametrize("method_name", ["query_np", "query_df"])
+def test_rust_codec_time64_unsupported_numpy_scale_parity(client_factory, call, test_config, query, method_name):
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+
+    version_client = client_factory(native_codec="python")
+    if not version_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    settings = {"enable_json_type": 1, "enable_time_time64_type": 1, "flatten_nested": 0}
+    rust_client = client_factory(native_codec="rust_strict", settings=settings)
+    python_client = client_factory(native_codec="python", settings=settings)
+
+    for client in (rust_client, python_client):
+        with pytest.raises(ProgrammingError, match=r"Cannot use .*Time64\(2\).* as a numpy or Pandas datatype"):
+            call(getattr(client, method_name), query)
 
 
 def test_rust_codec_interval_parity(client_factory, call, client_mode):
@@ -1466,6 +1661,30 @@ def test_rust_codec_insert_df_nullable_parity(client_factory, call, client_mode)
     finally:
         call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
+
+
+def test_rust_codec_extended_time64_insert_df(client_factory, call, client_mode):
+    pd = pytest.importorskip("pandas")
+    client = client_factory(native_codec="rust_strict", settings={"enable_time_time64_type": 1})
+    table = f"rc_time64_extended_{client_mode}"
+    frame = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "value": pd.to_timedelta(["00:00:05.12", "-00:00:07.89"]),
+            "nullable": pd.to_timedelta([None, "00:00:01.5"]),
+        }
+    )
+    try:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+        call(client.command, f"CREATE TABLE {table} (id UInt8, value Time64(2), nullable Nullable(Time64(2))) ENGINE Memory")
+        call(client.insert_df, table, frame)
+
+        assert call(client.query, f"SELECT * FROM {table} ORDER BY id").result_rows == [
+            (1, timedelta(seconds=5, milliseconds=120), None),
+            (2, timedelta(seconds=-8, milliseconds=110), timedelta(seconds=1, milliseconds=500)),
+        ]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
 
 
 @pytest.mark.parametrize("native_codec", ["python", "rust_strict"])

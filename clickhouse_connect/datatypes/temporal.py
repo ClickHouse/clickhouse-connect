@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     import numpy
 
 from clickhouse_connect import common
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
 from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options, tzutil
 from clickhouse_connect.driver.common import first_value, int_size, np_date_types, write_array
@@ -172,6 +172,7 @@ class DateTime(DateTimeBase):
     np_type = "datetime64[s]"
     nano_divisor = 1000000000
     byte_size = 4
+    _type_args = _TypeArgs(0, 1)
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -218,6 +219,7 @@ class DateTime(DateTimeBase):
 class DateTime64(DateTimeBase):
     __slots__ = "scale", "prec", "unit"
     byte_size = 8
+    _type_args = _TypeArgs(1, 2, integer_bounds=((0, 0, 9),))
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -449,6 +451,12 @@ class TimeBase(ClickHouseType, registered=False):
             converter_map[options.np.timedelta64] = self._timedelta_to_ticks
             converter_map[options.np.int64] = self._numerical_to_ticks
         converter = converter_map.get(expected_type, None)
+        if converter is None:
+            # Subclasses such as pandas Timedelta miss the exact type lookup
+            for base, base_converter in converter_map.items():
+                if isinstance(first, base):
+                    converter = base_converter
+                    break
 
         if converter is None:
             raise TypeError(
@@ -692,20 +700,25 @@ class Time64(TimeBase):
     __slots__ = ("scale", "precision", "unit")
     _array_type = "q"
     byte_size = 8
+    scale: int
+    precision: int
+    unit: str | None
+    _type_args = _TypeArgs(1, 1, integer_bounds=((0, 0, 9),))
 
     def __init__(self, type_def):
         super().__init__(type_def)
         self._name_suffix = type_def.arg_str
-        self.scale = type_def.values[0]
-        if self.scale not in (3, 6, 9):
-            raise ProgrammingError(f"Unsupported Time64 scale {self.scale}; only 3, 6, or 9 are allowed for NumPy.")
-        self.precision = 10**self.scale
-        self.unit = np_date_types.get(self.scale)
+        scale = type_def.values[0]
+        if not isinstance(scale, int) or scale < 0 or scale > 9:
+            raise ProgrammingError(f"Unsupported Time64 scale {scale}; expected a value from 0 through 9.")
+        self.scale = scale
+        self.precision = 10**scale
+        self.unit = np_date_types.get(scale)
 
     @property
     def pandas_dtype(self):
         """Sets dtype for pandas timedelta objects"""
-        return f"timedelta64{self.unit}"
+        return self.np_type
 
     @property
     def max_time_ticks(self) -> int:
@@ -713,7 +726,12 @@ class Time64(TimeBase):
 
     @property
     def np_type(self):
-        return f"timedelta64{self.unit}"
+        if self.unit:
+            return f"timedelta64{self.unit}"
+        raise ProgrammingError(
+            f"Cannot use {self.name} as a numpy or Pandas datatype. Only seconds(0), milliseconds(3), "
+            "microseconds(6), or nanoseconds(9) are supported for numpy based queries."
+        )
 
     @property
     def max_ticks(self) -> int:
@@ -726,7 +744,7 @@ class Time64(TimeBase):
     def _string_to_ticks(self, time_str: str) -> int:
         """Parse string format 'HHH:MM:SS[.fff]' to ticks with sub-second precision."""
         parts = self._parse_core(time_str)
-        frac_ticks = int((parts.frac or "").ljust(self.scale, "0")[: self.scale])
+        frac_ticks = int((parts.frac or "").ljust(self.scale, "0")[: self.scale]) if self.scale else 0
         ticks = (parts.hours * 3600 + parts.minutes * 60 + parts.seconds) * self.precision + frac_ticks
         if parts.is_negative:
             ticks = -ticks
@@ -772,9 +790,12 @@ class Time64(TimeBase):
 
     def _ticks_to_np_timedelta(self, ticks: int) -> numpy.timedelta64:
         """Convert ticks to numpy timedelta64 with nanosecond precision."""
-        res_map = {3: "ms", 6: "us", 9: "ns"}
+        res_map = {0: "s", 3: "ms", 6: "us", 9: "ns"}
+        unit = res_map.get(self.scale)
+        if unit is None:
+            raise ProgrammingError(f"Cannot use {self.name} as a numpy or Pandas datatype. Only scales 0, 3, 6, and 9 are supported.")
 
-        return options.np.timedelta64(ticks, res_map.get(self.scale))
+        return options.np.timedelta64(ticks, unit)
 
     def _time_to_ticks(self, t: time) -> int:
         """Convert time to ticks with sub-second precision."""

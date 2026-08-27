@@ -1,8 +1,13 @@
 from ipaddress import IPv4Address
 from uuid import UUID
 
+import pytest
+from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
+
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.dynamic import typed_variant
+from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
@@ -128,6 +133,83 @@ def test_geometry():
     assert geometry_type.name == "Geometry"
     assert registry.get_from_name("GEOMETRY").name == "Geometry"
     assert geometry_type.read_column_data(source, len(tagged), ctx, read_state) == expected
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_empty_tuple_native_markers_and_stream_alignment(buffer_cls):
+    tuple_type = registry.get_from_name("Tuple()")
+    uint8_type = registry.get_from_name("UInt8")
+    source = bytes_source(b"000" + bytes((13, 79, 80)), cls=buffer_cls)
+
+    assert tuple_type.read_column_data(source, 3, QueryContext(), []) == ((), (), ())
+    assert list(uint8_type.read_column_data(source, 3, QueryContext(), None)) == [13, 79, 80]
+
+
+def test_empty_tuple_native_write_and_size():
+    tuple_type = registry.get_from_name("Tuple()")
+    dest = bytearray()
+
+    tuple_type.write_column_data([(), (), ()], dest, InsertContext("", [], []))
+
+    assert dest == b"000"
+    assert tuple_type.data_size([(), (), ()]) == 1
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_nullable_empty_tuple_native_markers(buffer_cls):
+    tuple_type = registry.get_from_name("Nullable(Tuple())")
+    source = bytes_source(b"\x01\x00\x01" + b"000" + bytes((13, 79, 80)), cls=buffer_cls)
+    ctx = QueryContext()
+
+    assert tuple_type.read_column_data(source, 3, ctx, []) == [None, (), None]
+    assert list(registry.get_from_name("UInt8").read_column_data(source, 3, ctx, None)) == [13, 79, 80]
+
+    dest = bytearray()
+    tuple_type.write_column_data([None, (), None], dest, InsertContext("", [], []))
+    assert dest == b"\x01\x00\x01" + b"000"
+    assert tuple_type.data_size([None, (), None]) == 2
+    assert tuple_type.insert_name == "Nullable(Tuple())"
+
+
+@pytest.mark.parametrize(
+    "type_name, values, expected",
+    [
+        ("Array(Nullable(Tuple()))", [[None, ()], [], [()]], [[None, ()], [], [()]]),
+        (
+            "Tuple(Nullable(Tuple()), UInt8)",
+            [(None, 13), ((), 79), (None, 80)],
+            ((None, 13), ((), 79), (None, 80)),
+        ),
+    ],
+)
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_nullable_empty_tuple_composes_in_containers(type_name, values, expected, buffer_cls):
+    ch_type = registry.get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+    source = bytes_source(bytes(dest) + bytes((13, 79, 80)), cls=buffer_cls)
+
+    assert ch_type.read_column(source, 3, QueryContext()) == expected
+    assert list(registry.get_from_name("UInt8").read_column(source, 3, QueryContext())) == [13, 79, 80]
+    assert ch_type.insert_name == type_name
+
+
+@pytest.mark.parametrize(
+    "type_name, value",
+    [
+        ("Tuple()", 13),
+        ("Tuple()", (13,)),
+        ("Tuple()", {}),
+        ("Tuple()", []),
+        ("Tuple()", None),
+        ("Nullable(Tuple())", (13,)),
+    ],
+)
+def test_empty_tuple_native_write_rejects_invalid_values(type_name, value):
+    tuple_type = registry.get_from_name(type_name)
+
+    with pytest.raises(DataError, match=r"Tuple\(\) values must be empty tuples"):
+        tuple_type.write_column_data([value], bytearray(), InsertContext("", [], []))
 
 
 def test_nested():

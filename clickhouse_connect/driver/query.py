@@ -95,15 +95,15 @@ class QueryContext(BaseQueryContext):
         :param column_formats: Optional dictionary
         :param use_none: Use a Python None for ClickHouse NULL values in nullable columns.  Otherwise the default
           value of the column (such as 0 for numbers) will be returned in the result_set
-        :param max_str_len Limit returned ClickHouse String values to this length, which allows a Numpy
+        :param max_str_len: Limit returned ClickHouse String values to this length, which allows a Numpy
           structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
           String columns will always be object arrays
-        :param query_tz  Either a string IANA timezone name or a tzinfo object (strings are resolved via zoneinfo).
+        :param query_tz: Either a string IANA timezone name or a tzinfo object (strings are resolved via zoneinfo).
           Values for any DateTime or DateTime64 column in the query will be converted to Python datetime.datetime
           objects with the selected timezone
-        :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
+        :param column_tzs: A dictionary of column names to tzinfo objects (or strings that will be converted to
           tzinfo objects).  The timezone will be applied to datetime objects returned in the query
-        :param tz_mode Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
+        :param tz_mode: Controls timezone-aware behavior for UTC DateTime columns. "naive_utc" (default) returns
           naive UTC timestamps. "aware" forces timezone-aware UTC datetimes. "schema" returns datetimes that
           match the server's column definition which means timezone-aware when the column schema defines a timezone
           (e.g. DateTime('UTC')) and naive for bare DateTime columns.

@@ -28,8 +28,13 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 BlockConverter = Callable[[Any, Any, int], Any]
 
-_TIME64_UNITS = {3: "ms", 6: "us", 9: "ns"}
+_TIME64_UNITS = {0: "s", 3: "ms", 6: "us", 9: "ns"}
 _COMPOUND_JSON_BINARY_TYPE_INDEXES = frozenset({0x1E, 0x1F, 0x20, 0x23, 0x26, 0x27, 0x2B, 0x30})
+
+
+def _time64_unit(ch_type: Time64) -> str:
+    _ = ch_type.np_type
+    return _TIME64_UNITS[ch_type.scale]
 
 
 def _contains_json_type(ch_type: object) -> bool:
@@ -206,7 +211,7 @@ def _make_time_convert(
     as_pandas: bool = False,
     use_extended_dtypes: bool = False,
 ) -> BlockConverter:
-    unit = "s" if isinstance(ch_type, Time) else _TIME64_UNITS[ch_type.scale]
+    unit = "s" if isinstance(ch_type, Time) else _time64_unit(ch_type)
     nullable_pandas_ns = as_pandas and not use_extended_dtypes and _pandas_infers_ns_timedeltas()
 
     def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
@@ -245,19 +250,72 @@ def _make_time_convert(
 def _any_leaf(ch_type: ClickHouseType, predicate: Callable[[ClickHouseType], bool]) -> bool:
     if isinstance(ch_type, Array):
         return _any_leaf(ch_type.element_type, predicate)
-    if isinstance(ch_type, Tuple):
-        return any(_any_leaf(elem, predicate) for elem in ch_type.element_types)
     if isinstance(ch_type, Map):
         return _any_leaf(ch_type.key_type, predicate) or _any_leaf(ch_type.value_type, predicate)
+    if isinstance(ch_type, dynamic_module.JSON):
+        return any(_any_leaf(typed_type, predicate) for typed_type in ch_type.typed_types)
+    element_types = getattr(ch_type, "element_types", None)
+    if element_types is not None:
+        return any(_any_leaf(element, predicate) for element in element_types)
     return predicate(ch_type)
+
+
+def _validate_time64_units(ch_type: ClickHouseType) -> None:
+    def validate(leaf: ClickHouseType) -> bool:
+        if isinstance(leaf, Time64):
+            _time64_unit(leaf)
+        return False
+
+    _any_leaf(ch_type, validate)
+
+
+JsonTimePath = tuple[tuple[str, ...], ClickHouseType]
+JsonTimePaths = dict[ClickHouseType, tuple[JsonTimePath, ...]]
+
+
+def _prepare_json_time_paths(ch_type: ClickHouseType) -> JsonTimePaths:
+    prepared: JsonTimePaths = {}
+
+    def is_time(leaf: ClickHouseType) -> bool:
+        return isinstance(leaf, (Time, Time64))
+
+    def prepare(current: ClickHouseType) -> None:
+        if isinstance(current, Array):
+            prepare(current.element_type)
+            return
+        if isinstance(current, Map):
+            prepare(current.key_type)
+            prepare(current.value_type)
+            return
+        if isinstance(current, dynamic_module.JSON):
+            prepared[current] = tuple(
+                (tuple(dynamic_module._json_path_segments(path)), typed_type)
+                for path, typed_type in zip(current.typed_paths, current.typed_types)
+                if _any_leaf(typed_type, is_time)
+            )
+            for typed_type in current.typed_types:
+                prepare(typed_type)
+            return
+        for element_type in getattr(current, "element_types", ()):
+            prepare(element_type)
+
+    prepare(ch_type)
+    return prepared
 
 
 def _contains_nested_time(ch_type: ClickHouseType) -> bool:
     # Container-only: bare Time/Time64 variants keep their dedicated or object-exit converters.
-    return isinstance(ch_type, (Array, Tuple, Map)) and _any_leaf(ch_type, lambda leaf: isinstance(leaf, (Time, Time64)))
+    return isinstance(ch_type, (Array, Tuple, Map, Nested, dynamic_module.JSON)) and _any_leaf(
+        ch_type, lambda leaf: isinstance(leaf, (Time, Time64))
+    )
 
 
-def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null: bool = False) -> Any:
+def _materialize_raw_times(
+    ch_type: ClickHouseType,
+    raw: Any,
+    extended_time_null: bool,
+    json_time_paths: JsonTimePaths,
+) -> Any:
     """Replace raw Time ticks in an otherwise materialized Python object tree."""
     if raw is None:
         if extended_time_null and isinstance(ch_type, Time):
@@ -269,21 +327,40 @@ def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null
         return options.np.timedelta64(raw, "s")
     if isinstance(ch_type, Time64):
         return options.np.timedelta64(raw, _TIME64_UNITS[ch_type.scale])
+    if isinstance(ch_type, dynamic_module.JSON):
+        for segments, typed_type in json_time_paths.get(ch_type, ()):
+            item = raw
+            for segment in segments[:-1]:
+                item = item[segment]
+            key = segments[-1]
+            item[key] = _materialize_raw_times(typed_type, item[key], extended_time_null, json_time_paths)
+        return raw
+    if isinstance(ch_type, Nested):
+        return [
+            {
+                name: _materialize_raw_times(element_type, item[name], extended_time_null, json_time_paths)
+                for name, element_type in zip(ch_type.element_names, ch_type.element_types)
+            }
+            for item in raw
+        ]
     if isinstance(ch_type, Array):
         for index, value in enumerate(raw):
-            raw[index] = _materialize_raw_times(ch_type.element_type, value, extended_time_null)
+            raw[index] = _materialize_raw_times(ch_type.element_type, value, extended_time_null, json_time_paths)
         return raw
     if isinstance(ch_type, Tuple):
         if isinstance(raw, dict):
             return {
-                name: _materialize_raw_times(elem_type, raw[name], extended_time_null)
+                name: _materialize_raw_times(elem_type, raw[name], extended_time_null, json_time_paths)
                 for name, elem_type in zip(ch_type.element_names, ch_type.element_types)
             }
-        return tuple(_materialize_raw_times(elem_type, value, extended_time_null) for elem_type, value in zip(ch_type.element_types, raw))
+        return tuple(
+            _materialize_raw_times(elem_type, value, extended_time_null, json_time_paths)
+            for elem_type, value in zip(ch_type.element_types, raw)
+        )
     if isinstance(ch_type, Map):
         return {
-            _materialize_raw_times(ch_type.key_type, key, extended_time_null): _materialize_raw_times(
-                ch_type.value_type, value, extended_time_null
+            _materialize_raw_times(ch_type.key_type, key, extended_time_null, json_time_paths): _materialize_raw_times(
+                ch_type.value_type, value, extended_time_null, json_time_paths
             )
             for key, value in raw.items()
         }
@@ -291,7 +368,9 @@ def _materialize_raw_times(ch_type: ClickHouseType, raw: Any, extended_time_null
 
 
 def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+    _validate_time64_units(ch_type)
     extended_time_null = context.as_pandas and context.use_extended_dtypes
+    json_time_paths = _prepare_json_time_paths(ch_type)
     leaf_predicate = _refinalize_predicate(ch_type, context)
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
@@ -302,8 +381,10 @@ def _make_nested_time_convert(ch_type: ClickHouseType, context: QueryContext) ->
                 f"The rust native codec cannot decode this column for numpy/pandas output: {ex}. "
                 'Use native_codec="python" to fall back to the Python codec'
             ) from ex
+        if json_time_paths:
+            column = cast(list[Any], _normalize_json_shared_column(ch_type, column, context))
         for row, value in enumerate(column):
-            column[row] = _materialize_raw_times(ch_type, value, extended_time_null)
+            column[row] = _materialize_raw_times(ch_type, value, extended_time_null, json_time_paths)
         if leaf_predicate is not None:
             column = _refinalize_leaves(ch_type, column, context, leaf_predicate)
         return column
@@ -323,7 +404,7 @@ def _array_time_leaf(ch_type: ClickHouseType) -> tuple[int, Time | Time64] | Non
 
 
 def _make_array_time_convert(leaf: Time | Time64, depth: int, context: QueryContext) -> BlockConverter:
-    unit = "s" if isinstance(leaf, Time) else _TIME64_UNITS[leaf.scale]
+    unit = "s" if isinstance(leaf, Time) else _time64_unit(leaf)
     extended_time_null = context.as_pandas and context.use_extended_dtypes
 
     def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
@@ -394,7 +475,7 @@ def _needs_refinalize(ch_type: ClickHouseType, leaf_predicate: LeafPredicate = _
 
 def _refinalize_predicate(ch_type: ClickHouseType, context: QueryContext) -> LeafPredicate | None:
     """Select the leaf predicate for nested refinalize, or None when no leaf needs it."""
-    if not isinstance(ch_type, (Array, Tuple, Map)):
+    if not isinstance(ch_type, (Array, Tuple, Map, Nested)):
         return None
     if context.as_pandas and context.use_extended_dtypes:
         predicate: LeafPredicate = _extended_refinalize_leaf
@@ -434,6 +515,32 @@ def _refinalize_leaves(
                 continue
             out.append(flat[pos : pos + length])
             pos += length
+        return out
+    if isinstance(ch_type, Nested):
+        lengths = [None if row is None else len(row) for row in column]
+        flat = [dict(item) for row in column if row is not None for item in row]
+        refinalize_indexes = [index for index, elem in enumerate(ch_type.element_types) if _needs_refinalize(elem, leaf_predicate)]
+        if refinalize_indexes:
+            refinalized_columns = [
+                _refinalize_leaves(
+                    ch_type.element_types[index],
+                    [item[ch_type.element_names[index]] for item in flat],
+                    context,
+                    leaf_predicate,
+                )
+                for index in refinalize_indexes
+            ]
+            for item_index, item in enumerate(flat):
+                for element_index, values in zip(refinalize_indexes, refinalized_columns):
+                    item[ch_type.element_names[element_index]] = values[item_index]
+        out = []
+        position = 0
+        for length in lengths:
+            if length is None:
+                out.append(None)
+                continue
+            out.append(flat[position : position + length])
+            position += length
         return out
     if isinstance(ch_type, Tuple):
         refinalize_indexes = [index for index, elem in enumerate(ch_type.element_types) if _needs_refinalize(elem, leaf_predicate)]
@@ -561,6 +668,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     # rust core's physical_delegate expansion and the Python codec's delegated read.
     if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
+    _validate_time64_units(ch_type)
     if isinstance(ch_type, BFloat16) and not ch_type.low_card:
         extended = ch_type.nullable and context.as_pandas and context.use_extended_dtypes
         return _Converter(True, _make_bfloat16_convert(extended))
