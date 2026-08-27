@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     import numpy
 
 from clickhouse_connect import common
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
 from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options, tzutil
 from clickhouse_connect.driver.common import first_value, int_size, np_date_types, write_array
@@ -187,6 +187,7 @@ class DateTime(DateTimeBase):
     np_type = "datetime64[s]"
     nano_divisor = 1000000000
     byte_size = 4
+    _type_args = _TypeArgs(0, 1)
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -233,6 +234,7 @@ class DateTime(DateTimeBase):
 class DateTime64(DateTimeBase):
     __slots__ = "scale", "prec", "unit"
     byte_size = 8
+    _type_args = _TypeArgs(1, 2, integer_bounds=((0, 0, 9),))
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
@@ -669,6 +671,7 @@ class Time64(TimeBase):
     scale: int
     precision: int
     unit: str | None
+    _type_args = _TypeArgs(1, 1, integer_bounds=((0, 0, 9),))
 
     def __init__(self, type_def):
         super().__init__(type_def)

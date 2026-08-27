@@ -11,11 +11,13 @@ from sqlalchemy.sql.elements import quoted_name
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON as ChSqlaJSON  # noqa: N811
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import AggregateFunction as ChSqlaAggregateFunction
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Array as ChSqlaArray
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Enum as ChSqlaEnum
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Map as ChSqlaMap
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nested as ChSqlaNested
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import SimpleAggregateFunction as ChSqlaSimpleAggregateFunction
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import _Variant as ChSqlaVariant
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
@@ -60,7 +62,7 @@ def _contains_named_container(type_obj: ChSqlaType) -> bool:
 
 def _render_ch_type(type_obj):
     """Render a ChSqlaType as valid Python source for autogen migrations"""
-    if isinstance(type_obj, ChSqlaVariant):
+    if isinstance(type_obj, (ChSqlaAggregateFunction, ChSqlaSimpleAggregateFunction, ChSqlaVariant)):
         return f"sqla_type_from_name({type_obj.name!r})"
     if _contains_named_container(type_obj):
         return f"sqla_type_from_name({type_obj.name!r})"

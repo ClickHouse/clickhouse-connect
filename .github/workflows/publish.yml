@@ -162,11 +162,14 @@ jobs:
         with:
           python-version: 3.12
       - name: Install Dependencies
-        run: pip install -U setuptools
+        run: pip install -U build
       - name: Build source distribution
+        env:
+          # Keep the sdist pure source, shipping .pyx files without generated .c files
+          CLICKHOUSE_CONNECT_SKIP_CYTHON: '1'
         run: |
           rm -rf dist
-          python setup.py sdist
+          python -m build --sdist
       - name: Retrieve wheels
         uses: actions/download-artifact@v8
         with:

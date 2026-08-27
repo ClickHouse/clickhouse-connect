@@ -1,12 +1,16 @@
 import logging
 from typing import Any
 
-from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, type_map
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs, type_map
 from clickhouse_connect.driver.exceptions import InternalError
 from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 
 logger = logging.getLogger(__name__)
 type_cache: dict[str, ClickHouseType] = {}
+_WRAPPER_TYPE_ARGS = {
+    "LowCardinality": _TypeArgs(1, 1, nested=(0,)),
+    "Nullable": _TypeArgs(1, 1, nested=(0,)),
+}
 
 
 def _canonicalize_variant_name(type_name: str, ch_type: ClickHouseType) -> str:
@@ -75,13 +79,17 @@ def parse_name(name: str) -> tuple[str, str, TypeDef]:
                 raise InternalError("Generic Enum values must fit in Enum16")
     elif base.startswith("Nested"):
         keys, values = parse_columns(base[6:])
+        if not values:
+            raise InternalError("Nested must contain at least one type")
         base = "Nested"
     elif base.startswith("Tuple"):
-        if base not in ("Tuple", "Tuple()"):
+        if base != "Tuple":
             keys, values = parse_columns(base[5:])
         base = "Tuple"
     elif base.startswith("Variant"):
         keys, values = parse_columns(base[7:])
+        if not values:
+            raise InternalError("Variant must contain at least one type")
         base = "Variant"
     elif base.startswith("Dynamic") and len(base) > 7 and base[7] == "(":
         keys, values = parse_columns(base[7:])
