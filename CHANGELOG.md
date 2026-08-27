@@ -10,11 +10,11 @@
 - `Time64` now accepts every server-valid precision from 0 through 9 for parsing, reflection, native queries, and DataFrame inserts. NumPy and Pandas queries remain limited to precisions 0, 3, 6, and 9 and raise `ProgrammingError` otherwise.
 - `Dynamic` type names now preserve the `max_types` argument.
 - Generic `Enum` definitions are accepted and canonicalized to `Enum8` or `Enum16` by value range.
-- Root `Tuple()` query results now decode as empty tuples.
 - Type name parsing now handles double quoted identifiers and quoted string literals uniformly. Some type names that previously failed to parse now parse.
 
 ### Bug Fixes
 
+- Empty `Tuple()` definitions no longer parse as if they contain a phantom element, and their columns now consume and emit the Native format's per-row marker bytes. Root, nested, named, array-wrapped, and nullable empty tuples now query and insert without misaligning adjacent columns, corrupting values, or failing insert block sizing. Closes [#971](https://github.com/ClickHouse/clickhouse-connect/issues/971).
 - Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
 - SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
 - Alembic autogenerate now emits valid, lossless Python for `Nested` and named `Tuple` columns, including when they are inside another container. Generated upgrades preserve field names and no longer produce repeated type migrations. Closes [#988](https://github.com/ClickHouse/clickhouse-connect/issues/988).

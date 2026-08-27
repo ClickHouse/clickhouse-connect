@@ -79,13 +79,17 @@ def parse_name(name: str) -> tuple[str, str, TypeDef]:
                 raise InternalError("Generic Enum values must fit in Enum16")
     elif base.startswith("Nested"):
         keys, values = parse_columns(base[6:])
+        if not values:
+            raise InternalError("Nested must contain at least one type")
         base = "Nested"
     elif base.startswith("Tuple"):
-        if base not in ("Tuple", "Tuple()"):
+        if base != "Tuple":
             keys, values = parse_columns(base[5:])
         base = "Tuple"
     elif base.startswith("Variant"):
         keys, values = parse_columns(base[7:])
+        if not values:
+            raise InternalError("Variant must contain at least one type")
         base = "Variant"
     elif base.startswith("Dynamic") and len(base) > 7 and base[7] == "(":
         keys, values = parse_columns(base[7:])

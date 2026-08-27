@@ -4,7 +4,7 @@ from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.binding import _format_identifier, format_str, quote_identifier
 from clickhouse_connect.driver.common import unescape_identifier
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import InternalError, ProgrammingError
 from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 from clickhouse_connect.driver.query import remove_sql_comments
 
@@ -185,7 +185,23 @@ def test_empty_tuple_uses_server_canonical_name():
 
     assert get_from_name("Tuple").name == "Tuple()"
     assert tuple_type.name == "Tuple()"
-    assert tuple_type.read_column_data(None, 3, None, []) == ((), (), ())
+
+
+@pytest.mark.parametrize("preserve_names", [False, True])
+def test_parse_columns_empty_parentheses(preserve_names):
+    assert parse_columns("()", preserve_names=preserve_names) == ((), ())
+
+
+@pytest.mark.parametrize("expression", ["(value )", "(UInt8,)"])
+def test_parse_columns_preserves_malformed_empty_final_column(expression):
+    _, columns = parse_columns(expression)
+    assert columns[-1] == ""
+
+
+@pytest.mark.parametrize("type_name", ["Nested", "Variant"])
+def test_empty_container_type_is_rejected(type_name):
+    with pytest.raises(InternalError, match=rf"{type_name} must contain at least one type"):
+        get_from_name(f"{type_name}()")
 
 
 @pytest.mark.parametrize(

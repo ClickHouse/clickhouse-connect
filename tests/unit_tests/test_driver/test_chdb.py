@@ -354,6 +354,12 @@ class TestChdbInsert:
         result = client.query("SELECT * FROM ins_basic ORDER BY a")
         assert result.result_rows == [(1, "x"), (2, "y")]
 
+    def test_empty_tuple_query_and_insert(self, client):
+        assert client.query("SELECT tuple(), toUInt8(79)").result_rows == [((), 79)]
+        client.command("CREATE TABLE ins_empty_tuple (v Tuple()) ENGINE MergeTree ORDER BY tuple()")
+        client.insert("ins_empty_tuple", [[()], [()], [()]])
+        assert client.query("SELECT v FROM ins_empty_tuple").result_rows == [((),), ((),), ((),)]
+
     def test_insert_values_query_with_settings(self, client):
         client.command("CREATE TABLE ins_values (a UInt32) ENGINE MergeTree ORDER BY a")
         client.query("INSERT INTO ins_values VALUES (1), (2)", settings={"max_block_size": 1234})
