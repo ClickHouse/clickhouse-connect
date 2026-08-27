@@ -14,6 +14,7 @@
 
 ### Bug Fixes
 
+- The DB-API module now exposes the driver's PEP 249 exception hierarchy. `except clickhouse_connect.dbapi.Error` now catches errors raised by the driver, and SQLAlchemy wraps them in the matching `DBAPIError` subclass instead of a generic `StatementError`. `StreamFailureError` is now also an `OperationalError`, while remaining catchable by its existing class. Mid-stream failures now expose the numeric ClickHouse error code, and the symbolic error name when error details are enabled.
 - Empty `Tuple()` definitions no longer parse as if they contain a phantom element, and their columns now consume and emit the Native format's per-row marker bytes. Root, nested, named, array-wrapped, and nullable empty tuples now query and insert without misaligning adjacent columns, corrupting values, or failing insert block sizing. Closes [#971](https://github.com/ClickHouse/clickhouse-connect/issues/971).
 - Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
 - SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).

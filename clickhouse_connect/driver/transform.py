@@ -8,6 +8,8 @@ from clickhouse_connect.driver.exceptions import (
     OperationalError,
     StreamCompleteException,
     StreamFailureError,
+    _error_code_from_message,
+    error_name_from_body,
     scrub_error_details,
 )
 from clickhouse_connect.driver.insert import InsertContext
@@ -36,6 +38,14 @@ class NativeTransform:
                 return scrub_error_details(error_msg)
             return error_msg
 
+        def stream_failure(error_msg: str) -> StreamFailureError:
+            name = error_name_from_body(error_msg) if show_clickhouse_errors else None
+            return StreamFailureError(
+                format_stream_error(error_msg),
+                code=_error_code_from_message(error_msg),
+                name=name,
+            )
+
         def extract_source_error(tagged_only: bool = False) -> str | None:
             if not source.last_message:
                 return None
@@ -61,7 +71,7 @@ class NativeTransform:
                 except StreamCompleteException:
                     error_msg = extract_source_error(tagged_only=True)
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise stream_failure(error_msg) from None
                     return None
                 num_rows = source.read_leb128()
                 for col_num in range(num_cols):
@@ -82,12 +92,14 @@ class NativeTransform:
                         result_block.append(column)
             except Exception as ex:
                 source.close()
+                if isinstance(ex, StreamFailureError):
+                    raise
                 if isinstance(ex, StreamCompleteException):
                     # We ran out of data before it was expected, this could be ClickHouse reporting an error
                     # in the response
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise stream_failure(error_msg) from None
                     raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
 
                 # A read failure partway through the stream: OperationalError from the sync reader,
@@ -96,7 +108,7 @@ class NativeTransform:
                 if isinstance(ex, OperationalError) or ex.__class__.__name__ == "ClientPayloadError":
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise stream_failure(error_msg) from None
                     raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
 
                 raise
