@@ -4,8 +4,11 @@ from collections.abc import Callable
 from datetime import date, datetime
 from ipaddress import IPv4Address, IPv6Address
 
+import pytest
+
 from clickhouse_connect.datatypes.format import clear_default_format, set_default_formats, set_read_format
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.exceptions import DataError
 
 
 def test_low_card(param_client: Client, call, table_context: Callable):
@@ -133,6 +136,84 @@ def test_tuple_inserts(param_client: Client, call, table_context: Callable):
         assert len(query_result) == 4
         assert query_result[0] == query_result[1]
         assert query_result[2] == query_result[3]
+
+
+@pytest.mark.parametrize(
+    "expression, expected_values",
+    [
+        ("tuple()", [(), (), ()]),
+        ("(tuple(), toUInt8(number + 13))", [((), 13), ((), 14), ((), 15)]),
+        (
+            "CAST((tuple(), toUInt8(number + 13)), 'Tuple(empty_value Tuple(), number UInt8)')",
+            [
+                {"empty_value": (), "number": 13},
+                {"empty_value": (), "number": 14},
+                {"empty_value": (), "number": 15},
+            ],
+        ),
+        ("[tuple(), tuple()]", [[(), ()], [(), ()], [(), ()]]),
+    ],
+)
+def test_empty_tuple_queries(param_client: Client, call, expression, expected_values):
+    rows = call(
+        param_client.query,
+        f"SELECT {expression} AS value, toUInt8(number + 79) AS sentinel FROM numbers(3)",
+    ).result_rows
+
+    assert rows == list(zip(expected_values, (79, 80, 81)))
+
+
+def test_empty_tuple_inserts(param_client: Client, call, table_context: Callable):
+    with table_context("empty_tuple_root", ["value Tuple()"], order_by="tuple()"):
+        call(param_client.insert, "empty_tuple_root", [[()], [()], [()]])
+        assert call(param_client.query, "SELECT value FROM empty_tuple_root").result_rows == [((),), ((),), ((),)]
+        with pytest.raises(DataError, match=r"Tuple\(\) values must be empty tuples"):
+            call(param_client.insert, "empty_tuple_root", [[(13,)]])
+
+    columns = [
+        "key UInt8",
+        "empty_value Tuple()",
+        "outer_value Tuple(Tuple(), UInt8)",
+        "named_value Tuple(empty_value Tuple(), number UInt8)",
+        "array_value Array(Tuple())",
+    ]
+    data = [
+        [13, (), ((), 80), ((), 81), [(), ()]],
+        [79, (), ((), 82), ((), 83), []],
+    ]
+    with table_context("empty_tuple_composed", columns):
+        call(param_client.insert, "empty_tuple_composed", data)
+        rows = call(param_client.query, "SELECT * FROM empty_tuple_composed ORDER BY key").result_rows
+
+    assert rows == [
+        (13, (), ((), 80), {"empty_value": (), "number": 81}, [(), ()]),
+        (79, (), ((), 82), {"empty_value": (), "number": 83}, []),
+    ]
+
+
+def test_nullable_empty_tuple(param_client: Client, call, test_config):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    setting = call(
+        param_client.query,
+        "SELECT name FROM system.settings WHERE name = 'allow_experimental_nullable_tuple_type'",
+    ).first_row
+    if setting is None:
+        pytest.skip("Server does not support Nullable(Tuple(...))")
+
+    table = "nullable_empty_tuple"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (value Nullable(Tuple()), sentinel UInt8) ENGINE MergeTree ORDER BY sentinel",
+            settings={"allow_experimental_nullable_tuple_type": 1},
+        )
+        call(param_client.insert, table, [[None, 13], [(), 79], [None, 80]])
+        rows = call(param_client.query, f"SELECT value, sentinel FROM {table} ORDER BY sentinel").result_rows
+        assert rows == [(None, 13), ((), 79), (None, 80)]
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
 
 
 def test_agg_function(param_client: Client, call, table_context: Callable):

@@ -371,7 +371,7 @@ client.query(
 | Time64                | datetime.timedelta      | int, string, time | Scales 0 through 9 are supported. The integer format returns ticks at the column precision. Python `timedelta` is limited to microseconds. |
 | IPv4                  | `ipaddress.IPv4Address` | string, int       | IP addresses can be read as strings or integers.                                                                  |
 | IPv6                  | `ipaddress.IPv6Address` | string            | IP addresses can be read as strings and properly formatted can be inserted as IP addresses                        |
-| Tuple                 | dict or tuple           | tuple, dict, json | Named tuples return dictionaries by default; unnamed tuples return tuples. A root `Tuple()` value returns `()`.    |
+| Tuple                 | dict or tuple           | tuple, dict, json | Named tuples return dictionaries by default; unnamed tuples return tuples. A `Tuple()` value returns `()`.         |
 | Map                   | dict                    | -                 |                                                                                                                   |
 | Nested                | Sequence[dict]          | -                 |                                                                                                                   |
 | UUID                  | uuid.UUID               | string            | UUIDs can be read as strings formatted as per RFC 4122<br/>                                                       |

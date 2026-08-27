@@ -108,7 +108,12 @@ class Tuple(ClickHouseType):
 
     @property
     def insert_name(self):
-        return self._insert_name
+        name = self._insert_name
+        # Empty Tuple handles nullable framing below; non-empty Tuple keeps the legacy unwrapped insert name.
+        if not self.element_types:
+            for wrapper in reversed(self.wrappers):
+                name = f"{wrapper}({name})"
+        return name
 
     def __init__(self, type_def: TypeDef):
         self.element_names = type_def.keys
@@ -133,6 +138,8 @@ class Tuple(ClickHouseType):
             self._insert_name = "Tuple()"
 
     def _data_size(self, sample: Collection) -> int:
+        if not self.element_types:
+            return 1
         if len(sample) == 0:
             return 0
         elem_size = 0
@@ -151,7 +158,12 @@ class Tuple(ClickHouseType):
 
     def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any):
         if not self.element_types:
-            return tuple(() for _ in range(num_rows))
+            null_map = source.read_bytes(num_rows) if self.nullable else None
+            source.read_bytes(num_rows)
+            empty_column = tuple(() for _ in range(num_rows))
+            if null_map is not None:
+                return data_conv.build_nullable_column(empty_column, null_map, self._active_null(ctx))
+            return empty_column
         columns = []
         e_names = self.element_names
         for ix, e_type in enumerate(self.element_types):
@@ -173,6 +185,17 @@ class Tuple(ClickHouseType):
             e_type.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if not self.element_types:
+            for value in column:
+                if value is None and self.nullable:
+                    continue
+                if not isinstance(value, tuple) or value:
+                    raise ctx.data_error("Tuple() values must be empty tuples")
+            if self.nullable:
+                dest += bytes([1 if x is None else 0 for x in column])
+            # ClickHouse SerializationTuple uses ASCII '0' per row, not a NUL byte.
+            dest += b"0" * len(column)
+            return
         if self.element_names and isinstance(first_value(column, self.nullable), dict):
             columns = self.convert_dict_insert(column)
         else:

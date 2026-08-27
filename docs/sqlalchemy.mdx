@@ -125,7 +125,7 @@ Declare typed JSON paths with the `typed_paths` mapping. A path type can be a Cl
 
 Type name strings can contain configured nested JSON types such as ``Array(JSON(`child` UInt32))``. Recognized ClickHouse type names are case-insensitive in these strings and are emitted with their canonical capitalization. A string must contain one complete type expression. Trailing text and malformed nested JSON arguments are rejected.
 
-An empty `Tuple()` is not supported as a JSON typed path because ClickHouse cannot serialize it through a JSON column's Native format. Root `Tuple()` query columns are supported by the core driver.
+An empty `Tuple()` is not supported as a JSON typed path because ClickHouse cannot serialize it through a JSON column's Native format. The core driver supports `Tuple()` in query and insert columns at any position, including nested in positional or named tuples, inside `Array`, and as `Nullable(Tuple())` where enabled by the server.
 
 ```python
 from sqlalchemy import Column, MetaData, Table
