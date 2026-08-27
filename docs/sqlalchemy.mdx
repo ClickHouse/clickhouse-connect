@@ -65,6 +65,10 @@ with engine.connect() as conn:
     rows = conn.execute(stmt).all()
 ```
 
+### Error handling {#sqlalchemy-error-handling}
+
+Errors raised by the driver through a SQLAlchemy connection use the DB-API classes exported from `clickhouse_connect.dbapi`. They are the same class objects as the corresponding classes in `clickhouse_connect.driver.exceptions`, so SQLAlchemy wraps them in the matching `sqlalchemy.exc.DBAPIError` subclass. `StreamFailureError` is an `OperationalError` and is wrapped as `sqlalchemy.exc.OperationalError`.
+
 ### Server-side parameters {#sqlalchemy-server-side-parameters}
 
 SQLAlchemy normally renders client-side parameters. Opt in to ClickHouse server-side parameters when creating the engine:

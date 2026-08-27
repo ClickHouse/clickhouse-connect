@@ -6,7 +6,7 @@ import pytest
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.dbapi.cursor import Cursor
-from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
+from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError, StreamFailureError
 
 
 def create_mock_client(result_data):
@@ -548,6 +548,19 @@ def test_execute_empty_metadata_probe_failure_leaves_description_empty(caplog):
     assert cursor.description == []
     assert client.query.call_count == 3
     assert "DB-API cursor metadata probe failed; leaving description empty" in caplog.messages
+
+
+def test_execute_empty_metadata_probe_stream_failure_propagates():
+    failure = StreamFailureError("stream failed during metadata probe")
+    client = Mock()
+    client.query.side_effect = [create_mock_query_result([]), failure]
+    cursor = Cursor(client)
+
+    with pytest.raises(StreamFailureError) as exc_info:
+        cursor.execute("SELECT 13 WHERE 0")
+
+    assert exc_info.value is failure
+    assert client.query.call_count == 2
 
 
 def test_execute_empty_ignores_select_inside_leading_comment_for_metadata_probe():

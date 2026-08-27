@@ -798,6 +798,8 @@ For advanced use cases requiring direct access to ClickHouse HTTP interfaces wit
 
 The `clickhouse_connect.dbapi` module implements the PEP 249 connection and cursor interface. It declares API level 2.0, `threadsafety=2`, and `paramstyle="pyformat"`. The module also provides the PEP 249 type constructors `Date`, `Time`, `Timestamp`, and `Binary`, and the `DateFromTicks`, `TimeFromTicks`, and `TimestampFromTicks` functions.
 
+The module exports the PEP 249 exception hierarchy: `Warning`, `Error`, `InterfaceError`, `DatabaseError`, `DataError`, `OperationalError`, `IntegrityError`, `InternalError`, `ProgrammingError`, and `NotSupportedError`. These are the same class objects exposed by `clickhouse_connect.driver.exceptions`, so either import path catches driver errors. The driver-specific `StreamFailureError` remains available from `clickhouse_connect.driver.exceptions` and is an `OperationalError`.
+
 ```python
 from clickhouse_connect import dbapi
 
@@ -836,7 +838,7 @@ The installed package version is exposed as the string `clickhouse_connect.__ver
 
 ### Exceptions {#exceptions}
 
-Custom exceptions, including the DB-API 2.0 exception hierarchy, are defined in `clickhouse_connect.driver.exceptions`. `DatabaseError` and `OperationalError` expose a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so applications can branch on `exc.code` instead of parsing the message. `code` is set even when `show_clickhouse_errors` is disabled, while `name` requires error detail (`True` or `"scrub"`). Both are `None` when unavailable, such as on transport errors. Use `show_clickhouse_errors="scrub"` when end users should see SQL errors without host or server version information. The setting also controls mid-stream `StreamFailureError` messages and generic transport messages. It governs `str(exc)` only. Transport errors are still attached as `__cause__`, and tracebacks can contain the original host, URL, or library error text.
+Custom exceptions, including the DB-API 2.0 exception hierarchy re-exported by `clickhouse_connect.dbapi`, are defined in `clickhouse_connect.driver.exceptions`. `DatabaseError` and `OperationalError` expose a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so applications can branch on `exc.code` instead of parsing the message. `code` is set even when `show_clickhouse_errors` is disabled, while `name` requires error detail (`True` or `"scrub"`). Both are `None` when unavailable, such as on transport errors. Use `show_clickhouse_errors="scrub"` when end users should see SQL errors without host or server version information. The setting also controls mid-stream `StreamFailureError` messages and generic transport messages. It governs `str(exc)` only. Transport errors are still attached as `__cause__`, and tracebacks can contain the original host, URL, or library error text.
 
 ### ClickHouse SQL utilities {#clickhouse-sql-utilities}
 

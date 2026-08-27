@@ -7,7 +7,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.common import unescape_identifier
-from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
+from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError, StreamFailureError
 from clickhouse_connect.driver.parser import parse_callable
 from clickhouse_connect.driver.query import remove_sql_comments
 
@@ -145,6 +145,8 @@ class Cursor:
                         settings=settings,
                         query_formats=query_formats,
                     )
+                except StreamFailureError:
+                    raise
                 except DatabaseError:
                     logger.debug("DB-API cursor metadata probe failed; leaving description empty", exc_info=True)
                     return

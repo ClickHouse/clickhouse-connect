@@ -17,11 +17,17 @@ import pytest
 pytest.importorskip("chdb")
 
 import clickhouse_connect
-from clickhouse_connect.driver._backend.chdb_backend import ChdbBackend
+from clickhouse_connect.driver._backend.chdb_backend import ChdbBackend, _ChdbStreamFile, _ChdbStreamSource, _EngineHandle
 from clickhouse_connect.driver._backend.contracts import SyncBackend
 from clickhouse_connect.driver._backend.models import Capabilities
 from clickhouse_connect.driver._chdbclient import ChdbClient
-from clickhouse_connect.driver.exceptions import DatabaseError, NotSupportedError, ProgrammingError
+from clickhouse_connect.driver.exceptions import (
+    GENERIC_CLICKHOUSE_ERROR,
+    DatabaseError,
+    NotSupportedError,
+    ProgrammingError,
+    StreamFailureError,
+)
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.summary import QuerySummary
 
@@ -31,6 +37,50 @@ def client_fixture():
     client = clickhouse_connect.get_client(interface="chdb")
     yield client
     client.close()
+
+
+_CHDB_STREAM_ERROR = (
+    "chdb exception wrapper: Code: 153. DB::Exception: Illegal division. (ILLEGAL_DIVISION) (version 26.2.4.23 (official build))"
+)
+
+
+class _FailingStreamingResult:
+    def __next__(self):
+        raise RuntimeError(_CHDB_STREAM_ERROR)
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize("stream_kind", ["native", "raw"])
+@pytest.mark.parametrize(
+    "mode,expected,expected_name",
+    [
+        (
+            True,
+            "Code: 153. DB::Exception: Illegal division. (ILLEGAL_DIVISION) (version 26.2.4.23 (official build))",
+            "ILLEGAL_DIVISION",
+        ),
+        ("scrub", "Code: 153. DB::Exception: Illegal division. (ILLEGAL_DIVISION)", "ILLEGAL_DIVISION"),
+        (False, GENERIC_CLICKHOUSE_ERROR, None),
+    ],
+)
+def test_stream_failure_metadata_from_raw_exception(stream_kind, mode, expected, expected_name):
+    result = _FailingStreamingResult()
+    handle = _EngineHandle(None)
+
+    if stream_kind == "native":
+        stream = _ChdbStreamSource(result, handle, mode)
+        with pytest.raises(StreamFailureError) as exc_info:
+            next(stream.gen)
+    else:
+        with _ChdbStreamFile(result, handle, mode) as stream_file:
+            with pytest.raises(StreamFailureError) as exc_info:
+                stream_file.read(1)
+
+    assert str(exc_info.value) == expected
+    assert exc_info.value.code == 153
+    assert exc_info.value.name == expected_name
 
 
 class TestChdbContract:
@@ -249,10 +299,8 @@ class TestChdbStreaming:
         assert client.command("SELECT 1") == 1
 
     def test_mid_stream_failure(self, client):
-        from clickhouse_connect.driver.exceptions import StreamFailureError
-
         with (
-            pytest.raises(StreamFailureError),
+            pytest.raises(StreamFailureError) as exc_info,
             client.query_rows_stream(
                 "SELECT number, intDiv(1, number - 5000) AS x FROM numbers(100000)",
                 settings={"max_block_size": 100},
@@ -260,6 +308,8 @@ class TestChdbStreaming:
         ):
             for _ in stream:
                 pass
+        assert exc_info.value.code == 153
+        assert exc_info.value.name == "ILLEGAL_DIVISION"
         assert client.command("SELECT 1") == 1
 
     @pytest.mark.parametrize(
@@ -270,8 +320,6 @@ class TestChdbStreaming:
         ],
     )
     def test_mid_stream_failure_honors_show_clickhouse_errors(self, client, mode, expected, forbidden):
-        from clickhouse_connect.driver.exceptions import StreamFailureError
-
         original = client.show_clickhouse_errors
         client.show_clickhouse_errors = mode
         try:
@@ -288,6 +336,8 @@ class TestChdbStreaming:
             client.show_clickhouse_errors = original
 
         error_msg = str(exc_info.value)
+        assert exc_info.value.code == 153
+        assert exc_info.value.name == ("ILLEGAL_DIVISION" if mode else None)
         assert expected in error_msg
         assert forbidden not in error_msg
 
