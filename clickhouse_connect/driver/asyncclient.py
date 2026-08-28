@@ -255,6 +255,7 @@ class AsyncClient(Client):
         self._write_format = "Native"
         self._transform = NativeTransform()
         self._client_settings: dict[str, str] = {}
+        self._init_lock = asyncio.Lock()
         self._initialized = False
         self._reported_libs: set[str] = set()
         self.headers["User-Agent"] = self.headers["User-Agent"].replace("mode:sync;", "mode:async;")
@@ -353,53 +354,60 @@ class AsyncClient(Client):
     def compression(self, value: str | None) -> None:
         self._backend.compression = value
 
-    async def _initialize(self):
+    async def _initialize(self) -> None:
         """
         Async equivalent of Client._init_common_settings.
         Fetches server version, timezone, and settings.
         """
-        self._backend.ensure_session()
+        async with self._init_lock:
+            if self._initialized:
+                self._backend.ensure_session()
+                return
 
-        if self._initialized:
-            return
+            self._backend.ensure_session()
+            try:
+                if self._token_provider:
+                    self.set_access_token(await self._resolve_token())
 
-        if self._token_provider:
-            self.set_access_token(await self._resolve_token())
+                config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=self._deferred_tz_source)
+                init_result = await run_async(init_sequence(config), self._execute_operation)
+                self._apply_init_result(init_result)
 
-        try:
-            config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=self._deferred_tz_source)
-            init_result = await run_async(init_sequence(config), self._execute_operation)
-            self._apply_init_result(init_result)
+                if self._initial_settings:
+                    for key, value in self._initial_settings.items():
+                        self.set_client_setting(key, value)
 
-            if self._initial_settings:
-                for key, value in self._initial_settings.items():
-                    self.set_client_setting(key, value)
+                compression, write_compression = negotiate_compression(self._compress_param)
+                if write_compression:
+                    self.write_compression = write_compression
 
-            compression, write_compression = negotiate_compression(self._compress_param)
-            if write_compression:
-                self.write_compression = write_compression
+                session_id = self._session_id_param
+                autogenerate_session_id = self._autogenerate_session_id_param
 
-            session_id = self._session_id_param
-            autogenerate_session_id = self._autogenerate_session_id_param
+                if autogenerate_session_id is None:
+                    autogenerate_session_id = common.get_setting("autogenerate_session_id")
 
-            if autogenerate_session_id is None:
-                autogenerate_session_id = common.get_setting("autogenerate_session_id")
+                if session_id:
+                    self.set_client_setting("session_id", session_id)
+                elif self.get_client_setting("session_id"):
+                    pass
+                elif autogenerate_session_id:
+                    self.set_client_setting("session_id", str(uuid.uuid4()))
 
-            if session_id:
-                self.set_client_setting("session_id", session_id)
-            elif self.get_client_setting("session_id"):
-                pass
-            elif autogenerate_session_id:
-                self.set_client_setting("session_id", str(uuid.uuid4()))
+                apply_http_server_settings(self, self._backend, compression, self._send_receive_timeout)
 
-            apply_http_server_settings(self, self._backend, compression, self._send_receive_timeout)
-
-            self._initialized = True
-        except Exception:
-            if self._session and not self._session.closed:
-                await self._session.close()
-                self._session = None
-            raise
+                self._initialized = True
+            except BaseException:
+                session = self._session
+                try:
+                    if session is not None and not session.closed:
+                        await session.close()
+                except BaseException:
+                    logger.warning("Failed to close session after AsyncClient initialization error", exc_info=True)
+                finally:
+                    if self._session is session:
+                        self._session = None
+                raise
 
     async def _execute_operation(self, operation: Operation) -> object:
         """Execute an orchestration operation through this client's semantic methods."""

@@ -14,6 +14,14 @@
 
 ### Bug Fixes
 
+- `AsyncClient` now closes its newly created aiohttp session when token provider or token installation fails, or when
+  cancellation interrupts token resolution or server initialization. These paths no longer leak the session when
+  `create_async_client` exits without returning a client. Initialization is serialized per client so cancellation of
+  one overlapping context entry cannot close a session initialized successfully by another.
+- Async coroutine token providers, including `functools.partial` wrappers, now work when asyncio debug mode is enabled.
+  Synchronous providers still run outside the event loop, and synchronous callables that return an awaitable remain
+  supported. If cancellation wins while a synchronous provider is still running, a late native coroutine result is
+  closed instead of emitting a never-awaited coroutine warning.
 - `create_client` and `create_async_client` now convert string-valued pure boolean options from a DSN or `generic_args`,
   including `on` and `off`, so false values no longer act as truthy strings. Both factories report invalid boolean and
   numeric strings as `ProgrammingError`. The async factory preserves fractional timeout values and also

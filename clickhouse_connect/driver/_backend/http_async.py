@@ -52,6 +52,15 @@ logger = logging.getLogger(__name__)
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
 
 
+def _dispose_late_token_result(future: asyncio.Future[str | Awaitable[str]]) -> None:
+    try:
+        result = future.result()
+    except BaseException:
+        return
+    if inspect.iscoroutine(result):
+        result.close()
+
+
 def _plan_files(plan: QueryRequestPlan) -> dict[str, Any] | None:
     """Merge a plan's form parts into aiohttp files: file parts first, then
     plain values wrapped as text fields."""
@@ -213,7 +222,17 @@ class HttpAsyncBackend:
         # Run sync providers off the event loop; await async providers.
         # The provider may be called concurrently if multiple requests get a 516 at the same time;
         # it must be safe to invoke in parallel (e.g. if it hits an IdP, consider rate limiting).
-        result = await asyncio.get_running_loop().run_in_executor(None, cast(Callable[[], str | Awaitable[str]], self.token_provider))
+        provider = cast(Callable[[], str | Awaitable[str]], self.token_provider)
+        result: str | Awaitable[str]
+        if inspect.iscoroutinefunction(provider):
+            result = provider()
+        else:
+            future = asyncio.get_running_loop().run_in_executor(None, provider)
+            try:
+                result = await asyncio.shield(future)
+            except asyncio.CancelledError:
+                future.add_done_callback(_dispose_late_token_result)
+                raise
         if inspect.isawaitable(result):
             result = await result
         return result
