@@ -36,8 +36,8 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `compress` | bool or str | `True` | Enable compression or select `"lz4"`, `"zstd"`, `"br"`, or `"gzip"`. See [Compression](/integrations/language-clients/python/additional-options#compression). |
 | `query_limit` | int | `0` | Default row limit appended to eligible queries. Zero means unlimited. Stream large results instead of materializing them all in memory. |
 | `query_retries` | int | `2` | Retry budget for retryable read failures. Commands and inserts are not generally retried because replay can duplicate side effects. |
-| `connect_timeout` | int | `10` | Connection timeout in seconds. |
-| `send_receive_timeout` | int | `300` | Socket read timeout in seconds. |
+| `connect_timeout` | int for sync, float for async | `10` | Connection timeout in seconds. The async client accepts fractional seconds. |
+| `send_receive_timeout` | int for sync, float for async | `300` | Socket read timeout in seconds. The async client accepts fractional seconds. |
 | `client_name` | str or None | `None` | Prefix added to the HTTP User-Agent for identification in `system.query_log`. |
 | `session_id` | str or None | Generated for sync | Explicit ClickHouse session ID. Synchronous clients generate one by default; async clients do not. |
 | `autogenerate_session_id` | bool or None | Global setting for sync, `False` for async | Override automatic session ID generation. Disable it on a client shared by concurrent operations unless session state is required. |
@@ -52,7 +52,7 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `form_encode_query_params` | bool | `False` | Always place query parameters in the form-encoded request body. Large non-binary parameter payloads are moved automatically even when this is false. |
 | `rename_response_column` | str or None | `None` | Column renaming strategy: `"remove_prefix"`, `"to_camelcase"`, `"to_camelcase_without_prefix"`, `"to_underscore"`, or `"to_underscore_without_prefix"`. |
 
-The async factory also accepts `connector_limit=100`, `connector_limit_per_host=20`, and `keepalive_timeout=30.0` to configure its aiohttp connection pool. It does not accept `pool_mgr`. The synchronous chDB backend accepts `path` and `chdb_options`; see [Embedded chDB backend](#embedded-chdb-backend).
+The async factory also accepts `connector_limit=100`, `connector_limit_per_host=20`, and `keepalive_timeout=30.0` to configure its aiohttp connection pool. Pass them as direct keywords, DSN query parameters, or through `generic_args`, which is used internally for SQLAlchemy `connect_args`. String values from a DSN or `generic_args` are converted to the documented numeric types. Invalid selected string values raise `ProgrammingError`. Explicit non-`None` keywords take precedence over `generic_args`, then the DSN. It does not accept `pool_mgr`. The synchronous chDB backend accepts `path` and `chdb_options`; see [Embedded chDB backend](#embedded-chdb-backend).
 
 ### HTTPS/TLS arguments {#httpstls-arguments}
 

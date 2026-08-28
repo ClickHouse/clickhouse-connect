@@ -47,6 +47,20 @@ def context_manager() -> None:
 async def async_query() -> None:
     client = await clickhouse_connect.get_async_client(host="localhost")
     assert_type(client, AsyncClient)
+    assert_type(
+        AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            connect_timeout=1.25,
+            send_receive_timeout=2.5,
+        ),
+        AsyncClient,
+    )
     assert_type(await create_async_client(host="localhost"), AsyncClient)
+    assert_type(
+        await create_async_client(host="localhost", connector_limit=None, connector_limit_per_host=None, keepalive_timeout=None),
+        AsyncClient,
+    )
     async with client:
         assert_type(await client.query("SELECT 13"), QueryResult)

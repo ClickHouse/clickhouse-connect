@@ -184,7 +184,9 @@ class HttpTransportState(Protocol):
     progress_interval: str | None
 
 
-def apply_http_server_settings(client: Client, transport: HttpTransportState, compression: str | None, send_receive_timeout: int) -> None:
+def apply_http_server_settings(
+    client: Client, transport: HttpTransportState, compression: str | None, send_receive_timeout: int | float
+) -> None:
     """Apply HTTP-specific client setting defaults after server settings discovery.
 
     Sets the readonly-query cancel default (unless user-supplied), response
@@ -204,7 +206,7 @@ def apply_http_server_settings(client: Client, transport: HttpTransportState, co
     send_setting = client._setting_status("send_progress_in_http_headers")
     transport.send_progress = not send_setting.is_set and send_setting.is_writable
     if (send_setting.is_set or send_setting.is_writable) and client._setting_status("http_headers_progress_interval_ms").is_writable:
-        transport.progress_interval = str(min(120000, max(10000, (send_receive_timeout - 5) * 1000)))
+        transport.progress_interval = str(int(min(120000, max(10000, (send_receive_timeout - 5) * 1000))))
 
 
 @dataclass

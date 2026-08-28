@@ -14,6 +14,12 @@
 
 ### Bug Fixes
 
+- `create_client` and `create_async_client` now convert string-valued pure boolean options from a DSN or `generic_args`,
+  including `on` and `off`, so false values no longer act as truthy strings. Both factories report invalid boolean and
+  numeric strings as `ProgrammingError`. The async factory preserves fractional timeout values and also
+  accepts `connector_limit`, `connector_limit_per_host`, and `keepalive_timeout` from those sources without passing
+  duplicate constructor keywords. Explicit non-None connector arguments take precedence over `generic_args`, which
+  take precedence over the DSN; `None` falls through to the next source and then the documented defaults.
 - Empty `Tuple()` definitions no longer parse as if they contain a phantom element, and their columns now consume and emit the Native format's per-row marker bytes. Root, nested, named, array-wrapped, and nullable empty tuples now query and insert without misaligning adjacent columns, corrupting values, or failing insert block sizing. Closes [#971](https://github.com/ClickHouse/clickhouse-connect/issues/971).
 - Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
 - SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).

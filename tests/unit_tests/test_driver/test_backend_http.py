@@ -8,6 +8,7 @@ from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _pla
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend, _plan_fields
 from clickhouse_connect.driver._backend.httpcommon import (
     QueryRequestPlan,
+    apply_http_server_settings,
     plan_command_request,
     plan_data_insert_request,
     plan_query_request,
@@ -499,6 +500,22 @@ def make_async_backend(url="http://localhost:8123"):
         token_provider=None,
         autogenerate_query_id=False,
     )
+
+
+def test_fractional_timeout_produces_integer_progress_interval():
+    client = Mock()
+    client._initial_settings = {}
+    client._setting_status.return_value = SimpleNamespace(is_set=True, is_writable=True)
+    transport = SimpleNamespace(
+        compression=None,
+        progress_interval=None,
+        send_comp_setting=False,
+        send_progress=None,
+    )
+
+    apply_http_server_settings(client, transport, None, 19.25)
+
+    assert transport.progress_interval == "14250"
 
 
 class TestBackendContracts:
