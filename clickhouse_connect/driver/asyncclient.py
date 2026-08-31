@@ -82,6 +82,16 @@ from clickhouse_connect.driver.types import Closable
 logger = logging.getLogger(__name__)
 
 
+def _serializer_error_takes_precedence(caught: BaseException) -> bool:
+    if isinstance(caught, asyncio.CancelledError):
+        if not hasattr(asyncio.Task, "cancelling"):
+            return False
+        task = asyncio.current_task()
+        cancelling = getattr(task, "cancelling", None)
+        return cancelling is not None and cancelling() == 0
+    return isinstance(caught, Exception)
+
+
 class BytesSource:
     """Wrapper to make bytes compatible with ResponseBuffer expectations."""
 
@@ -1200,13 +1210,16 @@ class AsyncClient(Client):
             context.compression = self.write_compression
 
         loop = asyncio.get_running_loop()
+        serializer_error: Exception | None = None
 
         active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
         active_source.start_producer()
 
         async def rebuild_body():
-            nonlocal active_source
+            nonlocal active_source, serializer_error
             await active_source.close(timeout=None)
+            if serializer_error is None:
+                serializer_error = active_source.insert_exception
             context.current_row = 0
             context.current_block = 0
             active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
@@ -1214,23 +1227,30 @@ class AsyncClient(Client):
             return active_source.async_generator()
 
         runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
+        caught: BaseException | None = None
         try:
-            summary = await self._backend.execute_data_insert(context, runtime, active_source.async_generator(), rebuild_body)
-        except BaseException:
             try:
+                summary = await self._backend.execute_data_insert(context, runtime, active_source.async_generator(), rebuild_body)
+            except BaseException as ex:
+                caught = ex
                 await active_source.close()
-            finally:
-                ex = context.insert_exception
-                context.insert_exception = None
-            if ex:
-                raise ex from None
-            raise
         finally:
             try:
                 await active_source.close()
             finally:
+                if serializer_error is None:
+                    serializer_error = active_source.insert_exception
                 context.data = None
+                context.insert_exception = None
 
+        if caught is not None:
+            if serializer_error is not None and _serializer_error_takes_precedence(caught):
+                raise serializer_error from None
+            if serializer_error is not None and isinstance(caught, asyncio.CancelledError):
+                raise caught from serializer_error
+            raise caught
+        if serializer_error is not None:
+            raise serializer_error from None
         return QuerySummary(summary)
 
     async def insert_df(  # type: ignore[override]

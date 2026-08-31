@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.driver.common import write_leb128
@@ -121,7 +122,7 @@ class NativeTransform:
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
-    def build_insert(context: InsertContext):
+    def build_insert(context: InsertContext, error_handler: Callable[[Exception], None] | None = None):
         compression = context.compression if isinstance(context.compression, str) else None
         compressor = get_compressor(compression)
 
@@ -147,7 +148,10 @@ class NativeTransform:
                         # insert fails (using garbage data) to avoid a partial insert, and use the context to
                         # propagate the correct exception to the user
                         logger.error("Error serializing column `%s` into data type `%s`", col_name, col_type.name, exc_info=True)
-                        context.insert_exception = ex
+                        if error_handler is None:
+                            context.insert_exception = ex
+                        else:
+                            error_handler(ex)
                         yield b"INTERNAL EXCEPTION WHILE SERIALIZING"
                         return
                 yield compressor.compress_block(output)

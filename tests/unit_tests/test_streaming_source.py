@@ -699,7 +699,7 @@ class MockTransform:
     def __init__(self, chunks=None):
         self.chunks = chunks or [b"chunk1", b"chunk2"]
 
-    def build_insert(self, context):
+    def build_insert(self, context, error_handler=None):
         yield from self.chunks
 
 
@@ -707,7 +707,7 @@ class FailingTransform:
     """Mock NativeTransform that raises error."""
 
     @staticmethod
-    def build_insert(context):
+    def build_insert(context, error_handler=None):
         yield b"chunk1"
         raise ValueError("Serialization error")
 
@@ -721,7 +721,7 @@ class BackpressuredTransform:
         self.blocked_put_started = threading.Event()
         self.finished = threading.Event()
 
-    def build_insert(self, context):
+    def build_insert(self, context, error_handler=None):
         try:
             yield b"chunk1"
             yield b"chunk2"

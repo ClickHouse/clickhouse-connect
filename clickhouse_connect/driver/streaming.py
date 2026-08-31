@@ -381,8 +381,12 @@ class StreamingInsertSource:
         self.context = context
         self.loop = loop
         self.queue: AsyncSyncQueue[bytes | bytearray | Exception] = AsyncSyncQueue(maxsize=maxsize)
+        self.insert_exception: Exception | None = None
         self._producer_future = None
         self._started = False
+
+    def _record_insert_exception(self, ex: Exception) -> None:
+        self.insert_exception = ex
 
     def start_producer(self):
         if self._started:
@@ -391,7 +395,7 @@ class StreamingInsertSource:
 
         def producer():
             try:
-                for block in self.transform.build_insert(self.context):
+                for block in self.transform.build_insert(self.context, self._record_insert_exception):
                     try:
                         self.queue.sync_q.put(block)
                     except RuntimeError:
