@@ -260,13 +260,19 @@ def test_compiled_expression_executemany_preserves_percent_encoding(
     test_db: str,
 ):
     table_name = "sqlalchemy%expression_insert"
-    with table_context(table_name, ["value%pct String"]):
+    with table_context(table_name, ["value%pct String", "nonce String"]):
         table = db.Table(
             table_name,
             MetaData(schema=test_db),
             db.Column("value%pct", String),
+            db.Column("nonce", String),
         )
-        statement = db.insert(table).values({table.c["value%pct"]: db.literal_column("'single% adjacent%% tail%'")})
+        statement = db.insert(table).values(
+            {
+                table.c["value%pct"]: db.literal_column("'single% adjacent%% tail%'"),
+                table.c.nonce: db.literal_column("toString(generateUUIDv4())"),
+            }
+        )
         with test_engine.begin() as conn:
             client = conn.connection.driver_connection.client
             with patch.object(client, "insert", wraps=client.insert) as native_insert:
@@ -274,10 +280,9 @@ def test_compiled_expression_executemany_preserves_percent_encoding(
 
             assert native_insert.call_count == 0
             assert result.rowcount == 2
-            assert conn.execute(db.select(table.c["value%pct"])).all() == [
-                ("single% adjacent%% tail%",),
-                ("single% adjacent%% tail%",),
-            ]
+            stored = conn.execute(db.select(table.c["value%pct"], table.c.nonce)).all()
+            assert [row[0] for row in stored] == ["single% adjacent%% tail%", "single% adjacent%% tail%"]
+            assert len({row[1] for row in stored}) == 2
 
 
 def test_compiled_bind_expression_executemany_preserves_sql(test_engine: Engine, test_model, test_db: str):
