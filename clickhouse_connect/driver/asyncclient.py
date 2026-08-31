@@ -495,8 +495,11 @@ class AsyncClient(Client):
         # Run parser in executor (pulls from queue, decompresses & parses)
         try:
             query_result = await loop.run_in_executor(None, parse_streaming)
-        except Exception:
-            await streaming_source.aclose()
+        except BaseException:
+            try:
+                await streaming_source.aclose()
+            except BaseException:
+                logger.warning("Failed to close streaming response after AsyncClient query error", exc_info=True)
             raise
         query_result.summary = execution.summary
 

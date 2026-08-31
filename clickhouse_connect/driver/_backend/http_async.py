@@ -293,6 +293,12 @@ class HttpAsyncBackend:
             try:
                 body = await response.read()
                 encoding = response.headers.get("Content-Encoding")
+            except BaseException:
+                try:
+                    response.close()
+                except BaseException:
+                    logger.warning("Failed to close columns-only response after read error", exc_info=True)
+                raise
             finally:
                 release_lease(response)
             loop = asyncio.get_running_loop()
@@ -312,11 +318,20 @@ class HttpAsyncBackend:
             stream=True,
             retries=runtime.retries,
         )
-        source = await start_streaming_response(
-            response,
-            encoding=response.headers.get("Content-Encoding"),
-            exception_tag=response.headers.get(ex_tag_header),
-        )
+        try:
+            source = await start_streaming_response(
+                response,
+                encoding=response.headers.get("Content-Encoding"),
+                exception_tag=response.headers.get(ex_tag_header),
+            )
+        except BaseException:
+            try:
+                response.close()
+            except BaseException:
+                logger.warning("Failed to close response after streaming startup error", exc_info=True)
+            finally:
+                release_lease(response)
+            raise
         return QueryExecution(
             source=source,
             summary=summary_from_headers(response.headers),

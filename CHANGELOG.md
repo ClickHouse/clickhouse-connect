@@ -14,6 +14,9 @@
 
 ### Bug Fixes
 
+- Cancelling an `AsyncClient` query while its Native response is being handed to the parser now closes the response
+  source and releases its session lease. Streaming startup and columns-only response reads also close and release
+  their responses when interrupted, so later client shutdown no longer waits indefinitely for those abandoned queries.
 - `AsyncClient` now closes its newly created aiohttp session when token provider or token installation fails, or when
   cancellation interrupts token resolution or server initialization. These paths no longer leak the session when
   `create_async_client` exits without returning a client. Initialization is serialized per client so cancellation of

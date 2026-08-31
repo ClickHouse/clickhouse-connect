@@ -51,11 +51,33 @@ class StreamingResponseSource(Closable):
         self._producer_started = threading.Event()
         self._producer_error: Exception | None = None
         self._producer_completed = False
+        self._lease_lock = threading.Lock()
+        self._lease_released = False
 
     def _release_lease(self):
+        with self._lease_lock:
+            if self._lease_released:
+                return
+            self._lease_released = True
         release = getattr(self.response, "_lease_release", None)
-        if release is not None:
-            release()
+        if release is None:
+            return
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is loop:
+                release()
+                return
+            try:
+                loop.call_soon_threadsafe(release)
+            except RuntimeError:
+                pass
+            else:
+                return
+        release()
 
     async def start_producer(self, loop: asyncio.AbstractEventLoop):
         """Start the async producer task.
@@ -88,8 +110,10 @@ class StreamingResponseSource(Closable):
                     pass
 
             finally:
-                self.queue.shutdown()
-                self._release_lease()
+                try:
+                    self.queue.shutdown()
+                finally:
+                    self._release_lease()
 
         self._loop = loop
         self._producer_task = loop.create_task(producer())
@@ -177,26 +201,28 @@ class StreamingResponseSource(Closable):
 
     async def aclose(self):
         """Async cleanup resources"""
-        self.queue.shutdown()
-
-        if self._producer_task and not self._producer_task.done():
-            self._producer_task.cancel()
+        try:
             try:
-                await self._producer_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-
-        if self.response and not self.response.closed:
-            if not self._producer_completed:
-                self.response.close()
-                await asyncio.sleep(0.05)
-        self._release_lease()
+                self.queue.shutdown()
+                if self._producer_task and not self._producer_task.done():
+                    self._producer_task.cancel()
+                    done, _ = await asyncio.wait((self._producer_task,))
+                    for task in done:
+                        if not task.cancelled():
+                            try:
+                                task.result()
+                            except Exception:
+                                pass
+            finally:
+                if self.response and not self.response.closed:
+                    if not self._producer_completed:
+                        self.response.close()
+                        await asyncio.sleep(0.05)
+        finally:
+            self._release_lease()
 
     def close(self):
         """Synchronous cleanup resources"""
-        self.queue.shutdown()
 
         def cleanup():
             if self._producer_task and not self._producer_task.done():
@@ -205,16 +231,21 @@ class StreamingResponseSource(Closable):
                 if not self._producer_completed:
                     self.response.close()
 
-        # Task cancellation and aiohttp response teardown must run on the event
-        # loop thread. close() is normally called from an executor thread.
-        if self._loop is not None and not self._loop.is_closed():
+        try:
             try:
-                self._loop.call_soon_threadsafe(cleanup)
-            except RuntimeError:
-                cleanup()
-        else:
-            cleanup()
-        self._release_lease()
+                self.queue.shutdown()
+            finally:
+                # Task cancellation and aiohttp response teardown must run on the event
+                # loop thread. close() is normally called from an executor thread.
+                if self._loop is not None and not self._loop.is_closed():
+                    try:
+                        self._loop.call_soon_threadsafe(cleanup)
+                    except RuntimeError:
+                        cleanup()
+                else:
+                    cleanup()
+        finally:
+            self._release_lease()
 
 
 async def start_streaming_response(response, encoding: str | None = None, exception_tag: str | None = None) -> StreamingResponseSource:

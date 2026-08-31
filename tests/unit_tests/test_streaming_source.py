@@ -3,11 +3,13 @@ import gzip
 import threading
 import time
 import zlib
+from contextlib import suppress
 from unittest.mock import Mock
 
 import lz4.frame
 import pytest
 
+from clickhouse_connect.driver._backend.http_async import SessionLease, _one_shot
 from clickhouse_connect.driver.compression import _zstd_compress
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.streaming import (
@@ -396,6 +398,231 @@ async def test_sync_close_runs_on_event_loop_thread():
             await source._producer_task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_sync_close_releases_session_lease_on_event_loop_thread():
+    class FakeSession:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class StalledContent:
+        @staticmethod
+        async def read(n=-1):
+            await asyncio.Event().wait()
+
+    class StalledResponse:
+        def __init__(self, release):
+            self.content = StalledContent()
+            self.headers = {}
+            self.closed = False
+            self._lease_release = _one_shot(release)
+
+        def close(self):
+            self.closed = True
+
+    loop = asyncio.get_running_loop()
+    previous_debug = loop.get_debug()
+    loop.set_debug(True)
+    session = FakeSession()
+    lease = SessionLease(session)
+    lease.acquire()
+    response = StalledResponse(lease.release)
+    source = StreamingResponseSource(response)
+    await source.start_producer(loop)
+    close_started = asyncio.Event()
+
+    async def close_session():
+        close_started.set()
+        await lease.wait_drained()
+        await session.close()
+
+    close_task = asyncio.create_task(close_session())
+    await asyncio.wait_for(close_started.wait(), timeout=1)
+    assert not close_task.done()
+    try:
+        await loop.run_in_executor(None, source.close)
+        await asyncio.wait_for(close_task, timeout=1)
+    finally:
+        loop.set_debug(previous_debug)
+        await source.aclose()
+        if not close_task.done():
+            close_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await close_task
+
+    assert lease._inflight == 0
+    assert session.closed
+    assert response.closed
+
+
+@pytest.mark.parametrize("failure", ["queue", "response"])
+def test_sync_close_releases_lease_when_cleanup_fails(failure):
+    cleanup_error = RuntimeError(f"{failure} cleanup failed")
+    release_lease = Mock()
+    response = MockResponse([])
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+    if failure == "queue":
+        source.queue.shutdown = Mock(side_effect=cleanup_error)
+    else:
+        response.close = Mock(side_effect=cleanup_error)
+
+    with pytest.raises(RuntimeError) as caught:
+        source.close()
+
+    assert caught.value is cleanup_error
+    if failure == "queue":
+        assert response.closed
+    release_lease.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_close_releases_lease_when_response_close_fails():
+    close_error = RuntimeError("response close failed")
+    release_lease = Mock()
+
+    class FailingCloseResponse:
+        content = MockContent([])
+        headers = {}
+        closed = False
+
+        @staticmethod
+        def close():
+            raise close_error
+
+    source = StreamingResponseSource(FailingCloseResponse())
+    source.response._lease_release = _one_shot(release_lease)
+
+    with pytest.raises(RuntimeError) as caught:
+        await source.aclose()
+
+    assert caught.value is close_error
+    release_lease.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_producer_releases_lease_when_queue_shutdown_fails():
+    shutdown_error = RuntimeError("queue shutdown failed")
+    release_lease = Mock()
+    response = MockResponse([])
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+    source.queue.shutdown = Mock(side_effect=shutdown_error)
+
+    await source.start_producer(asyncio.get_running_loop())
+    with pytest.raises(RuntimeError) as caught:
+        await source._producer_task
+
+    assert caught.value is shutdown_error
+    release_lease.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_close_releases_lease_when_queue_shutdown_fails():
+    shutdown_error = RuntimeError("queue shutdown failed")
+    release_lease = Mock()
+    response = MockResponse([])
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+    source.queue.shutdown = Mock(side_effect=shutdown_error)
+
+    with pytest.raises(RuntimeError) as caught:
+        await source.aclose()
+
+    assert caught.value is shutdown_error
+    assert response.closed
+    release_lease.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_close_releases_lease_when_cleanup_is_cancelled():
+    close_started = asyncio.Event()
+    release_lease = Mock()
+
+    class SlowCloseResponse:
+        content = MockContent([])
+        headers = {}
+        closed = False
+
+        def close(self):
+            self.closed = True
+            close_started.set()
+
+    response = SlowCloseResponse()
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+    close_task = asyncio.create_task(source.aclose())
+    await asyncio.wait_for(close_started.wait(), timeout=1)
+
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+    release_lease.assert_called_once_with()
+    await source.aclose()
+
+    release_lease.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_close_tears_down_response_when_producer_wait_is_cancelled():
+    release_lease = Mock()
+    response = MockResponse([])
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+    producer_cancelled = asyncio.Event()
+    producer_release = asyncio.Event()
+
+    async def slow_cancel_producer():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            producer_cancelled.set()
+            await producer_release.wait()
+
+    producer_task = asyncio.create_task(slow_cancel_producer())
+    source._producer_task = producer_task
+    close_task = asyncio.create_task(source.aclose())
+    await asyncio.wait_for(producer_cancelled.wait(), timeout=1)
+
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    assert response.closed
+    release_lease.assert_called_once_with()
+    producer_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await producer_task
+
+
+@pytest.mark.asyncio
+async def test_async_close_suppresses_ordinary_producer_task_error():
+    producer_started = asyncio.Event()
+    producer_error = RuntimeError("producer cleanup failed")
+    release_lease = Mock()
+    response = MockResponse([])
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+
+    async def fail_on_cancel():
+        producer_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise producer_error from None
+
+    source._loop = asyncio.get_running_loop()
+    source._producer_task = asyncio.create_task(fail_on_cancel())
+    await asyncio.wait_for(producer_started.wait(), timeout=1)
+
+    await source.aclose()
+
+    assert response.closed
+    release_lease.assert_called_once_with()
 
 
 class MockTransform:
