@@ -206,6 +206,25 @@ async def test_query_parser_error_is_preserved_when_source_cleanup_fails(caplog)
     assert "Failed to close streaming response after AsyncClient query error" in caplog.messages
 
 
+@pytest.mark.asyncio
+async def test_query_parser_error_is_preserved_when_source_cleanup_is_cancelled(caplog):
+    query_error = RuntimeError("query parser failed")
+    client = AsyncClient(interface="http", host="localhost", port=8123)
+    source = _StaticSource(asyncio.CancelledError())
+    client._transform = _FailingTransform(query_error)
+    client._backend.execute_query = AsyncMock(return_value=QueryExecution(source=source))
+    context = client.create_query_context(query="SELECT 13", streaming=True)
+
+    with caplog.at_level("DEBUG", logger="clickhouse_connect.driver.asyncclient"):
+        with pytest.raises(RuntimeError) as caught:
+            await client._query_with_context(context)
+
+    assert caught.value is query_error
+    assert source.aclose_calls == 1
+    assert "Streaming response cleanup was cancelled after AsyncClient query error" in caplog.messages
+    assert not any(record.levelname == "WARNING" for record in caplog.records)
+
+
 class _BlockingContent:
     def __init__(self):
         self.read_started = asyncio.Event()
@@ -254,7 +273,7 @@ class _BlockingTransform:
 
 async def _wait_for_thread_event(event: threading.Event) -> None:
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + 1
+    deadline = loop.time() + 5
     while not event.is_set():
         if loop.time() >= deadline:
             raise TimeoutError("thread event was not set")

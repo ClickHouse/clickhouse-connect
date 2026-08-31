@@ -498,6 +498,8 @@ class AsyncClient(Client):
         except BaseException:
             try:
                 await streaming_source.aclose()
+            except asyncio.CancelledError:
+                logger.debug("Streaming response cleanup was cancelled after AsyncClient query error", exc_info=True)
             except BaseException:
                 logger.warning("Failed to close streaming response after AsyncClient query error", exc_info=True)
             raise
@@ -1214,17 +1216,20 @@ class AsyncClient(Client):
         runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
         try:
             summary = await self._backend.execute_data_insert(context, runtime, active_source.async_generator(), rebuild_body)
-        except Exception:
-            await active_source.close()
-
-            if context.insert_exception:
+        except BaseException:
+            try:
+                await active_source.close()
+            finally:
                 ex = context.insert_exception
                 context.insert_exception = None
+            if ex:
                 raise ex from None
             raise
         finally:
-            await active_source.close()
-            context.data = None
+            try:
+                await active_source.close()
+            finally:
+                context.data = None
 
         return QuerySummary(summary)
 

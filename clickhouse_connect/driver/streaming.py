@@ -63,7 +63,7 @@ class StreamingResponseSource(Closable):
         if release is None:
             return
         loop = self._loop
-        if loop is not None and loop.is_running():
+        if loop is not None and not loop.is_closed():
             try:
                 current_loop = asyncio.get_running_loop()
             except RuntimeError:
@@ -78,6 +78,15 @@ class StreamingResponseSource(Closable):
             else:
                 return
         release()
+
+    @staticmethod
+    def _retrieve_producer_task_result(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            logger.debug("Discarded producer error during streaming response cleanup", exc_info=True)
 
     async def start_producer(self, loop: asyncio.AbstractEventLoop):
         """Start the async producer task.
@@ -206,13 +215,13 @@ class StreamingResponseSource(Closable):
                 self.queue.shutdown()
                 if self._producer_task and not self._producer_task.done():
                     self._producer_task.cancel()
-                    done, _ = await asyncio.wait((self._producer_task,))
+                    try:
+                        done, _ = await asyncio.wait((self._producer_task,))
+                    except asyncio.CancelledError:
+                        self._producer_task.add_done_callback(self._retrieve_producer_task_result)
+                        raise
                     for task in done:
-                        if not task.cancelled():
-                            try:
-                                task.result()
-                            except Exception:
-                                pass
+                        self._retrieve_producer_task_result(task)
             finally:
                 if self.response and not self.response.closed:
                     if not self._producer_completed:
@@ -383,9 +392,15 @@ class StreamingInsertSource:
         def producer():
             try:
                 for block in self.transform.build_insert(self.context):
-                    self.queue.sync_q.put(block)
+                    try:
+                        self.queue.sync_q.put(block)
+                    except RuntimeError:
+                        return
 
-                self.queue.sync_q.put(EOF_SENTINEL)
+                try:
+                    self.queue.sync_q.put(EOF_SENTINEL)
+                except RuntimeError:
+                    return
 
             except Exception as e:
                 logger.error("Insert producer error: %s", e, exc_info=True)
@@ -419,6 +434,7 @@ class StreamingInsertSource:
             logger.error("Insert consumer error: %s", e, exc_info=True)
             raise
         finally:
+            self.queue.shutdown()
             if self._producer_future and not self._producer_future.done():
                 try:
                     await self._producer_future

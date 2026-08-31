@@ -14,6 +14,9 @@
 
 ### Bug Fixes
 
+- Cancelling an `AsyncClient` insert while its Native serializer is blocked on the bounded request-body queue now
+  shuts down the queue before awaiting the serializer. Async-generator cleanup no longer waits indefinitely, and
+  reusable insert contexts release their data even if cleanup itself is interrupted.
 - Cancelling an `AsyncClient` query while its Native response is being handed to the parser now closes the response
   source and releases its session lease. Streaming startup and columns-only response reads also close and release
   their responses when interrupted, so later client shutdown no longer waits indefinitely for those abandoned queries.

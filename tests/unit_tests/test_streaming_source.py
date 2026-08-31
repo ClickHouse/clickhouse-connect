@@ -459,6 +459,34 @@ async def test_sync_close_releases_session_lease_on_event_loop_thread():
     assert response.closed
 
 
+def test_release_lease_queues_on_stopped_open_event_loop():
+    release_threads = []
+    worker_threads = []
+    response = MockResponse([])
+    response._lease_release = lambda: release_threads.append(threading.get_ident())
+    source = StreamingResponseSource(response)
+    loop = asyncio.new_event_loop()
+    source._loop = loop
+
+    def release_from_worker():
+        worker_threads.append(threading.get_ident())
+        source._release_lease()
+
+    worker = threading.Thread(target=release_from_worker)
+    try:
+        worker.start()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+        assert release_threads == []
+
+        loop.run_until_complete(asyncio.sleep(0))
+
+        assert release_threads == [threading.get_ident()]
+        assert release_threads != worker_threads
+    finally:
+        loop.close()
+
+
 @pytest.mark.parametrize("failure", ["queue", "response"])
 def test_sync_close_releases_lease_when_cleanup_fails(failure):
     cleanup_error = RuntimeError(f"{failure} cleanup failed")
@@ -600,7 +628,7 @@ async def test_async_close_tears_down_response_when_producer_wait_is_cancelled()
 
 
 @pytest.mark.asyncio
-async def test_async_close_suppresses_ordinary_producer_task_error():
+async def test_async_close_suppresses_ordinary_producer_task_error(caplog):
     producer_started = asyncio.Event()
     producer_error = RuntimeError("producer cleanup failed")
     release_lease = Mock()
@@ -619,10 +647,50 @@ async def test_async_close_suppresses_ordinary_producer_task_error():
     source._producer_task = asyncio.create_task(fail_on_cancel())
     await asyncio.wait_for(producer_started.wait(), timeout=1)
 
-    await source.aclose()
+    with caplog.at_level("DEBUG", logger="clickhouse_connect.driver.streaming"):
+        await source.aclose()
 
     assert response.closed
     release_lease.assert_called_once_with()
+    assert "Discarded producer error during streaming response cleanup" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_async_close_retrieves_late_producer_error_when_wait_is_cancelled(caplog):
+    producer_cancelled = asyncio.Event()
+    producer_release = asyncio.Event()
+    producer_error = RuntimeError("late producer cleanup failed")
+    response = MockResponse([])
+    source = StreamingResponseSource(response)
+
+    async def fail_after_cancel():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            producer_cancelled.set()
+            await producer_release.wait()
+            raise producer_error from None
+
+    producer_task = asyncio.create_task(fail_after_cancel())
+    source._producer_task = producer_task
+    with caplog.at_level("DEBUG", logger="clickhouse_connect.driver.streaming"):
+        close_task = asyncio.create_task(source.aclose())
+        await asyncio.wait_for(producer_cancelled.wait(), timeout=1)
+        close_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+
+        producer_release.set()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 1
+        while "Discarded producer error during streaming response cleanup" not in caplog.messages:
+            if loop.time() >= deadline:
+                raise TimeoutError("producer task result was not retrieved")
+            await asyncio.sleep(0.001)
+
+    assert producer_task.done()
+    assert producer_task.exception() is producer_error
+    assert response.closed
 
 
 class MockTransform:
@@ -646,6 +714,21 @@ class FailingTransform:
 
 class MockContext:
     """Mock InsertContext."""
+
+
+class BackpressuredTransform:
+    def __init__(self):
+        self.blocked_put_started = threading.Event()
+        self.finished = threading.Event()
+
+    def build_insert(self, context):
+        try:
+            yield b"chunk1"
+            yield b"chunk2"
+            self.blocked_put_started.set()
+            yield b"chunk3"
+        finally:
+            self.finished.set()
 
 
 @pytest.mark.asyncio
@@ -710,6 +793,30 @@ async def test_streaming_insert_backpressure():
 
     assert len(received) == 100
     assert received == chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_insert_generator_close_unblocks_backpressured_producer(caplog):
+    transform = BackpressuredTransform()
+    source = StreamingInsertSource(transform, MockContext(), asyncio.get_running_loop(), maxsize=1)
+    source.start_producer()
+    generator = source.async_generator()
+
+    try:
+        assert await generator.__anext__() == b"chunk1"
+        assert await asyncio.get_running_loop().run_in_executor(None, transform.blocked_put_started.wait, 1)
+
+        await asyncio.wait_for(generator.aclose(), timeout=1)
+
+        assert transform.finished.is_set()
+        assert source._producer_future.done()
+        with pytest.raises(RuntimeError, match="shutdown"):
+            source.queue.sync_q.put(b"late chunk")
+        await source.close()
+        assert "Insert producer error" not in caplog.messages
+    finally:
+        source.queue.shutdown()
+        await source.close()
 
 
 if __name__ == "__main__":
