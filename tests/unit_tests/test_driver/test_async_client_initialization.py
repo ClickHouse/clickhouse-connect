@@ -162,6 +162,34 @@ async def test_session_close_failure_preserves_initialization_error(cleanup_erro
     assert "Failed to close session after AsyncClient initialization error" in caplog.messages
 
 
+@pytest.mark.parametrize(
+    "cleanup_error",
+    [RuntimeError("session close failed"), asyncio.CancelledError()],
+    ids=["error", "cancellation"],
+)
+@pytest.mark.asyncio
+async def test_real_session_close_failure_force_closes_connector(cleanup_error, monkeypatch, caplog):
+    provider_error = RuntimeError("token provider failed")
+
+    def fail_provider() -> str:
+        raise provider_error
+
+    async def fail_close(_session) -> None:
+        raise cleanup_error
+
+    client = _build_client(fail_provider)
+    sessions = _track_sessions(client)
+    monkeypatch.setattr(aiohttp.ClientSession, "close", fail_close)
+
+    with caplog.at_level("WARNING", logger="clickhouse_connect.driver.asyncclient"):
+        with pytest.raises(RuntimeError) as caught:
+            await client._initialize()
+
+    assert caught.value is provider_error
+    _assert_transport_closed(client, sessions)
+    assert "Failed to close session after AsyncClient initialization error" in caplog.messages
+
+
 @pytest.mark.asyncio
 async def test_token_installation_failure_closes_session():
     client = _build_client(lambda: "token", username="user_1")

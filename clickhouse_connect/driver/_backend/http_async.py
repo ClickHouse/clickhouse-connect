@@ -140,6 +140,35 @@ def release_lease(response: aiohttp.ClientResponse | None) -> None:
         release()
 
 
+def _owned_session_connector(session: aiohttp.ClientSession) -> aiohttp.BaseConnector | None:
+    if not getattr(session, "connector_owner", False):
+        return None
+    return getattr(session, "connector", None)
+
+
+def _force_close_connector(connector: aiohttp.BaseConnector | None) -> None:
+    if connector is None:
+        return
+    close = getattr(connector, "_close", None)
+    if close is None:
+        logger.warning("aiohttp connector has no synchronous close fallback")
+        return
+    try:
+        close()
+    except BaseException:
+        logger.warning("Failed to force-close aiohttp connector", exc_info=True)
+
+
+async def _close_session_lease(lease: SessionLease) -> None:
+    connector = _owned_session_connector(lease.session)
+    try:
+        await lease.wait_drained()
+        await lease.session.close()
+    except BaseException:
+        _force_close_connector(connector)
+        raise
+
+
 def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
     if isinstance(error, (aiohttp.ServerTimeoutError, aiohttp.ClientConnectorError, aiohttp.ServerFingerprintMismatch)):
         return False
@@ -634,8 +663,7 @@ class HttpAsyncBackend:
             old_lease = self.session_lease
             self.session_lease = None
         if old_lease is not None:
-            await old_lease.wait_drained()
-            await old_lease.session.close()
+            await _close_session_lease(old_lease)
 
     async def close_connections(self) -> None:
         """Rotate the connection pool: new requests use a fresh session; in-flight
@@ -644,8 +672,7 @@ class HttpAsyncBackend:
             old_lease = self.session_lease
             self.session_lease = SessionLease(self._new_session())
         if old_lease is not None:
-            await old_lease.wait_drained()
-            await old_lease.session.close()
+            await _close_session_lease(old_lease)
 
 
 if TYPE_CHECKING:

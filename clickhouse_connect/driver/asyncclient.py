@@ -22,7 +22,12 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, options
-from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, release_lease
+from clickhouse_connect.driver._backend.http_async import (
+    HttpAsyncBackend,
+    _force_close_connector,
+    _owned_session_connector,
+    release_lease,
+)
 from clickhouse_connect.driver._backend.httpcommon import (
     add_integration_tag,
     apply_http_server_settings,
@@ -409,10 +414,12 @@ class AsyncClient(Client):
                 self._initialized = True
             except BaseException:
                 session = self._session
+                connector = _owned_session_connector(session) if session is not None else None
                 try:
                     if session is not None and not session.closed:
                         await session.close()
                 except BaseException:
+                    _force_close_connector(connector)
                     logger.warning("Failed to close session after AsyncClient initialization error", exc_info=True)
                 finally:
                     if self._session is session:

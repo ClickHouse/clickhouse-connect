@@ -14,6 +14,9 @@
 
 ### Bug Fixes
 
+- Cancelling `AsyncClient.close()`, context-manager exit, or connection-pool rotation now force-closes the detached
+  aiohttp transport before propagating cancellation. Failed graceful session cleanup receives the same fallback, so
+  cancelled shutdown and automatic connection-age rotation no longer orphan a session or connector.
 - Cancelling an `AsyncClient` insert while its Native serializer is blocked on the bounded request-body queue now
   shuts down the queue before awaiting the serializer. Async-generator cleanup no longer waits indefinitely, and
   reusable insert contexts release their data and serializer error state after every attempt. External task
