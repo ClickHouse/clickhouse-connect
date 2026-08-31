@@ -1,8 +1,10 @@
 from collections.abc import Callable
 
+import pytest
 from pytest import fixture
 
 from clickhouse_connect import dbapi
+from clickhouse_connect.driver.exceptions import DatabaseError
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -51,6 +53,27 @@ def test_executemany_with_dict_rows(dbapi_connection, table_context: Callable):
         assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
 
 
+def test_executemany_bare_values_with_dict_rows(dbapi_connection, table_context: Callable):
+    with table_context("dbapi_executemany_bare_dicts", ["id UInt32", "name String"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            "INSERT INTO dbapi_executemany_bare_dicts (id, name) VALUES",
+            [{"id": 13, "name": "user_1"}, {"name": "user_2", "id": 79}],
+        )
+        assert cursor.rowcount == 2
+        cursor.execute("SELECT id, name FROM dbapi_executemany_bare_dicts ORDER BY id")
+        assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+def test_executemany_bare_values_preserves_comment_markers_in_identifier(dbapi_connection, table_context: Callable):
+    with table_context("dbapi/*event--log*/", ["id UInt32"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany("INSERT INTO `dbapi/*event--log*/` (id) VALUES // trailing", [(13,), (79,)])
+        assert cursor.rowcount == 2
+        cursor.execute("SELECT id FROM `dbapi/*event--log*/` ORDER BY id")
+        assert cursor.fetchall() == [(13,), (79,)]
+
+
 def test_executemany_with_percent_identifiers(dbapi_connection, table_context: Callable):
     with table_context("dbapi%executemany", ["value%pct UInt32"]):
         cursor = dbapi_connection.cursor()
@@ -58,8 +81,88 @@ def test_executemany_with_percent_identifiers(dbapi_connection, table_context: C
             "INSERT INTO `dbapi%%executemany` (`value%%pct`) VALUES (%s)",
             [(13,), (79,)],
         )
+        cursor.executemany("INSERT INTO `dbapi%%executemany` (`value%%pct`) VALUES", [(97,)])
+        cursor.executemany("INSERT INTO `dbapi%%executemany` (`value%%pct`) VALUES", [{"value%pct": 101}])
         cursor.execute("SELECT `value%%pct` FROM `dbapi%%executemany` ORDER BY `value%%pct`")
-        assert cursor.fetchall() == [(13,), (79,)]
+        assert cursor.fetchall() == [(13,), (79,), (97,), (101,)]
+
+
+def test_executemany_preserves_values_expressions_and_rowcount(dbapi_connection, table_context: Callable):
+    with table_context("dbapi_executemany_expr", ["raw String", "encoded String", "fixed UInt32"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            "INSERT INTO dbapi_executemany_expr (raw, encoded, fixed) VALUES (%s, hex(%s), 79)",
+            [("user_1", "user_1"), ("user_2", "user_2")],
+        )
+        assert cursor.rowcount == 2
+        cursor.execute("SELECT raw, encoded, fixed FROM dbapi_executemany_expr ORDER BY raw")
+        assert cursor.fetchall() == [
+            ("user_1", "757365725F31", 79),
+            ("user_2", "757365725F32", 79),
+        ]
+
+
+def test_executemany_preserves_target_grammar_and_quoted_columns(
+    dbapi_connection,
+    table_context: Callable,
+    test_db: str,
+):
+    with table_context("dbapi_executemany_target", ["id UInt32", "name String"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            f'INSERT INTO TABLE {test_db} . dbapi_executemany_target ("id", "name") VALUES (%s, %s)',
+            [(13, "user_1"), (79, "user_2")],
+        )
+        cursor.execute("SELECT id, name FROM dbapi_executemany_target ORDER BY id")
+        assert cursor.fetchall() == [(13, "user_1"), (79, "user_2")]
+
+
+def test_executemany_preserves_named_bind_order_and_reuse(dbapi_connection, table_context: Callable):
+    with table_context("dbapi_executemany_named", ["first UInt32", "second UInt32", "again UInt32"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            "INSERT INTO dbapi_executemany_named (first, second, again) VALUES (%(second)s, %(first)s, %(first)s)",
+            [
+                {"first": 13, "second": 79, "again": 211},
+                {"second": 97, "again": 223, "first": 31},
+            ],
+        )
+        cursor.execute("SELECT first, second, again FROM dbapi_executemany_named ORDER BY first")
+        assert cursor.fetchall() == [(79, 13, 13), (97, 31, 31)]
+
+
+def test_executemany_preserves_insert_select_values_alias(dbapi_connection, table_context: Callable):
+    with table_context("dbapi_executemany_select", ["raw String", "encoded String"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany(
+            "INSERT INTO dbapi_executemany_select (raw, encoded) SELECT %(raw)s, hex(%(encoded)s) AS VALUES",
+            [
+                {"raw": "user_1", "encoded": "user_1"},
+                {"encoded": "user_2", "raw": "user_2"},
+            ],
+        )
+        cursor.execute("SELECT raw, encoded FROM dbapi_executemany_select ORDER BY raw")
+        assert cursor.fetchall() == [("user_1", "757365725F31"), ("user_2", "757365725F32")]
+
+
+def test_executemany_rejects_invalid_values_suffix(dbapi_connection, table_context: Callable):
+    with table_context("dbapi_executemany_invalid", ["id UInt32"]):
+        cursor = dbapi_connection.cursor()
+        with pytest.raises(DatabaseError):
+            cursor.executemany(
+                "INSERT INTO dbapi_executemany_invalid (id) VALUESgarbage (%s)",
+                [(13,), (79,)],
+            )
+        cursor.execute("SELECT count() FROM dbapi_executemany_invalid")
+        assert cursor.fetchone() == (0,)
+
+
+def test_executemany_uses_sql_coercion(dbapi_connection, table_context: Callable):
+    with table_context("dbapi_executemany_coercion", ["value String"]):
+        cursor = dbapi_connection.cursor()
+        cursor.executemany("INSERT INTO dbapi_executemany_coercion (value) VALUES (%s)", [(13,), (79,)])
+        cursor.execute("SELECT value FROM dbapi_executemany_coercion ORDER BY value")
+        assert cursor.fetchall() == [("13",), ("79",)]
 
 
 def test_description_null_ok_reflects_result_type(dbapi_connection):

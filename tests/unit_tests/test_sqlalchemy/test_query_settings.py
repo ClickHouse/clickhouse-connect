@@ -52,10 +52,10 @@ def test_cursor_executemany_forwards_settings():
     assert _query_settings(client) == [{"max_threads": 3}, {"max_threads": 3}]
 
 
-def test_cursor_bulk_insert_forwards_settings():
+def test_cursor_executemany_insert_forwards_settings():
     client = _mock_client()
     Cursor(client).executemany("INSERT INTO tbl (a, b) VALUES", [{"a": 13, "b": 79}], settings={"max_threads": 3})
-    client.insert.assert_called_once_with("tbl", [[13, 79]], ["a", "b"], settings={"max_threads": 3})
+    client.insert.assert_called_once_with("tbl", [[13, 79]], ("a", "b"), settings={"max_threads": 3})
 
 
 def test_dialect_do_execute_forwards_settings():
