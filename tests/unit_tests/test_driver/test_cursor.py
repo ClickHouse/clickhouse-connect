@@ -801,6 +801,23 @@ def test_executemany_with_insert_uses_written_rows_summary():
     assert cursor.rowcount == 2
 
 
+@pytest.mark.parametrize(
+    "operation, expected_rowcount",
+    [
+        ("WITH 13 AS value INSERT INTO test_table SELECT value", -1),
+        ("WITH 13 AS value SELECT value WHERE 0", 0),
+    ],
+)
+def test_executemany_with_prefix_without_written_rows_uses_statement_type(operation, expected_rowcount):
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.executemany(operation, [{}, {}])
+
+    assert cursor.rowcount == expected_rowcount
+
+
 def test_executemany_insert_rowcount_is_unknown_without_written_rows():
     client = Mock()
     client.query.return_value = create_mock_query_result([])

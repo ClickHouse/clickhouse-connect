@@ -257,6 +257,7 @@ class ClickHouseDialect(DefaultDialect):
             parameters,
             settings=settings,
             query_formats=self._ch_query_formats(context),
+            pyformat_encoded=self._ch_pyformat_encoded(context),
         )
 
     def do_execute_no_params(self, cursor, statement, context=None):

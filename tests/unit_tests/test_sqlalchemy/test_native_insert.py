@@ -278,6 +278,28 @@ def test_raw_and_expression_insert_executemany_preserve_sql_and_parameters():
     assert cursor.rowcount == 2
 
 
+@pytest.mark.parametrize("compile_server_side", [False, True], ids=["client-compiled", "server-compiled"])
+@pytest.mark.parametrize("receive_server_side", [False, True], ids=["client-received", "server-received"])
+def test_expression_insert_executemany_preserves_percent_provenance(compile_server_side, receive_server_side):
+    compile_dialect = ClickHouseDialect(dbapi=dbapi, server_side_params=compile_server_side)
+    table = sa.Table("events%2026", sa.MetaData(), sa.Column("value%pct", sa.String))
+    statement = sa.insert(table).values({table.c["value%pct"]: sa.literal_column("'single% adjacent%% tail%'")})
+    context = _context(statement, compile_dialect)
+    operation = str(context.compiled)
+    raw_operation = str(statement.compile(dialect=ClickHouseDialect(dbapi=dbapi, server_side_params=True)))
+    client = Mock()
+    client.query.return_value = _query_result({"written_rows": "1"})
+    cursor = Cursor(client)
+    dialect = ClickHouseDialect(dbapi=dbapi, server_side_params=receive_server_side)
+
+    dialect.do_executemany(cursor, operation, [{}, {}], context)
+
+    assert context.compiled.preparer._double_percents is not compile_server_side
+    assert [item.args[:2] for item in client.query.call_args_list] == [(raw_operation, {}), (raw_operation, {})]
+    client.insert.assert_not_called()
+    assert cursor.rowcount == 2
+
+
 def test_text_insert_executemany_preserves_sql_and_parameters():
     dialect = ClickHouseDialect(dbapi=dbapi)
     statement = sa.text("INSERT INTO events (id, name) VALUES (:id, hex(:name))")

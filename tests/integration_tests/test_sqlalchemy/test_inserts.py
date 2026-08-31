@@ -254,6 +254,32 @@ def test_compiled_expression_executemany_preserves_sql(test_engine: Engine, test
         assert stored == [("expr_1", "757365725F31"), ("expr_2", "757365725F32")]
 
 
+def test_compiled_expression_executemany_preserves_percent_encoding(
+    test_engine: Engine,
+    table_context: Callable,
+    test_db: str,
+):
+    table_name = "sqlalchemy%expression_insert"
+    with table_context(table_name, ["value%pct String"]):
+        table = db.Table(
+            table_name,
+            MetaData(schema=test_db),
+            db.Column("value%pct", String),
+        )
+        statement = db.insert(table).values({table.c["value%pct"]: db.literal_column("'single% adjacent%% tail%'")})
+        with test_engine.begin() as conn:
+            client = conn.connection.driver_connection.client
+            with patch.object(client, "insert", wraps=client.insert) as native_insert:
+                result = conn.execute(statement, [{}, {}])
+
+            assert native_insert.call_count == 0
+            assert result.rowcount == 2
+            assert conn.execute(db.select(table.c["value%pct"])).all() == [
+                ("single% adjacent%% tail%",),
+                ("single% adjacent%% tail%",),
+            ]
+
+
 def test_compiled_bind_expression_executemany_preserves_sql(test_engine: Engine, test_model, test_db: str):
     class HexString(db.TypeDecorator):
         impl = String

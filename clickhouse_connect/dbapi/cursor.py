@@ -7,7 +7,7 @@ from typing import Any, cast
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.binding import external_bind_re
+from clickhouse_connect.driver.binding import _query_is_insert, external_bind_re
 from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
 
@@ -443,6 +443,8 @@ class Cursor:
         parameters: Any,
         settings: dict[str, Any] | None = None,
         query_formats: dict[str, str] | None = None,
+        *,
+        pyformat_encoded: bool = True,
     ) -> None:
         self.names = []
         self.types = []
@@ -461,11 +463,13 @@ class Cursor:
         keyword = _leading_keyword(operation)
         written_rows = 0
         has_reliable_written_rows = True
-        expects_rows = keyword in ("SELECT", "WITH")
+        expects_rows = keyword == "SELECT" or (keyword == "WITH" and not _query_is_insert(operation))
         has_result_columns = False
+        operation_without_pyformat_escapes = operation.replace("%%", "%") if pyformat_encoded else operation
         try:
             for param_row in parameters:
-                query_result = self.client.query(operation, param_row, settings=settings, query_formats=query_formats)
+                row_operation = operation_without_pyformat_escapes if not param_row else operation
+                query_result = self.client.query(row_operation, param_row, settings=settings, query_formats=query_formats)
                 self.data.extend(query_result.result_set)
                 has_result_columns = has_result_columns or bool(query_result.column_names)
                 if has_reliable_written_rows:
