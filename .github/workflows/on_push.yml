@@ -136,11 +136,10 @@ jobs:
           - '3.13'
           - '3.14'
         clickhouse-version:
-          - '25.8' # LTS
           - '26.3' # LTS
-          - '26.5' # Stable
           - '26.6' # Stable
           - '26.7' # Stable
+          - '26.8' # LTS
         use-c:
           - '1'
         include:

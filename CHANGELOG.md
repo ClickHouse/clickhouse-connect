@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+## 1.8.0, 2026-08-31
+
+No code changes since `1.8.0rc3`. See the `1.8.0rc1`, `1.8.0rc2`, and `1.8.0rc3` entries below for the full set of changes included in 1.8.0.
+
 ## 1.8.0rc3, 2026-08-27
 
 ### Improvements
