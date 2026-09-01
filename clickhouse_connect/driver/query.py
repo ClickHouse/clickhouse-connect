@@ -250,7 +250,7 @@ class QueryContext(BaseQueryContext):
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
         resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
-        return QueryContext(
+        copy = QueryContext(
             query=query or self.query,
             parameters=(
                 dict_copy(self.parameters, parameters if isinstance(parameters, dict) else None)
@@ -277,6 +277,8 @@ class QueryContext(BaseQueryContext):
             transport_settings=self.transport_settings if transport_settings is None else transport_settings,
             rename_response_column=self.rename_response_column if rename_response_column is None else rename_response_column,
         )
+        copy.internal = self.internal
+        return copy
 
     def _update_query(self):
         query = self.query
