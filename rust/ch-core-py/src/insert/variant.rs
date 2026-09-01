@@ -10,16 +10,51 @@ pub(super) fn build_variant_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
+    build_variant_column_with_name(py, name, alternatives, values, row_count, None)
+}
+
+pub(super) fn build_geometry_column(
+    py: Python<'_>,
+    name: &str,
+    alternatives: &[ChType],
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+) -> PyResult<Column> {
+    build_variant_column_with_name(py, name, alternatives, values, row_count, Some("Geometry"))
+}
+
+fn build_variant_column_with_name(
+    py: Python<'_>,
+    name: &str,
+    alternatives: &[ChType],
+    values: &Bound<'_, PyAny>,
+    row_count: usize,
+    dispatch_type_name: Option<&str>,
+) -> PyResult<Column> {
     let column_values = ColumnValues::new(values, name)?;
     check_row_count(name, &column_values, row_count)?;
     if let Ok(list) = values.cast_exact::<PyList>() {
-        return variant_column_from_seq(py, name, alternatives, &ListSeq(list), row_count);
+        return variant_column_from_seq_with_name(
+            py,
+            name,
+            alternatives,
+            &ListSeq(list),
+            row_count,
+            dispatch_type_name,
+        );
     }
     if let Ok(tuple) = values.cast_exact::<PyTuple>() {
-        return variant_column_from_seq(py, name, alternatives, &TupleSeq(tuple), row_count);
+        return variant_column_from_seq_with_name(
+            py,
+            name,
+            alternatives,
+            &TupleSeq(tuple),
+            row_count,
+            dispatch_type_name,
+        );
     }
 
-    let mut builder = VariantBuilder::new(py, name, alternatives, row_count)?;
+    let mut builder = VariantBuilder::new(py, name, alternatives, row_count, dispatch_type_name)?;
     for row in 0..row_count {
         let value = column_values.get_item(row)?;
         builder.push_row(&value, row)?;
@@ -35,7 +70,28 @@ pub(super) fn variant_column_from_seq<S: FastSeq>(
     seq: &S,
     row_count: usize,
 ) -> PyResult<Column> {
-    let mut builder = VariantBuilder::new(py, name, alternatives, row_count)?;
+    variant_column_from_seq_with_name(py, name, alternatives, seq, row_count, None)
+}
+
+pub(super) fn geometry_column_from_seq<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    alternatives: &[ChType],
+    seq: &S,
+    row_count: usize,
+) -> PyResult<Column> {
+    variant_column_from_seq_with_name(py, name, alternatives, seq, row_count, Some("Geometry"))
+}
+
+fn variant_column_from_seq_with_name<S: FastSeq>(
+    py: Python<'_>,
+    name: &str,
+    alternatives: &[ChType],
+    seq: &S,
+    row_count: usize,
+    dispatch_type_name: Option<&str>,
+) -> PyResult<Column> {
+    let mut builder = VariantBuilder::new(py, name, alternatives, row_count, dispatch_type_name)?;
     for row in 0..row_count {
         // SAFETY: row < row_count, which the caller checked against seq.size().
         // A strong reference protects the value while the builder retains its
@@ -90,8 +146,11 @@ impl<'a, 'py> VariantBuilder<'a, 'py> {
         name: &'a str,
         alternatives: &'a [ChType],
         row_count: usize,
+        dispatch_type_name: Option<&str>,
     ) -> PyResult<Self> {
-        let type_name = ChType::Variant(alternatives.to_vec()).to_string();
+        let type_name = dispatch_type_name
+            .map(str::to_owned)
+            .unwrap_or_else(|| ChType::Variant(alternatives.to_vec()).to_string());
         // Any driver-interop failure becomes NotImplementedError so the
         // insert probe falls back to the Python codec.
         let dispatch =

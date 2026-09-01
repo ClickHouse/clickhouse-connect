@@ -4,7 +4,11 @@
 
 ## 1.8.0, 2026-08-31
 
-No code changes since `1.8.0rc3`. See the `1.8.0rc1`, `1.8.0rc2`, and `1.8.0rc3` entries below for the full set of changes included in 1.8.0.
+### Improvements
+
+- Added native query and insert support for the ClickHouse `MultiPoint` type in the Python and Rust codecs, including containers and SQLAlchemy reflection. Inserting `MultiPoint` values requires ClickHouse 26.8 or later. `Geometry` now supports the `MultiPoint` member added in ClickHouse 26.8 at Native discriminator 6 while preserving the original discriminators 0 through 5. `Geometry` also supports the `typed` query format when selected with the `Geometry` type key. `Variant` format settings do not apply to `Geometry`. The Rust extra now requires `clickhouse-connect-core>=0.2.0,<0.3`.
+
+See the `1.8.0rc1`, `1.8.0rc2`, and `1.8.0rc3` entries below for the other changes included in 1.8.0.
 
 ## 1.8.0rc3, 2026-08-27
 

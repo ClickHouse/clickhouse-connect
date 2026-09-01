@@ -17,7 +17,7 @@ from clickhouse_connect.driver.exceptions import (
     StreamFailureError,
 )
 from clickhouse_connect.driver.insert import InsertContext
-from tests.integration_tests.conftest import type_available
+from tests.integration_tests.conftest import supports_multi_point, type_available
 
 pytest.importorskip("_ch_core")
 
@@ -1938,6 +1938,45 @@ def test_rust_codec_geo_insert_parity(client_factory, call, client_mode):
         call(python_client.command, f"DROP TABLE IF EXISTS {py_table}")
 
 
+def test_rust_codec_multi_point_round_trip_parity(client_factory, call, client_mode):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    if not supports_multi_point(python_client, call):
+        pytest.skip(f"MultiPoint is not supported by server {python_client.server_version}")
+
+    schema = (
+        "id UInt8, mp MultiPoint, a Array(MultiPoint), t Tuple(MultiPoint, UInt8), "
+        "at Array(Tuple(MultiPoint, UInt8)), m Map(String, MultiPoint)"
+    )
+    rows = [
+        [
+            0,
+            [(13.0, 23.0), (14.0, 24.0)],
+            [[(31.0, 41.0)], []],
+            ([(51.0, 61.0)], 7),
+            [([(71.0, 81.0)], 13)],
+            {"value": [(91.0, 101.0)]},
+        ],
+        [1, [], [], ([], 79), [], {}],
+    ]
+    expected = [tuple(row) for row in rows]
+    rust_table = f"rc_multi_point_rust_{client_mode}"
+    python_table = f"rc_multi_point_python_{client_mode}"
+
+    def create_insert_query(write_client, read_client, table):
+        call(write_client.command, f"DROP TABLE IF EXISTS {table}")
+        call(write_client.command, f"CREATE TABLE {table} ({schema}) ENGINE MergeTree ORDER BY id")
+        call(write_client.insert, table, rows, column_names=["id", "mp", "a", "t", "at", "m"])
+        return call(read_client.query, f"SELECT * FROM {table} ORDER BY id").result_rows
+
+    try:
+        assert create_insert_query(rust_client, python_client, rust_table) == expected
+        assert create_insert_query(python_client, rust_client, python_table) == expected
+    finally:
+        call(python_client.command, f"DROP TABLE IF EXISTS {rust_table}")
+        call(python_client.command, f"DROP TABLE IF EXISTS {python_table}")
+
+
 def test_rust_codec_geometry_round_trip_parity(client_factory, call, client_mode):
     probe = client_factory(native_codec="python")
     try:
@@ -1953,6 +1992,7 @@ def test_rust_codec_geometry_round_trip_parity(client_factory, call, client_mode
     python_client = client_factory(native_codec="python")
     rust_table = f"rc_geometry_rust_{client_mode}"
     python_table = f"rc_geometry_python_{client_mode}"
+    has_multi_point = supports_multi_point(python_client, call)
     tagged = [
         typed_variant([(13.0, 23.0), (14.0, 24.0)], "LineString"),
         typed_variant([[(31.0, 41.0), (32.0, 42.0)]], "MultiLineString"),
@@ -1960,11 +2000,17 @@ def test_rust_codec_geometry_round_trip_parity(client_factory, call, client_mode
         typed_variant((71.0, 81.0), "Point"),
         typed_variant([[(91.0, 101.0), (92.0, 102.0)]], "Polygon"),
         typed_variant([(111.0, 121.0)], "Ring"),
-        None,
     ]
+    if has_multi_point:
+        tagged.append(typed_variant([(131.0, 141.0), (132.0, 142.0)], "MultiPoint"))
+    tagged.append(None)
     rows = [[index, value] for index, value in enumerate(tagged)]
     expected = [(index, value.value if value is not None else None) for index, value in enumerate(tagged)]
-    expanded_geometry = "Variant(LineString, MultiLineString, MultiPolygon, Point, Polygon, Ring)"
+    expanded_geometry = (
+        "Variant(LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon, Ring)"
+        if has_multi_point
+        else "Variant(LineString, MultiLineString, MultiPolygon, Point, Polygon, Ring)"
+    )
     expected_variant_types = [
         ("LineString",),
         ("MultiLineString",),
@@ -1972,8 +2018,10 @@ def test_rust_codec_geometry_round_trip_parity(client_factory, call, client_mode
         ("Point",),
         ("Polygon",),
         ("Ring",),
-        ("None",),
     ]
+    if has_multi_point:
+        expected_variant_types.append(("MultiPoint",))
+    expected_variant_types.append(("None",))
 
     def create_and_insert(client, table):
         call(client.command, f"DROP TABLE IF EXISTS {table}")

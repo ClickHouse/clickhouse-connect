@@ -15,7 +15,7 @@ from pytest import fixture
 from clickhouse_connect import common, get_async_client
 from clickhouse_connect.driver import AsyncClient, Client, create_client
 from clickhouse_connect.driver.common import coerce_bool
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.httpclient import HttpClient
 from clickhouse_connect.tools.testing import TableContext
 from tests.helpers import PROJECT_ROOT_DIR
@@ -47,6 +47,19 @@ def type_available(client: Client | AsyncClient, data_type: str) -> None:
     if setting_def is not None and setting_def.value == "1":
         return
     pytest.skip(f"New {data_type.upper()} type not available in this version: {client.server_version}")
+
+
+def supports_multi_point(client: Client | AsyncClient, call: Callable | None = None) -> bool:
+    if call is None and isinstance(client, AsyncClient):
+        raise TypeError("call is required when checking MultiPoint support with AsyncClient")
+    try:
+        query = "SELECT toTypeName(defaultValueOfTypeName('MultiPoint'))"
+        result = call(client.command, query) if call else client.command(query)
+        return result == "MultiPoint"
+    except DatabaseError as ex:
+        if ex.name != "UNKNOWN_TYPE":
+            raise
+        return False
 
 
 def make_client_config(test_config: TestConfig, **kwargs):

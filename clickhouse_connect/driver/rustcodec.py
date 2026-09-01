@@ -32,7 +32,7 @@ NativeCodec = Literal["python", "rust", "rust_strict"]
 
 _VALID_CODECS = ("python", "rust", "rust_strict")
 
-REQUIRED_BINDING_API_VERSION = 2
+REQUIRED_BINDING_API_VERSION = 3
 
 _versions_logged = False
 

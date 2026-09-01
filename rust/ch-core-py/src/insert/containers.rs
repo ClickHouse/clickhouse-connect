@@ -293,6 +293,14 @@ pub(super) fn build_element_column(
 ) -> PyResult<Column> {
     let row_count = ptrs.len();
     let seq = PtrSeq(ptrs);
+    if matches!(ch_type, ChType::Geometry) {
+        let Some(ChType::Variant(alternatives)) = ch_type.physical_delegate() else {
+            return Err(PyRuntimeError::new_err(
+                "internal error: Geometry must delegate to Variant",
+            ));
+        };
+        return geometry_column_from_seq(py, name, &alternatives, &seq, row_count);
+    }
     // Expand SimpleAggregateFunction/geo/Nested aliases before dispatch so a
     // nested alias (e.g. Array(Point)) builds its physical element column.
     if let Some(delegate) = ch_type.physical_delegate() {

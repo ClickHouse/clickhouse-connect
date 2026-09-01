@@ -27,7 +27,7 @@ handoff for Python integration work.
   running the Rust query path against a stale `.so` will hit `AttributeError` on
   `.gen`.
 - **Upstream pin:** `ch-core-rs` currently tracks encode against
-  ClickHouse `v26.6.1.1193-stable`, protocol revision `54485`. HTTP Native
+  ClickHouse `v26.8.1.2041-lts`, protocol revision `54485`. HTTP Native
   inserts use `EncodeOptions { protocol_revision: 0 }`, so there is no
   `BlockInfo` preamble and no per-column custom-serialization marker.
 - **Current type scope:** the first binding encoder targets the upstream
@@ -38,8 +38,8 @@ handoff for Python integration work.
   `Dynamic`, `JSON`, `Nullable(T)`, and `LowCardinality(T)` where the upstream
   core permits it. It also covers the three
   name-decoration alias families the core resolves through `ChType::physical_delegate`:
-  `SimpleAggregateFunction(func, T)`, the six geo types (`Point`, `Ring`, `LineString`,
-  `MultiLineString`, `Polygon`, `MultiPolygon`), and `Nested(...)`. Registered
+  `SimpleAggregateFunction(func, T)`, the seven geo types (`Point`, `Ring`, `LineString`,
+  `MultiLineString`, `MultiPoint`, `Polygon`, `MultiPolygon`), and `Nested(...)`. Registered
   `AggregateFunction(...)` signatures use the core's function-specific state
   framing and validation.
 - **numpy/pandas:** `query_np`, `query_df`, and their block and row stream variants
