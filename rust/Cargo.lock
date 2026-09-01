@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "ch-core-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ch-core-rs",
  "pyo3",
@@ -13,8 +13,8 @@ dependencies = [
 
 [[package]]
 name = "ch-core-rs"
-version = "0.1.1"
-source = "git+https://github.com/ClickHouse/ch-core-rs?tag=v0.1.1#303c09fc5c064505ade7e2c7bd5a12cd308de549"
+version = "0.2.0"
+source = "git+https://github.com/ClickHouse/ch-core-rs?tag=v0.2.0#fe1c9fa981ed0844470f4ba59a968cf47ac23349"
 
 [[package]]
 name = "heck"

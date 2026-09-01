@@ -1,6 +1,6 @@
 [package]
 name = "ch-core-py"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "PyO3 binding crate for the clickhouse-connect-core wheel"
 license = "Apache-2.0"
@@ -11,7 +11,7 @@ name = "_ch_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.1.1" }
+ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.2.0" }
 # generate-import-lib synthesizes the CPython import library when
 # cross-compiling to Windows targets with no local interpreter
 pyo3 = { version = "0.29", features = ["extension-module", "generate-import-lib"] }

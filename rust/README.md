@@ -90,7 +90,7 @@ The binding depends on `ch-core-rs`, pinned by release tag in
 `ch-core-py/Cargo.toml`:
 
 ```toml
-ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.1.0" }
+ch-core-rs = { git = "https://github.com/ClickHouse/ch-core-rs", tag = "v0.2.0" }
 ```
 
 Release and CI builds resolve the tag directly, so the repository must be

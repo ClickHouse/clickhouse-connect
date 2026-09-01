@@ -21,6 +21,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     Int64,
     LowCardinality,
     Map,
+    MultiPoint,
     Nested,
     Nullable,
     QBit,
@@ -95,6 +96,15 @@ def test_geometry():
     assert geometry.name == "Geometry"
     assert geometry._compiler_dispatch(None) == "Geometry"
     assert sqla_type_from_name("GEOMETRY").name == "Geometry"
+
+
+def test_multi_point():
+    multi_point = sqla_type_from_name("MultiPoint")
+    assert multi_point.__class__ == MultiPoint
+    assert multi_point.python_type is list
+    assert multi_point.name == "MultiPoint"
+    assert multi_point._compiler_dispatch(None) == "MultiPoint"
+    assert sqla_type_from_name("MULTIPOINT").name == "MultiPoint"
 
 
 def test_nullable():

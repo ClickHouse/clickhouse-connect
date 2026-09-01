@@ -294,6 +294,14 @@ fn build_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
 ) -> PyResult<Column> {
+    if matches!(ch_type, ChType::Geometry) {
+        let Some(ChType::Variant(alternatives)) = ch_type.physical_delegate() else {
+            return Err(PyRuntimeError::new_err(
+                "internal error: Geometry must delegate to Variant",
+            ));
+        };
+        return build_geometry_column(py, name, &alternatives, values, row_count);
+    }
     // Expand SimpleAggregateFunction/geo/Nested aliases to the physical type
     // whose column the encoder actually builds; the block header still renders
     // the alias spelling from the Field's ChType.

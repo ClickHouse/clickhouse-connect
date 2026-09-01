@@ -1003,10 +1003,10 @@ class TestMap:
 # ---------------------------------------------------------------------------
 
 
-def _geometry_block():
-    """Independent Native Geometry fixture with every alternative and NULL."""
+def _geometry_body():
+    """Independent Native Geometry body with every alternative and NULL."""
     body = bytearray(struct.pack("<Q", 0))
-    body.extend(bytes([0, 1, 2, 3, 4, 5, 255]))
+    body.extend(bytes([0, 1, 2, 3, 4, 5, 6, 255]))
 
     # LineString: two points.
     body.extend(struct.pack("<Q", 2))
@@ -1035,7 +1035,15 @@ def _geometry_block():
     body.extend(struct.pack("<Q", 1))
     body.extend(struct.pack("<d", 111.0))
     body.extend(struct.pack("<d", 121.0))
-    return build_native_block_from_bodies([("g", "Geometry", bytes(body))], 7)
+    # MultiPoint: two points.
+    body.extend(struct.pack("<Q", 2))
+    body.extend(struct.pack("<2d", 131.0, 132.0))
+    body.extend(struct.pack("<2d", 141.0, 142.0))
+    return bytes(body)
+
+
+def _geometry_block():
+    return build_native_block_from_bodies([("g", "Geometry", _geometry_body())], 8)
 
 
 class TestGeometry:
@@ -1046,6 +1054,7 @@ class TestGeometry:
         (71.0, 81.0),
         [[(91.0, 101.0), (92.0, 102.0)]],
         [(111.0, 121.0)],
+        [(131.0, 141.0), (132.0, 142.0)],
         None,
     ]
     expected_arrow = [
@@ -1055,6 +1064,7 @@ class TestGeometry:
         {"1": 71.0, "2": 81.0},
         [[{"1": 91.0, "2": 101.0}, {"1": 92.0, "2": 102.0}]],
         [{"1": 111.0, "2": 121.0}],
+        [{"1": 131.0, "2": 141.0}, {"1": 132.0, "2": 142.0}],
         None,
     ]
 
@@ -1069,6 +1079,7 @@ class TestGeometry:
             "Point",
             "Polygon",
             "Ring",
+            "MultiPoint",
         )
         return [typed_variant(value, name) for value, name in zip(values, names)] + [None]
 
@@ -1084,12 +1095,16 @@ class TestGeometry:
         pa = pytest.importorskip("pyarrow")
         column = pa.RecordBatchReader.from_stream(batch).read_all().column("g")
         assert pa.types.is_union(column.type)
+        assert column.type.num_fields == 8
+        assert column.type.type_codes == list(range(8))
+        assert column.type.field(6).name == "MultiPoint"
         assert column.to_pylist() == self.expected_arrow
 
     @pytest.mark.parametrize("type_name", ["Geometry", "GEOMETRY"])
     def test_encode_matches_golden_and_requires_explicit_geo_name(self, type_name):
-        values = self.tagged(self.expected[:6])
-        assert _ch_core.encode_native_block(["g"], [type_name], [values], 7) == _geometry_block()
+        values = self.tagged(self.expected[:7])
+        assert _geometry_body()[8:16] == bytes([0, 1, 2, 3, 4, 5, 6, 255])
+        assert _ch_core.encode_native_block(["g"], [type_name], [values], 8) == _geometry_block()
 
         with pytest.raises(ValueError, match="cannot map Python type"):
             _ch_core.encode_native_block(["g"], [type_name], [[self.expected[3]]], 1)
@@ -1111,7 +1126,7 @@ class TestGeometry:
         [
             (
                 "Array(Geometry)",
-                lambda tag: [[tag((13.0, 23.0), "Point"), None], [], [tag([(31.0, 41.0)], "Ring")]],
+                lambda tag: [[tag((13.0, 23.0), "Point"), None], [], [tag([(31.0, 41.0)], "MultiPoint")]],
                 [[(13.0, 23.0), None], [], [[(31.0, 41.0)]],],
             ),
             (
@@ -1121,13 +1136,13 @@ class TestGeometry:
             ),
             (
                 "Array(Tuple(Geometry, UInt8))",
-                lambda tag: [[(tag((13.0, 23.0), "Point"), 1)], [], [(tag([(31.0, 41.0)], "Ring"), 2)]],
+                lambda tag: [[(tag((13.0, 23.0), "Point"), 1)], [], [(tag([(31.0, 41.0)], "MultiPoint"), 2)]],
                 [[((13.0, 23.0), 1)], [], [([(31.0, 41.0)], 2)]],
             ),
             (
                 "Map(String, Geometry)",
-                lambda tag: [{"point": tag((13.0, 23.0), "Point")}, {}, {"ring": tag([(31.0, 41.0)], "Ring")}],
-                [{"point": (13.0, 23.0)}, {}, {"ring": [(31.0, 41.0)]}],
+                lambda tag: [{"point": tag((13.0, 23.0), "Point")}, {}, {"multi": tag([(31.0, 41.0)], "MultiPoint")}],
+                [{"point": (13.0, 23.0)}, {}, {"multi": [(31.0, 41.0)]}],
             ),
         ],
     )
@@ -1156,14 +1171,14 @@ class TestGeometry:
         assert list(batch.column_data(0)) == self.expected
 
     def test_invalid_discriminator_is_value_error(self):
-        body = struct.pack("<Q", 0) + b"\x06"
+        body = struct.pack("<Q", 0) + b"\x07"
         block = build_native_block_from_bodies([("g", "Geometry", body)], 1)
         with pytest.raises(ValueError, match="Invalid Variant layout"):
             _ch_core.ColBatch.decode_native(block)
 
 
 # ---------------------------------------------------------------------------
-# Geo aliases (Point/Ring/LineString/Polygon/MultiLineString/MultiPolygon)
+# Geo aliases (Point/Ring/LineString/Polygon/MultiLineString/MultiPolygon/MultiPoint)
 # ---------------------------------------------------------------------------
 
 # A Point decodes to an (x, y) tuple; each array-based kind wraps it in one more
@@ -1172,6 +1187,7 @@ _GEO_DECODE = [
     ("Point", [(1.5, 2.5), (-3.25, 4.0), (0.0, 0.0)]),
     ("Ring", [[(1.0, 2.0), (3.0, 4.0)], [], [(5.5, 6.5)]]),
     ("LineString", [[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)], [], [(7.5, 8.5)]]),
+    ("MultiPoint", [[(1.0, 2.0), (3.0, 4.0)], [], [(5.5, 6.5)]]),
     ("Polygon", [[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], [(0.25, 0.25)]], []]),
     ("MultiLineString", [[[(0.0, 0.0), (1.0, 1.0)], [(2.0, 2.0)]], []]),
     ("MultiPolygon", [[[[(0.0, 0.0), (1.0, 0.0)]], [[(2.0, 2.0)], [(3.0, 3.0)]]], []]),
@@ -1226,6 +1242,20 @@ class TestGeo:
         encoded = _ch_core.encode_native_block(["g"], ["Nullable(Point)"], [rows], len(rows))
         assert encoded == build_native_block([("g", "Nullable(Point)", rows)])
         assert list(_ch_core.ColBatch.decode_native(encoded).column_data(0)) == rows
+
+    def test_nullable_multi_point_is_rejected(self):
+        with pytest.raises(NotImplementedError, match="unsupported ClickHouse type"):
+            _ch_core.encode_native_block(["g"], ["Nullable(MultiPoint)"], [[]], 0)
+
+    def test_multi_point_arrow_exit(self):
+        pa = pytest.importorskip("pyarrow")
+        rows = [[(13.0, 23.0), (14.0, 24.0)], []]
+        batch = _ch_core.ColBatch.decode_native(build_native_block([("g", "MultiPoint", rows)]))
+        column = pa.RecordBatchReader.from_stream(batch).read_all().column("g")
+        assert column.to_pylist() == [
+            [{"1": 13.0, "2": 23.0}, {"1": 14.0, "2": 24.0}],
+            [],
+        ]
 
 
 # ---------------------------------------------------------------------------

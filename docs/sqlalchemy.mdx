@@ -328,7 +328,7 @@ ClickHouse does not support recursive materialized CTEs. The SQLAlchemy helpers 
 
 ClickHouse Connect provides ClickHouse data types, table engines, dictionary constructs, database DDL, and table reflection.
 
-Standalone `Variant` columns reflect through an internal SQLAlchemy type, and Alembic autogenerate preserves their canonical raw type names without repeated type changes. `Geometry` columns reflect as the public `Geometry` SQLAlchemy type.
+Standalone `Variant` columns reflect through an internal SQLAlchemy type, and Alembic autogenerate preserves their canonical raw type names without repeated type changes. `Geometry` and `MultiPoint` columns reflect as public SQLAlchemy types.
 
 ```python
 import sqlalchemy as db

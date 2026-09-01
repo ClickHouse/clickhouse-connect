@@ -1,7 +1,9 @@
 from collections.abc import Collection, Sequence
 from typing import Any
 
-from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
+from clickhouse_connect.datatypes.dynamic import Variant
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -10,7 +12,6 @@ POINT_DATA_TYPE: ClickHouseType
 RING_DATA_TYPE: ClickHouseType
 POLYGON_DATA_TYPE: ClickHouseType
 MULTI_POLYGON_DATA_TYPE: ClickHouseType
-GEOMETRY_DATA_TYPE: ClickHouseType
 
 # ruff: noqa: F821 (Undefine name)
 
@@ -91,20 +92,27 @@ class MultiLineString(Polygon):
     pass
 
 
-class Geometry(ClickHouseType):
-    """ClickHouse Geometry, a fixed Variant over the six geo types."""
+class MultiPoint(Ring):
+    pass
 
-    def data_size(self, sample: Collection[Any]) -> int:
-        return GEOMETRY_DATA_TYPE.data_size(sample)
 
-    def write_column_prefix(self, dest: bytearray) -> None:
-        return GEOMETRY_DATA_TYPE.write_column_prefix(dest)
+class Geometry(Variant):
+    """ClickHouse Geometry with its fixed Native discriminator order."""
 
-    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        return GEOMETRY_DATA_TYPE.write_column_data(column, dest, ctx)
+    python_type = None
+    valid_formats = "typed", "native"
+    _type_args = _TypeArgs()
+    _alternative_names = (
+        "LineString",
+        "MultiLineString",
+        "MultiPolygon",
+        "Point",
+        "Polygon",
+        "Ring",
+        "MultiPoint",
+    )
 
-    def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
-        return GEOMETRY_DATA_TYPE.read_column_prefix(source, ctx)
-
-    def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
-        return GEOMETRY_DATA_TYPE.read_column_data(source, num_rows, ctx, read_state)
+    def __init__(self, type_def: TypeDef):
+        ClickHouseType.__init__(self, type_def)
+        self.element_types = [get_from_name(name) for name in self._alternative_names]
+        self._build_dispatch()

@@ -6,9 +6,10 @@ from sqlalchemy.exc import NoResultFound
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Geometry, Point, SimpleAggregateFunction, UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Geometry, MultiPoint, Point, SimpleAggregateFunction, UInt32
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.driver.exceptions import DatabaseError
+from tests.integration_tests.conftest import supports_multi_point
 
 
 def test_basic_reflection(test_engine: Engine):
@@ -75,6 +76,27 @@ def test_geometry_reflection(test_engine: Engine, test_db: str, test_client):
             assert table.columns.geometry.type.name == "Geometry"
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.sqlalchemy_geometry_test"))
+
+
+def test_multi_point_reflection(test_engine: Engine, test_db: str, test_client):
+    if not supports_multi_point(test_client):
+        pytest.skip(f"MultiPoint is not supported by server {test_client.server_version}")
+
+    common.set_setting("invalid_setting_action", "drop")
+    with test_engine.begin() as conn:
+        try:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.sqlalchemy_multi_point_test"))
+            conn.execute(
+                text(
+                    f"CREATE TABLE {test_db}.sqlalchemy_multi_point_test (key UInt32, multi_point MultiPoint) ENGINE MergeTree ORDER BY key"
+                )
+            )
+            metadata = db.MetaData(schema=test_db)
+            table = db.Table("sqlalchemy_multi_point_test", metadata, autoload_with=test_engine)
+            assert table.columns.multi_point.type.__class__ == MultiPoint
+            assert table.columns.multi_point.type.name == "MultiPoint"
+        finally:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.sqlalchemy_multi_point_test"))
 
 
 def test_variant_reflection(test_engine: Engine, test_db: str):

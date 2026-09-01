@@ -1,3 +1,4 @@
+import struct
 from ipaddress import IPv4Address
 from uuid import UUID
 
@@ -7,7 +8,7 @@ from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
-from clickhouse_connect.driver.exceptions import DataError
+from clickhouse_connect.driver.exceptions import DataError, InternalError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
@@ -112,6 +113,51 @@ def test_point():
     assert tuple(python) == tuple(point for point in points)
 
 
+@pytest.mark.parametrize(
+    ("type_name", "values"),
+    [
+        (
+            "MultiPoint",
+            [[(13.0, 23.0), (14.0, 24.0)], [], [(15.0, 25.0)]],
+        ),
+        (
+            "Array(MultiPoint)",
+            [[[(13.0, 23.0)], []], [], [[(14.0, 24.0), (15.0, 25.0)]]],
+        ),
+        (
+            "Tuple(MultiPoint, UInt8)",
+            [([(13.0, 23.0)], 7), ([], 13), ([(14.0, 24.0)], 79)],
+        ),
+        (
+            "Array(Tuple(MultiPoint, UInt8))",
+            [[([(13.0, 23.0)], 7)], [], [([], 13), ([(14.0, 24.0)], 79)]],
+        ),
+        (
+            "Map(String, MultiPoint)",
+            [
+                {"first": [(13.0, 23.0)]},
+                {},
+                {"second": [(14.0, 24.0), (15.0, 25.0)]},
+            ],
+        ),
+    ],
+)
+def test_multi_point_native_container_matrix(type_name, values):
+    ch_type = registry.get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+
+    source = bytes_source(bytes(dest))
+    assert list(ch_type.read_column(source, len(values), QueryContext())) == values
+
+
+def test_multi_point_registry_case_behavior():
+    assert registry.get_from_name("MultiPoint").name == "MultiPoint"
+    for spelling in ("multipoint", "MULTIPOINT"):
+        with pytest.raises(InternalError, match="Unrecognized ClickHouse type base"):
+            registry.get_from_name(spelling)
+
+
 def test_geometry():
     tagged = [
         typed_variant([(13.0, 23.0), (14.0, 24.0)], "LineString"),
@@ -120,19 +166,52 @@ def test_geometry():
         typed_variant((71.0, 81.0), "Point"),
         typed_variant([[(91.0, 101.0), (92.0, 102.0)]], "Polygon"),
         typed_variant([(111.0, 121.0)], "Ring"),
+        typed_variant([(131.0, 141.0), (132.0, 142.0)], "MultiPoint"),
         None,
     ]
     expected = [value.value if value is not None else None for value in tagged]
+    expected_body = b"".join(
+        [
+            struct.pack("<Q", 0),
+            bytes([0, 1, 2, 3, 4, 5, 6, 255]),
+            struct.pack("<Q2d2d", 2, 13.0, 14.0, 23.0, 24.0),
+            struct.pack("<QQ2d2d", 1, 2, 31.0, 32.0, 41.0, 42.0),
+            struct.pack("<QQQdd", 1, 1, 1, 51.0, 61.0),
+            struct.pack("<dd", 71.0, 81.0),
+            struct.pack("<QQ2d2d", 1, 2, 91.0, 92.0, 101.0, 102.0),
+            struct.pack("<Qdd", 1, 111.0, 121.0),
+            struct.pack("<Q2d2d", 2, 131.0, 132.0, 141.0, 142.0),
+        ]
+    )
     geometry_type = registry.get_from_name("Geometry")
     dest = bytearray()
     geometry_type.write_column(tagged, dest, InsertContext("", [], []))
+    assert bytes(dest) == expected_body
 
-    source = bytes_source(bytes(dest))
-    ctx = QueryContext()
-    read_state = geometry_type.read_column_prefix(source, ctx)
     assert geometry_type.name == "Geometry"
+    assert geometry_type.python_type is None
+    assert geometry_type.valid_formats == ("typed", "native")
     assert registry.get_from_name("GEOMETRY").name == "Geometry"
-    assert geometry_type.read_column_data(source, len(tagged), ctx, read_state) == expected
+    assert geometry_type.read_column(bytes_source(expected_body), len(tagged), QueryContext()) == expected
+    assert geometry_type.read_column(bytes_source(expected_body), len(tagged), QueryContext(query_formats={"Variant": "typed"})) == expected
+    assert geometry_type.read_column(bytes_source(expected_body), len(tagged), QueryContext(query_formats={"Geometry": "typed"})) == tagged
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_geometry_unknown_discriminator_is_data_error(buffer_cls):
+    geometry_type = registry.get_from_name("Geometry")
+    source = bytes_source(struct.pack("<Q", 0) + b"\x07", cls=buffer_cls)
+    ctx = QueryContext()
+    ctx.start_column("geometry_value")
+
+    with pytest.raises(
+        DataError,
+        match=(
+            r"Column 'geometry_value' has Variant discriminator 7, but the type definition has 7 alternatives\. "
+            r"The server sent an unknown type member or the Native stream is corrupt\."
+        ),
+    ):
+        geometry_type.read_column(source, 1, ctx)
 
 
 @pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])

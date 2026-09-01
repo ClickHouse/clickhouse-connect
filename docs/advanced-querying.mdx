@@ -379,7 +379,8 @@ client.query(
 | JSON                  | dict                    | string            | A python dictionary is returned by default. The `string` format will return a JSON string                         |
 | Variant               | object                  | typed             | `typed` returns `TypedVariant(value, type_name)` so the originating member type is preserved.                     |
 | Dynamic               | object                  | -                 | Returns the matching Python type for the ClickHouse datatype stored for the value                                 |
-| Geometry              | tuple or list           | -                 | Point values are 2-tuples. Other geometry members use nested lists.                                               |
+| MultiPoint            | list[tuple]             | -                 | Each point is returned as a 2-tuple.                                                                               |
+| Geometry              | tuple or list           | typed             | Point values are 2-tuples. Other members, including MultiPoint, use nested lists. Select `typed` with the `Geometry` key to preserve the member type. `Variant` format settings do not apply. |
 | QBit                  | list[float]             | -                 | NumPy is used automatically for faster bit transposition when installed.                                          |
 
 `query_np`, `query_np_stream`, `query_df`, and `query_df_stream` support `Time64` scales 0, 3, 6, and 9. Other scales raise `ProgrammingError` because they do not have a matching NumPy time unit. Use a standard Python query with the `int` or `string` read format to preserve those precisions. The experimental [Rust codec](/integrations/language-clients/python/rust-codec#known-behavior-differences) documents an exception for `Time64` stored inside `Dynamic`.

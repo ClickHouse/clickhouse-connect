@@ -382,6 +382,7 @@ _GEO_PHYSICAL = {
     "Point": _POINT_PHYSICAL,
     "Ring": f"Array({_POINT_PHYSICAL})",
     "LineString": f"Array({_POINT_PHYSICAL})",
+    "MultiPoint": f"Array({_POINT_PHYSICAL})",
     "Polygon": f"Array(Array({_POINT_PHYSICAL}))",
     "MultiLineString": f"Array(Array({_POINT_PHYSICAL}))",
     "MultiPolygon": f"Array(Array(Array({_POINT_PHYSICAL})))",
@@ -391,7 +392,7 @@ _GEO_PHYSICAL = {
 def _expand_alias(type_name):
     """Physical type string of a name-decoration alias, else the input unchanged.
 
-    SimpleAggregateFunction, the six geo aliases, and Nested carry a custom name
+    SimpleAggregateFunction, the seven geo aliases, and Nested carry a custom name
     over a physical type whose wire body is byte-identical, so the helper emits
     the alias header but the physical body. Recurses through Nullable
     (Nullable(Point) is legal); container recursion is left to the body helpers,
