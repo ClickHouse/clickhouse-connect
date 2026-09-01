@@ -5,9 +5,12 @@ from typing import Any
 
 import numpy
 import pandas
+from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule
 from typing_extensions import assert_type
 
 import clickhouse_connect
+from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
+from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import AsyncClient, Client, create_async_client, create_client
 from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
@@ -44,6 +47,11 @@ def context_manager() -> None:
         client.command("SELECT 1")
 
 
+def dbapi_cursor_client(cursor: Cursor) -> None:
+    assert_type(cursor.client, Client)
+    assert_type(cursor.client.command("SELECT 13"), str | int | Sequence[str] | QuerySummary)
+
+
 async def async_query() -> None:
     client = await clickhouse_connect.get_async_client(host="localhost")
     assert_type(client, AsyncClient)
@@ -64,3 +72,9 @@ async def async_query() -> None:
     )
     async with client:
         assert_type(await client.query("SELECT 13"), QueryResult)
+
+
+def async_sqlalchemy_dialect(connection: DBAPIConnection) -> None:
+    dialect = ClickHouseAsyncDialect()
+    assert_type(dialect.import_dbapi(), DBAPIModule)
+    assert_type(dialect.get_driver_connection(connection), AsyncClient)

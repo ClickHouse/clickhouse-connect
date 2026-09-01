@@ -38,8 +38,12 @@ When creating a Superset Data Source, either use the provided connection dialog,
 ### SQLAlchemy Implementation
 
 ClickHouse Connect includes a lightweight SQLAlchemy dialect implementation focused on compatibility with **Superset**
-and **SQLAlchemy Core**. Both SQLAlchemy 1.4 and 2.x are supported. SQLAlchemy 1.4 compatibility is maintained
-because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
+and **SQLAlchemy Core**. The synchronous dialect supports SQLAlchemy 1.4 and 2.x. SQLAlchemy 1.4 compatibility is
+maintained because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
+
+Async SQLAlchemy usage is available with SQLAlchemy 2.0.44 and later. Install
+`clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. Results are
+buffered. Server-side cursors are not supported.
 
 Supported features include:
 - Basic query execution via SQLAlchemy Core
