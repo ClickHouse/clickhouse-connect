@@ -15,6 +15,9 @@
 
 ### Bug Fixes
 
+- Async SQLAlchemy pool pre-ping now uses the driver's authenticated HTTP `/ping` request. Force-closed native
+  sessions are classified as disconnected and replaced on checkout or execution, while healthy ClickHouse server
+  errors and transport failures with a reusable client session do not invalidate the pool.
 - Checked-out async SQLAlchemy connections now close when returned after awaited engine disposal or when garbage
   collected. Recycle and invalidation use an explicit cancellation-safe terminate path with synchronous aiohttp
   transport fallback when graceful close cannot complete.

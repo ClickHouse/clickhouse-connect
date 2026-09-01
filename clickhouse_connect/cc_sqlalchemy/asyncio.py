@@ -28,8 +28,8 @@ if find_spec("greenlet") is None:
     )
 
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection, AsyncAdapt_terminate  # noqa: E402
-from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule  # noqa: E402
-from sqlalchemy.pool import AsyncAdaptedQueuePool, ConnectionPoolEntry  # noqa: E402
+from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPICursor, DBAPIModule  # noqa: E402
+from sqlalchemy.pool import AsyncAdaptedQueuePool, ConnectionPoolEntry, PoolProxiedConnection  # noqa: E402
 from sqlalchemy.util import await_only  # noqa: E402
 from sqlalchemy.util import queue as sqla_queue  # noqa: E402
 
@@ -235,6 +235,13 @@ class _AsyncAdaptedConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection)
 
     def close(self) -> None:
         self._client_facade.close()
+
+    def ping(self) -> bool:
+        return bool(await_only(cast("AsyncClient", self.driver_connection).ping()))
+
+    def is_closed(self) -> bool:
+        session = cast("AsyncClient", self.driver_connection)._session
+        return session is None or session.closed
 
     async def _terminate_graceful_close(self) -> None:
         await self.driver_connection.close()
@@ -539,6 +546,23 @@ class ClickHouseAsyncDialect(ClickHouseDialect):
     def get_driver_connection(self, connection: DBAPIConnection) -> AsyncClient:
         """Return the native async driver connection."""
         return cast("AsyncClient", cast(_AsyncAdaptedConnection, connection).driver_connection)
+
+    def do_ping(self, dbapi_connection: DBAPIConnection) -> bool:
+        return cast(_AsyncAdaptedConnection, dbapi_connection).ping()
+
+    def is_disconnect(
+        self,
+        e: DBAPIModule.Error,
+        connection: PoolProxiedConnection | DBAPIConnection | None,
+        cursor: DBAPICursor | None,
+    ) -> bool:
+        del e, cursor
+        if connection is None:
+            return False
+        is_closed = getattr(connection, "is_closed", None)
+        if is_closed is None:
+            return False
+        return bool(is_closed())
 
     def do_close(self, dbapi_connection: DBAPIConnection) -> None:
         cast(_AsyncAdaptedConnection, dbapi_connection).close()

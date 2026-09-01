@@ -9,7 +9,7 @@ pytest.importorskip("pytest_asyncio")
 pytest.importorskip("sqlalchemy", minversion="2.0.44")
 
 from sqlalchemy.dialects import registry
-from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy.pool import AsyncAdaptedQueuePool, PoolProxiedConnection
 from sqlalchemy.util.concurrency import await_only, greenlet_spawn
 
 from clickhouse_connect import dbapi
@@ -17,6 +17,7 @@ from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect, _As
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import create_async_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.exceptions import StreamFailureError
 from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
 
@@ -760,6 +761,104 @@ class _LifecycleClient(_SerializedClient):
     def _force_close(self) -> None:
         self.force_close_calls += 1
         self.close_release.set()
+
+
+class _PingClient(_SerializedClient):
+    def __init__(self, result: bool):
+        super().__init__()
+        self.result = result
+        self.ping_calls = 0
+
+    async def ping(self) -> bool:
+        self.ping_calls += 1
+        await asyncio.sleep(0)
+        return self.result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [True, False])
+async def test_async_dialect_do_ping_uses_native_client(result: bool):
+    dialect = ClickHouseAsyncDialect()
+    client = _PingClient(result)
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    assert await greenlet_spawn(lambda: dialect.do_ping(adapted)) is result
+    assert client.ping_calls == 1
+    assert client.calls == 0
+
+
+class _Session:
+    def __init__(self, closed: bool):
+        self.closed = closed
+
+
+class _SessionStateClient:
+    server_tz = timezone.utc
+
+    def __init__(self, session: _Session | None):
+        self._session = session
+
+    async def close(self) -> None:
+        await asyncio.sleep(0)
+
+
+def _operational_error(cause: BaseException) -> dbapi.OperationalError:
+    error = dbapi.OperationalError("Network Error")
+    error.__cause__ = cause
+    return error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(dbapi.DatabaseError("Unknown table", code=60, name="UNKNOWN_TABLE"), id="server"),
+        pytest.param(_operational_error(TimeoutError()), id="timeout"),
+        pytest.param(_operational_error(ConnectionRefusedError()), id="connection-refused"),
+        pytest.param(StreamFailureError("Stream failed"), id="stream"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("session", "expected"),
+    [
+        pytest.param(_Session(False), False, id="open"),
+        pytest.param(_Session(True), True, id="closed"),
+        pytest.param(None, True, id="absent"),
+    ],
+)
+def test_async_dialect_is_disconnect_uses_adapted_client_session_state(
+    error: dbapi.Error,
+    session: _Session | None,
+    expected: bool,
+):
+    dialect = ClickHouseAsyncDialect()
+    client = _SessionStateClient(session)
+    connection = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    assert dialect.is_disconnect(error, connection, None) is expected
+
+
+@pytest.mark.asyncio
+async def test_async_dialect_is_disconnect_uses_pool_proxied_adapted_state():
+    dialect = ClickHouseAsyncDialect()
+    client = _SessionStateClient(None)
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+    pool = ClickHouseAsyncDialect.poolclass(lambda: adapted, pool_size=1, max_overflow=0)
+    connection = await greenlet_spawn(pool.connect)
+
+    try:
+        assert isinstance(connection, PoolProxiedConnection)
+        assert dialect.is_disconnect(dbapi.OperationalError("Network Error"), connection, None) is True
+    finally:
+        await greenlet_spawn(connection.close)
+        await greenlet_spawn(pool.dispose)
+
+
+def test_async_dialect_is_disconnect_requires_client_state():
+    dialect = ClickHouseAsyncDialect()
+    error = dbapi.OperationalError("Network Error")
+
+    assert dialect.is_disconnect(error, None, None) is False
+    assert dialect.is_disconnect(error, object(), None) is False  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

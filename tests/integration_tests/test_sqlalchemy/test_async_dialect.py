@@ -11,6 +11,7 @@ pytest.importorskip("sqlalchemy", minversion="2.0.44")
 import sqlalchemy as sa
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DatabaseError as SQLAlchemyDatabaseError
+from sqlalchemy.exc import DBAPIError as SQLAlchemyDBAPIError
 from sqlalchemy.exc import InvalidRequestError, SAWarning
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base
@@ -18,6 +19,7 @@ from sqlalchemy.orm import declarative_base
 from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import DatabaseError as DriverDatabaseError
+from clickhouse_connect.driver.exceptions import ProgrammingError as DriverProgrammingError
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -183,6 +185,110 @@ async def test_async_sqlalchemy_connection_preserves_session_state(test_config: 
             await connection.exec_driver_sql(f"INSERT INTO {table_name} VALUES (13)")
             rows = await connection.exec_driver_sql(f"SELECT value FROM {table_name}")
             assert rows.all() == [(13,)]
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_pool_pre_ping_replaces_closed_native_client(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_pre_ping=True)
+
+    try:
+        async with engine.connect() as connection:
+            raw_connection = await connection.get_raw_connection()
+            stale_client = raw_connection.driver_connection
+            stale_session = stale_client._session
+            assert stale_session is not None
+            stale_connector = stale_session.connector
+            assert stale_connector is not None
+            del raw_connection
+            assert (await connection.exec_driver_sql("SELECT 13")).scalar_one() == 13
+
+        stale_client._force_close()
+        assert stale_session.closed
+        assert stale_connector.closed
+
+        async with engine.connect() as connection:
+            raw_connection = await connection.get_raw_connection()
+            replacement_client = raw_connection.driver_connection
+            del raw_connection
+            assert replacement_client is not stale_client
+            assert (await connection.exec_driver_sql("SELECT 79")).scalar_one() == 79
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_force_closed_connection_is_invalidated(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0)
+    connection = await engine.connect()
+
+    try:
+        raw_connection = await connection.get_raw_connection()
+        stale_client = raw_connection.driver_connection
+        del raw_connection
+        stale_client._force_close()
+
+        with pytest.raises(SQLAlchemyDBAPIError) as exc_info:
+            await connection.exec_driver_sql("SELECT 13")
+        assert isinstance(exc_info.value.orig, DriverProgrammingError)
+        assert exc_info.value.connection_invalidated is True
+        await connection.close()
+
+        async with engine.connect() as replacement_connection:
+            raw_connection = await replacement_connection.get_raw_connection()
+            replacement_client = raw_connection.driver_connection
+            del raw_connection
+            assert replacement_client is not stale_client
+            assert (await replacement_connection.exec_driver_sql("SELECT 79")).scalar_one() == 79
+    finally:
+        await connection.close()
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_server_error_keeps_connection_usable(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0)
+
+    try:
+        async with engine.connect() as connection:
+            raw_connection = await connection.get_raw_connection()
+            raw_client = raw_connection.driver_connection
+            del raw_connection
+
+            with pytest.raises(SQLAlchemyDatabaseError) as exc_info:
+                await connection.exec_driver_sql("SELECT * FROM async_dialect_missing_health_table")
+            assert isinstance(exc_info.value.orig, DriverDatabaseError)
+            assert exc_info.value.connection_invalidated is False
+            assert (await connection.exec_driver_sql("SELECT 101")).scalar_one() == 101
+
+            raw_connection = await connection.get_raw_connection()
+            assert raw_connection.driver_connection is raw_client
+            del raw_connection
     finally:
         await asyncio.wait_for(engine.dispose(), 10.0)
 
