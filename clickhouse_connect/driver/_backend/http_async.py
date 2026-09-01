@@ -220,6 +220,7 @@ class HttpAsyncBackend:
         self.progress_interval: str | None = None
         self.session_lease: SessionLease | None = None
         self.session_lock = asyncio.Lock()
+        self._retired_session_tasks: set[asyncio.Task[None]] = set()
         self._active_session: str | None = None
         self._last_pool_reset: float | None = None
 
@@ -246,6 +247,51 @@ class HttpAsyncBackend:
     def ensure_session(self) -> None:
         if not self.session:
             self.session = self._new_session()
+
+    async def _close_retired_session(self, lease: SessionLease) -> None:
+        try:
+            await _close_session_lease(lease)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Failed to close retired aiohttp session", exc_info=True)
+
+    def _start_session_close(self, lease: SessionLease, *, retired: bool) -> asyncio.Task[None]:
+        connector = _owned_session_connector(lease.session)
+        started = False
+
+        async def close_session() -> None:
+            nonlocal started
+            started = True
+            if retired:
+                await self._close_retired_session(lease)
+            else:
+                await _close_session_lease(lease)
+
+        task = asyncio.create_task(close_session())
+
+        def force_close_unstarted(done_task: asyncio.Task[None]) -> None:
+            if done_task.cancelled() and not started:
+                _force_close_connector(connector)
+
+        task.add_done_callback(force_close_unstarted)
+        return task
+
+    def _retire_session(self, lease: SessionLease) -> None:
+        task = self._start_session_close(lease, retired=True)
+        self._retired_session_tasks.add(task)
+        task.add_done_callback(self._retired_session_tasks.discard)
+
+    async def _rotate_connections(self, *, background: bool) -> None:
+        async with self.session_lock:
+            old_lease = self.session_lease
+            if background and old_lease is None:
+                return
+            self.session_lease = SessionLease(self._new_session())
+            if background and old_lease is not None:
+                self._retire_session(old_lease)
+        if old_lease is not None and not background:
+            await _close_session_lease(old_lease)
 
     async def resolve_token(self) -> str:
         # Run sync providers off the event loop; await async providers.
@@ -495,7 +541,7 @@ class HttpAsyncBackend:
                 # Stamp before await so concurrent callers don't all queue redundant resets.
                 self._last_pool_reset = now
                 logger.debug("connection expiration - resetting connection pool")
-                await self.close_connections()
+                await self._rotate_connections(background=True)
 
         final_params = dict_copy(self.client_settings, params)
         if server_wait:
@@ -598,7 +644,7 @@ class HttpAsyncBackend:
 
             except aiohttp.ClientConnectionError as e:
                 msg = str(e)
-                if _is_retryable_async_connection_error(e):
+                if not session.closed and _is_retryable_async_connection_error(e):
                     # Always allow at least one retry on a clean connection error so a single stale
                     # keep-alive socket doesn't surface to the caller, and additionally honor the
                     # retries budget when it is larger (e.g. query_retries for reads), so that
@@ -662,17 +708,17 @@ class HttpAsyncBackend:
         async with self.session_lock:
             old_lease = self.session_lease
             self.session_lease = None
+            retired_tasks = tuple(self._retired_session_tasks)
+        cleanup_tasks = list(retired_tasks)
         if old_lease is not None:
-            await _close_session_lease(old_lease)
+            cleanup_tasks.append(self._start_session_close(old_lease, retired=False))
+        if cleanup_tasks:
+            await asyncio.gather(*cleanup_tasks)
 
     async def close_connections(self) -> None:
         """Rotate the connection pool: new requests use a fresh session; in-flight
         requests keep using the old session until they complete, then it's closed."""
-        async with self.session_lock:
-            old_lease = self.session_lease
-            self.session_lease = SessionLease(self._new_session())
-        if old_lease is not None:
-            await _close_session_lease(old_lease)
+        await self._rotate_connections(background=False)
 
 
 if TYPE_CHECKING:
