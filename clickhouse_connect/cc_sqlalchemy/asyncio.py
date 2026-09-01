@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import tzinfo
 from importlib.metadata import version
@@ -30,6 +31,7 @@ from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection, AsyncAdap
 from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule  # noqa: E402
 from sqlalchemy.pool import AsyncAdaptedQueuePool, ConnectionPoolEntry  # noqa: E402
 from sqlalchemy.util import await_only  # noqa: E402
+from sqlalchemy.util import queue as sqla_queue  # noqa: E402
 
 from clickhouse_connect import dbapi  # noqa: E402
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect  # noqa: E402
@@ -343,31 +345,151 @@ class _AsyncDBAPI:
 
 
 _ASYNC_DBAPI = _AsyncDBAPI()
+_POOL_ACCOUNTING_EPOCH_KEY = "clickhouse_connect_async_pool_accounting_epoch"
 _POOL_GENERATION_KEY = "clickhouse_connect_async_pool_generation"
 
 
 class _ClickHouseAsyncAdaptedQueuePool(AsyncAdaptedQueuePool):
-    _clickhouse_generation = 0
+    def __init__(
+        self,
+        creator: Callable[..., Any],
+        pool_size: int = 5,
+        max_overflow: int = 10,
+        timeout: float = 30.0,
+        use_lifo: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(creator, pool_size, max_overflow, timeout, use_lifo, **kwargs)
+        self._clickhouse_accounting_epoch = 0
+        self._clickhouse_awaiting_recreate = False
+        self._clickhouse_disposing = False
+        self._clickhouse_generation = 0
+        self._clickhouse_pending_records: deque[ConnectionPoolEntry] = deque()
+        self._clickhouse_recreated = False
 
     def dispose(self) -> None:
+        self._clickhouse_awaiting_recreate = False
+        self._clickhouse_disposing = True
         self._clickhouse_generation += 1
-        super().dispose()
+        try:
+            while True:
+                try:
+                    record = self._pool.get(False)
+                except sqla_queue.Empty:
+                    break
+                try:
+                    record.close()
+                except BaseException:
+                    if record.dbapi_connection is not None:
+                        try:
+                            record.close()
+                        except BaseException:
+                            pass
+                    if record.dbapi_connection is None:
+                        self._append_pending(record)
+                    raise
+                self._append_pending(record)
+        except BaseException:
+            self._clickhouse_disposing = False
+            try:
+                self._restore_pending_records()
+            except BaseException:
+                self.logger.warning("Failed to restore async pool records after interrupted disposal", exc_info=True)
+            raise
+
+        self._overflow = 0 - self.size()
+        self._clickhouse_accounting_epoch += 1
+        self._trim_pending_records()
+        self._clickhouse_disposing = False
+        self._promote_pending_record()
+        self._clickhouse_awaiting_recreate = True
+        self.logger.info("Pool disposed. %s", self.status())
+
+    def _append_pending(self, record: ConnectionPoolEntry) -> None:
+        if self._clickhouse_disposing or self._max_overflow < 0 or len(self._clickhouse_pending_records) < self.size() + self._max_overflow:
+            self._clickhouse_pending_records.append(record)
+
+    def _trim_pending_records(self) -> None:
+        if self._max_overflow < 0:
+            return
+        capacity = self.size() + self._max_overflow
+        while len(self._clickhouse_pending_records) > capacity:
+            self._clickhouse_pending_records.pop()
+
+    def _promote_pending_record(self) -> None:
+        while self._clickhouse_pending_records and self._inc_overflow():
+            record = self._clickhouse_pending_records.popleft()
+            record_info = record.record_info
+            assert record_info is not None
+            try:
+                self._pool.put_nowait(record)
+            except sqla_queue.Full:
+                self._dec_overflow()
+                self._clickhouse_pending_records.appendleft(record)
+                break
+            record_info[_POOL_ACCOUNTING_EPOCH_KEY] = self._clickhouse_accounting_epoch
+
+    def _restore_pending_records(self) -> None:
+        pending_records = self._clickhouse_pending_records
+        self._clickhouse_pending_records = deque()
+        while pending_records:
+            record = pending_records.popleft()
+            record_info = record.record_info
+            if record_info is not None and record_info.get(_POOL_ACCOUNTING_EPOCH_KEY) == self._clickhouse_accounting_epoch:
+                super()._do_return_conn(record)
+            else:
+                self._append_pending(record)
+        self._promote_pending_record()
 
     def _do_return_conn(self, record: ConnectionPoolEntry) -> None:
         # SQLAlchemy replaces a disposed pool without closing connections that
         # are still checked out. Close them when they return to the old pool.
         record_info = record.record_info
-        if record_info is None or record_info.get(_POOL_GENERATION_KEY) != self._clickhouse_generation:
+        stale = (
+            self._clickhouse_disposing
+            or self._clickhouse_recreated
+            or record_info is None
+            or record_info.get(_POOL_GENERATION_KEY) != self._clickhouse_generation
+        )
+        if stale:
             record.close()
+            if self._clickhouse_disposing:
+                self._append_pending(record)
+            elif record_info is not None and record_info.get(_POOL_ACCOUNTING_EPOCH_KEY) == self._clickhouse_accounting_epoch:
+                super()._do_return_conn(record)
+            else:
+                self._append_pending(record)
+                self._promote_pending_record()
         else:
             super()._do_return_conn(record)
 
     def _do_get(self) -> ConnectionPoolEntry:
-        record = super()._do_get()
-        record_info = record.record_info
-        assert record_info is not None
-        record_info[_POOL_GENERATION_KEY] = self._clickhouse_generation
-        return record
+        self._clickhouse_awaiting_recreate = False
+        generation = self._clickhouse_generation
+        accounting_epoch = self._clickhouse_accounting_epoch
+        while True:
+            record = super()._do_get()
+            record_info = record.record_info
+            assert record_info is not None
+            if _POOL_ACCOUNTING_EPOCH_KEY not in record_info:
+                record_info[_POOL_ACCOUNTING_EPOCH_KEY] = accounting_epoch
+            if record_info[_POOL_ACCOUNTING_EPOCH_KEY] != self._clickhouse_accounting_epoch:
+                if not self._inc_overflow():
+                    record.close()
+                    self._append_pending(record)
+                    self._promote_pending_record()
+                    continue
+                record_info[_POOL_ACCOUNTING_EPOCH_KEY] = self._clickhouse_accounting_epoch
+            record_info[_POOL_GENERATION_KEY] = generation
+            self._promote_pending_record()
+            return record
+
+    def recreate(self) -> _ClickHouseAsyncAdaptedQueuePool:
+        replacement = super().recreate()
+        if self._clickhouse_awaiting_recreate:
+            self._clickhouse_recreated = True
+            self._clickhouse_awaiting_recreate = False
+        return cast("_ClickHouseAsyncAdaptedQueuePool", replacement)
 
 
 class ClickHouseAsyncDialect(ClickHouseDialect):

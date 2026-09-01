@@ -203,16 +203,29 @@ async def test_async_sqlalchemy_invalidation_and_recycle_close_native_clients(te
         connection = await engine.connect()
         raw_connection = await connection.get_raw_connection()
         invalidated_client = raw_connection.driver_connection
+        invalidated_session = invalidated_client._session
+        assert invalidated_session is not None
+        invalidated_connector = invalidated_session.connector
+        assert invalidated_connector is not None
+        assert not invalidated_session.closed
+        assert not invalidated_connector.closed
         del raw_connection
 
         await connection.invalidate()
 
-        assert invalidated_client._session is None or invalidated_client._session.closed
+        assert invalidated_session.closed
+        assert invalidated_connector.closed
         await connection.close()
 
         async with engine.connect() as recycled_connection:
             raw_connection = await recycled_connection.get_raw_connection()
             recycled_client = raw_connection.driver_connection
+            recycled_session = recycled_client._session
+            assert recycled_session is not None
+            recycled_connector = recycled_session.connector
+            assert recycled_connector is not None
+            assert not recycled_session.closed
+            assert not recycled_connector.closed
             del raw_connection
             assert (await recycled_connection.exec_driver_sql("SELECT 13")).scalar_one() == 13
 
@@ -224,7 +237,8 @@ async def test_async_sqlalchemy_invalidation_and_recycle_close_native_clients(te
             assert (await replacement_connection.exec_driver_sql("SELECT 79")).scalar_one() == 79
 
         assert recycled_client is not replacement_client
-        assert recycled_client._session is None or recycled_client._session.closed
+        assert recycled_session.closed
+        assert recycled_connector.closed
     finally:
         await asyncio.wait_for(engine.dispose(), 10.0)
 
@@ -243,15 +257,21 @@ async def test_async_sqlalchemy_checked_out_connection_closes_after_pool_dispose
     connection = await engine.connect()
     raw_connection = await connection.get_raw_connection()
     raw_client = raw_connection.driver_connection
+    session = raw_client._session
+    assert session is not None
+    connector = session.connector
+    assert connector is not None
     del raw_connection
 
     try:
         await engine.dispose()
-        assert raw_client._session is not None and not raw_client._session.closed
+        assert not session.closed
+        assert not connector.closed
 
         await connection.close()
 
-        assert raw_client._session is None or raw_client._session.closed
+        assert session.closed
+        assert connector.closed
         async with engine.connect() as replacement_connection:
             assert (await replacement_connection.exec_driver_sql("SELECT 127")).scalar_one() == 127
     finally:
@@ -275,16 +295,22 @@ async def test_async_sqlalchemy_gc_force_closes_checked_out_connection(test_conf
         connection = await engine.connect()
         raw_connection = await connection.get_raw_connection()
         raw_client = raw_connection.driver_connection
+        session = raw_client._session
+        assert session is not None
+        connector = session.connector
+        assert connector is not None
         connection_ref = weakref.ref(connection)
         del raw_connection
         await engine.dispose()
-        assert raw_client._session is not None and not raw_client._session.closed
+        assert not session.closed
+        assert not connector.closed
 
-        with pytest.warns(SAWarning, match="garbage collector.*terminated"):
+        with pytest.warns(SAWarning, match="garbage collector.*will be terminated"):
             del connection
             gc.collect()
 
         assert connection_ref() is None
-        assert raw_client._session is None or raw_client._session.closed
+        assert session.closed
+        assert connector.closed
     finally:
         await asyncio.wait_for(engine.dispose(), 10.0)
