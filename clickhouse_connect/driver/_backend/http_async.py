@@ -710,10 +710,16 @@ class HttpAsyncBackend:
             self.session_lease = None
             retired_tasks = tuple(self._retired_session_tasks)
         cleanup_tasks = list(retired_tasks)
+        foreground_task = None
         if old_lease is not None:
-            cleanup_tasks.append(self._start_session_close(old_lease, retired=False))
+            foreground_task = self._start_session_close(old_lease, retired=False)
+            cleanup_tasks.append(foreground_task)
         if cleanup_tasks:
-            await asyncio.gather(*cleanup_tasks)
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        if foreground_task is not None:
+            # Shared retired tasks may be cancelled by another close caller. Only
+            # this caller's foreground cleanup result is authoritative here.
+            foreground_task.result()
 
     async def close_connections(self) -> None:
         """Rotate the connection pool: new requests use a fresh session; in-flight

@@ -364,6 +364,39 @@ async def test_cancelled_close_owns_current_and_background_retirement(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_overlapping_close_does_not_inherit_shared_retirement_cancellation():
+    backend = _build_backend()
+    retired_session = _RequestSession("retired")
+    retired_lease = SessionLease(retired_session)
+    retired_lease.acquire()
+    backend._retire_session(retired_lease)
+    await asyncio.sleep(0)
+
+    active_session = _RequestSession("active")
+    active_lease = SessionLease(active_session)
+    active_lease.acquire()
+    backend.session_lease = active_lease
+
+    first_close = asyncio.create_task(backend.close())
+    await _wait_until(lambda: backend.session_lease is None)
+    second_close = asyncio.create_task(backend.close())
+    await asyncio.sleep(0)
+    assert not first_close.done()
+    assert not second_close.done()
+
+    first_close.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_close
+    await second_close
+
+    assert retired_session.connector.force_close_calls == 1
+    assert active_session.connector.force_close_calls == 1
+    retired_lease.release()
+    active_lease.release()
+    await _wait_until(lambda: not backend._retired_session_tasks)
+
+
+@pytest.mark.asyncio
 async def test_close_waits_for_drain_without_an_internal_timeout():
     backend = _build_backend()
     backend.ensure_session()

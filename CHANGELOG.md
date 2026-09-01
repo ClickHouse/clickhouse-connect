@@ -18,7 +18,8 @@
   detached aiohttp transport before propagating cancellation. Failed graceful session cleanup receives the same
   fallback. Automatic connection-age rotation retires the old session in owned background cleanup, so cancellation
   of the triggering request cannot interrupt or replay another request still using that session. Requests interrupted
-  by an explicitly force-closed session are not retried, preventing teardown from replaying an insert body.
+  by an explicitly force-closed session are not retried, preventing teardown from replaying an insert body. Concurrent
+  close callers do not inherit one another's cancellation while they wait on the same retired session cleanup.
 - Cancelling an `AsyncClient` insert while its Native serializer is blocked on the bounded request-body queue now
   shuts down the queue before awaiting the serializer. Async-generator cleanup no longer waits indefinitely, and
   reusable insert contexts release their data and serializer error state after every attempt. External task
