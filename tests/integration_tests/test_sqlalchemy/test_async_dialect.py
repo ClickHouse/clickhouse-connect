@@ -96,7 +96,7 @@ async def test_async_sqlalchemy_dialect_acceptance(test_config: TestConfig) -> N
             assert raw_client._backend.connector_kwargs["limit"] == 3
             assert raw_client._backend.connector_kwargs["limit_per_host"] == 2
             assert raw_client._backend.connector_kwargs["keepalive_timeout"] == 7.5
-            assert raw_client._autogenerate_session_id_param is False
+            assert raw_client._autogenerate_session_id_param is True
 
             await connection.execute(sa.text(f"CREATE TABLE {table_name} (id UInt32, label String) ENGINE MergeTree ORDER BY id"))
             await connection.execute(
@@ -156,3 +156,30 @@ async def test_async_sqlalchemy_dialect_acceptance(test_config: TestConfig) -> N
 
     assert raw_clients
     assert all(client._session is None or client._session.closed for client in raw_clients.values())
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_connection_preserves_session_state(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url)
+    table_name = f"test_async_session_{uuid.uuid4().hex}"
+
+    try:
+        async with engine.connect() as connection:
+            await connection.exec_driver_sql("SET max_threads = 1")
+            setting = await connection.exec_driver_sql("SELECT getSetting('max_threads')")
+            assert setting.scalar_one() == 1
+
+            await connection.exec_driver_sql(f"CREATE TEMPORARY TABLE {table_name} (value UInt32)")
+            await connection.exec_driver_sql(f"INSERT INTO {table_name} VALUES (13)")
+            rows = await connection.exec_driver_sql(f"SELECT value FROM {table_name}")
+            assert rows.all() == [(13,)]
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)

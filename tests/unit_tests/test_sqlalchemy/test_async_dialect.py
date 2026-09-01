@@ -75,8 +75,30 @@ async def test_async_dbapi_connector_options(connect_options, expected):
     assert raw._backend.connector_kwargs["limit"] == expected[0]
     assert raw._backend.connector_kwargs["limit_per_host"] == expected[1]
     assert raw._backend.connector_kwargs["keepalive_timeout"] == expected[2]
-    assert raw._autogenerate_session_id_param is False
+    assert raw._autogenerate_session_id_param is True
     assert ClickHouseAsyncDialect().get_driver_connection(adapted) is raw
+    await greenlet_spawn(adapted.close)
+
+
+@pytest.mark.parametrize(
+    "connect_options",
+    (
+        {"autogenerate_session_id": False},
+        {"autogenerate_session_id": "false"},
+        {"dsn": "http://localhost:8123/default?autogenerate_session_id=false"},
+        {
+            "dsn": "http://localhost:8123/default?autogenerate_session_id=true",
+            "autogenerate_session_id": False,
+        },
+    ),
+)
+@pytest.mark.asyncio
+async def test_async_dbapi_session_id_default_can_be_disabled(connect_options):
+    async_dbapi = ClickHouseAsyncDialect.import_dbapi()
+    with patch.object(AsyncClient, "_initialize", new=AsyncMock()):
+        adapted = await greenlet_spawn(lambda: async_dbapi.connect(**connect_options))
+
+    assert adapted.driver_connection._autogenerate_session_id_param is False
     await greenlet_spawn(adapted.close)
 
 

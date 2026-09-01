@@ -5,6 +5,7 @@ import re
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import tzinfo
 from importlib.metadata import version
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlparse
 
@@ -18,6 +19,11 @@ if _SQLALCHEMY_VERSION_INFO < (2, 0, 44) or _SQLALCHEMY_VERSION_INFO >= (3, 0, 0
     raise ImportError(
         "The ClickHouse async SQLAlchemy dialect requires SQLAlchemy >=2.0.44,<3.0. "
         'Install with: pip install "clickhouse-connect[sqlalchemy-async]"'
+    )
+
+if find_spec("greenlet") is None:
+    raise ImportError(
+        'The ClickHouse async SQLAlchemy dialect requires greenlet. Install with: pip install "clickhouse-connect[sqlalchemy-async]"'
     )
 
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection  # noqa: E402
@@ -298,8 +304,9 @@ class _AsyncDBAPI:
         if async_creator_fn is not None:
             driver_connection = await_only(async_creator_fn())
         else:
-            kwargs.setdefault("autogenerate_session_id", False)
             dsn_options = parse_qs(urlparse(dsn).query) if dsn else {}
+            if "autogenerate_session_id" not in kwargs and "autogenerate_session_id" not in dsn_options:
+                kwargs["autogenerate_session_id"] = True
             if connector_limit is None and "connector_limit" not in dsn_options:
                 connector_limit = 1
             if connector_limit_per_host is None and "connector_limit_per_host" not in dsn_options:
