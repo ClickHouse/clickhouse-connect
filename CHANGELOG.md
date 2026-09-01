@@ -15,6 +15,9 @@
 
 ### Bug Fixes
 
+- Checked-out async SQLAlchemy connections now close when returned after awaited engine disposal or when garbage
+  collected. Recycle and invalidation use an explicit cancellation-safe terminate path with synchronous aiohttp
+  transport fallback when graceful close cannot complete.
 - Cancelling `AsyncClient.close()`, context-manager exit, or explicit connection-pool rotation now force-closes the
   detached aiohttp transport before propagating cancellation. Failed graceful session cleanup receives the same
   fallback. Automatic connection-age rotation retires the old session in owned background cleanup, so cancellation

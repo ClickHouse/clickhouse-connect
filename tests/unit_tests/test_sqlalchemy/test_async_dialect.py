@@ -26,7 +26,8 @@ def test_async_dialect_registry_and_flags():
     assert ClickHouseAsyncDialect.__dict__["supports_statement_cache"] is False
     assert "import_dbapi" in ClickHouseAsyncDialect.__dict__
     assert ClickHouseAsyncDialect.is_async is True
-    assert ClickHouseAsyncDialect.poolclass is AsyncAdaptedQueuePool
+    assert ClickHouseAsyncDialect.has_terminate is True
+    assert issubclass(ClickHouseAsyncDialect.poolclass, AsyncAdaptedQueuePool)
     assert ClickHouseAsyncDialect.supports_server_side_cursors is False
 
 
@@ -51,6 +52,52 @@ def test_async_dbapi_mirrors_pep249_surface():
         assert getattr(async_dbapi, name) is getattr(dbapi, name)
     assert async_dbapi.Binary([0, 255]) == b"\x00\xff"
     assert async_dbapi.DateFromTicks(0) == dbapi.DateFromTicks(0)
+
+
+@pytest.mark.asyncio
+async def test_async_pool_generation_closes_stale_returns_during_direct_reuse():
+    class Connection:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+        def rollback(self) -> None:
+            pass
+
+    connections: list[Connection] = []
+
+    def creator() -> Connection:
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    pool = ClickHouseAsyncDialect.poolclass(creator, pool_size=1, max_overflow=0)
+    old_checkout = await greenlet_spawn(pool.connect)
+    old_connection = old_checkout.dbapi_connection
+    assert isinstance(old_connection, Connection)
+
+    await greenlet_spawn(pool.dispose)
+    new_checkout = await greenlet_spawn(pool.connect)
+    new_connection = new_checkout.dbapi_connection
+    assert isinstance(new_connection, Connection)
+
+    await greenlet_spawn(old_checkout.close)
+    assert old_connection.close_calls == 1
+    assert new_connection.close_calls == 0
+
+    await greenlet_spawn(new_checkout.close)
+    assert pool.checkedout() == 0
+
+    reused_checkout = await greenlet_spawn(pool.connect)
+
+    assert reused_checkout.dbapi_connection is new_connection
+    assert len(connections) == 2
+    assert pool.checkedout() == 1
+    await greenlet_spawn(reused_checkout.close)
+    assert pool.checkedout() == 0
+    await greenlet_spawn(pool.dispose)
 
 
 @pytest.mark.parametrize(
@@ -184,6 +231,100 @@ class _SerializedClient:
 
     def _add_integration_tag(self, name: str) -> None:
         pass
+
+
+class _LifecycleClient(_SerializedClient):
+    def __init__(self, close_error: BaseException | None = None, block_close: bool = False):
+        super().__init__()
+        self.close_error = close_error
+        self.close_calls = 0
+        self.force_close_calls = 0
+        self.close_started = asyncio.Event()
+        self.close_finished = asyncio.Event()
+        self.close_release = asyncio.Event()
+        if not block_close:
+            self.close_release.set()
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.close_started.set()
+        await self.close_release.wait()
+        if self.close_error is not None:
+            raise self.close_error
+        self.close_finished.set()
+
+    def _force_close(self) -> None:
+        self.force_close_calls += 1
+        self.close_release.set()
+
+
+@pytest.mark.asyncio
+async def test_async_dialect_do_close_uses_graceful_close():
+    dialect = ClickHouseAsyncDialect()
+    client = _LifecycleClient()
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    await greenlet_spawn(lambda: dialect.do_close(adapted))
+
+    assert client.close_calls == 1
+    assert client.force_close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_async_dialect_do_terminate_uses_graceful_close_in_greenlet():
+    dialect = ClickHouseAsyncDialect()
+    client = _LifecycleClient()
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    await greenlet_spawn(lambda: dialect.do_terminate(adapted))
+
+    assert client.close_calls == 1
+    assert client.force_close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_async_dialect_do_terminate_force_closes_outside_greenlet():
+    dialect = ClickHouseAsyncDialect()
+    client = _LifecycleClient()
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    dialect.do_terminate(adapted)
+
+    assert client.close_calls == 0
+    assert client.force_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_async_dialect_cancelled_terminate_force_closes_and_preserves_cancellation():
+    dialect = ClickHouseAsyncDialect()
+    client = _LifecycleClient(block_close=True)
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    terminate_task = asyncio.create_task(greenlet_spawn(lambda: dialect.do_terminate(adapted)))
+    await asyncio.wait_for(client.close_started.wait(), timeout=1)
+    terminate_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await terminate_task
+    await asyncio.wait_for(client.close_finished.wait(), timeout=1)
+
+    assert client.close_calls == 1
+    assert client.force_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_async_dialect_unexpected_terminate_error_is_not_force_closed():
+    dialect = ClickHouseAsyncDialect()
+    close_error = RuntimeError("graceful close failed")
+    client = _LifecycleClient(close_error=close_error)
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError) as caught:
+        await greenlet_spawn(lambda: dialect.do_terminate(adapted))
+
+    assert caught.value is close_error
+    assert client.close_calls == 1
+    assert client.force_close_calls == 0
 
 
 class _InsertRoutingClient(_SerializedClient):

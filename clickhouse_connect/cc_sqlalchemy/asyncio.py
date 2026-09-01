@@ -26,9 +26,9 @@ if find_spec("greenlet") is None:
         'The ClickHouse async SQLAlchemy dialect requires greenlet. Install with: pip install "clickhouse-connect[sqlalchemy-async]"'
     )
 
-from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection  # noqa: E402
+from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection, AsyncAdapt_terminate  # noqa: E402
 from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule  # noqa: E402
-from sqlalchemy.pool import AsyncAdaptedQueuePool  # noqa: E402
+from sqlalchemy.pool import AsyncAdaptedQueuePool, ConnectionPoolEntry  # noqa: E402
 from sqlalchemy.util import await_only  # noqa: E402
 
 from clickhouse_connect import dbapi  # noqa: E402
@@ -209,7 +209,7 @@ class _AsyncCursor(Cursor):
         return
 
 
-class _AsyncAdaptedConnection(AsyncAdapt_dbapi_connection):
+class _AsyncAdaptedConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection):
     __slots__ = ("_client_facade",)
 
     def __init__(self, async_dbapi: _AsyncDBAPI, driver_connection: AsyncClient):
@@ -233,6 +233,12 @@ class _AsyncAdaptedConnection(AsyncAdapt_dbapi_connection):
 
     def close(self) -> None:
         self._client_facade.close()
+
+    async def _terminate_graceful_close(self) -> None:
+        await self.driver_connection.close()
+
+    def _terminate_force_close(self) -> None:
+        self.driver_connection._force_close()
 
     def command(
         self,
@@ -337,6 +343,31 @@ class _AsyncDBAPI:
 
 
 _ASYNC_DBAPI = _AsyncDBAPI()
+_POOL_GENERATION_KEY = "clickhouse_connect_async_pool_generation"
+
+
+class _ClickHouseAsyncAdaptedQueuePool(AsyncAdaptedQueuePool):
+    _clickhouse_generation = 0
+
+    def dispose(self) -> None:
+        self._clickhouse_generation += 1
+        super().dispose()
+
+    def _do_return_conn(self, record: ConnectionPoolEntry) -> None:
+        # SQLAlchemy replaces a disposed pool without closing connections that
+        # are still checked out. Close them when they return to the old pool.
+        record_info = record.record_info
+        if record_info is None or record_info.get(_POOL_GENERATION_KEY) != self._clickhouse_generation:
+            record.close()
+        else:
+            super()._do_return_conn(record)
+
+    def _do_get(self) -> ConnectionPoolEntry:
+        record = super()._do_get()
+        record_info = record.record_info
+        assert record_info is not None
+        record_info[_POOL_GENERATION_KEY] = self._clickhouse_generation
+        return record
 
 
 class ClickHouseAsyncDialect(ClickHouseDialect):
@@ -344,7 +375,8 @@ class ClickHouseAsyncDialect(ClickHouseDialect):
 
     driver = "async"
     is_async = True
-    poolclass = AsyncAdaptedQueuePool
+    has_terminate = True
+    poolclass = _ClickHouseAsyncAdaptedQueuePool
     supports_server_side_cursors: bool = False
     supports_statement_cache: bool = False
 
@@ -356,3 +388,9 @@ class ClickHouseAsyncDialect(ClickHouseDialect):
     def get_driver_connection(self, connection: DBAPIConnection) -> AsyncClient:
         """Return the native async driver connection."""
         return cast("AsyncClient", cast(_AsyncAdaptedConnection, connection).driver_connection)
+
+    def do_close(self, dbapi_connection: DBAPIConnection) -> None:
+        cast(_AsyncAdaptedConnection, dbapi_connection).close()
+
+    def do_terminate(self, dbapi_connection: DBAPIConnection) -> None:
+        cast(_AsyncAdaptedConnection, dbapi_connection).terminate()

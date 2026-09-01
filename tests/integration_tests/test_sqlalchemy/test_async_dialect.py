@@ -1,5 +1,7 @@
 import asyncio
+import gc
 import uuid
+import weakref
 
 import pytest
 
@@ -9,7 +11,7 @@ pytest.importorskip("sqlalchemy", minversion="2.0.44")
 import sqlalchemy as sa
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DatabaseError as SQLAlchemyDatabaseError
-from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.exc import InvalidRequestError, SAWarning
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base
 
@@ -181,5 +183,108 @@ async def test_async_sqlalchemy_connection_preserves_session_state(test_config: 
             await connection.exec_driver_sql(f"INSERT INTO {table_name} VALUES (13)")
             rows = await connection.exec_driver_sql(f"SELECT value FROM {table_name}")
             assert rows.all() == [(13,)]
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_invalidation_and_recycle_close_native_clients(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_recycle=3600)
+
+    try:
+        connection = await engine.connect()
+        raw_connection = await connection.get_raw_connection()
+        invalidated_client = raw_connection.driver_connection
+        del raw_connection
+
+        await connection.invalidate()
+
+        assert invalidated_client._session is None or invalidated_client._session.closed
+        await connection.close()
+
+        async with engine.connect() as recycled_connection:
+            raw_connection = await recycled_connection.get_raw_connection()
+            recycled_client = raw_connection.driver_connection
+            del raw_connection
+            assert (await recycled_connection.exec_driver_sql("SELECT 13")).scalar_one() == 13
+
+        engine.sync_engine.pool._recycle = 0
+        async with engine.connect() as replacement_connection:
+            raw_connection = await replacement_connection.get_raw_connection()
+            replacement_client = raw_connection.driver_connection
+            del raw_connection
+            assert (await replacement_connection.exec_driver_sql("SELECT 79")).scalar_one() == 79
+
+        assert recycled_client is not replacement_client
+        assert recycled_client._session is None or recycled_client._session.closed
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_checked_out_connection_closes_after_pool_dispose(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0)
+    connection = await engine.connect()
+    raw_connection = await connection.get_raw_connection()
+    raw_client = raw_connection.driver_connection
+    del raw_connection
+
+    try:
+        await engine.dispose()
+        assert raw_client._session is not None and not raw_client._session.closed
+
+        await connection.close()
+
+        assert raw_client._session is None or raw_client._session.closed
+        async with engine.connect() as replacement_connection:
+            assert (await replacement_connection.exec_driver_sql("SELECT 127")).scalar_one() == 127
+    finally:
+        await connection.close()
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_gc_force_closes_checked_out_connection(test_config: TestConfig) -> None:
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+    )
+    engine = create_async_engine(url, pool_size=1, max_overflow=0)
+
+    try:
+        connection = await engine.connect()
+        raw_connection = await connection.get_raw_connection()
+        raw_client = raw_connection.driver_connection
+        connection_ref = weakref.ref(connection)
+        del raw_connection
+        await engine.dispose()
+        assert raw_client._session is not None and not raw_client._session.closed
+
+        with pytest.warns(SAWarning, match="garbage collector.*terminated"):
+            del connection
+            gc.collect()
+
+        assert connection_ref() is None
+        assert raw_client._session is None or raw_client._session.closed
     finally:
         await asyncio.wait_for(engine.dispose(), 10.0)

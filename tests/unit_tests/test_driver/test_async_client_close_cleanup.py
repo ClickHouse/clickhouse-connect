@@ -1,11 +1,19 @@
 import asyncio
+import gc
+import threading
 import time
+import weakref
 
 import aiohttp
 import pytest
 
 from clickhouse_connect import common
-from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, SessionLease, release_lease
+from clickhouse_connect.driver._backend.http_async import (
+    HttpAsyncBackend,
+    SessionLease,
+    _force_close_connector,
+    release_lease,
+)
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import OperationalError
 
@@ -139,6 +147,29 @@ async def test_cancelled_rotation_force_closes_retired_session_and_keeps_replace
 
     old_lease.release()
     await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_force_close_reaches_explicit_rotation_and_replacement(monkeypatch):
+    backend = _build_backend()
+    old_session = _RequestSession("old")
+    old_lease = SessionLease(old_session)
+    old_lease.acquire()
+    replacement_session = _RequestSession("replacement")
+    backend.session_lease = old_lease
+    monkeypatch.setattr(backend, "_new_session", lambda: replacement_session)
+
+    rotation_task = asyncio.create_task(backend.close_connections())
+    await _wait_until(lambda: backend.session is replacement_session)
+    assert not rotation_task.done()
+
+    backend.force_close()
+    backend.force_close()
+
+    assert old_session.connector.force_close_calls == 1
+    assert replacement_session.connector.force_close_calls == 1
+    old_lease.release()
+    await rotation_task
 
 
 class _RequestResponse:
@@ -413,6 +444,139 @@ async def test_close_waits_for_drain_without_an_internal_timeout():
     lease.release()
     await close_task
     assert session.closed
+    assert connector.closed
+
+
+@pytest.mark.asyncio
+async def test_force_close_is_idempotent_and_reaches_detached_graceful_close():
+    backend = _build_backend()
+    session = _RequestSession("active")
+    lease = SessionLease(session)
+    lease.acquire()
+    backend.session_lease = lease
+
+    close_task = asyncio.create_task(backend.close())
+    await _wait_until(lambda: backend.session_lease is None)
+    assert not close_task.done()
+
+    backend.force_close()
+    backend.force_close()
+
+    assert session.connector.force_close_calls == 1
+    assert session.closed
+    lease.release()
+    await close_task
+
+
+@pytest.mark.asyncio
+async def test_force_close_from_worker_thread_runs_on_connector_loop(monkeypatch):
+    backend = _build_backend()
+    backend.ensure_session()
+    _, session, connector = _current_session(backend)
+    loop = asyncio.get_running_loop()
+    debug = loop.get_debug()
+    owner_thread = threading.get_ident()
+    close_threads: list[int] = []
+    original_close = aiohttp.TCPConnector._close
+
+    def recording_close(self) -> None:
+        if self is connector:
+            close_threads.append(threading.get_ident())
+        original_close(self)
+
+    monkeypatch.setattr(aiohttp.TCPConnector, "_close", recording_close)
+    loop.set_debug(True)
+    try:
+        await asyncio.to_thread(backend.force_close)
+        await _wait_until(lambda: connector.closed)
+
+        assert session.closed
+        assert close_threads == [owner_thread]
+    finally:
+        loop.set_debug(debug)
+        if not session.closed:
+            await session.close()
+
+
+def test_force_close_on_stopped_owner_loop_runs_synchronously():
+    class StoppedLoop:
+        @staticmethod
+        def is_running() -> bool:
+            return False
+
+    class Connector:
+        closed = False
+        _loop = StoppedLoop()
+
+        def _close(self) -> None:
+            self.closed = True
+
+    connector = Connector()
+
+    _force_close_connector(connector)  # type: ignore[arg-type]
+
+    assert connector.closed
+
+
+def test_force_close_dispatch_retains_session_until_owner_loop_callback():
+    callbacks = []
+
+    class OwnerLoop:
+        @staticmethod
+        def is_running() -> bool:
+            return True
+
+        @staticmethod
+        def call_soon_threadsafe(callback) -> None:
+            callbacks.append(callback)
+
+    class Connector:
+        closed = False
+        _loop = OwnerLoop()
+
+        def _close(self) -> None:
+            self.closed = True
+
+    class Session:
+        pass
+
+    connector = Connector()
+    session = Session()
+    session_ref = weakref.ref(session)
+
+    _force_close_connector(connector, session)  # type: ignore[arg-type]
+    del session
+    gc.collect()
+
+    assert session_ref() is not None
+    assert not connector.closed
+    callbacks.pop()()
+    gc.collect()
+    assert connector.closed
+    assert session_ref() is None
+
+
+def test_force_close_falls_back_when_owner_loop_rejects_dispatch():
+    class ClosedLoop:
+        @staticmethod
+        def is_running() -> bool:
+            return True
+
+        @staticmethod
+        def call_soon_threadsafe(callback) -> None:
+            raise RuntimeError("event loop is closed")
+
+    class Connector:
+        closed = False
+        _loop = ClosedLoop()
+
+        def _close(self) -> None:
+            self.closed = True
+
+    connector = Connector()
+
+    _force_close_connector(connector)  # type: ignore[arg-type]
+
     assert connector.closed
 
 

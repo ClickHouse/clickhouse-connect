@@ -13,9 +13,11 @@ import inspect
 import io
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -146,8 +148,8 @@ def _owned_session_connector(session: aiohttp.ClientSession) -> aiohttp.BaseConn
     return getattr(session, "connector", None)
 
 
-def _force_close_connector(connector: aiohttp.BaseConnector | None) -> None:
-    if connector is None:
+def _close_connector_now(connector: aiohttp.BaseConnector | None, _retain: object | None = None) -> None:
+    if connector is None or connector.closed:
         return
     close = getattr(connector, "_close", None)
     if close is None:
@@ -157,6 +159,24 @@ def _force_close_connector(connector: aiohttp.BaseConnector | None) -> None:
         close()
     except BaseException:
         logger.warning("Failed to force-close aiohttp connector", exc_info=True)
+
+
+def _force_close_connector(connector: aiohttp.BaseConnector | None, retain: object | None = None) -> None:
+    if connector is None or connector.closed:
+        return
+    owner_loop = getattr(connector, "_loop", None)
+    if owner_loop is not None and owner_loop.is_running():
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not owner_loop:
+            try:
+                owner_loop.call_soon_threadsafe(partial(_close_connector_now, connector, retain))
+                return
+            except RuntimeError:
+                pass
+    _close_connector_now(connector, retain)
 
 
 async def _close_session_lease(lease: SessionLease) -> None:
@@ -221,6 +241,8 @@ class HttpAsyncBackend:
         self.session_lease: SessionLease | None = None
         self.session_lock = asyncio.Lock()
         self._retired_session_tasks: set[asyncio.Task[None]] = set()
+        self._closing_sessions: set[aiohttp.ClientSession] = set()
+        self._closing_sessions_lock = threading.Lock()
         self._active_session: str | None = None
         self._last_pool_reset: float | None = None
 
@@ -260,6 +282,10 @@ class HttpAsyncBackend:
         connector = _owned_session_connector(lease.session)
         started = False
 
+        if connector is not None:
+            with self._closing_sessions_lock:
+                self._closing_sessions.add(lease.session)
+
         async def close_session() -> None:
             nonlocal started
             started = True
@@ -268,11 +294,20 @@ class HttpAsyncBackend:
             else:
                 await _close_session_lease(lease)
 
-        task = asyncio.create_task(close_session())
+        try:
+            task = asyncio.create_task(close_session())
+        except BaseException:
+            if connector is not None:
+                with self._closing_sessions_lock:
+                    self._closing_sessions.discard(lease.session)
+            raise
 
         def force_close_unstarted(done_task: asyncio.Task[None]) -> None:
             if done_task.cancelled() and not started:
-                _force_close_connector(connector)
+                _force_close_connector(connector, lease.session)
+            if connector is not None:
+                with self._closing_sessions_lock:
+                    self._closing_sessions.discard(lease.session)
 
         task.add_done_callback(force_close_unstarted)
         return task
@@ -291,7 +326,7 @@ class HttpAsyncBackend:
             if background and old_lease is not None:
                 self._retire_session(old_lease)
         if old_lease is not None and not background:
-            await _close_session_lease(old_lease)
+            await self._start_session_close(old_lease, retired=False)
 
     async def resolve_token(self) -> str:
         # Run sync providers off the event loop; await async providers.
@@ -720,6 +755,15 @@ class HttpAsyncBackend:
             # Shared retired tasks may be cancelled by another close caller. Only
             # this caller's foreground cleanup result is authoritative here.
             foreground_task.result()
+
+    def force_close(self) -> None:
+        lease = self.session_lease
+        self.session_lease = None
+        sessions = {lease.session} if lease is not None else set()
+        with self._closing_sessions_lock:
+            sessions.update(self._closing_sessions)
+        for session in sessions:
+            _force_close_connector(_owned_session_connector(session), session)
 
     async def close_connections(self) -> None:
         """Rotate the connection pool: new requests use a fresh session; in-flight

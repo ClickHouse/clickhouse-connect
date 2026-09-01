@@ -451,6 +451,9 @@ class AsyncClient(Client):
     async def close(self) -> None:  # type: ignore[override]
         await self._backend.close()
 
+    def _force_close(self) -> None:
+        self._backend.force_close()
+
     async def close_connections(self) -> None:  # type: ignore[override]
         """Rotate the connection pool: new requests use a fresh session; in-flight
         requests keep using the old session until they complete, then it's closed."""

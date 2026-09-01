@@ -43,7 +43,8 @@ maintained because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
 
 Async SQLAlchemy usage is available with SQLAlchemy 2.0.44 and later. Install
 `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. Results are
-buffered. Server-side cursors are not supported.
+buffered. Server-side cursors are not supported. Always await the async engine's `dispose()` method during shutdown
+instead of calling `engine.sync_engine.dispose()`.
 
 Supported features include:
 - Basic query execution via SQLAlchemy Core
