@@ -2191,3 +2191,54 @@ def test_rust_codec_midstream_error_df_parity(client_factory, call, consume_stre
         run(rust_client)
     with pytest.raises(StreamFailureError):
         run(python_client)
+
+
+@pytest.mark.parametrize("mode", [True, "scrub", False])
+def test_rust_codec_stream_error_show_clickhouse_errors_modes(client_factory, call, consume_stream, mode):
+    client = client_factory(native_codec="rust_strict", show_clickhouse_errors=mode)
+    with pytest.raises(StreamFailureError) as excinfo:
+        stream = call(
+            client.query_rows_stream,
+            "SELECT sleepEachRow(0.01), throwIf(number = 100) FROM numbers(200)",
+            settings={"max_block_size": 1, "wait_end_of_query": 0},
+        )
+        consume_stream(stream)
+    error_msg = str(excinfo.value)
+    if mode is False:
+        assert error_msg == "The ClickHouse server returned an error"
+        return
+    assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in error_msg
+    if mode == "scrub":
+        assert "version" not in error_msg.lower()
+        assert client.url not in error_msg
+
+
+@pytest.mark.parametrize("codec", ["rust", "rust_strict"])
+def test_rust_codec_sqlalchemy_dialect_metadata(test_config, codec):
+    sqlalchemy = pytest.importorskip("sqlalchemy")
+    from sqlalchemy import inspect, text
+
+    table = f"rust_sqla_meta_{codec}"
+    conn_str = (
+        f"clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:{test_config.port}/{test_config.test_database}"
+    )
+    engine = sqlalchemy.create_engine(conn_str, connect_args={"native_codec": codec})
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+            conn.execute(text(f"CREATE TABLE {table} (id UInt32, name String) ENGINE MergeTree ORDER BY id"))
+            conn.execute(text(f"INSERT INTO {table} VALUES (13, 'user_1'), (79, 'user_2')"))
+            inspector = inspect(conn)
+            assert table in inspector.get_table_names()
+            assert [column["name"] for column in inspector.get_columns(table)] == ["id", "name"]
+            assert conn.execute(text(f"SELECT name FROM {table} ORDER BY id")).scalars().all() == ["user_1", "user_2"]
+            # The private option key cannot be spoofed with a public boolean to bypass strict mode.
+            stmt = text(f"SELECT name FROM {table}").execution_options(query_formats={"String": "bytes"}, ch_internal_query=True)
+            if codec == "rust_strict":
+                with pytest.raises(NotSupportedError, match="query_formats"):
+                    conn.execute(stmt)
+            else:
+                assert conn.execute(stmt).scalars().first() == b"user_1"
+            conn.execute(text(f"DROP TABLE {table}"))
+    finally:
+        engine.dispose()

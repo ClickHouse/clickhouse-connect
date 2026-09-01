@@ -3,7 +3,7 @@ from collections.abc import Generator
 from typing import Protocol
 
 from clickhouse_connect.datatypes import registry
-from clickhouse_connect.driver.common import write_leb128
+from clickhouse_connect.driver.common import ShowClickHouseErrors, write_leb128
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import (
     GENERIC_CLICKHOUSE_ERROR,
@@ -43,13 +43,6 @@ class NativeTransform:
         renamer = context.column_renamer
         show_clickhouse_errors = context.show_clickhouse_errors
 
-        def format_stream_error(error_msg: str) -> str:
-            if show_clickhouse_errors is False:
-                return GENERIC_CLICKHOUSE_ERROR
-            if show_clickhouse_errors == "scrub":
-                return scrub_error_details(error_msg)
-            return error_msg
-
         def extract_source_error(tagged_only: bool = False) -> str | None:
             if not source.last_message:
                 return None
@@ -75,7 +68,7 @@ class NativeTransform:
                 except StreamCompleteException:
                     error_msg = extract_source_error(tagged_only=True)
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
                     return None
                 num_rows = source.read_leb128()
                 for col_num in range(num_cols):
@@ -101,7 +94,7 @@ class NativeTransform:
                     # in the response
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
                     raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
 
                 # A read failure partway through the stream: OperationalError from the sync reader,
@@ -110,7 +103,7 @@ class NativeTransform:
                 if isinstance(ex, OperationalError) or ex.__class__.__name__ == "ClientPayloadError":
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg)) from None
+                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
                     raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
 
                 raise
@@ -230,6 +223,15 @@ def extract_exception_with_tag(message: bytes, exception_tag: str) -> str | None
         return error_message.decode("utf-8", errors="replace").strip()
     except Exception:
         return error_message.decode("latin-1", errors="replace").strip()
+
+
+def format_stream_error(error_msg: str, show_clickhouse_errors: ShowClickHouseErrors) -> str:
+    """Apply the client's show_clickhouse_errors policy to a mid-stream server error message."""
+    if show_clickhouse_errors is False:
+        return GENERIC_CLICKHOUSE_ERROR
+    if show_clickhouse_errors == "scrub":
+        return scrub_error_details(error_msg)
+    return error_msg
 
 
 def extract_error_message(message: bytes) -> str:
