@@ -8,6 +8,15 @@
 
 - Added native query and insert support for the ClickHouse `MultiPoint` type in the Python and Rust codecs, including containers and SQLAlchemy reflection. Inserting `MultiPoint` values requires ClickHouse 26.8 or later. `Geometry` now supports the `MultiPoint` member added in ClickHouse 26.8 at Native discriminator 6 while preserving the original discriminators 0 through 5. `Geometry` also supports the `typed` query format when selected with the `Geometry` type key. `Variant` format settings do not apply to `Geometry`. The Rust extra now requires `clickhouse-connect-core>=0.2.0,<0.3`.
 
+### Bug Fixes
+
+- SQLAlchemy and Alembic now connect and reflect with `native_codec="rust_strict"`. Dialect metadata statements are marked as driver-internal, so they decode with the Python codec in every codec mode instead of tripping the strict `query_formats` check. Compatible ordinary statements still use the Rust codec.
+- Rust codec streaming queries now honor `show_clickhouse_errors`. Mid-stream server errors return the generic message when the setting is `False` and drop the server version trailer when it is `"scrub"`, matching the Python codec on both the sync and async clients.
+
+### Compatibility
+
+- The experimental Rust codec targets Python codec parity, with documented differences in some result cell types, insert validation errors, accepted insert conversions, and `Dynamic` shared-value decoding. See the Rust codec documentation for the full list of known behavior differences.
+
 See the `1.8.0rc1`, `1.8.0rc2`, and `1.8.0rc3` entries below for the other changes included in 1.8.0.
 
 ## 1.8.0rc3, 2026-08-27
@@ -48,7 +57,7 @@ Follow-up release candidate to 1.8.0rc1, rebased on 1.7.2 so all bug fixes from 
 
 ### Improvements
 
-- Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Results and dtypes match the Python codec, and the Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
+- Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Python codec parity is the target, with known differences documented on the rust-codec page. The Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
 - Added native query and insert support for the ClickHouse `Geometry` type. Point values use 2-tuples and the other geometry members use nested lists. SQLAlchemy reflection exposes the public `Geometry` type.
 - Added support for all ClickHouse `Interval*` types as signed 64-bit counts in the interval type's unit.
 
