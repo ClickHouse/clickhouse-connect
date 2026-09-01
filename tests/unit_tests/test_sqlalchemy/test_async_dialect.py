@@ -281,6 +281,138 @@ async def test_async_pool_dispose_during_slow_creation_closes_stale_return():
     await greenlet_spawn(replacement_pool.dispose)
 
 
+@pytest.mark.parametrize(("max_overflow", "holder_count"), ((0, 1), (1, 2)))
+@pytest.mark.asyncio
+async def test_async_pool_waiter_creation_uses_post_dispose_accounting_epoch(max_overflow, holder_count):
+    class Connection:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+        def rollback(self) -> None:
+            pass
+
+    connections: list[Connection] = []
+
+    def creator() -> Connection:
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    pool = ClickHouseAsyncDialect.poolclass(creator, pool_size=1, max_overflow=max_overflow, timeout=0.05)
+    holders = [await greenlet_spawn(pool.connect) for _ in range(holder_count)]
+    waiter_task = asyncio.create_task(greenlet_spawn(pool.connect))
+    await asyncio.sleep(0)
+    assert not waiter_task.done()
+
+    await greenlet_spawn(pool.dispose)
+    replacement_pool = pool.recreate()
+    waiter = await asyncio.wait_for(waiter_task, timeout=1.0)
+
+    assert len(connections) == holder_count + 1
+    assert pool.checkedout() == 1
+    assert pool.overflow() == 0
+    await greenlet_spawn(waiter.close)
+    assert connections[holder_count].close_calls == 1
+    assert pool.checkedout() == 0
+
+    for holder in holders:
+        await greenlet_spawn(holder.close)
+    await greenlet_spawn(pool.dispose)
+    await greenlet_spawn(replacement_pool.dispose)
+
+
+@pytest.mark.parametrize("max_overflow", (-1, 0, 1))
+@pytest.mark.parametrize("error_type", (RuntimeError, asyncio.CancelledError))
+@pytest.mark.asyncio
+async def test_async_pool_creation_failure_does_not_decrement_new_accounting_epoch(max_overflow, error_type):
+    create_started = asyncio.Event()
+    create_release = asyncio.Event()
+    create_error = error_type("creation failed")
+
+    async def async_creator():
+        create_started.set()
+        await create_release.wait()
+        raise create_error
+
+    def creator():
+        return await_only(async_creator())
+
+    pool = ClickHouseAsyncDialect.poolclass(creator, pool_size=1, max_overflow=max_overflow)
+    checkout_task = asyncio.create_task(greenlet_spawn(pool.connect))
+    await asyncio.wait_for(create_started.wait(), timeout=1.0)
+
+    await greenlet_spawn(pool.dispose)
+    replacement_pool = pool.recreate()
+    create_release.set()
+    with pytest.raises(error_type) as caught:
+        await checkout_task
+
+    assert caught.value is create_error
+    assert pool._clickhouse_accounting_epoch == 1
+    assert pool.overflow() == -1
+    assert pool.checkedout() == 0
+
+    await greenlet_spawn(pool.dispose)
+    await greenlet_spawn(replacement_pool.dispose)
+
+
+@pytest.mark.asyncio
+async def test_async_pool_overflow_return_does_not_decrement_new_accounting_epoch():
+    class Connection:
+        def __init__(self, block_close: bool):
+            self.close_calls = 0
+            self.close_started = asyncio.Event()
+            self.close_release = asyncio.Event()
+            if not block_close:
+                self.close_release.set()
+
+        async def _close(self) -> None:
+            self.close_started.set()
+            await self.close_release.wait()
+            self.close_calls += 1
+
+        def close(self) -> None:
+            await_only(self._close())
+
+        def rollback(self) -> None:
+            pass
+
+    connections: list[Connection] = []
+
+    def creator() -> Connection:
+        connection = Connection(block_close=len(connections) == 1)
+        connections.append(connection)
+        return connection
+
+    pool = ClickHouseAsyncDialect.poolclass(creator, pool_size=1, max_overflow=1, timeout=1.0)
+    checkouts = [await greenlet_spawn(pool.connect) for _ in range(2)]
+    await greenlet_spawn(checkouts[0].close)
+    overflow_return = asyncio.create_task(greenlet_spawn(checkouts[1].close))
+    await asyncio.wait_for(connections[1].close_started.wait(), timeout=1.0)
+
+    await greenlet_spawn(pool.dispose)
+    replacement_pool = pool.recreate()
+    connections[1].close_release.set()
+    await asyncio.wait_for(overflow_return, timeout=1.0)
+
+    assert pool.checkedout() == 0
+    assert pool.overflow() == 0
+    assert len(pool._clickhouse_pending_records) == 1
+
+    reused = [await greenlet_spawn(pool.connect) for _ in range(2)]
+    assert pool.checkedout() == 2
+    assert pool.overflow() == 1
+    assert not pool._clickhouse_pending_records
+    for checkout in reused:
+        await greenlet_spawn(checkout.close)
+
+    await greenlet_spawn(pool.dispose)
+    await greenlet_spawn(replacement_pool.dispose)
+
+
 @pytest.mark.asyncio
 async def test_async_pool_multiple_stale_returns_preserve_overflow_accounting():
     live_connections = 0

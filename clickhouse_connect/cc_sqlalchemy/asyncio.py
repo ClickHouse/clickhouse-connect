@@ -436,10 +436,24 @@ class _ClickHouseAsyncAdaptedQueuePool(AsyncAdaptedQueuePool):
             record = pending_records.popleft()
             record_info = record.record_info
             if record_info is not None and record_info.get(_POOL_ACCOUNTING_EPOCH_KEY) == self._clickhouse_accounting_epoch:
-                super()._do_return_conn(record)
+                self._return_current_record(record)
             else:
                 self._append_pending(record)
         self._promote_pending_record()
+
+    def _return_current_record(self, record: ConnectionPoolEntry) -> None:
+        try:
+            self._pool.put(record, False)
+        except sqla_queue.Full:
+            accounting_epoch = self._clickhouse_accounting_epoch
+            try:
+                record.close()
+            finally:
+                if accounting_epoch == self._clickhouse_accounting_epoch:
+                    self._dec_overflow()
+                elif record.dbapi_connection is None:
+                    self._append_pending(record)
+                    self._promote_pending_record()
 
     def _do_return_conn(self, record: ConnectionPoolEntry) -> None:
         # SQLAlchemy replaces a disposed pool without closing connections that
@@ -456,23 +470,38 @@ class _ClickHouseAsyncAdaptedQueuePool(AsyncAdaptedQueuePool):
             if self._clickhouse_disposing:
                 self._append_pending(record)
             elif record_info is not None and record_info.get(_POOL_ACCOUNTING_EPOCH_KEY) == self._clickhouse_accounting_epoch:
-                super()._do_return_conn(record)
+                self._return_current_record(record)
             else:
                 self._append_pending(record)
                 self._promote_pending_record()
         else:
-            super()._do_return_conn(record)
+            self._return_current_record(record)
+
+    def _create_connection(self) -> ConnectionPoolEntry:
+        accounting_epoch = self._clickhouse_accounting_epoch
+        try:
+            record = super()._create_connection()
+        except BaseException:
+            if accounting_epoch != self._clickhouse_accounting_epoch:
+                # Neutralize QueuePool._do_get's stale permit decrement after the reset.
+                if self._max_overflow == -1:
+                    self._overflow += 1
+                else:
+                    with self._overflow_lock:
+                        self._overflow += 1
+            raise
+        record_info = record.record_info
+        assert record_info is not None
+        record_info[_POOL_ACCOUNTING_EPOCH_KEY] = accounting_epoch
+        return record
 
     def _do_get(self) -> ConnectionPoolEntry:
         self._clickhouse_awaiting_recreate = False
         generation = self._clickhouse_generation
-        accounting_epoch = self._clickhouse_accounting_epoch
         while True:
             record = super()._do_get()
             record_info = record.record_info
             assert record_info is not None
-            if _POOL_ACCOUNTING_EPOCH_KEY not in record_info:
-                record_info[_POOL_ACCOUNTING_EPOCH_KEY] = accounting_epoch
             if record_info[_POOL_ACCOUNTING_EPOCH_KEY] != self._clickhouse_accounting_epoch:
                 if not self._inc_overflow():
                     record.close()
