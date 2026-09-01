@@ -2226,19 +2226,21 @@ def test_rust_codec_sqlalchemy_dialect_metadata(test_config, codec):
     try:
         with engine.begin() as conn:
             conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
-            conn.execute(text(f"CREATE TABLE {table} (id UInt32, name String) ENGINE MergeTree ORDER BY id"))
-            conn.execute(text(f"INSERT INTO {table} VALUES (13, 'user_1'), (79, 'user_2')"))
-            inspector = inspect(conn)
-            assert table in inspector.get_table_names()
-            assert [column["name"] for column in inspector.get_columns(table)] == ["id", "name"]
-            assert conn.execute(text(f"SELECT name FROM {table} ORDER BY id")).scalars().all() == ["user_1", "user_2"]
-            # The private option key cannot be spoofed with a public boolean to bypass strict mode.
-            stmt = text(f"SELECT name FROM {table}").execution_options(query_formats={"String": "bytes"}, ch_internal_query=True)
-            if codec == "rust_strict":
-                with pytest.raises(NotSupportedError, match="query_formats"):
-                    conn.execute(stmt)
-            else:
-                assert conn.execute(stmt).scalars().first() == b"user_1"
-            conn.execute(text(f"DROP TABLE {table}"))
+            try:
+                conn.execute(text(f"CREATE TABLE {table} (id UInt32, name String) ENGINE MergeTree ORDER BY id"))
+                conn.execute(text(f"INSERT INTO {table} VALUES (13, 'user_1'), (79, 'user_2')"))
+                inspector = inspect(conn)
+                assert table in inspector.get_table_names()
+                assert [column["name"] for column in inspector.get_columns(table)] == ["id", "name"]
+                assert conn.execute(text(f"SELECT name FROM {table} ORDER BY id")).scalars().all() == ["user_1", "user_2"]
+                # The private option key cannot be spoofed with a public boolean to bypass strict mode.
+                stmt = text(f"SELECT name FROM {table}").execution_options(query_formats={"String": "bytes"}, ch_internal_query=True)
+                if codec == "rust_strict":
+                    with pytest.raises(NotSupportedError, match="query_formats"):
+                        conn.execute(stmt)
+                else:
+                    assert conn.execute(stmt).scalars().first() == b"user_1"
+            finally:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
     finally:
         engine.dispose()
