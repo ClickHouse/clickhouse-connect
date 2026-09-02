@@ -27,6 +27,8 @@ The `rust` extra alone stays lean for applications that use standard Python row 
 pip install "clickhouse-connect[rust]"
 ```
 
+The codec, its packaging, and its dependency set are experimental. A smaller Arrow interoperability dependency is being evaluated for a future release.
+
 If a Rust codec is selected and the compiled module is not installed, client creation raises a `NotSupportedError` naming this install command.
 
 ## Enabling the codec {#enabling-the-codec}
