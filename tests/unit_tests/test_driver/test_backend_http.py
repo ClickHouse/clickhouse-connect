@@ -20,6 +20,14 @@ from clickhouse_connect.driver._backend.models import Capabilities, QueryRuntime
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 
+def _run_in_new_loop(coroutine):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coroutine)
+    finally:
+        loop.close()
+
+
 def make_context(
     final_query="SELECT number FROM system.numbers",
     bind_params=None,
@@ -689,17 +697,17 @@ class TestAsyncSessionLoop:
 
     def test_request_rejects_session_from_another_event_loop(self):
         backend = make_async_backend()
-        asyncio.run(self._bind_session(backend))
+        _run_in_new_loop(self._bind_session(backend))
 
         with pytest.raises(ProgrammingError, match="owning event loop") as exc_info:
-            asyncio.run(backend.request(b"SELECT 1", {}, server_wait=False))
+            _run_in_new_loop(backend.request(b"SELECT 1", {}, server_wait=False))
         assert "current event loop" in str(exc_info.value)
 
     def test_ping_returns_false_for_session_from_another_event_loop(self):
         backend = make_async_backend()
-        asyncio.run(self._bind_session(backend))
+        _run_in_new_loop(self._bind_session(backend))
 
-        assert asyncio.run(backend.ping()) is False
+        assert _run_in_new_loop(backend.ping()) is False
 
     @pytest.mark.asyncio
     async def test_missing_session_error_explains_how_to_reopen(self):

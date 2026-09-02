@@ -58,7 +58,7 @@ _SESSION_UNAVAILABLE_ERROR = (
 _SESSION_LOOP_ERROR = (
     "Async client session belongs to a different event loop. Close the client, or dispose its SQLAlchemy engine, in "
     "the owning event loop before transfer when possible. If that loop has already closed, perform cleanup in the "
-    "current event loop; directly reused clients must then call 'await client._initialize()'."
+    "current event loop. Directly reused clients must then call 'await client._initialize()'."
 )
 
 
