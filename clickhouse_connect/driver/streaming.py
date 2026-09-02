@@ -477,6 +477,41 @@ def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Itera
             return
 
 
+def _drain_read_ahead_queue(source_queue: queue.Queue[tuple[str, object]]) -> None:
+    try:
+        while True:
+            source_queue.get_nowait()
+    except queue.Empty:
+        pass
+
+
+def _release_abandoned_read_ahead(source: ByteSource, source_queue: queue.Queue[tuple[str, object]]) -> None:
+    try:
+        _drain_read_ahead_queue(source_queue)
+    finally:
+        try:
+            source.close()
+        except Exception:  # noqa: BLE001 - finalizers must not raise
+            pass
+
+
+def _finalize_read_ahead_off_loop(
+    loop: asyncio.AbstractEventLoop,
+    source: ByteSource,
+    source_queue: queue.Queue[tuple[str, object]],
+    producer_thread: threading.Thread,
+) -> None:
+    try:
+        if producer_thread.is_alive():
+            producer_thread.join(timeout=1.0)
+    except Exception:  # noqa: BLE001 - finalizers must not raise
+        pass
+    try:
+        loop.call_soon_threadsafe(_release_abandoned_read_ahead, source, source_queue)
+    except Exception:  # noqa: BLE001 - a closed loop must not leak the source
+        _release_abandoned_read_ahead(source, source_queue)
+
+
 class ReadAheadSource(Closable):
     """Reads chunks from a byte source on a daemon thread into a bounded queue so transport overlaps decode.
 
@@ -500,8 +535,29 @@ class ReadAheadSource(Closable):
 
     def __del__(self) -> None:
         try:
-            if not self._stop_event.is_set():
+            if self._stop_event.is_set():
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
                 self.close()
+                return
+
+            self._stop_event.set()
+            source, self.source = self.source, None
+            if source is None:
+                return
+            try:
+                loop.run_in_executor(
+                    None,
+                    _finalize_read_ahead_off_loop,
+                    loop,
+                    source,
+                    self.queue,
+                    self._thread,
+                )
+            except Exception:
+                _finalize_read_ahead_off_loop(loop, source, self.queue, self._thread)
         except Exception:  # noqa: BLE001 - finalizers must not raise
             pass
 
@@ -512,11 +568,7 @@ class ReadAheadSource(Closable):
         return self._gen_cache
 
     def _drain(self):
-        try:
-            while True:
-                self.queue.get_nowait()
-        except queue.Empty:
-            pass
+        _drain_read_ahead_queue(self.queue)
 
     def _release_source(self):
         source, self.source = self.source, None
@@ -524,7 +576,7 @@ class ReadAheadSource(Closable):
             source.close()
 
     def close(self) -> None:
-        # Join the producer before closing the source. A _put-blocked producer returns within one _put
+        # Join the producer before closing the source. A queue-blocked producer returns within one put
         # timeout of the stop event; a read-blocked producer exits after its in-flight read returns. Closing
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
         # which would race a producer still reading it.
