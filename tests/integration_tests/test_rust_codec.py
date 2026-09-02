@@ -1,7 +1,8 @@
 import array
+import gc
 import logging
-import threading
 import time
+import weakref
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -1574,31 +1575,43 @@ def test_rust_codec_uuid_df_parity(client_factory, call):
 
 
 def test_rust_codec_abandoned_stream_no_read_ahead_thread(client_factory, call, client_mode):
-    rust_client = client_factory(native_codec="rust_strict")
-    # The result must exceed the read-ahead queue capacity so the producer thread is still blocked at
-    # abandonment. A small result the producer fully buffers would exit on its own and hide a close() leak.
-    stream = call(rust_client.query_column_block_stream, "SELECT number FROM numbers(20000000)")
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    try:
+        rust_client = client_factory(native_codec="rust_strict")
+        # The result must exceed the read-ahead queue capacity so the producer thread is still blocked at
+        # abandonment. A small result the producer fully buffers would exit on its own and hide a close() leak.
+        stream = call(rust_client.query_column_block_stream, "SELECT number FROM numbers(20000000)")
+        read_source = stream.source.source
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+        del read_source
 
-    if client_mode == "sync":
-        with stream as blocks:
-            for _ in blocks:
-                break
-    else:
+        if client_mode == "sync":
+            with pytest.raises(ProgrammingError, match="Stream should be used within a context"):
+                next(stream)
+        else:
 
-        async def abandon():
-            async with stream as blocks:
-                async for _ in blocks:
-                    break
+            async def abandon(stream_context):
+                with pytest.raises(ProgrammingError, match="Stream should be used within a context"):
+                    await stream_context.__anext__()
 
-        call(abandon)
+            call(abandon, stream)
 
-    def read_ahead_threads():
-        return [t for t in threading.enumerate() if t.name == "clickhouse-read-ahead" and t.is_alive()]
-
-    deadline = time.time() + 2.0
-    while time.time() < deadline and read_ahead_threads():
-        time.sleep(0.05)
-    assert not read_ahead_threads()
+        del stream
+        deadline = time.time() + 2.0
+        while time.time() < deadline and thread.is_alive():
+            time.sleep(0.05)
+        assert read_source_ref() is None
+        assert thread.is_alive() is False
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def _insert_df_roundtrip(client, python_client, call, table, schema, df):
@@ -2191,3 +2204,56 @@ def test_rust_codec_midstream_error_df_parity(client_factory, call, consume_stre
         run(rust_client)
     with pytest.raises(StreamFailureError):
         run(python_client)
+
+
+@pytest.mark.parametrize("mode", [True, "scrub", False])
+def test_rust_codec_stream_error_show_clickhouse_errors_modes(client_factory, call, consume_stream, mode):
+    client = client_factory(native_codec="rust_strict", show_clickhouse_errors=mode)
+    with pytest.raises(StreamFailureError) as excinfo:
+        stream = call(
+            client.query_rows_stream,
+            "SELECT sleepEachRow(0.01), throwIf(number = 100) FROM numbers(200)",
+            settings={"max_block_size": 1, "wait_end_of_query": 0},
+        )
+        consume_stream(stream)
+    error_msg = str(excinfo.value)
+    if mode is False:
+        assert error_msg == "The ClickHouse server returned an error"
+        return
+    assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in error_msg
+    if mode == "scrub":
+        assert "version" not in error_msg.lower()
+        assert client.url not in error_msg
+
+
+@pytest.mark.parametrize("codec", ["rust", "rust_strict"])
+def test_rust_codec_sqlalchemy_dialect_metadata(test_config, codec):
+    sqlalchemy = pytest.importorskip("sqlalchemy")
+    from sqlalchemy import inspect, text
+
+    table = f"rust_sqla_meta_{codec}"
+    conn_str = (
+        f"clickhousedb://{test_config.username}:{test_config.password}@{test_config.host}:{test_config.port}/{test_config.test_database}"
+    )
+    engine = sqlalchemy.create_engine(conn_str, connect_args={"native_codec": codec})
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+            try:
+                conn.execute(text(f"CREATE TABLE {table} (id UInt32, name String) ENGINE MergeTree ORDER BY id"))
+                conn.execute(text(f"INSERT INTO {table} VALUES (13, 'user_1'), (79, 'user_2')"))
+                inspector = inspect(conn)
+                assert table in inspector.get_table_names()
+                assert [column["name"] for column in inspector.get_columns(table)] == ["id", "name"]
+                assert conn.execute(text(f"SELECT name FROM {table} ORDER BY id")).scalars().all() == ["user_1", "user_2"]
+                # The private option key cannot be spoofed with a public boolean to bypass strict mode.
+                stmt = text(f"SELECT name FROM {table}").execution_options(query_formats={"String": "bytes"}, ch_internal_query=True)
+                if codec == "rust_strict":
+                    with pytest.raises(NotSupportedError, match="query_formats"):
+                        conn.execute(stmt)
+                else:
+                    assert conn.execute(stmt).scalars().first() == b"user_1"
+            finally:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+    finally:
+        engine.dispose()

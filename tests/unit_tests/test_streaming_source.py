@@ -1,8 +1,10 @@
 import asyncio
+import gc
 import gzip
 import logging
 import threading
 import time
+import weakref
 import zlib
 from unittest.mock import Mock
 
@@ -15,6 +17,7 @@ from clickhouse_connect.driver.streaming import (
     ReadAheadSource,
     StreamingInsertSource,
     StreamingResponseSource,
+    _finalize_read_ahead_off_loop,
     _SyncStreamingInsertSource,
 )
 
@@ -575,6 +578,30 @@ class MockByteSource:
         self.closed = True
 
 
+class ReadBlockedByteSource:
+    def __init__(self):
+        self.read_started = threading.Event()
+        self.release_read = threading.Event()
+        self.closed = False
+        self.close_thread_id = None
+
+    @property
+    def gen(self):
+        self.read_started.set()
+        self.release_read.wait(timeout=5.0)
+        yield b"late"
+
+    def close(self):
+        self.close_thread_id = threading.get_ident()
+        self.closed = True
+        self.release_read.set()
+
+
+class RejectingLoop:
+    def call_soon_threadsafe(self, _callback, *_args):
+        raise RuntimeError("loop closed")
+
+
 def test_read_ahead_chunk_order():
     src = MockByteSource([b"a", b"b", b"c"])
     read_source = ReadAheadSource(src)
@@ -625,6 +652,93 @@ def test_read_ahead_join_on_close():
     src = MockByteSource([b"a", b"b"])
     read_source = ReadAheadSource(src)
     read_source.close()
+    assert read_source._thread.is_alive() is False
+    assert src.closed is True
+
+
+def test_read_ahead_abandoned_source_is_collected():
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    try:
+        src = MockByteSource([bytes([i % 256]) for i in range(500)])
+        read_source = ReadAheadSource(src, maxsize=2)
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+
+        assert next(read_source.gen) == b"\x00"
+        deadline = time.time() + 1.0
+        while time.time() < deadline and not read_source.queue.full():
+            time.sleep(0.01)
+        assert read_source.queue.full()
+
+        del read_source
+        thread.join(timeout=1.0)
+        assert read_source_ref() is None
+        assert thread.is_alive() is False
+        assert src.closed is True
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        if gc_was_enabled:
+            gc.enable()
+
+
+@pytest.mark.asyncio
+async def test_read_ahead_abandoned_source_does_not_block_event_loop():
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    source = ReadBlockedByteSource()
+    thread = None
+    try:
+        read_source = ReadAheadSource(source)
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+        _ = read_source.gen
+        assert await asyncio.to_thread(source.read_started.wait, 1.0)
+
+        loop = asyncio.get_running_loop()
+        loop_thread_id = threading.get_ident()
+        loop_ticked = asyncio.Event()
+        loop.call_soon(loop_ticked.set)
+        started = time.monotonic()
+        del read_source
+
+        await asyncio.wait_for(loop_ticked.wait(), timeout=0.5)
+        assert time.monotonic() - started < 0.5
+        assert read_source_ref() is None
+
+        deadline = loop.time() + 2.0
+        while loop.time() < deadline and not source.closed:
+            await asyncio.sleep(0.01)
+        assert source.closed is True
+        assert source.close_thread_id == loop_thread_id
+        await asyncio.to_thread(thread.join, 1.0)
+        assert thread.is_alive() is False
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        source.release_read.set()
+        if thread is not None:
+            await asyncio.to_thread(thread.join, 1.0)
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_read_ahead_finalizer_releases_source_when_loop_scheduling_fails():
+    src = MockByteSource([bytes([i % 256]) for i in range(500)])
+    read_source = ReadAheadSource(src, maxsize=2)
+    read_source._stop_event.set()
+    source, read_source.source = read_source.source, None
+    assert source is not None
+
+    _finalize_read_ahead_off_loop(RejectingLoop(), source, read_source.queue, read_source._thread)
+
     assert read_source._thread.is_alive() is False
     assert src.closed is True
 

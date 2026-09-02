@@ -442,6 +442,76 @@ class StreamingInsertSource:
         return False
 
 
+def _read_ahead_producer(
+    source: ByteSource,
+    out: queue.Queue[tuple[str, object]],
+    stop_event: threading.Event,
+) -> None:
+    def put(item: tuple[str, object]) -> bool:
+        while not stop_event.is_set():
+            try:
+                out.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    try:
+        for chunk in source.gen:
+            if not put(("data", chunk)):
+                return
+    except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
+        put(("error", ex))
+    finally:
+        put(("eof", None))
+
+
+def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Iterator[bytes]:
+    while True:
+        tag, payload = source_queue.get()
+        if tag == "data":
+            yield cast(bytes, payload)
+        elif tag == "error":
+            raise cast(BaseException, payload)
+        else:  # eof
+            return
+
+
+def _drain_read_ahead_queue(source_queue: queue.Queue[tuple[str, object]]) -> None:
+    try:
+        while True:
+            source_queue.get_nowait()
+    except queue.Empty:
+        pass
+
+
+def _release_abandoned_read_ahead(source: ByteSource, source_queue: queue.Queue[tuple[str, object]]) -> None:
+    try:
+        _drain_read_ahead_queue(source_queue)
+    finally:
+        try:
+            source.close()
+        except Exception:  # noqa: BLE001 - finalizers must not raise
+            pass
+
+
+def _finalize_read_ahead_off_loop(
+    loop: asyncio.AbstractEventLoop,
+    source: ByteSource,
+    source_queue: queue.Queue[tuple[str, object]],
+    producer_thread: threading.Thread,
+) -> None:
+    try:
+        if producer_thread.is_alive():
+            producer_thread.join(timeout=1.0)
+    except Exception:  # noqa: BLE001 - finalizers must not raise
+        pass
+    try:
+        loop.call_soon_threadsafe(_release_abandoned_read_ahead, source, source_queue)
+    except Exception:  # noqa: BLE001 - a closed loop must not leak the source
+        _release_abandoned_read_ahead(source, source_queue)
+
+
 class ReadAheadSource(Closable):
     """Reads chunks from a byte source on a daemon thread into a bounded queue so transport overlaps decode.
 
@@ -455,44 +525,50 @@ class ReadAheadSource(Closable):
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
         self._gen_cache: Iterator[bytes] | None = None
-        self._thread = threading.Thread(target=self._producer, name="clickhouse-read-ahead", daemon=True)
+        self._thread = threading.Thread(
+            target=_read_ahead_producer,
+            args=(source, self.queue, self._stop_event),
+            name="clickhouse-read-ahead",
+            daemon=True,
+        )
         self._thread.start()
+
+    def __del__(self) -> None:
+        try:
+            if self._stop_event.is_set():
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self.close()
+                return
+
+            self._stop_event.set()
+            source, self.source = self.source, None
+            if source is None:
+                return
+            try:
+                loop.run_in_executor(
+                    None,
+                    _finalize_read_ahead_off_loop,
+                    loop,
+                    source,
+                    self.queue,
+                    self._thread,
+                )
+            except Exception:
+                _finalize_read_ahead_off_loop(loop, source, self.queue, self._thread)
+        except Exception:  # noqa: BLE001 - finalizers must not raise
+            pass
 
     @property
     def gen(self) -> Iterator[bytes]:
         if self._gen_cache is None:
-            self._gen_cache = self._consume()
+            self._gen_cache = _read_ahead_consumer(self.queue)
         return self._gen_cache
 
-    def _consume(self) -> Iterator[bytes]:
-        while True:
-            tag, payload = self.queue.get()
-            if tag == "data":
-                yield cast(bytes, payload)
-            elif tag == "error":
-                raise cast(BaseException, payload)
-            else:  # eof
-                return
-
-    def _producer(self):
-        source = self.source
-        if source is None:
-            return
-        try:
-            for chunk in source.gen:
-                if not self._put(("data", chunk)):
-                    return
-        except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
-            self._put(("error", ex))
-        finally:
-            self._put(("eof", None))
-
     def _drain(self):
-        try:
-            while True:
-                self.queue.get_nowait()
-        except queue.Empty:
-            pass
+        _drain_read_ahead_queue(self.queue)
 
     def _release_source(self):
         source, self.source = self.source, None
@@ -500,7 +576,7 @@ class ReadAheadSource(Closable):
             source.close()
 
     def close(self) -> None:
-        # Join the producer before closing the source. A _put-blocked producer returns within one _put
+        # Join the producer before closing the source. A queue-blocked producer returns within one put
         # timeout of the stop event; a read-blocked producer exits after its in-flight read returns. Closing
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
         # which would race a producer still reading it.
@@ -519,15 +595,6 @@ class ReadAheadSource(Closable):
         # Release on the loop thread: the async source's close cancels its producer task, which must not
         # run from an executor thread.
         self._release_source()
-
-    def _put(self, item: tuple[str, object]) -> bool:
-        while not self._stop_event.is_set():
-            try:
-                self.queue.put(item, timeout=0.1)
-                return True
-            except queue.Full:
-                continue
-        return False
 
 
 class _SyncStreamingInsertSource:

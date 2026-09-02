@@ -11,6 +11,7 @@ from clickhouse_connect.common import _native_codec_env_default
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import rustcodec
 from clickhouse_connect.driver.exceptions import (
+    GENERIC_CLICKHOUSE_ERROR,
     DataError,
     NotSupportedError,
     ProgrammingError,
@@ -304,12 +305,22 @@ def test_strict_global_read_format_raises_and_closes_source(clean_formats):
 def test_non_strict_ineligible_delegates_to_python_and_logs_reason(monkeypatch, caplog):
     sentinel = object()
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
-    src = FakeSource([])
+    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
+    pyarrow_src = FakeSource([])
+    option_src = FakeSource([])
     with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
-        result = _RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
-    assert result is sentinel
-    assert src.closed is False
-    assert "fallback to Python for query: use_none=False" in caplog.text
+        pyarrow_result = _RustNativeTransform(strict=False).parse_response(pyarrow_src, eligible_ctx(use_numpy=True))
+        option_result = _RustNativeTransform(strict=False).parse_response(option_src, eligible_ctx(use_none=False))
+
+    assert pyarrow_result is sentinel
+    assert option_result is sentinel
+    assert pyarrow_src.closed is False
+    assert option_src.closed is False
+    fallback_records = [record for record in caplog.records if "fallback to Python for query" in record.getMessage()]
+    assert [(record.getMessage(), record.levelno) for record in fallback_records] == [
+        ("Native codec fallback to Python for query: pyarrow not installed", logging.WARNING),
+        ("Native codec fallback to Python for query: use_none=False", logging.INFO),
+    ]
 
 
 # --- Insert build (FakeCore) -------------------------------------------------
@@ -658,6 +669,50 @@ def test_decode_feed_error_disambiguation(monkeypatch, error, exception_tag, chu
         _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
     if expected is DataError:
         assert str(excinfo.value) == str(error)
+    assert src.closed is True
+
+
+@pytest.mark.parametrize(
+    ("decoder_error", "mode"),
+    [
+        pytest.param(ValueError("Malformed payload"), False, id="decoder_value_error_false"),
+        pytest.param(EOFError("Truncated payload"), "scrub", id="decoder_eof_scrub"),
+    ],
+)
+def test_decode_untagged_server_error_honors_detail_policy(monkeypatch, decoder_error, mode):
+    core = _fake_decoder_core(feed_error=decoder_error)
+    monkeypatch.setitem(sys.modules, "_ch_core", core)
+    chunk = (
+        b"Code: 62. DB::Exception: Value passed to 'throwIf' function is non-zero. "
+        b"(FUNCTION_THROW_IF_VALUE_IS_NON_ZERO) (version 26.8.1.2041)"
+    )
+    src = FakeSource([chunk])
+    context = eligible_ctx()
+    context.show_clickhouse_errors = mode
+
+    with pytest.raises(StreamFailureError) as excinfo:
+        _RustNativeTransform(strict=True).parse_response(src, context)
+
+    message = str(excinfo.value)
+    if mode is False:
+        assert message == GENERIC_CLICKHOUSE_ERROR
+    else:
+        assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in message
+        assert "version" not in message.lower()
+        assert "http://" not in message
+    assert src.closed is True
+
+
+def test_decode_tagged_scanner_honors_hidden_detail_policy(monkeypatch):
+    core = _fake_decoder_core(feed_error=AssertionError("decoder must not receive a tagged server exception"))
+    monkeypatch.setitem(sys.modules, "_ch_core", core)
+    src = FakeSource([TAGGED_EXCEPTION_BODY], exception_tag=TAGGED_EXCEPTION_TAG)
+    context = eligible_ctx()
+    context.show_clickhouse_errors = False
+
+    with pytest.raises(StreamFailureError, match=f"^{GENERIC_CLICKHOUSE_ERROR}$"):
+        _RustNativeTransform(strict=True).parse_response(src, context)
+
     assert src.closed is True
 
 

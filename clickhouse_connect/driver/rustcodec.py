@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Generator
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes import registry
@@ -23,7 +23,13 @@ from clickhouse_connect.driver.rustnumpy import (
     _normalize_json_shared_column,
 )
 from clickhouse_connect.driver.streaming import ReadAheadSource
-from clickhouse_connect.driver.transform import NativeTransform, Transform, extract_error_message, extract_exception_with_tag
+from clickhouse_connect.driver.transform import (
+    NativeTransform,
+    Transform,
+    extract_error_message,
+    extract_exception_with_tag,
+    format_stream_error,
+)
 from clickhouse_connect.driver.types import ByteSource, Closable
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -271,7 +277,10 @@ class _RustNativeTransform:
             if self.strict:
                 source.close()
                 raise NotSupportedError(f'native_codec="rust_strict" does not support {reason}; use native_codec="python" or "rust"')
-            logger.info("Native codec fallback to Python for query: %s", reason)
+            if reason == "pyarrow not installed":
+                logger.warning("Native codec fallback to Python for query: %s", reason)
+            else:
+                logger.info("Native codec fallback to Python for query: %s", reason)
             return NativeTransform.parse_response(source, context)
 
         core = _ch_core_module()
@@ -287,6 +296,12 @@ class _RustNativeTransform:
         exception_tag = read_source.exception_tag
         scanner = _ExceptionTagScanner(exception_tag) if exception_tag else None
         last_chunk = b""
+        show_clickhouse_errors = context.show_clickhouse_errors
+
+        def server_error(chunk: bytes) -> StreamFailureError:
+            # Tagged text first, as in the Python codec, then the client's show_clickhouse_errors policy.
+            message = extract_exception_with_tag(chunk, exception_tag or "") or extract_error_message(chunk)
+            return StreamFailureError(format_stream_error(message, show_clickhouse_errors))
 
         def raw_blocks() -> Generator[Any, None, None]:
             # Decode blocks lazily so streaming queries keep bounded memory. Errors surface here on the
@@ -299,9 +314,7 @@ class _RustNativeTransform:
                         hit = scanner.push(chunk)
                         if hit is not None:
                             read_source.close()
-                            raise StreamFailureError(
-                                extract_exception_with_tag(hit, cast(str, exception_tag)) or extract_error_message(hit)
-                            )
+                            raise server_error(hit)
                     yield from decoder.feed(chunk)
                 yield from decoder.finish()
             except StreamFailureError:
@@ -309,22 +322,22 @@ class _RustNativeTransform:
             except EOFError as ex:
                 read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
-                    raise StreamFailureError(extract_error_message(last_chunk)) from ex
+                    raise server_error(last_chunk) from ex
                 raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
             except NotImplementedError as ex:
                 read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
-                    raise StreamFailureError(extract_error_message(last_chunk)) from ex
+                    raise server_error(last_chunk) from ex
                 raise _unsupported_decode_error(ex) from ex
             except ValueError as ex:
                 read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
-                    raise StreamFailureError(extract_error_message(last_chunk)) from ex
+                    raise server_error(last_chunk) from ex
                 raise _binding_value_error(ex) from ex
             except Exception as ex:
                 read_source.close()
                 if _chunk_has_server_error(last_chunk, exception_tag):
-                    raise StreamFailureError(extract_error_message(last_chunk)) from ex
+                    raise server_error(last_chunk) from ex
                 if ex.__class__.__name__ == "ClientPayloadError":
                     raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
                 raise
