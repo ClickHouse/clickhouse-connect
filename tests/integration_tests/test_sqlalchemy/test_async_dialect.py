@@ -22,6 +22,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt32
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.binding import format_str
 from clickhouse_connect.driver.exceptions import DatabaseError as DriverDatabaseError
 from clickhouse_connect.driver.exceptions import ProgrammingError as DriverProgrammingError
 from tests.integration_tests.conftest import TestConfig
@@ -50,7 +51,7 @@ async def test_async_sqlalchemy_query_behavior_parity(test_config: TestConfig) -
 
     try:
         async with engine.connect() as connection:
-            connection = await connection.execution_options(
+            await connection.execution_options(
                 settings={"max_threads": 2},
                 query_formats={"UUID": "string"},
             )
@@ -144,6 +145,8 @@ async def test_async_sqlalchemy_ddl_reflection_and_percent_identifiers(test_conf
                 clear_all_formats()
 
         assert insert_result.rowcount == 2
+        # Async executemany currently sends one request per parameter set. Native bulk support should change this to one.
+        assert len(insert_result.context.cursor.summary) == 2
         assert rows == [(13, "user_1"), (79, "user_2")]
         assert reflected == (True, [value_name, "label"], [value_name, "label"], "MergeTree")
     finally:
@@ -160,6 +163,12 @@ async def test_async_sqlalchemy_server_binds_and_native_client_surface(test_conf
         _async_url(test_config, {"query_limit": "2333", "compression": "false"}),
         server_side_params=True,
     )
+    statements: list[str] = []
+
+    def capture_statement(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    sa.event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
 
     try:
         async with engine.connect() as connection:
@@ -167,21 +176,29 @@ async def test_async_sqlalchemy_server_binds_and_native_client_surface(test_conf
             label = sa.bindparam("label", type_=String())
             result = await connection.execute(sa.select(value, label), {"value": 113, "label": "value%pct"})
             assert result.one() == (113, "value%pct")
+            assert "{value:UInt32}" in statements[-1]
+            assert "{label:String}" in statements[-1]
 
             in_result = await connection.execute(
                 sa.select(value).where(value.in_([13, 113])),
                 {"value": 113},
             )
             assert in_result.scalar_one() == 113
+            assert "{param_1:Array(UInt32)}" in statements[-1]
             tuple_result = await connection.execute(
                 sa.select(value, label).where(sa.tuple_(value, label).in_([(13, "other"), (113, "value%pct")])),
                 {"value": 113, "label": "value%pct"},
             )
             assert tuple_result.one() == (113, "value%pct")
 
+            payload = "single% adjacent%% %(token)s quote'tail%"
+            compiled_percent = await connection.execute(sa.text(f"SELECT {format_str(payload)}"))
+            assert compiled_percent.scalar_one() == payload
+            driver_percent = await connection.exec_driver_sql(f"SELECT {format_str(payload).replace('%', '%%')}")
+            assert driver_percent.scalar_one() == payload
+
             raw_connection = await connection.get_raw_connection()
             client = raw_connection.driver_connection
-            del raw_connection
 
             assert isinstance(client, AsyncClient)
             assert client.min_version("20.1")
@@ -206,6 +223,15 @@ async def test_async_session_stream_is_buffered_but_iterable(test_config: TestCo
     engine = create_async_engine(_async_url(test_config))
 
     try:
+        async with engine.connect() as connection:
+            raw_connection = await connection.get_raw_connection()
+            client = raw_connection.driver_connection
+            async with await client.query_row_block_stream(
+                "SELECT number, sleepEachRow(0.2) FROM numbers(5) SETTINGS max_block_size=1"
+            ) as stream:
+                block_sizes = [len(block) async for block in stream]
+            assert block_sizes == [1, 1, 1, 1, 1]
+
         async with AsyncSession(engine) as session:
             await_started = time.monotonic()
             result = await session.stream(sa.text("SELECT number, sleepEachRow(0.2) FROM numbers(5) SETTINGS max_block_size=1"))
@@ -224,14 +250,7 @@ async def test_async_session_stream_is_buffered_but_iterable(test_config: TestCo
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_executemany_preserves_sql_bind_order(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url)
     table_name = f"test_async_executemany_{uuid.uuid4().hex}"
 
@@ -259,14 +278,9 @@ async def test_async_executemany_preserves_sql_bind_order(test_config: TestConfi
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_dialect_acceptance(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-        query={
+    url = _async_url(
+        test_config,
+        {
             "connector_limit": "3",
             "connector_limit_per_host": "2",
             "keepalive_timeout": "7.5",
@@ -366,14 +380,7 @@ async def test_async_sqlalchemy_dialect_acceptance(test_config: TestConfig) -> N
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_connection_preserves_session_state(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url)
     table_name = f"test_async_session_{uuid.uuid4().hex}"
 
@@ -394,15 +401,7 @@ async def test_async_sqlalchemy_connection_preserves_session_state(test_config: 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_fixed_session_id_rejects_concurrent_requests(test_config: TestConfig) -> None:
     session_id = f"test_async_fixed_session_{uuid.uuid4().hex}"
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-        query={"session_id": session_id},
-    )
+    url = _async_url(test_config, {"session_id": session_id})
     engine = create_async_engine(url, pool_size=2, max_overflow=0)
 
     async def slow_query() -> int:
@@ -428,14 +427,7 @@ async def test_async_sqlalchemy_fixed_session_id_rejects_concurrent_requests(tes
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_pool_pre_ping_replaces_closed_native_client(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_pre_ping=True)
 
     try:
@@ -465,14 +457,7 @@ async def test_async_sqlalchemy_pool_pre_ping_replaces_closed_native_client(test
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_force_closed_connection_is_invalidated(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url, pool_size=1, max_overflow=0)
     connection = await engine.connect()
 
@@ -502,14 +487,7 @@ async def test_async_sqlalchemy_force_closed_connection_is_invalidated(test_conf
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_server_error_keeps_connection_usable(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url, pool_size=1, max_overflow=0)
 
     try:
@@ -533,14 +511,7 @@ async def test_async_sqlalchemy_server_error_keeps_connection_usable(test_config
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_invalidation_and_recycle_close_native_clients(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_recycle=3600)
 
     try:
@@ -589,14 +560,7 @@ async def test_async_sqlalchemy_invalidation_and_recycle_close_native_clients(te
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_checked_out_connection_closes_after_pool_dispose(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url, pool_size=1, max_overflow=0)
     connection = await engine.connect()
     raw_connection = await connection.get_raw_connection()
@@ -625,14 +589,7 @@ async def test_async_sqlalchemy_checked_out_connection_closes_after_pool_dispose
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_gc_force_closes_checked_out_connection(test_config: TestConfig) -> None:
-    url = URL.create(
-        "clickhousedb+async",
-        username=test_config.username,
-        password=test_config.password,
-        host=test_config.host,
-        port=test_config.port,
-        database=test_config.test_database,
-    )
+    url = _async_url(test_config)
     engine = create_async_engine(url, pool_size=1, max_overflow=0)
 
     try:

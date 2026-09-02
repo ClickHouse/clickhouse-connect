@@ -21,14 +21,7 @@ from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import StreamFailureError
 from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
-
-
-def _run_in_new_loop(coroutine):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coroutine)
-    finally:
-        loop.close()
+from tests.helpers import run_in_new_loop
 
 
 def test_async_dialect_registry_and_flags():
@@ -827,8 +820,8 @@ def test_async_engine_can_move_to_new_loop_after_awaited_dispose():
             pool_size=1,
             max_overflow=0,
         )
-        _run_in_new_loop(use_and_dispose(engine))
-        _run_in_new_loop(use_and_dispose(engine))
+        run_in_new_loop(use_and_dispose(engine))
+        run_in_new_loop(use_and_dispose(engine))
 
     assert len(clients) == 2
     assert clients[0].owner_loop is not clients[1].owner_loop
@@ -859,8 +852,8 @@ def test_async_engine_recovers_when_disposed_after_owner_loop_closes():
             pool_size=1,
             max_overflow=0,
         )
-        _run_in_new_loop(use(engine))
-        _run_in_new_loop(dispose_use_and_dispose(engine))
+        run_in_new_loop(use(engine))
+        run_in_new_loop(dispose_use_and_dispose(engine))
 
     assert len(clients) == 2
     assert clients[0].owner_loop is not clients[1].owner_loop
@@ -885,9 +878,9 @@ def test_async_engine_with_null_pool_does_not_retain_clients_across_loops():
             async_creator=creator,
             poolclass=NullPool,
         )
-        _run_in_new_loop(use(engine))
-        _run_in_new_loop(use(engine))
-        _run_in_new_loop(engine.dispose())
+        run_in_new_loop(use(engine))
+        run_in_new_loop(use(engine))
+        run_in_new_loop(engine.dispose())
 
     assert len(clients) == 2
     assert clients[0].owner_loop is not clients[1].owner_loop

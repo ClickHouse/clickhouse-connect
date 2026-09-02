@@ -10,14 +10,7 @@ import pytest
 from clickhouse_connect.driver._backend.operations import CommandOp, QueryOp, RawQueryOp
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import ProgrammingError
-
-
-def _run_in_new_loop(coroutine):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coroutine)
-    finally:
-        loop.close()
+from tests.helpers import run_in_new_loop
 
 
 async def _async_token_provider() -> str:
@@ -140,8 +133,8 @@ def test_initialized_client_reopens_on_new_event_loop_after_close():
         assert session.closed
         return session
 
-    first_session = _run_in_new_loop(open_and_close())
-    second_session = _run_in_new_loop(open_and_close())
+    first_session = run_in_new_loop(open_and_close())
+    second_session = run_in_new_loop(open_and_close())
 
     assert first_session is not second_session
 
@@ -156,7 +149,7 @@ def test_initialized_client_recovers_in_current_loop_after_owner_loop_closes():
         assert session is not None
         return session
 
-    first_session = _run_in_new_loop(open_session())
+    first_session = run_in_new_loop(open_session())
 
     async def recover_session() -> aiohttp.ClientSession:
         with pytest.raises(ProgrammingError, match="current event loop"):
@@ -170,7 +163,7 @@ def test_initialized_client_recovers_in_current_loop_after_owner_loop_closes():
         await client.close()
         return session
 
-    second_session = _run_in_new_loop(recover_session())
+    second_session = run_in_new_loop(recover_session())
 
     assert second_session is not first_session
     assert second_session.closed
