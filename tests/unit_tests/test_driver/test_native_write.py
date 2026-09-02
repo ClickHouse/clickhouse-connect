@@ -1,5 +1,8 @@
+import pytest
+
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
+from clickhouse_connect.driver.insert import InsertContext
 from tests.helpers import native_insert_block, to_bytes
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
@@ -87,6 +90,22 @@ def test_point():
     types = [get_from_name("Point")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == bytes.fromhex(POINT_OUTPUT)
+
+
+@pytest.mark.parametrize(
+    ("points", "message"),
+    [
+        ([(13.0,)], "got 1 at row 0"),
+        ([(13.0, 23.0, 79.0)], "got 3 at row 0"),
+        ([(13.0, 23.0), (79.0,)], "got 1 at row 1"),
+        ([(13.0, 23.0), (13.0, 23.0, 79.0)], "got 3 at row 1"),
+    ],
+)
+def test_point_rejects_wrong_coordinate_count(points, message):
+    point_type = get_from_name("Point")
+    context = InsertContext("table", ["value"], [point_type], [[(13.0, 23.0)]])
+    with pytest.raises(DataError, match=message):
+        point_type.write_column(points, bytearray(), context)
 
 
 def test_nested():
