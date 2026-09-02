@@ -388,7 +388,7 @@ class HttpSyncBackend:
             if self.server_host_name:
                 kwargs["assert_same_host"] = False
                 headers["Host"] = self.server_host_name
-            response = cast(PoolManager, self.http).request("GET", f"{self.url}/ping", **kwargs)
+            response = cast(PoolManager, self.http).request("GET", f"{self.url.rstrip('/')}/ping", **kwargs)
             return 200 <= response.status < 300
         except HTTPError:
             logger.debug("ping failed", exc_info=True)

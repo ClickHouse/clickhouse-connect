@@ -119,6 +119,25 @@ async def test_initialized_client_recreates_missing_session_without_server_initi
     await client.close()
 
 
+def test_initialized_client_reopens_on_new_event_loop_after_close():
+    client = _build_client()
+    client._initialized = True
+
+    async def open_and_close() -> aiohttp.ClientSession:
+        await client._initialize()
+        session = client._session
+        assert session is not None
+        assert not session.closed
+        await client.close()
+        assert session.closed
+        return session
+
+    first_session = asyncio.run(open_and_close())
+    second_session = asyncio.run(open_and_close())
+
+    assert first_session is not second_session
+
+
 @pytest.mark.asyncio
 async def test_sync_token_provider_failure_closes_session():
     provider_error = RuntimeError("token provider failed")

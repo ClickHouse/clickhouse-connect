@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+_SESSION_UNAVAILABLE_ERROR = (
+    "Client session is unavailable. Call 'await client._initialize()' before making requests or to reopen a closed client."
+)
 
 
 def _dispose_late_token_result(future: asyncio.Future[str | Awaitable[str]]) -> None:
@@ -99,10 +102,11 @@ class SessionLease:
     """An aiohttp.ClientSession with an in-flight request count, so close()
     can wait for outstanding requests to drain before tearing down the session."""
 
-    __slots__ = ("session", "_inflight", "_drained")
+    __slots__ = ("session", "_inflight", "_drained", "_owner_loop")
 
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
+        self._owner_loop = asyncio.get_running_loop()
         self._inflight = 0
         self._drained = asyncio.Event()
         self._drained.set()
@@ -562,9 +566,13 @@ class HttpAsyncBackend:
         retries: int = 0,
         retry_body: Callable[[], Awaitable[Any]] | None = None,
     ) -> aiohttp.ClientResponse:
-        if self.session is None:
+        lease = self.session_lease
+        if lease is None:
+            raise ProgrammingError(_SESSION_UNAVAILABLE_ERROR)
+        if lease._owner_loop is not asyncio.get_running_loop():
             raise ProgrammingError(
-                "Session not initialized. Use 'async with get_async_client(...)' or call 'await client._initialize()' first."
+                "Async client session belongs to a different event loop. Close the client or await engine.dispose() "
+                "in the original event loop before reuse, then call 'await client._initialize()' when reusing the client directly."
             )
 
         reset_seconds = common.get_setting("max_connection_age")
@@ -613,7 +621,7 @@ class HttpAsyncBackend:
                 if lease is None or lease.session.closed:
                     if query_session:
                         self._active_session = None
-                    raise ProgrammingError("Client session is unavailable; the client may have been closed.")
+                    raise ProgrammingError(_SESSION_UNAVAILABLE_ERROR)
                 session = lease.session
                 lease.acquire()
             lease_released = False
@@ -714,6 +722,12 @@ class HttpAsyncBackend:
                     self._active_session = None
 
     async def ping(self) -> bool:
+        lease = self.session_lease
+        if lease is None or lease.session.closed:
+            return False
+        if lease._owner_loop is not asyncio.get_running_loop():
+            logger.debug("ping skipped because the async client session belongs to a different event loop")
+            return False
         async with self.session_lock:
             lease = self.session_lease
             if lease is None or lease.session.closed:
@@ -721,7 +735,7 @@ class HttpAsyncBackend:
             session = lease.session
             lease.acquire()
         try:
-            url = f"{self.url}/ping"
+            url = f"{self.url.rstrip('/')}/ping"
             timeout = aiohttp.ClientTimeout(total=3.0)
             get_kwargs: dict[str, Any] = {"timeout": timeout}
             if self.proxy_url:

@@ -10,7 +10,7 @@ pytest.importorskip("sqlalchemy", minversion="2.0.44")
 
 from sqlalchemy.dialects import registry
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import AsyncAdaptedQueuePool, PoolProxiedConnection
+from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool, PoolProxiedConnection
 from sqlalchemy.util.concurrency import await_only, greenlet_spawn
 
 from clickhouse_connect import dbapi
@@ -655,6 +655,17 @@ async def test_async_dbapi_session_id_default_can_be_disabled(connect_options):
     await greenlet_spawn(adapted.close)
 
 
+@pytest.mark.asyncio
+async def test_async_dbapi_preserves_explicit_session_id():
+    async_dbapi = ClickHouseAsyncDialect.import_dbapi()
+    with patch.object(AsyncClient, "_initialize", new=AsyncMock()):
+        adapted = await greenlet_spawn(lambda: async_dbapi.connect(session_id="fixed_session_13"))
+
+    raw = adapted.driver_connection
+    assert raw._session_id_param == "fixed_session_13"
+    await greenlet_spawn(adapted.close)
+
+
 @pytest.mark.parametrize(
     ("connect_options", "expected"),
     (
@@ -762,6 +773,140 @@ class _LifecycleClient(_SerializedClient):
     def _force_close(self) -> None:
         self.force_close_calls += 1
         self.close_release.set()
+
+
+class _LoopBoundClient(_SerializedClient):
+    def __init__(self):
+        super().__init__()
+        self.owner_loop = asyncio.get_running_loop()
+        self.close_calls = 0
+
+    def _assert_owner_loop(self) -> None:
+        if asyncio.get_running_loop() is not self.owner_loop:
+            raise RuntimeError("client used from a different event loop")
+
+    async def query(self, *args: Any, **kwargs: Any) -> QueryResult:
+        self._assert_owner_loop()
+        return await super().query(*args, **kwargs)
+
+    async def close(self) -> None:
+        self._assert_owner_loop()
+        self.close_calls += 1
+
+
+def test_async_engine_can_move_to_new_loop_after_awaited_dispose():
+    clients: list[_LoopBoundClient] = []
+
+    async def creator() -> _LoopBoundClient:
+        client = _LoopBoundClient()
+        clients.append(client)
+        return client
+
+    async def use_and_dispose(engine) -> None:
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql("SELECT 13")).scalar_one() == 13
+        await engine.dispose()
+
+    with patch.object(ClickHouseAsyncDialect, "initialize"):
+        engine = create_async_engine(
+            "clickhousedb+async://",
+            async_creator=creator,
+            pool_size=1,
+            max_overflow=0,
+        )
+        asyncio.run(use_and_dispose(engine))
+        asyncio.run(use_and_dispose(engine))
+
+    assert len(clients) == 2
+    assert clients[0].owner_loop is not clients[1].owner_loop
+    assert [client.close_calls for client in clients] == [1, 1]
+
+
+def test_async_engine_with_null_pool_does_not_retain_clients_across_loops():
+    clients: list[_LoopBoundClient] = []
+
+    async def creator() -> _LoopBoundClient:
+        client = _LoopBoundClient()
+        clients.append(client)
+        return client
+
+    async def use(engine) -> None:
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql("SELECT 13")).scalar_one() == 13
+
+    with patch.object(ClickHouseAsyncDialect, "initialize"):
+        engine = create_async_engine(
+            "clickhousedb+async://",
+            async_creator=creator,
+            poolclass=NullPool,
+        )
+        asyncio.run(use(engine))
+        asyncio.run(use(engine))
+        asyncio.run(engine.dispose())
+
+    assert len(clients) == 2
+    assert clients[0].owner_loop is not clients[1].owner_loop
+    assert [client.close_calls for client in clients] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_owned_invalidation_task_finishes_cleanup_before_cancellation_propagates():
+    clients: list[_LifecycleClient] = []
+
+    async def creator() -> _LifecycleClient:
+        client = _LifecycleClient(block_close=not clients)
+        clients.append(client)
+        return client
+
+    async def invalidate_safely(connection) -> None:
+        invalidate_task = asyncio.create_task(connection.invalidate())
+        cancellation = None
+        while not invalidate_task.done():
+            try:
+                await asyncio.shield(invalidate_task)
+            except asyncio.CancelledError as ex:
+                cancellation = ex
+        if cancellation is not None:
+            try:
+                invalidate_task.result()
+            finally:
+                raise cancellation
+        invalidate_task.result()
+
+    with patch.object(ClickHouseAsyncDialect, "initialize"):
+        engine = create_async_engine(
+            "clickhousedb+async://",
+            async_creator=creator,
+            pool_size=1,
+            max_overflow=0,
+        )
+        connection = await engine.connect()
+        invalidate_task = asyncio.create_task(invalidate_safely(connection))
+        await asyncio.wait_for(clients[0].close_started.wait(), timeout=1.0)
+
+        invalidate_task.cancel()
+        await asyncio.sleep(0)
+        assert not invalidate_task.done()
+        invalidate_task.cancel()
+        await asyncio.sleep(0)
+        assert not invalidate_task.done()
+        assert clients[0].force_close_calls == 0
+        clients[0].close_release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await invalidate_task
+        assert invalidate_task.cancelled()
+        assert connection.invalidated
+
+        await connection.close()
+        async with engine.connect():
+            pass
+        await engine.dispose()
+
+    assert len(clients) == 2
+    assert clients[0].close_calls == 1
+    assert clients[0].close_finished.is_set()
+    assert clients[1].close_calls == 1
 
 
 class _Session:

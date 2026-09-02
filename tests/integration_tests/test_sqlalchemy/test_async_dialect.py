@@ -159,6 +159,9 @@ async def test_async_sqlalchemy_dialect_acceptance(test_config: TestConfig) -> N
             await asyncio.wait_for(engine.dispose(), 10.0)
 
     assert raw_clients
+    session_ids = [client.get_client_setting("session_id") for client in raw_clients.values()]
+    assert all(session_ids)
+    assert len(set(session_ids)) == len(session_ids)
     assert all(client._session is None or client._session.closed for client in raw_clients.values())
 
 
@@ -186,6 +189,41 @@ async def test_async_sqlalchemy_connection_preserves_session_state(test_config: 
             rows = await connection.exec_driver_sql(f"SELECT value FROM {table_name}")
             assert rows.all() == [(13,)]
     finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_fixed_session_id_rejects_concurrent_requests(test_config: TestConfig) -> None:
+    session_id = f"test_async_fixed_session_{uuid.uuid4().hex}"
+    url = URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+        query={"session_id": session_id},
+    )
+    engine = create_async_engine(url, pool_size=2, max_overflow=0)
+
+    async def slow_query() -> int:
+        async with engine.connect() as connection:
+            result = await connection.exec_driver_sql("SELECT sleep(0.5), 13")
+            return int(result.one()[1])
+
+    first_query = asyncio.create_task(slow_query())
+    try:
+        await asyncio.sleep(0.1)
+        async with engine.connect() as connection:
+            with pytest.raises(SQLAlchemyDatabaseError) as exc_info:
+                await connection.exec_driver_sql("SELECT 79")
+        assert isinstance(exc_info.value.orig, DriverDatabaseError)
+        assert exc_info.value.orig.code == 373
+        assert await first_query == 13
+    finally:
+        if not first_query.done():
+            first_query.cancel()
+        await asyncio.gather(first_query, return_exceptions=True)
         await asyncio.wait_for(engine.dispose(), 10.0)
 
 

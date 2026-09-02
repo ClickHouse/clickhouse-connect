@@ -54,7 +54,11 @@ async with engine.connect() as conn:
 await engine.dispose()
 ```
 
-Results are buffered. Server-side cursors and `AsyncConnection.stream()` are not supported by this dialect. Use the native `AsyncClient` streaming methods for large results. `AsyncSession.stream()` is accepted by SQLAlchemy but also returns a buffered result. SQLAlchemy's pool owns connection concurrency. Each pooled connection owns one native async client and defaults its aiohttp connector limits to one connection and one connection per host. Set `connector_limit`, `connector_limit_per_host`, or `keepalive_timeout` in the URL or `connect_args` to override those transport settings. Create and dispose an async engine in the event loop where it is used. Return every checked-out connection, then await `engine.dispose()` during shutdown and before using the engine from another event loop. If disposal runs while a connection is still checked out, the dialect closes that connection when it is returned or garbage collected. Do not call `engine.sync_engine.dispose()` from synchronous code. SQLAlchemy cannot await async connection cleanup there and may log the error instead of closing pooled transports.
+Results are buffered. Server-side cursors and `AsyncConnection.stream()` are not supported by this dialect. Use the native `AsyncClient` streaming methods for large results. `AsyncSession.stream()` is accepted by SQLAlchemy but also returns a buffered result. SQLAlchemy's pool owns connection concurrency. Each pooled connection owns one native async client and defaults its aiohttp connector limits to one connection and one connection per host. Set `connector_limit`, `connector_limit_per_host`, or `keepalive_timeout` in the URL or `connect_args` to override those transport settings. With `pool_pre_ping=True`, SQLAlchemy checks reused connections with `SELECT 1` before checkout.
+
+Each pooled connection generates a distinct ClickHouse session ID by default, so settings changed with `SET` and temporary tables persist for that connection. If you configure a fixed `session_id`, use `pool_size=1, max_overflow=0` or externally serialize engine access. ClickHouse allows only one concurrent request for the same user and session ID and rejects overlap instead of waiting.
+
+Create and dispose an async engine in the event loop where it is used. Return every checked-out connection, then await `engine.dispose()` during shutdown and before using the engine from another event loop. To share one engine across event loops without retaining loop-bound connections, configure `poolclass=NullPool`. If disposal runs while a connection is still checked out, the dialect closes that connection when it is returned or garbage collected. Do not call `engine.sync_engine.dispose()` from synchronous code. SQLAlchemy cannot await async connection cleanup there and may log the error instead of closing pooled transports.
 
 URL query parameters can contain ClickHouse settings, ClickHouse Connect client options such as `compression`, `query_limit`, and timeouts, or HTTP/TLS options such as `ca_cert`. Prefix a ClickHouse setting with `ch_` to force it to be treated as a server setting when needed, for example `ch_http_max_field_name_size=99999`.
 
@@ -93,6 +97,28 @@ with engine.connect() as conn:
 ### Error handling {#sqlalchemy-error-handling}
 
 Errors raised by the driver through a SQLAlchemy connection use the DB-API classes exported from `clickhouse_connect.dbapi`. They are the same class objects as the corresponding classes in `clickhouse_connect.driver.exceptions`, so SQLAlchemy wraps them in the matching `sqlalchemy.exc.DBAPIError` subclass. `StreamFailureError` is an `OperationalError` and is wrapped as `sqlalchemy.exc.OperationalError`.
+
+If caller cancellation can interrupt an explicit `AsyncConnection.invalidate()`, run invalidation in an owned task and wait for that task before propagating cancellation. This lets SQLAlchemy finish its connection-record bookkeeping:
+
+```python
+import asyncio
+
+
+async def invalidate_safely(connection):
+    invalidate_task = asyncio.create_task(connection.invalidate())
+    cancellation = None
+    while not invalidate_task.done():
+        try:
+            await asyncio.shield(invalidate_task)
+        except asyncio.CancelledError as ex:
+            cancellation = ex
+    if cancellation is not None:
+        try:
+            invalidate_task.result()
+        finally:
+            raise cancellation
+    invalidate_task.result()
+```
 
 ### Server-side parameters {#sqlalchemy-server-side-parameters}
 
