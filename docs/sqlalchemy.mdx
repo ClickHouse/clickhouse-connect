@@ -33,7 +33,7 @@ with engine.connect() as conn:
 
 ### ClickHouse session IDs {#sqlalchemy-session-ids}
 
-Each pooled connection in either the synchronous or async dialect generates a distinct ClickHouse session ID by default, so settings changed with `SET` and temporary tables persist for that connection. If you configure a fixed `session_id`, use `pool_size=1, max_overflow=0` or externally serialize engine access. ClickHouse allows only one concurrent request for the same user and session ID and rejects overlap instead of waiting.
+Each pooled connection in either the synchronous or async dialect generates a distinct ClickHouse session ID by default. When requests for that connection reach the same ClickHouse server process, settings changed with `SET` and temporary tables persist for that connection. Named-session state and same-session overlap checks are process-local. If you configure a fixed `session_id`, use `pool_size=1, max_overflow=0` or serialize access before requests reach ClickHouse. In ClickHouse Cloud or other load-balanced deployments, requests with the same session ID can reach different servers, so do not rely on a fixed `session_id` as distributed state or as a distributed mutex.
 
 ### Async connections {#sqlalchemy-async-connections}
 

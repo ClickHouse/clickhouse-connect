@@ -196,7 +196,7 @@ for i in range(1000):
 ### Multi-threaded applications {#multi-threaded-applications}
 
 <Warning>
-Client instances are **NOT thread-safe** when using session IDs. By default, clients have an auto-generated session ID, and concurrent queries within the same session will raise a `ProgrammingError`.
+Client instances are **NOT thread-safe** when using session IDs. By default, clients have an auto-generated session ID. Concurrent queries through one client and the same session raise a `ProgrammingError` when the client detects local overlap. Named-session state and server-side session overlap checks are local to one ClickHouse server process, so a fixed `session_id` is not distributed state or a distributed mutex in ClickHouse Cloud or other load-balanced deployments.
 </Warning>
 
 To share a client across threads safely:

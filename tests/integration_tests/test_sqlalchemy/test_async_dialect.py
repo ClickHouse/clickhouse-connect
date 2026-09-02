@@ -401,6 +401,8 @@ async def test_async_sqlalchemy_connection_preserves_session_state(test_config: 
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_fixed_session_id_rejects_concurrent_requests(test_config: TestConfig) -> None:
+    if test_config.cloud:
+        pytest.skip("Named session locks are server-local, and ClickHouse Cloud may route requests to different replicas")
     session_id = f"test_async_fixed_session_{uuid.uuid4().hex}"
     url = _async_url(test_config, {"session_id": session_id})
     engine = create_async_engine(url, pool_size=2, max_overflow=0)
