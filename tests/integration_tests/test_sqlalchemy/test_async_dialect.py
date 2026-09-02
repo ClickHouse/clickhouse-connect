@@ -3,6 +3,7 @@ import gc
 import time
 import uuid
 import weakref
+from contextlib import AsyncExitStack
 
 import pytest
 
@@ -403,25 +404,42 @@ async def test_async_sqlalchemy_fixed_session_id_rejects_concurrent_requests(tes
     session_id = f"test_async_fixed_session_{uuid.uuid4().hex}"
     url = _async_url(test_config, {"session_id": session_id})
     engine = create_async_engine(url, pool_size=2, max_overflow=0)
+    start = asyncio.Event()
+    ready = (asyncio.Event(), asyncio.Event())
 
-    async def slow_query() -> int:
-        async with engine.connect() as connection:
-            result = await connection.exec_driver_sql("SELECT sleep(2), 13")
-            return int(result.one()[1])
+    async def slow_query(connection, value: int, query_ready: asyncio.Event) -> int:
+        query_ready.set()
+        await start.wait()
+        result = await connection.exec_driver_sql(f"SELECT sleep(2), {value}")
+        return int(result.one()[1])
 
-    first_query = asyncio.create_task(slow_query())
     try:
-        await asyncio.sleep(0.1)
-        async with engine.connect() as connection:
-            with pytest.raises(SQLAlchemyDatabaseError) as exc_info:
-                await connection.exec_driver_sql("SELECT 79")
-        assert isinstance(exc_info.value.orig, DriverDatabaseError)
-        assert exc_info.value.orig.code == 373
-        assert await first_query == 13
+        async with AsyncExitStack() as stack:
+            first_connection = await stack.enter_async_context(engine.connect())
+            second_connection = await stack.enter_async_context(engine.connect())
+            query_tasks = [
+                asyncio.create_task(slow_query(first_connection, 13, ready[0])),
+                asyncio.create_task(slow_query(second_connection, 79, ready[1])),
+            ]
+            try:
+                await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), timeout=5.0)
+                assert all(not query_task.done() for query_task in query_tasks)
+                start.set()
+                results = await asyncio.gather(*query_tasks, return_exceptions=True)
+
+                successes = [result for result in results if isinstance(result, int)]
+                errors = [result for result in results if isinstance(result, SQLAlchemyDatabaseError)]
+                assert len(successes) == 1
+                assert successes[0] in (13, 79)
+                assert len(errors) == 1
+                assert isinstance(errors[0].orig, DriverDatabaseError)
+                assert errors[0].orig.code == 373
+            finally:
+                for query_task in query_tasks:
+                    if not query_task.done():
+                        query_task.cancel()
+                await asyncio.gather(*query_tasks, return_exceptions=True)
     finally:
-        if not first_query.done():
-            first_query.cancel()
-        await asyncio.gather(first_query, return_exceptions=True)
         await asyncio.wait_for(engine.dispose(), 10.0)
 
 
