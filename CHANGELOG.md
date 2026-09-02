@@ -12,6 +12,7 @@
 
 - SQLAlchemy and Alembic now connect and reflect with `native_codec="rust_strict"`. Dialect metadata statements are marked as driver-internal, so they decode with the Python codec in every codec mode instead of tripping the strict `query_formats` check. Compatible ordinary statements still use the Rust codec.
 - Rust codec streaming queries now honor `show_clickhouse_errors`. Mid-stream server errors return the generic message when the setting is `False` and drop the server version trailer when it is `"scrub"`, matching the Python codec on both the sync and async clients.
+- Rust codec streams that are discarded without entering their context now close their response and stop the read-ahead thread during garbage collection. Previously each abandoned stream retained a thread, socket, and buffered response data.
 
 ### Compatibility
 

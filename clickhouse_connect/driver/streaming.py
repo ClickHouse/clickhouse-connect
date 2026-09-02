@@ -442,6 +442,41 @@ class StreamingInsertSource:
         return False
 
 
+def _read_ahead_producer(
+    source: ByteSource,
+    out: queue.Queue[tuple[str, object]],
+    stop_event: threading.Event,
+) -> None:
+    def put(item: tuple[str, object]) -> bool:
+        while not stop_event.is_set():
+            try:
+                out.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    try:
+        for chunk in source.gen:
+            if not put(("data", chunk)):
+                return
+    except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
+        put(("error", ex))
+    finally:
+        put(("eof", None))
+
+
+def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Iterator[bytes]:
+    while True:
+        tag, payload = source_queue.get()
+        if tag == "data":
+            yield cast(bytes, payload)
+        elif tag == "error":
+            raise cast(BaseException, payload)
+        else:  # eof
+            return
+
+
 class ReadAheadSource(Closable):
     """Reads chunks from a byte source on a daemon thread into a bounded queue so transport overlaps decode.
 
@@ -455,37 +490,26 @@ class ReadAheadSource(Closable):
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
         self._gen_cache: Iterator[bytes] | None = None
-        self._thread = threading.Thread(target=self._producer, name="clickhouse-read-ahead", daemon=True)
+        self._thread = threading.Thread(
+            target=_read_ahead_producer,
+            args=(source, self.queue, self._stop_event),
+            name="clickhouse-read-ahead",
+            daemon=True,
+        )
         self._thread.start()
+
+    def __del__(self) -> None:
+        try:
+            if not self._stop_event.is_set():
+                self.close()
+        except Exception:  # noqa: BLE001 - finalizers must not raise
+            pass
 
     @property
     def gen(self) -> Iterator[bytes]:
         if self._gen_cache is None:
-            self._gen_cache = self._consume()
+            self._gen_cache = _read_ahead_consumer(self.queue)
         return self._gen_cache
-
-    def _consume(self) -> Iterator[bytes]:
-        while True:
-            tag, payload = self.queue.get()
-            if tag == "data":
-                yield cast(bytes, payload)
-            elif tag == "error":
-                raise cast(BaseException, payload)
-            else:  # eof
-                return
-
-    def _producer(self):
-        source = self.source
-        if source is None:
-            return
-        try:
-            for chunk in source.gen:
-                if not self._put(("data", chunk)):
-                    return
-        except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
-            self._put(("error", ex))
-        finally:
-            self._put(("eof", None))
 
     def _drain(self):
         try:
@@ -519,15 +543,6 @@ class ReadAheadSource(Closable):
         # Release on the loop thread: the async source's close cancels its producer task, which must not
         # run from an executor thread.
         self._release_source()
-
-    def _put(self, item: tuple[str, object]) -> bool:
-        while not self._stop_event.is_set():
-            try:
-                self.queue.put(item, timeout=0.1)
-                return True
-            except queue.Full:
-                continue
-        return False
 
 
 class _SyncStreamingInsertSource:

@@ -1,7 +1,8 @@
 import array
+import gc
 import logging
-import threading
 import time
+import weakref
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -1574,31 +1575,43 @@ def test_rust_codec_uuid_df_parity(client_factory, call):
 
 
 def test_rust_codec_abandoned_stream_no_read_ahead_thread(client_factory, call, client_mode):
-    rust_client = client_factory(native_codec="rust_strict")
-    # The result must exceed the read-ahead queue capacity so the producer thread is still blocked at
-    # abandonment. A small result the producer fully buffers would exit on its own and hide a close() leak.
-    stream = call(rust_client.query_column_block_stream, "SELECT number FROM numbers(20000000)")
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    try:
+        rust_client = client_factory(native_codec="rust_strict")
+        # The result must exceed the read-ahead queue capacity so the producer thread is still blocked at
+        # abandonment. A small result the producer fully buffers would exit on its own and hide a close() leak.
+        stream = call(rust_client.query_column_block_stream, "SELECT number FROM numbers(20000000)")
+        read_source = stream.source.source
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+        del read_source
 
-    if client_mode == "sync":
-        with stream as blocks:
-            for _ in blocks:
-                break
-    else:
+        if client_mode == "sync":
+            with pytest.raises(ProgrammingError, match="Stream should be used within a context"):
+                next(stream)
+        else:
 
-        async def abandon():
-            async with stream as blocks:
-                async for _ in blocks:
-                    break
+            async def abandon(stream_context):
+                with pytest.raises(ProgrammingError, match="Stream should be used within a context"):
+                    await stream_context.__anext__()
 
-        call(abandon)
+            call(abandon, stream)
 
-    def read_ahead_threads():
-        return [t for t in threading.enumerate() if t.name == "clickhouse-read-ahead" and t.is_alive()]
-
-    deadline = time.time() + 2.0
-    while time.time() < deadline and read_ahead_threads():
-        time.sleep(0.05)
-    assert not read_ahead_threads()
+        del stream
+        deadline = time.time() + 2.0
+        while time.time() < deadline and thread.is_alive():
+            time.sleep(0.05)
+        assert read_source_ref() is None
+        assert thread.is_alive() is False
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def _insert_df_roundtrip(client, python_client, call, table, schema, df):

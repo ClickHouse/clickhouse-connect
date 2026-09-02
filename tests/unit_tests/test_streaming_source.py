@@ -1,8 +1,10 @@
 import asyncio
+import gc
 import gzip
 import logging
 import threading
 import time
+import weakref
 import zlib
 from unittest.mock import Mock
 
@@ -627,6 +629,36 @@ def test_read_ahead_join_on_close():
     read_source.close()
     assert read_source._thread.is_alive() is False
     assert src.closed is True
+
+
+def test_read_ahead_abandoned_source_is_collected():
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    try:
+        src = MockByteSource([bytes([i % 256]) for i in range(500)])
+        read_source = ReadAheadSource(src, maxsize=2)
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+
+        assert next(read_source.gen) == b"\x00"
+        deadline = time.time() + 1.0
+        while time.time() < deadline and not read_source.queue.full():
+            time.sleep(0.01)
+        assert read_source.queue.full()
+
+        del read_source
+        thread.join(timeout=1.0)
+        assert read_source_ref() is None
+        assert thread.is_alive() is False
+        assert src.closed is True
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        if gc_was_enabled:
+            gc.enable()
 
 
 if __name__ == "__main__":
