@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import time
 import uuid
 import weakref
 
@@ -17,10 +18,208 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base
 
 from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt32
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
+from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import DatabaseError as DriverDatabaseError
 from clickhouse_connect.driver.exceptions import ProgrammingError as DriverProgrammingError
 from tests.integration_tests.conftest import TestConfig
+
+
+def _async_url(test_config: TestConfig, query: dict[str, str] | None = None) -> URL:
+    default_query = {}
+    if test_config.cloud:
+        default_query["select_sequential_consistency"] = "1"
+    if test_config.insert_quorum:
+        default_query["insert_quorum"] = str(test_config.insert_quorum)
+    return URL.create(
+        "clickhousedb+async",
+        username=test_config.username,
+        password=test_config.password,
+        host=test_config.host,
+        port=test_config.port,
+        database=test_config.test_database,
+        query={**default_query, **(query or {})},
+    )
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_query_behavior_parity(test_config: TestConfig) -> None:
+    engine = create_async_engine(_async_url(test_config))
+
+    try:
+        async with engine.connect() as connection:
+            connection = await connection.execution_options(
+                settings={"max_threads": 2},
+                query_formats={"UUID": "string"},
+            )
+            result = await connection.exec_driver_sql(
+                "SELECT number AS value, concat('user_', toString(number)) AS label FROM numbers(3) ORDER BY number"
+            )
+            cursor = result.cursor
+
+            assert list(result.keys()) == ["value", "label"]
+            assert result.rowcount == 3
+            assert result.returns_rows is True
+            assert cursor.summary[-1]["read_rows"] == "3"
+            assert result.fetchone() == (0, "user_0")
+            assert result.fetchmany(1) == [(1, "user_1")]
+            assert result.all() == [(2, "user_2")]
+
+            mapping_result = await connection.exec_driver_sql("SELECT 13 AS value, 'user_1' AS label")
+            assert mapping_result.mappings().one() == {"value": 13, "label": "user_1"}
+            scalar_result = await connection.exec_driver_sql("SELECT number FROM numbers(4) ORDER BY number")
+            assert [list(partition) for partition in scalar_result.scalars().partitions(3)] == [[0, 1, 2], [3]]
+
+            empty_result = await connection.exec_driver_sql(
+                "/* outer /* nested */ done */\n#! clickhouse\n# hash\n// slash\n-- dash\nWITH 13 AS value_1 SELECT value_1 WHERE 0"
+            )
+            assert empty_result.all() == []
+            assert list(empty_result.keys()) == ["value_1"]
+            assert empty_result.returns_rows is True
+
+            setting_result = await connection.execute(
+                sa.text("SELECT getSetting('max_threads')").execution_options(settings={"max_threads": 3})
+            )
+            assert setting_result.scalar_one() == 3
+            assert (await connection.exec_driver_sql("SELECT getSetting('max_threads')")).scalar_one() == 2
+
+            format_result = await connection.execute(
+                sa.text("SELECT toUUID('00000000-0000-0000-0000-00000000000d') AS value").execution_options(
+                    query_formats={"UUID": "native"}
+                )
+            )
+            assert format_result.scalar_one() == uuid.UUID("00000000-0000-0000-0000-00000000000d")
+            connection_format_result = await connection.exec_driver_sql("SELECT toUUID('00000000-0000-0000-0000-00000000000d') AS value")
+            assert connection_format_result.scalar_one() == "00000000-0000-0000-0000-00000000000d"
+
+            percent_result = await connection.execute(sa.text("SELECT :value, 'single% adjacent%% %(token)s tail%'").bindparams(value=79))
+            assert percent_result.one() == (79, "single% adjacent%% %(token)s tail%")
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_ddl_reflection_and_percent_identifiers(test_config: TestConfig) -> None:
+    engine = create_async_engine(_async_url(test_config))
+    table_name = f"test_async_parity%_{uuid.uuid4().hex}"
+    value_name = "value%pct"
+    metadata = sa.MetaData()
+    value_column = sa.Column(value_name, UInt32)
+    table = sa.Table(
+        table_name,
+        metadata,
+        value_column,
+        sa.Column("label", String),
+        MergeTree(order_by=value_column),
+    )
+
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(metadata.create_all)
+            insert_result = await connection.execute(
+                table.insert(),
+                [
+                    {value_name: 13, "label": "user_1"},
+                    {value_name: 79, "label": "user_2"},
+                ],
+            )
+            rows = (await connection.execute(sa.select(table).order_by(table.c[value_name]))).all()
+
+            def reflect(sync_connection):
+                inspector = sa.inspect(sync_connection)
+                reflected = sa.Table(table_name, sa.MetaData(), autoload_with=sync_connection)
+                return (
+                    inspector.has_table(table_name),
+                    [column["name"] for column in inspector.get_columns(table_name)],
+                    [column.name for column in reflected.columns],
+                    reflected.engine.name,
+                )
+
+            set_default_formats("String", "bytes")
+            try:
+                reflected = await connection.run_sync(reflect)
+            finally:
+                clear_all_formats()
+
+        assert insert_result.rowcount == 2
+        assert rows == [(13, "user_1"), (79, "user_2")]
+        assert reflected == (True, [value_name, "label"], [value_name, "label"], "MergeTree")
+    finally:
+        try:
+            async with engine.connect() as connection:
+                await connection.run_sync(metadata.drop_all)
+        finally:
+            await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_sqlalchemy_server_binds_and_native_client_surface(test_config: TestConfig) -> None:
+    engine = create_async_engine(
+        _async_url(test_config, {"query_limit": "2333", "compression": "false"}),
+        server_side_params=True,
+    )
+
+    try:
+        async with engine.connect() as connection:
+            value = sa.bindparam("value", type_=UInt32())
+            label = sa.bindparam("label", type_=String())
+            result = await connection.execute(sa.select(value, label), {"value": 113, "label": "value%pct"})
+            assert result.one() == (113, "value%pct")
+
+            in_result = await connection.execute(
+                sa.select(value).where(value.in_([13, 113])),
+                {"value": 113},
+            )
+            assert in_result.scalar_one() == 113
+            tuple_result = await connection.execute(
+                sa.select(value, label).where(sa.tuple_(value, label).in_([(13, "other"), (113, "value%pct")])),
+                {"value": 113, "label": "value%pct"},
+            )
+            assert tuple_result.one() == (113, "value%pct")
+
+            raw_connection = await connection.get_raw_connection()
+            client = raw_connection.driver_connection
+            del raw_connection
+
+            assert isinstance(client, AsyncClient)
+            assert client.min_version("20.1")
+            assert client.query_limit == 2333
+            assert client.compression is None
+            assert "sqlalchemy" in client.headers["User-Agent"]
+            assert client.get_client_setting("session_id")
+            assert (await client.query("SELECT 127 AS value")).result_rows == [(127,)]
+            assert await client.command("SELECT 131") == 131
+            assert await client.raw_query("SELECT 137 FORMAT TabSeparated") == b"137\n"
+
+            async with await client.query_rows_stream("SELECT number FROM numbers(3) ORDER BY number") as stream:
+                assert [row async for row in stream] == [(0,), (1,), (2,)]
+
+            assert (await connection.exec_driver_sql("SELECT 139")).scalar_one() == 139
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_session_stream_is_buffered_but_iterable(test_config: TestConfig) -> None:
+    engine = create_async_engine(_async_url(test_config))
+
+    try:
+        async with AsyncSession(engine) as session:
+            await_started = time.monotonic()
+            result = await session.stream(sa.text("SELECT number, sleepEachRow(0.2) FROM numbers(5) SETTINGS max_block_size=1"))
+            await_elapsed = time.monotonic() - await_started
+
+            consume_started = time.monotonic()
+            rows = [row async for row in result]
+            consume_elapsed = time.monotonic() - consume_started
+
+            assert rows == [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]
+            assert await_elapsed >= 0.7
+            assert consume_elapsed < 0.25
+    finally:
+        await asyncio.wait_for(engine.dispose(), 10.0)
 
 
 @pytest.mark.asyncio(loop_scope="function")

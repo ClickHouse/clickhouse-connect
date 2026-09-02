@@ -44,27 +44,60 @@ pip install "clickhouse-connect[sqlalchemy-async]"
 ```
 
 ```python
+import asyncio
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-engine = create_async_engine(
-    "clickhousedb+async://user:password@host:8123/mydb"
-)
 
-async with engine.connect() as conn:
-    version = (await conn.execute(text("SELECT version()"))).scalar_one()
-    print(version)
+async def main():
+    engine = create_async_engine(
+        "clickhousedb+async://user:password@host:8123/mydb"
+    )
+    try:
+        async with engine.connect() as conn:
+            version = (await conn.execute(text("SELECT version()"))).scalar_one()
+            print(version)
+    finally:
+        await engine.dispose()
 
-await engine.dispose()
+
+asyncio.run(main())
 ```
 
-Results are buffered. Server-side cursors and `AsyncConnection.stream()` are not supported by this dialect. Use the native `AsyncClient` streaming methods for large results. `AsyncSession.stream()` is accepted by SQLAlchemy but also returns a buffered result. SQLAlchemy's pool owns connection concurrency. Each pooled connection owns one native async client and defaults its aiohttp connector limits to one connection and one connection per host. Set `connector_limit`, `connector_limit_per_host`, or `keepalive_timeout` in the URL or `connect_args` to override those transport settings. With `pool_pre_ping=True`, SQLAlchemy checks reused connections with `SELECT 1` when a pooled connection is checked out.
+Results are buffered. Server-side cursors are disabled, so `AsyncConnection.stream()` raises `InvalidRequestError`. `AsyncSession.stream()` is accepted by SQLAlchemy, but the dialect buffers the full result before returning it. Use the native `AsyncClient` streaming methods for large results. The raw native client is available as `driver_connection` while its SQLAlchemy connection is checked out:
+
+```python
+async def stream_events(engine):
+    async with engine.connect() as conn:
+        raw_connection = await conn.get_raw_connection()
+        client = raw_connection.driver_connection
+        async with await client.query_rows_stream("SELECT * FROM events") as rows:
+            async for row in rows:
+                print(row)
+```
+
+Do not use the SQLAlchemy connection concurrently with its raw client. Finish raw-client streams before leaving the SQLAlchemy connection block, and do not keep the raw client after the connection returns to the pool. SQLAlchemy owns the borrowed client's lifecycle, so never call `client.close()`, `client._initialize()`, or `client._force_close()` on it. SQLAlchemy's pool owns connection concurrency. Each pooled connection owns one native async client and defaults its aiohttp connector limits to one connection and one connection per host. Set `connector_limit`, `connector_limit_per_host`, or `keepalive_timeout` in the URL or `connect_args` to override those transport settings. With `pool_pre_ping=True`, SQLAlchemy checks reused connections with `SELECT 1` when a pooled connection is checked out.
 
 Create and dispose an async engine in the event loop where it is used. Return every checked-out connection, then await `engine.dispose()` during shutdown and before using the engine from another event loop. If the engine's owning loop has already closed, await `engine.dispose()` in the current loop before reuse. aiohttp may still report an unclosed transport when cleanup begins only after the owning loop has closed, so dispose before transfer when possible. `pool_pre_ping=True` is not a replacement for disposal when moving a pooled async engine between event loops. To share one engine across event loops without retaining loop-bound connections, configure `poolclass=NullPool`. If disposal runs while a connection is still checked out, the dialect closes that connection when it is returned or garbage collected. Do not call `engine.sync_engine.dispose()` from synchronous code. SQLAlchemy cannot await async connection cleanup there and may log the error instead of closing pooled transports.
 
 URL query parameters can contain ClickHouse settings, ClickHouse Connect client options such as `compression`, `query_limit`, and timeouts, or HTTP/TLS options such as `ca_cert`. Prefix a ClickHouse setting with `ch_` to force it to be treated as a server setting when needed, for example `ch_http_max_field_name_size=99999`.
 
 See [Connection arguments and settings](/integrations/language-clients/python/driver-api#connection-arguments) for the available client options.
+
+Run synchronous SQLAlchemy helpers such as DDL and inspection through `AsyncConnection.run_sync()`:
+
+```python
+from sqlalchemy import inspect
+
+
+async def prepare_schema(engine, metadata):
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        return await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_table_names()
+        )
+```
 
 ### Per-query settings {#sqlalchemy-per-query-settings}
 
@@ -134,6 +167,8 @@ engine = create_engine(
     server_side_params=True,
 )
 ```
+
+Use the same `server_side_params=True` argument with `create_async_engine()` for the async dialect.
 
 In this mode every bound value must have a ClickHouse-compatible SQLAlchemy type. Supported `IN` lists become typed ClickHouse `Array` parameters. The compiler raises `CompileError` when it cannot derive a compatible type or safely process a bind.
 
