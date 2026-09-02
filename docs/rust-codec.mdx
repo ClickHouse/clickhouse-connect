@@ -13,13 +13,21 @@ The codec is experimental and opt in. The Python codec remains the default.
 
 ## Installation {#installation}
 
-The compiled codec ships as a separate wheel named `clickhouse-connect-core`, which provides the `_ch_core` extension module. Install it through the `rust` extra:
+The compiled codec ships as a separate wheel named `clickhouse-connect-core`, which provides the `_ch_core` extension module. For evaluation, install the codec and PyArrow together:
+
+```bash
+pip install "clickhouse-connect[rust,arrow]"
+```
+
+In 1.8, every Rust path that produces NumPy or Pandas output requires PyArrow. This includes `query_np`, `query_df`, their streaming variants, and `query(..., use_numpy=True)`. Without PyArrow, `native_codec="rust"` logs a warning and runs those queries with the Python codec. `native_codec="rust_strict"` raises `NotSupportedError` instead.
+
+The `rust` extra alone stays lean for applications that use standard Python row results, row or column block streams, and inserts without requesting NumPy or Pandas output. Those paths do not require PyArrow:
 
 ```bash
 pip install "clickhouse-connect[rust]"
 ```
 
-If a Rust codec is selected and the module is not installed, client creation raises a `NotSupportedError` naming this install command.
+If a Rust codec is selected and the compiled module is not installed, client creation raises a `NotSupportedError` naming this install command.
 
 ## Enabling the codec {#enabling-the-codec}
 
@@ -42,6 +50,16 @@ Accepted values:
 The default can also be seeded with the `native_codec` common setting or the `CLICKHOUSE_CONNECT_NATIVE_CODEC` environment variable. Precedence is the client keyword argument, then the common setting, then the environment variable.
 
 The option is ignored for `interface="chdb"` clients, which always use the Python codec.
+
+## When to use the Rust codec {#when-to-use-the-rust-codec}
+
+The Rust codec is most useful for large DataFrame results with text, container, and complex types such as `String`, `LowCardinality`, `Map`, `Array`, `JSON`, `Decimal`, and `UUID`. It can also help large row and column block streams, concurrent query workloads, and bulk inserts.
+
+Small results and network-bound queries may see little change. Flat numeric results already use efficient bulk paths in the Python codec, so they may also see less benefit.
+
+Buffered `query()` calls on very wide or all-numeric results can currently be slower and use more peak memory with the Rust codec. Prefer `query_df`, `query_row_block_stream`, or `query_column_block_stream` for those workloads. Streaming keeps memory bounded.
+
+Benchmark your own workload before adopting the codec. Use `native_codec="rust_strict"` while measuring so an unsupported option or missing dependency raises instead of silently routing the query to Python.
 
 ## Fallback rules {#fallback-rules}
 

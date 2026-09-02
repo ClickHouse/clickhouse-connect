@@ -277,7 +277,10 @@ class _RustNativeTransform:
             if self.strict:
                 source.close()
                 raise NotSupportedError(f'native_codec="rust_strict" does not support {reason}; use native_codec="python" or "rust"')
-            logger.info("Native codec fallback to Python for query: %s", reason)
+            if reason == "pyarrow not installed":
+                logger.warning("Native codec fallback to Python for query: %s", reason)
+            else:
+                logger.info("Native codec fallback to Python for query: %s", reason)
             return NativeTransform.parse_response(source, context)
 
         core = _ch_core_module()

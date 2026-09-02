@@ -305,12 +305,22 @@ def test_strict_global_read_format_raises_and_closes_source(clean_formats):
 def test_non_strict_ineligible_delegates_to_python_and_logs_reason(monkeypatch, caplog):
     sentinel = object()
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
-    src = FakeSource([])
+    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
+    pyarrow_src = FakeSource([])
+    option_src = FakeSource([])
     with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
-        result = _RustNativeTransform(strict=False).parse_response(src, eligible_ctx(use_none=False))
-    assert result is sentinel
-    assert src.closed is False
-    assert "fallback to Python for query: use_none=False" in caplog.text
+        pyarrow_result = _RustNativeTransform(strict=False).parse_response(pyarrow_src, eligible_ctx(use_numpy=True))
+        option_result = _RustNativeTransform(strict=False).parse_response(option_src, eligible_ctx(use_none=False))
+
+    assert pyarrow_result is sentinel
+    assert option_result is sentinel
+    assert pyarrow_src.closed is False
+    assert option_src.closed is False
+    fallback_records = [record for record in caplog.records if "fallback to Python for query" in record.getMessage()]
+    assert [(record.getMessage(), record.levelno) for record in fallback_records] == [
+        ("Native codec fallback to Python for query: pyarrow not installed", logging.WARNING),
+        ("Native codec fallback to Python for query: use_none=False", logging.INFO),
+    ]
 
 
 # --- Insert build (FakeCore) -------------------------------------------------

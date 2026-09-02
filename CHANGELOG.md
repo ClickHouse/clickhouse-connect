@@ -7,6 +7,7 @@
 ### Improvements
 
 - Added native query and insert support for the ClickHouse `MultiPoint` type in the Python and Rust codecs, including containers and SQLAlchemy reflection. Inserting `MultiPoint` values requires ClickHouse 26.8 or later. `Geometry` now supports the `MultiPoint` member added in ClickHouse 26.8 at Native discriminator 6 while preserving the original discriminators 0 through 5. `Geometry` also supports the `typed` query format when selected with the `Geometry` type key. `Variant` format settings do not apply to `Geometry`. The Rust extra now requires `clickhouse-connect-core>=0.2.0,<0.3`.
+- Rust codec setup guidance now recommends `pip install "clickhouse-connect[rust,arrow]"` for evaluation because its NumPy and Pandas output paths require PyArrow in 1.8. The lean `rust` extra remains available for standard Python row queries, block streams, and inserts. A missing PyArrow dependency now logs a warning before `native_codec="rust"` falls back to Python.
 
 ### Bug Fixes
 
