@@ -258,7 +258,8 @@ async def test_async_sqlalchemy_force_closed_connection_is_invalidated(test_conf
             assert replacement_client is not stale_client
             assert (await replacement_connection.exec_driver_sql("SELECT 79")).scalar_one() == 79
     finally:
-        await connection.close()
+        if not connection.closed:
+            await connection.close()
         await asyncio.wait_for(engine.dispose(), 10.0)
 
 

@@ -9,6 +9,7 @@ pytest.importorskip("pytest_asyncio")
 pytest.importorskip("sqlalchemy", minversion="2.0.44")
 
 from sqlalchemy.dialects import registry
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import AsyncAdaptedQueuePool, PoolProxiedConnection
 from sqlalchemy.util.concurrency import await_only, greenlet_spawn
 
@@ -763,30 +764,6 @@ class _LifecycleClient(_SerializedClient):
         self.close_release.set()
 
 
-class _PingClient(_SerializedClient):
-    def __init__(self, result: bool):
-        super().__init__()
-        self.result = result
-        self.ping_calls = 0
-
-    async def ping(self) -> bool:
-        self.ping_calls += 1
-        await asyncio.sleep(0)
-        return self.result
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("result", [True, False])
-async def test_async_dialect_do_ping_uses_native_client(result: bool):
-    dialect = ClickHouseAsyncDialect()
-    client = _PingClient(result)
-    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
-
-    assert await greenlet_spawn(lambda: dialect.do_ping(adapted)) is result
-    assert client.ping_calls == 1
-    assert client.calls == 0
-
-
 class _Session:
     def __init__(self, closed: bool):
         self.closed = closed
@@ -856,9 +833,77 @@ async def test_async_dialect_is_disconnect_uses_pool_proxied_adapted_state():
 def test_async_dialect_is_disconnect_requires_client_state():
     dialect = ClickHouseAsyncDialect()
     error = dbapi.OperationalError("Network Error")
+    connection = _AsyncAdaptedConnection(
+        ClickHouseAsyncDialect.import_dbapi(),
+        _SerializedClient(),  # type: ignore[arg-type]
+    )
 
     assert dialect.is_disconnect(error, None, None) is False
     assert dialect.is_disconnect(error, object(), None) is False  # type: ignore[arg-type]
+    assert dialect.is_disconnect(error, connection, None) is False
+
+
+class _PrePingClient(_SerializedClient):
+    def __init__(self):
+        super().__init__()
+        self._session: _Session | None = _Session(False)
+        self.query_calls: list[str | None] = []
+        self.close_calls = 0
+
+    async def query(self, query: str | None = None, *args: Any, **kwargs: Any) -> QueryResult:
+        self.query_calls.append(query)
+        if self._session is None or self._session.closed:
+            raise dbapi.ProgrammingError("Session not initialized")
+        return await super().query(query, *args, **kwargs)
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        if self._session is not None:
+            self._session.closed = True
+        self._session = None
+
+    def force_close(self) -> None:
+        if self._session is not None:
+            self._session.closed = True
+        self._session = None
+
+
+@pytest.mark.asyncio
+async def test_async_engine_pool_pre_ping_uses_select_one_and_replaces_closed_client():
+    clients: list[_PrePingClient] = []
+
+    async def creator() -> _PrePingClient:
+        client = _PrePingClient()
+        clients.append(client)
+        return client
+
+    with patch.object(ClickHouseAsyncDialect, "initialize"):
+        engine = create_async_engine(
+            "clickhousedb+async://",
+            async_creator=creator,
+            pool_size=1,
+            max_overflow=0,
+            pool_pre_ping=True,
+        )
+
+        try:
+            async with engine.connect():
+                pass
+            assert clients[0].query_calls == []
+
+            async with engine.connect():
+                pass
+            assert clients[0].query_calls == ["SELECT 1"]
+
+            clients[0].force_close()
+            async with engine.connect():
+                pass
+
+            assert len(clients) == 2
+            assert clients[0].close_calls == 1
+            assert clients[1].query_calls == []
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.asyncio

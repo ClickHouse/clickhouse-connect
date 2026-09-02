@@ -236,11 +236,11 @@ class _AsyncAdaptedConnection(AsyncAdapt_terminate, AsyncAdapt_dbapi_connection)
     def close(self) -> None:
         self._client_facade.close()
 
-    def ping(self) -> bool:
-        return bool(await_only(cast("AsyncClient", self.driver_connection).ping()))
-
     def is_closed(self) -> bool:
-        session = cast("AsyncClient", self.driver_connection)._session
+        try:
+            session = cast("AsyncClient", self.driver_connection)._session
+        except AttributeError:
+            return False
         return session is None or session.closed
 
     async def _terminate_graceful_close(self) -> None:
@@ -546,9 +546,6 @@ class ClickHouseAsyncDialect(ClickHouseDialect):
     def get_driver_connection(self, connection: DBAPIConnection) -> AsyncClient:
         """Return the native async driver connection."""
         return cast("AsyncClient", cast(_AsyncAdaptedConnection, connection).driver_connection)
-
-    def do_ping(self, dbapi_connection: DBAPIConnection) -> bool:
-        return cast(_AsyncAdaptedConnection, dbapi_connection).ping()
 
     def is_disconnect(
         self,

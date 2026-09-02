@@ -4,7 +4,7 @@
 
 ### Improvements
 
-- Added a native async SQLAlchemy dialect for SQLAlchemy 2.0.44 and later. Install `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. The first release supports buffered Core and ORM execution, including inserts. Server-side cursors remain unsupported.
+- Added a native async SQLAlchemy dialect for SQLAlchemy 2.0.44 and later. Install `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. The first release supports buffered Core and ORM execution, including inserts. SQLAlchemy pool pre-ping uses its standard `SELECT 1` check. Closed native sessions are invalidated and replaced, while execution-time server and transport errors keep reusable open HTTP sessions. Server-side cursors remain unsupported.
 - SQLAlchemy JSON typed-path validation now reads ClickHouse type arity and numeric bounds from shared driver metadata. Invalid hints that combine a wrong outer argument count with a malformed surplus nested argument now report the outer arity error instead of the nested parsing error. Accepted hints and canonical type names are unchanged. Closes [#990](https://github.com/ClickHouse/clickhouse-connect/issues/990).
 - SQLAlchemy `JSON` columns can now declare ClickHouse typed paths with `typed_paths={...}` or simple keyword shorthand, plus dynamic path and type limits and plain and regular expression skip rules. JSON arguments use the same canonical ordering as server reflection. Alembic autogeneration renders configured JSON types as valid Python and round-trips them without a follow-up type migration. Closes [#981](https://github.com/ClickHouse/clickhouse-connect/issues/981).
 - Driver `JSON` type names now use the server's canonical argument ordering, omit explicit default limits, and expose decoded `skip_paths` and `skip_regexps`. This changes the `.name` and skips values reflected to all driver users.
@@ -15,9 +15,6 @@
 
 ### Bug Fixes
 
-- Async SQLAlchemy pool pre-ping now uses the driver's authenticated HTTP `/ping` request. Force-closed native
-  sessions are classified as disconnected and replaced on checkout or execution, while healthy ClickHouse server
-  errors and transport failures with a reusable client session do not invalidate the pool.
 - Checked-out async SQLAlchemy connections now close when returned after awaited engine disposal or when garbage
   collected. Recycle and invalidation use an explicit cancellation-safe terminate path with synchronous aiohttp
   transport fallback when graceful close cannot complete.
