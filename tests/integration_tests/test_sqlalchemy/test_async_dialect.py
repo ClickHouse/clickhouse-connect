@@ -208,7 +208,7 @@ async def test_async_sqlalchemy_fixed_session_id_rejects_concurrent_requests(tes
 
     async def slow_query() -> int:
         async with engine.connect() as connection:
-            result = await connection.exec_driver_sql("SELECT sleep(0.5), 13")
+            result = await connection.exec_driver_sql("SELECT sleep(2), 13")
             return int(result.one()[1])
 
     first_query = asyncio.create_task(slow_query())

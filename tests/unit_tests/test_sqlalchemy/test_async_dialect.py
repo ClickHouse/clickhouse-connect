@@ -794,6 +794,11 @@ class _LoopBoundClient(_SerializedClient):
         self.close_calls += 1
 
 
+class _CrossLoopCloseClient(_LoopBoundClient):
+    async def close(self) -> None:
+        self.close_calls += 1
+
+
 def test_async_engine_can_move_to_new_loop_after_awaited_dispose():
     clients: list[_LoopBoundClient] = []
 
@@ -816,6 +821,38 @@ def test_async_engine_can_move_to_new_loop_after_awaited_dispose():
         )
         asyncio.run(use_and_dispose(engine))
         asyncio.run(use_and_dispose(engine))
+
+    assert len(clients) == 2
+    assert clients[0].owner_loop is not clients[1].owner_loop
+    assert [client.close_calls for client in clients] == [1, 1]
+
+
+def test_async_engine_recovers_when_disposed_after_owner_loop_closes():
+    clients: list[_CrossLoopCloseClient] = []
+
+    async def creator() -> _CrossLoopCloseClient:
+        client = _CrossLoopCloseClient()
+        clients.append(client)
+        return client
+
+    async def use(engine) -> None:
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql("SELECT 13")).scalar_one() == 13
+
+    async def dispose_use_and_dispose(engine) -> None:
+        await engine.dispose()
+        await use(engine)
+        await engine.dispose()
+
+    with patch.object(ClickHouseAsyncDialect, "initialize"):
+        engine = create_async_engine(
+            "clickhousedb+async://",
+            async_creator=creator,
+            pool_size=1,
+            max_overflow=0,
+        )
+        asyncio.run(use(engine))
+        asyncio.run(dispose_use_and_dispose(engine))
 
     assert len(clients) == 2
     assert clients[0].owner_loop is not clients[1].owner_loop
@@ -849,6 +886,22 @@ def test_async_engine_with_null_pool_does_not_retain_clients_across_loops():
     assert [client.close_calls for client in clients] == [1, 1]
 
 
+async def _invalidate_safely(connection) -> None:
+    invalidate_task = asyncio.create_task(connection.invalidate())
+    cancellation = None
+    while not invalidate_task.done():
+        try:
+            await asyncio.wait({invalidate_task})
+        except asyncio.CancelledError as ex:
+            cancellation = ex
+    if cancellation is not None:
+        try:
+            invalidate_task.result()
+        finally:
+            raise cancellation
+    invalidate_task.result()
+
+
 @pytest.mark.asyncio
 async def test_owned_invalidation_task_finishes_cleanup_before_cancellation_propagates():
     clients: list[_LifecycleClient] = []
@@ -858,21 +911,6 @@ async def test_owned_invalidation_task_finishes_cleanup_before_cancellation_prop
         clients.append(client)
         return client
 
-    async def invalidate_safely(connection) -> None:
-        invalidate_task = asyncio.create_task(connection.invalidate())
-        cancellation = None
-        while not invalidate_task.done():
-            try:
-                await asyncio.shield(invalidate_task)
-            except asyncio.CancelledError as ex:
-                cancellation = ex
-        if cancellation is not None:
-            try:
-                invalidate_task.result()
-            finally:
-                raise cancellation
-        invalidate_task.result()
-
     with patch.object(ClickHouseAsyncDialect, "initialize"):
         engine = create_async_engine(
             "clickhousedb+async://",
@@ -881,7 +919,7 @@ async def test_owned_invalidation_task_finishes_cleanup_before_cancellation_prop
             max_overflow=0,
         )
         connection = await engine.connect()
-        invalidate_task = asyncio.create_task(invalidate_safely(connection))
+        invalidate_task = asyncio.create_task(_invalidate_safely(connection))
         await asyncio.wait_for(clients[0].close_started.wait(), timeout=1.0)
 
         invalidate_task.cancel()
@@ -907,6 +945,43 @@ async def test_owned_invalidation_task_finishes_cleanup_before_cancellation_prop
     assert clients[0].close_calls == 1
     assert clients[0].close_finished.is_set()
     assert clients[1].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_owned_invalidation_task_preserves_cancellation_when_invalidation_fails():
+    invalidate_started = asyncio.Event()
+    invalidate_release = asyncio.Event()
+    invalidate_error = RuntimeError("invalidation failed")
+
+    class Connection:
+        async def invalidate(self) -> None:
+            invalidate_started.set()
+            await invalidate_release.wait()
+            raise invalidate_error
+
+    invalidate_task = asyncio.create_task(_invalidate_safely(Connection()))
+    await asyncio.wait_for(invalidate_started.wait(), timeout=1.0)
+
+    invalidate_task.cancel()
+    await asyncio.sleep(0)
+    assert not invalidate_task.done()
+    invalidate_task.cancel()
+    await asyncio.sleep(0)
+    assert not invalidate_task.done()
+    invalidate_release.set()
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await invalidate_task
+
+    assert invalidate_task.cancelled()
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    error: BaseException | None = exc_info.value
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        chain.append(error)
+        error = error.__cause__ if error.__cause__ is not None else error.__context__
+    assert invalidate_error in chain
 
 
 class _Session:

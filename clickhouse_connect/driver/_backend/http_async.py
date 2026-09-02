@@ -55,6 +55,11 @@ _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
 _SESSION_UNAVAILABLE_ERROR = (
     "Client session is unavailable. Call 'await client._initialize()' before making requests or to reopen a closed client."
 )
+_SESSION_LOOP_ERROR = (
+    "Async client session belongs to a different event loop. Close the client, or dispose its SQLAlchemy engine, in "
+    "the owning event loop before transfer when possible. If that loop has already closed, perform cleanup in the "
+    "current event loop; directly reused clients must then call 'await client._initialize()'."
+)
 
 
 def _dispose_late_token_result(future: asyncio.Future[str | Awaitable[str]]) -> None:
@@ -271,7 +276,8 @@ class HttpAsyncBackend:
         )
 
     def ensure_session(self) -> None:
-        if not self.session:
+        lease = self.session_lease
+        if lease is None or lease.session.closed:
             self.session = self._new_session()
 
     async def _close_retired_session(self, lease: SessionLease) -> None:
@@ -567,13 +573,10 @@ class HttpAsyncBackend:
         retry_body: Callable[[], Awaitable[Any]] | None = None,
     ) -> aiohttp.ClientResponse:
         lease = self.session_lease
-        if lease is None:
+        if lease is None or lease.session.closed:
             raise ProgrammingError(_SESSION_UNAVAILABLE_ERROR)
         if lease._owner_loop is not asyncio.get_running_loop():
-            raise ProgrammingError(
-                "Async client session belongs to a different event loop. Close the client or await engine.dispose() "
-                "in the original event loop before reuse, then call 'await client._initialize()' when reusing the client directly."
-            )
+            raise ProgrammingError(_SESSION_LOOP_ERROR)
 
         reset_seconds = common.get_setting("max_connection_age")
         if reset_seconds:
@@ -622,6 +625,10 @@ class HttpAsyncBackend:
                     if query_session:
                         self._active_session = None
                     raise ProgrammingError(_SESSION_UNAVAILABLE_ERROR)
+                if lease._owner_loop is not asyncio.get_running_loop():
+                    if query_session:
+                        self._active_session = None
+                    raise ProgrammingError(_SESSION_LOOP_ERROR)
                 session = lease.session
                 lease.acquire()
             lease_released = False
@@ -731,6 +738,9 @@ class HttpAsyncBackend:
         async with self.session_lock:
             lease = self.session_lease
             if lease is None or lease.session.closed:
+                return False
+            if lease._owner_loop is not asyncio.get_running_loop():
+                logger.debug("ping skipped because the async client session belongs to a different event loop")
                 return False
             session = lease.session
             lease.acquire()

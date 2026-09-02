@@ -119,7 +119,7 @@ asyncio.run(main())
 
 The async client follows the same query, insert, raw, Arrow, and streaming contract as the synchronous client. It uses aiohttp for network I/O. CPU-bound Native-format parsing may run in an executor so that it doesn't block the event loop.
 
-An async client owns an aiohttp session created in one event loop. To reuse the client from another event loop, close it in the original loop, then call `await client._initialize()` in the new loop before making requests.
+An async client owns an aiohttp session created in one event loop. Before moving the client to another event loop, close it in the owning loop, then call `await client._initialize()` in the new loop before making requests. If the owning loop has already closed, call `await client.close()` followed by `await client._initialize()` in the current loop. aiohttp may still report an unclosed transport when cleanup begins only after the owning loop has closed, so close before transfer when possible.
 
 Async streaming methods are awaited before entering the returned context:
 

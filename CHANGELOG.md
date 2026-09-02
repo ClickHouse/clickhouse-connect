@@ -15,7 +15,7 @@
 
 ### Bug Fixes
 
-- Async clients now report a driver `ProgrammingError` before network I/O when a live aiohttp session is used from a different event loop. Close the client, or await SQLAlchemy engine disposal, in the original loop before reuse. The unavailable-session error now explains how to reopen a directly reused client with `_initialize()`.
+- Async clients now report a driver `ProgrammingError` before network I/O when a live aiohttp session is used from a different event loop. Close the client or dispose its SQLAlchemy engine in the owning loop before transfer when possible. If that loop has already closed, perform cleanup in the current loop before reuse, then reopen a directly reused client with `_initialize()`.
 - Native sync and async `ping()` calls now normalize a trailing slash in `proxy_path`, so a path such as `/clickhouse/` sends `/clickhouse/ping` instead of `/clickhouse//ping`.
 - Checked-out async SQLAlchemy connections now close when returned after awaited engine disposal or when garbage
   collected. Recycle and invalidation use an explicit cancellation-safe terminate path with synchronous aiohttp

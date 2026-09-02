@@ -138,6 +138,57 @@ def test_initialized_client_reopens_on_new_event_loop_after_close():
     assert first_session is not second_session
 
 
+def test_initialized_client_recovers_in_current_loop_after_owner_loop_closes():
+    client = _build_client()
+    client._initialized = True
+
+    async def open_session() -> aiohttp.ClientSession:
+        await client._initialize()
+        session = client._session
+        assert session is not None
+        return session
+
+    first_session = asyncio.run(open_session())
+
+    async def recover_session() -> aiohttp.ClientSession:
+        with pytest.raises(ProgrammingError, match="current event loop"):
+            await client._backend.request(b"SELECT 1", {}, server_wait=False)
+        await client.close()
+        assert first_session.closed
+        await client._initialize()
+        session = client._session
+        assert session is not None
+        assert not session.closed
+        await client.close()
+        return session
+
+    second_session = asyncio.run(recover_session())
+
+    assert second_session is not first_session
+    assert second_session.closed
+
+
+@pytest.mark.asyncio
+async def test_initialized_client_replaces_closed_session_lease():
+    client = _build_client()
+    client._initialized = True
+    sessions = _track_sessions(client)
+
+    await client._initialize()
+    first_session = client._session
+    assert first_session is not None
+    await first_session.close()
+    assert client._backend.session_lease is not None
+
+    await client._initialize()
+
+    assert len(sessions) == 2
+    assert client._session is sessions[1][0]
+    assert client._session is not first_session
+    assert not client._session.closed
+    await client.close()
+
+
 @pytest.mark.asyncio
 async def test_sync_token_provider_failure_closes_session():
     provider_error = RuntimeError("token provider failed")

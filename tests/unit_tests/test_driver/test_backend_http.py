@@ -691,8 +691,9 @@ class TestAsyncSessionLoop:
         backend = make_async_backend()
         asyncio.run(self._bind_session(backend))
 
-        with pytest.raises(ProgrammingError, match="different event loop"):
+        with pytest.raises(ProgrammingError, match="owning event loop") as exc_info:
             asyncio.run(backend.request(b"SELECT 1", {}, server_wait=False))
+        assert "current event loop" in str(exc_info.value)
 
     def test_ping_returns_false_for_session_from_another_event_loop(self):
         backend = make_async_backend()
@@ -720,6 +721,35 @@ class TestAsyncSessionLoop:
 
         with pytest.raises(ProgrammingError, match=r"await client\._initialize\(\).+reopen"):
             await request
+
+    @pytest.mark.asyncio
+    async def test_request_rechecks_session_loop_while_holding_lock(self):
+        backend = make_async_backend()
+        backend.session = self._session()
+        await backend.session_lock.acquire()
+        request = asyncio.create_task(backend.request(b"SELECT 1", {}, server_wait=False))
+        await asyncio.sleep(0)
+
+        backend.session = self._session()
+        backend.session_lease._owner_loop = object()
+        backend.session_lock.release()
+
+        with pytest.raises(ProgrammingError, match="current event loop"):
+            await request
+
+    @pytest.mark.asyncio
+    async def test_ping_rechecks_session_loop_while_holding_lock(self):
+        backend = make_async_backend()
+        backend.session = self._session()
+        await backend.session_lock.acquire()
+        ping = asyncio.create_task(backend.ping())
+        await asyncio.sleep(0)
+
+        backend.session = self._session()
+        backend.session_lease._owner_loop = object()
+        backend.session_lock.release()
+
+        assert await ping is False
 
     @classmethod
     async def _bind_session(cls, backend):
