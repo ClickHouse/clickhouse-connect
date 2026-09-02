@@ -353,7 +353,11 @@ async def test_async_pool_creation_failure_does_not_decrement_new_accounting_epo
     with pytest.raises(error_type) as caught:
         await checkout_task
 
-    assert caught.value is create_error
+    assert type(caught.value) is error_type
+    assert checkout_task.cancelled() is (error_type is asyncio.CancelledError)
+    if error_type is RuntimeError:
+        assert caught.value is create_error
+        assert str(caught.value) == "creation failed"
     assert pool._clickhouse_accounting_epoch == 1
     assert pool.overflow() == -1
     assert pool.checkedout() == 0
