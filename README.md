@@ -79,6 +79,11 @@ To get started, install the Alembic extra:
 pip install clickhouse-connect[alembic]
 ```
 
+For Alembic with the async SQLAlchemy dialect, install `clickhouse-connect[alembic,sqlalchemy-async]` and use the
+checked-in [async Alembic environment](examples/alembic_async/env.py). It includes the ClickHouse Alembic hooks and
+options, runs online migrations through `AsyncConnection.run_sync()`, and compiles offline migrations without creating
+an engine.
+
 See the [Alembic worked example](clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for a
 full end-to-end walkthrough covering setup, autogeneration, upgrades, downgrades, and manual
 migration operations.

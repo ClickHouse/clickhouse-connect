@@ -5,7 +5,9 @@ from typing import Any
 
 import numpy
 import pandas
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from typing_extensions import assert_type
 
 import clickhouse_connect
@@ -78,3 +80,16 @@ def async_sqlalchemy_dialect(connection: DBAPIConnection) -> None:
     dialect = ClickHouseAsyncDialect()
     assert_type(dialect.import_dbapi(), DBAPIModule)
     assert_type(dialect.get_driver_connection(connection), AsyncClient)
+
+
+async def async_sqlalchemy_connection() -> None:
+    engine = create_async_engine("clickhousedb+async://user:password@localhost:8123/default")
+    assert_type(engine, AsyncEngine)
+    async with engine.connect() as connection:
+        assert_type(connection, AsyncConnection)
+        assert_type(await connection.exec_driver_sql("SELECT 13"), CursorResult[Any])
+        raw_connection = await connection.get_raw_connection()
+        client = ClickHouseAsyncDialect().get_driver_connection(raw_connection)
+        assert_type(client, AsyncClient)
+        assert_type(await client.command("SELECT 13"), str | int | Sequence[str] | QuerySummary)
+        assert_type(await client.insert("events", [[13]], column_names=["value"]), QuerySummary)

@@ -508,7 +508,15 @@ ClickHouse Connect includes Alembic integration for ClickHouse schema migrations
 pip install "clickhouse-connect[alembic]"
 ```
 
+For migrations through the async dialect, install both extras:
+
+```bash
+pip install "clickhouse-connect[alembic,sqlalchemy-async]"
+```
+
 Import `clickhouse_connect.cc_sqlalchemy.alembic` in Alembic's `env.py` to register the dialect integration. Autogenerate supports common table evolution, including table creation and removal, column add/alter/drop, defaults, and comments. Use manual operations for table and column renames. Review every generated migration before applying it.
+
+Alembic's migration functions remain synchronous. An async environment creates an `AsyncEngine`, opens an `AsyncConnection`, and passes the synchronous migration function to `await connection.run_sync(...)`. Offline migrations call `context.configure(url=..., literal_binds=True, dialect_opts={"paramstyle": "named"})` directly and do not create an engine. The checked-in [async Alembic `env.py` example](https://github.com/ClickHouse/clickhouse-connect/blob/main/examples/alembic_async/env.py) includes both paths and reads the connection URL through Alembic's standard `sqlalchemy.url` configuration. It keeps the ClickHouse Alembic hooks and options from the worked example, including `include_object`, `make_include_name(...)`, `clickhouse_writer`, and `version_table`. Do not use `engine.sync_engine` to run or dispose async migrations.
 
 ClickHouse-specific `op.*` helpers cover:
 

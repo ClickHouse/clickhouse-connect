@@ -80,7 +80,18 @@ jobs:
           "$RUNNER_TEMP/consumer/bin/pip" install "mypy==2.1.0" "pyright==1.1.408"
       - name: Confirm py.typed shipped with the install
         run: test -f "$RUNNER_TEMP"/consumer/lib/python*/site-packages/clickhouse_connect/py.typed
-      - name: Consumer smoke test (mypy --strict against installed wheel)
+      - name: Build wheel and install it into a separate consumer environment
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-consumer"
+          CLICKHOUSE_CONNECT_SKIP_CYTHON=1 python -m build --wheel --outdir "$RUNNER_TEMP/wheel-dist"
+          "$RUNNER_TEMP/wheel-consumer/bin/pip" install "$RUNNER_TEMP"/wheel-dist/*.whl
+          "$RUNNER_TEMP/wheel-consumer/bin/pip" install "sqlalchemy[asyncio]>=2.0.44,<3.0" aiohttp
+      - name: Installed wheel SQLAlchemy entry point smoke test
+        run: |
+          cp tests/type_check/installed_sqlalchemy_smoke.py "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-consumer/bin/python" installed_sqlalchemy_smoke.py
+      - name: Consumer smoke test (mypy --strict against installed sdist)
         run: |
           cp tests/type_check/consumer_smoke.py "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"
