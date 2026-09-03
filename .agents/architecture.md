@@ -23,7 +23,7 @@ tests/
   unit_tests/        Fast tests, including backend and optional chDB coverage
   integration_tests/ Client-level and wire-level behavior against ClickHouse
   type_check/        Downstream consumer typing checks
-examples/            Usage examples and ad hoc performance scripts
+examples/            Usage examples
 ```
 
 ## Core Invariants
@@ -162,7 +162,7 @@ Prefer predictable, low-allocation changes. Avoid per-row overhead, unnecessary 
 
 Do not accept a performance change that quietly alters formatting, dtype behavior, timezone handling, null semantics, or result structures unless that behavior change is explicitly intended.
 
-There is no `tests/performance/` directory. Local performance scripts live under `examples/`, and PR comparison runs through `.github/workflows/stresshouse-benchmark-compare.yml`. Use the appropriate existing harness and record the environment with any claimed result.
+There is no `tests/performance/` directory. PR performance comparisons run through `.github/workflows/stresshouse-benchmark-compare.yml`. Do not commit one-off benchmark scripts or results. Record the environment with any claimed result.
 
 ## Testing Layout
 
