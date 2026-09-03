@@ -13,9 +13,11 @@ import inspect
 import io
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -50,6 +52,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+_SESSION_UNAVAILABLE_ERROR = (
+    "Client session is unavailable. Call 'await client._initialize()' before making requests or to reopen a closed client."
+)
+_SESSION_LOOP_ERROR = (
+    "Async client session belongs to a different event loop. Close the client, or dispose its SQLAlchemy engine, in "
+    "the owning event loop before transfer when possible. If that loop has already closed, perform cleanup in the "
+    "current event loop. Directly reused clients must then call 'await client._initialize()'."
+)
+
+
+def _dispose_late_token_result(future: asyncio.Future[str | Awaitable[str]]) -> None:
+    try:
+        result = future.result()
+    except BaseException:
+        return
+    if inspect.iscoroutine(result):
+        result.close()
 
 
 def _plan_files(plan: QueryRequestPlan) -> dict[str, Any] | None:
@@ -88,10 +107,11 @@ class SessionLease:
     """An aiohttp.ClientSession with an in-flight request count, so close()
     can wait for outstanding requests to drain before tearing down the session."""
 
-    __slots__ = ("session", "_inflight", "_drained")
+    __slots__ = ("session", "_inflight", "_drained", "_owner_loop")
 
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
+        self._owner_loop = asyncio.get_running_loop()
         self._inflight = 0
         self._drained = asyncio.Event()
         self._drained.set()
@@ -129,6 +149,53 @@ def release_lease(response: aiohttp.ClientResponse | None) -> None:
     release = getattr(response, "_lease_release", None)
     if release is not None:
         release()
+
+
+def _owned_session_connector(session: aiohttp.ClientSession) -> aiohttp.BaseConnector | None:
+    if not getattr(session, "connector_owner", False):
+        return None
+    return getattr(session, "connector", None)
+
+
+def _close_connector_now(connector: aiohttp.BaseConnector | None, _retain: object | None = None) -> None:
+    if connector is None or connector.closed:
+        return
+    close = getattr(connector, "_close", None)
+    if close is None:
+        logger.warning("aiohttp connector has no synchronous close fallback")
+        return
+    try:
+        close()
+    except BaseException:
+        logger.warning("Failed to force-close aiohttp connector", exc_info=True)
+
+
+def _force_close_connector(connector: aiohttp.BaseConnector | None, retain: object | None = None) -> None:
+    if connector is None or connector.closed:
+        return
+    owner_loop = getattr(connector, "_loop", None)
+    if owner_loop is not None and owner_loop.is_running():
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not owner_loop:
+            try:
+                owner_loop.call_soon_threadsafe(partial(_close_connector_now, connector, retain))
+                return
+            except RuntimeError:
+                pass
+    _close_connector_now(connector, retain)
+
+
+async def _close_session_lease(lease: SessionLease) -> None:
+    connector = _owned_session_connector(lease.session)
+    try:
+        await lease.wait_drained()
+        await lease.session.close()
+    except BaseException:
+        _force_close_connector(connector)
+        raise
 
 
 def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
@@ -182,6 +249,9 @@ class HttpAsyncBackend:
         self.progress_interval: str | None = None
         self.session_lease: SessionLease | None = None
         self.session_lock = asyncio.Lock()
+        self._retired_session_tasks: set[asyncio.Task[None]] = set()
+        self._closing_sessions: set[aiohttp.ClientSession] = set()
+        self._closing_sessions_lock = threading.Lock()
         self._active_session: str | None = None
         self._last_pool_reset: float | None = None
 
@@ -206,14 +276,83 @@ class HttpAsyncBackend:
         )
 
     def ensure_session(self) -> None:
-        if not self.session:
+        lease = self.session_lease
+        if lease is None or lease.session.closed:
             self.session = self._new_session()
+
+    async def _close_retired_session(self, lease: SessionLease) -> None:
+        try:
+            await _close_session_lease(lease)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Failed to close retired aiohttp session", exc_info=True)
+
+    def _start_session_close(self, lease: SessionLease, *, retired: bool) -> asyncio.Task[None]:
+        connector = _owned_session_connector(lease.session)
+        started = False
+
+        if connector is not None:
+            with self._closing_sessions_lock:
+                self._closing_sessions.add(lease.session)
+
+        async def close_session() -> None:
+            nonlocal started
+            started = True
+            if retired:
+                await self._close_retired_session(lease)
+            else:
+                await _close_session_lease(lease)
+
+        try:
+            task = asyncio.create_task(close_session())
+        except BaseException:
+            if connector is not None:
+                with self._closing_sessions_lock:
+                    self._closing_sessions.discard(lease.session)
+            raise
+
+        def force_close_unstarted(done_task: asyncio.Task[None]) -> None:
+            if done_task.cancelled() and not started:
+                _force_close_connector(connector, lease.session)
+            if connector is not None:
+                with self._closing_sessions_lock:
+                    self._closing_sessions.discard(lease.session)
+
+        task.add_done_callback(force_close_unstarted)
+        return task
+
+    def _retire_session(self, lease: SessionLease) -> None:
+        task = self._start_session_close(lease, retired=True)
+        self._retired_session_tasks.add(task)
+        task.add_done_callback(self._retired_session_tasks.discard)
+
+    async def _rotate_connections(self, *, background: bool) -> None:
+        async with self.session_lock:
+            old_lease = self.session_lease
+            if background and old_lease is None:
+                return
+            self.session_lease = SessionLease(self._new_session())
+            if background and old_lease is not None:
+                self._retire_session(old_lease)
+        if old_lease is not None and not background:
+            await self._start_session_close(old_lease, retired=False)
 
     async def resolve_token(self) -> str:
         # Run sync providers off the event loop; await async providers.
         # The provider may be called concurrently if multiple requests get a 516 at the same time;
         # it must be safe to invoke in parallel (e.g. if it hits an IdP, consider rate limiting).
-        result = await asyncio.get_running_loop().run_in_executor(None, cast(Callable[[], str | Awaitable[str]], self.token_provider))
+        provider = cast(Callable[[], str | Awaitable[str]], self.token_provider)
+        result: str | Awaitable[str]
+        if inspect.iscoroutinefunction(provider):
+            result = provider()
+        else:
+            future = asyncio.get_running_loop().run_in_executor(None, provider)
+            try:
+                result = await asyncio.shield(future)
+            except asyncio.CancelledError:
+                future.add_done_callback(_dispose_late_token_result)
+                raise
         if inspect.isawaitable(result):
             result = await result
         return result
@@ -274,6 +413,12 @@ class HttpAsyncBackend:
             try:
                 body = await response.read()
                 encoding = response.headers.get("Content-Encoding")
+            except BaseException:
+                try:
+                    response.close()
+                except BaseException:
+                    logger.warning("Failed to close columns-only response after read error", exc_info=True)
+                raise
             finally:
                 release_lease(response)
             loop = asyncio.get_running_loop()
@@ -293,11 +438,20 @@ class HttpAsyncBackend:
             stream=True,
             retries=runtime.retries,
         )
-        source = await start_streaming_response(
-            response,
-            encoding=response.headers.get("Content-Encoding"),
-            exception_tag=response.headers.get(ex_tag_header),
-        )
+        try:
+            source = await start_streaming_response(
+                response,
+                encoding=response.headers.get("Content-Encoding"),
+                exception_tag=response.headers.get(ex_tag_header),
+            )
+        except BaseException:
+            try:
+                response.close()
+            except BaseException:
+                logger.warning("Failed to close response after streaming startup error", exc_info=True)
+            finally:
+                release_lease(response)
+            raise
         return QueryExecution(
             source=source,
             summary=summary_from_headers(response.headers),
@@ -418,10 +572,11 @@ class HttpAsyncBackend:
         retries: int = 0,
         retry_body: Callable[[], Awaitable[Any]] | None = None,
     ) -> aiohttp.ClientResponse:
-        if self.session is None:
-            raise ProgrammingError(
-                "Session not initialized. Use 'async with get_async_client(...)' or call 'await client._initialize()' first."
-            )
+        lease = self.session_lease
+        if lease is None or lease.session.closed:
+            raise ProgrammingError(_SESSION_UNAVAILABLE_ERROR)
+        if lease._owner_loop is not asyncio.get_running_loop():
+            raise ProgrammingError(_SESSION_LOOP_ERROR)
 
         reset_seconds = common.get_setting("max_connection_age")
         if reset_seconds:
@@ -432,7 +587,7 @@ class HttpAsyncBackend:
                 # Stamp before await so concurrent callers don't all queue redundant resets.
                 self._last_pool_reset = now
                 logger.debug("connection expiration - resetting connection pool")
-                await self.close_connections()
+                await self._rotate_connections(background=True)
 
         final_params = dict_copy(self.client_settings, params)
         if server_wait:
@@ -469,7 +624,11 @@ class HttpAsyncBackend:
                 if lease is None or lease.session.closed:
                     if query_session:
                         self._active_session = None
-                    raise ProgrammingError("Client session is unavailable; the client may have been closed.")
+                    raise ProgrammingError(_SESSION_UNAVAILABLE_ERROR)
+                if lease._owner_loop is not asyncio.get_running_loop():
+                    if query_session:
+                        self._active_session = None
+                    raise ProgrammingError(_SESSION_LOOP_ERROR)
                 session = lease.session
                 lease.acquire()
             lease_released = False
@@ -535,7 +694,7 @@ class HttpAsyncBackend:
 
             except aiohttp.ClientConnectionError as e:
                 msg = str(e)
-                if _is_retryable_async_connection_error(e):
+                if not session.closed and _is_retryable_async_connection_error(e):
                     # Always allow at least one retry on a clean connection error so a single stale
                     # keep-alive socket doesn't surface to the caller, and additionally honor the
                     # retries budget when it is larger (e.g. query_retries for reads), so that
@@ -570,14 +729,23 @@ class HttpAsyncBackend:
                     self._active_session = None
 
     async def ping(self) -> bool:
+        lease = self.session_lease
+        if lease is None or lease.session.closed:
+            return False
+        if lease._owner_loop is not asyncio.get_running_loop():
+            logger.debug("ping skipped because the async client session belongs to a different event loop")
+            return False
         async with self.session_lock:
             lease = self.session_lease
             if lease is None or lease.session.closed:
                 return False
+            if lease._owner_loop is not asyncio.get_running_loop():
+                logger.debug("ping skipped because the async client session belongs to a different event loop")
+                return False
             session = lease.session
             lease.acquire()
         try:
-            url = f"{self.url}/ping"
+            url = f"{self.url.rstrip('/')}/ping"
             timeout = aiohttp.ClientTimeout(total=3.0)
             get_kwargs: dict[str, Any] = {"timeout": timeout}
             if self.proxy_url:
@@ -599,19 +767,32 @@ class HttpAsyncBackend:
         async with self.session_lock:
             old_lease = self.session_lease
             self.session_lease = None
+            retired_tasks = tuple(self._retired_session_tasks)
+        cleanup_tasks = list(retired_tasks)
+        foreground_task = None
         if old_lease is not None:
-            await old_lease.wait_drained()
-            await old_lease.session.close()
+            foreground_task = self._start_session_close(old_lease, retired=False)
+            cleanup_tasks.append(foreground_task)
+        if cleanup_tasks:
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        if foreground_task is not None:
+            # Shared retired tasks may be cancelled by another close caller. Only
+            # this caller's foreground cleanup result is authoritative here.
+            foreground_task.result()
+
+    def force_close(self) -> None:
+        lease = self.session_lease
+        self.session_lease = None
+        sessions = {lease.session} if lease is not None else set()
+        with self._closing_sessions_lock:
+            sessions.update(self._closing_sessions)
+        for session in sessions:
+            _force_close_connector(_owned_session_connector(session), session)
 
     async def close_connections(self) -> None:
         """Rotate the connection pool: new requests use a fresh session; in-flight
         requests keep using the old session until they complete, then it's closed."""
-        async with self.session_lock:
-            old_lease = self.session_lease
-            self.session_lease = SessionLease(self._new_session())
-        if old_lease is not None:
-            await old_lease.wait_drained()
-            await old_lease.session.close()
+        await self._rotate_connections(background=False)
 
 
 if TYPE_CHECKING:

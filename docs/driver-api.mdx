@@ -36,8 +36,8 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `compress` | bool or str | `True` | Enable compression or select `"lz4"`, `"zstd"`, `"br"`, or `"gzip"`. See [Compression](/integrations/language-clients/python/additional-options#compression). |
 | `query_limit` | int | `0` | Default row limit appended to eligible queries. Zero means unlimited. Stream large results instead of materializing them all in memory. |
 | `query_retries` | int | `2` | Retry budget for retryable read failures. Commands and inserts are not generally retried because replay can duplicate side effects. |
-| `connect_timeout` | int | `10` | Connection timeout in seconds. |
-| `send_receive_timeout` | int | `300` | Socket read timeout in seconds. |
+| `connect_timeout` | int for sync, float for async | `10` | Connection timeout in seconds. The async client accepts fractional seconds. |
+| `send_receive_timeout` | int for sync, float for async | `300` | Socket read timeout in seconds. The async client accepts fractional seconds. |
 | `client_name` | str or None | `None` | Prefix added to the HTTP User-Agent for identification in `system.query_log`. |
 | `session_id` | str or None | Generated for sync | Explicit ClickHouse session ID. Synchronous clients generate one by default; async clients do not. |
 | `autogenerate_session_id` | bool or None | Global setting for sync, `False` for async | Override automatic session ID generation. Disable it on a client shared by concurrent operations unless session state is required. |
@@ -53,7 +53,7 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `native_codec` | str or None | Global setting, `"python"` | Experimental codec for client-managed Native format traffic: `"python"`, `"rust"`, or `"rust_strict"`. The Rust values require the `clickhouse-connect-core` wheel. See [Rust codec](/integrations/language-clients/python/rust-codec). |
 | `rename_response_column` | str or None | `None` | Column renaming strategy: `"remove_prefix"`, `"to_camelcase"`, `"to_camelcase_without_prefix"`, `"to_underscore"`, or `"to_underscore_without_prefix"`. |
 
-The async factory also accepts `connector_limit=100`, `connector_limit_per_host=20`, and `keepalive_timeout=30.0` to configure its aiohttp connection pool. It does not accept `pool_mgr`. The synchronous chDB backend accepts `path` and `chdb_options`; see [Embedded chDB backend](#embedded-chdb-backend).
+The async factory also accepts `connector_limit=100`, `connector_limit_per_host=20`, and `keepalive_timeout=30.0` to configure its aiohttp connection pool. Pass them as direct keywords, DSN query parameters, or through `generic_args`, which is used internally for SQLAlchemy `connect_args`. String values from a DSN or `generic_args` are converted to the documented numeric types. Invalid selected string values raise `ProgrammingError`. Explicit non-`None` keywords take precedence over `generic_args`, then the DSN. It does not accept `pool_mgr`. The synchronous chDB backend accepts `path` and `chdb_options`; see [Embedded chDB backend](#embedded-chdb-backend).
 
 ### HTTPS/TLS arguments {#httpstls-arguments}
 
@@ -197,7 +197,7 @@ for i in range(1000):
 ### Multi-threaded applications {#multi-threaded-applications}
 
 <Warning>
-Client instances are **NOT thread-safe** when using session IDs. By default, clients have an auto-generated session ID, and concurrent queries within the same session will raise a `ProgrammingError`.
+Client instances are **NOT thread-safe** when using session IDs. By default, clients have an auto-generated session ID. Concurrent queries through one client and the same session raise a `ProgrammingError` when the client detects local overlap. Named-session state and server-side session overlap checks are local to one ClickHouse server process, so a fixed `session_id` is not distributed state or a distributed mutex in ClickHouse Cloud or other load-balanced deployments.
 </Warning>
 
 To share a client across threads safely:
@@ -799,6 +799,8 @@ For advanced use cases requiring direct access to ClickHouse HTTP interfaces wit
 
 The `clickhouse_connect.dbapi` module implements the PEP 249 connection and cursor interface. It declares API level 2.0, `threadsafety=2`, and `paramstyle="pyformat"`. The module also provides the PEP 249 type constructors `Date`, `Time`, `Timestamp`, and `Binary`, and the `DateFromTicks`, `TimeFromTicks`, and `TimestampFromTicks` functions.
 
+The module exports the PEP 249 exception hierarchy: `Warning`, `Error`, `InterfaceError`, `DatabaseError`, `DataError`, `OperationalError`, `IntegrityError`, `InternalError`, `ProgrammingError`, and `NotSupportedError`. These are the same class objects exposed by `clickhouse_connect.driver.exceptions`, so either import path catches driver errors. The driver-specific `StreamFailureError` remains available from `clickhouse_connect.driver.exceptions` and is an `OperationalError`.
+
 ```python
 from clickhouse_connect import dbapi
 
@@ -837,7 +839,7 @@ The installed package version is exposed as the string `clickhouse_connect.__ver
 
 ### Exceptions {#exceptions}
 
-Custom exceptions, including the DB-API 2.0 exception hierarchy, are defined in `clickhouse_connect.driver.exceptions`. `DatabaseError` and `OperationalError` expose a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so applications can branch on `exc.code` instead of parsing the message. `code` is set even when `show_clickhouse_errors` is disabled, while `name` requires error detail (`True` or `"scrub"`). Both are `None` when unavailable, such as on transport errors. Use `show_clickhouse_errors="scrub"` when end users should see SQL errors without host or server version information. The setting also controls mid-stream `StreamFailureError` messages and generic transport messages. It governs `str(exc)` only. Transport errors are still attached as `__cause__`, and tracebacks can contain the original host, URL, or library error text.
+Custom exceptions, including the DB-API 2.0 exception hierarchy re-exported by `clickhouse_connect.dbapi`, are defined in `clickhouse_connect.driver.exceptions`. `DatabaseError` and `OperationalError` expose a numeric `code` attribute with the ClickHouse error code and a `name` attribute with the symbolic name such as `UNKNOWN_TABLE`, so applications can branch on `exc.code` instead of parsing the message. `code` is set even when `show_clickhouse_errors` is disabled, while `name` requires error detail (`True` or `"scrub"`). Both are `None` when unavailable, such as on transport errors. Use `show_clickhouse_errors="scrub"` when end users should see SQL errors without host or server version information. The setting also controls mid-stream `StreamFailureError` messages and generic transport messages. It governs `str(exc)` only. Transport errors are still attached as `__cause__`, and tracebacks can contain the original host, URL, or library error text.
 
 ### ClickHouse SQL utilities {#clickhouse-sql-utilities}
 

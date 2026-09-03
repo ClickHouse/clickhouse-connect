@@ -258,6 +258,30 @@ def test_clickhouse_impl_current_database_uses_internal_query_formats():
     assert opts["version_table_schema"] == "default"
 
 
+def test_clickhouse_impl_adds_tag_through_dialect_driver_connection():
+    class DriverClient:
+        def __init__(self):
+            self.tags = []
+
+        def _add_integration_tag(self, name):
+            self.tags.append(name)
+
+    class DriverDialect(ClickHouseDialect):
+        def get_driver_connection(self, connection):
+            assert connection is adapted_connection
+            return driver_client
+
+    driver_client = DriverClient()
+    adapted_connection = object()
+    pool_connection = SimpleNamespace(dbapi_connection=adapted_connection)
+    connection = Mock()
+    connection.connection = pool_connection
+
+    ClickHouseImpl(DriverDialect(), connection, False, False, StringIO(), {})
+
+    assert driver_client.tags == ["alembic"]
+
+
 def test_render_type_uses_clickhouse_names():
     context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
     assert context.impl.render_type(types.Int32(), None) == "Int32"

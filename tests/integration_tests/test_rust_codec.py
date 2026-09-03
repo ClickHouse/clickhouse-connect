@@ -2249,8 +2249,9 @@ def test_rust_codec_sqlalchemy_dialect_metadata(test_config, codec):
                 # The private option key cannot be spoofed with a public boolean to bypass strict mode.
                 stmt = text(f"SELECT name FROM {table}").execution_options(query_formats={"String": "bytes"}, ch_internal_query=True)
                 if codec == "rust_strict":
-                    with pytest.raises(NotSupportedError, match="query_formats"):
+                    with pytest.raises(sqlalchemy.exc.NotSupportedError, match="query_formats") as excinfo:
                         conn.execute(stmt)
+                    assert isinstance(excinfo.value.orig, NotSupportedError)
                 else:
                     assert conn.execute(stmt).scalars().first() == b"user_1"
             finally:

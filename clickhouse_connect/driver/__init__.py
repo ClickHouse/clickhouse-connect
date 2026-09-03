@@ -18,6 +18,35 @@ __all__ = ["Client", "AsyncClient", "create_client", "create_async_client"]
 
 logger = logging.getLogger(__name__)
 
+_BOOL_OPTIONS = frozenset(
+    {
+        "autogenerate_query_id",
+        "autogenerate_session_id",
+        "form_encode_query_params",
+    }
+)
+_SYNC_INT_OPTIONS = frozenset(
+    {
+        "connect_timeout",
+        "query_limit",
+        "query_retries",
+        "send_receive_timeout",
+    }
+)
+_ASYNC_INT_OPTIONS = frozenset(
+    {
+        "query_limit",
+        "query_retries",
+    }
+)
+_ASYNC_FLOAT_OPTIONS = frozenset({"connect_timeout", "send_receive_timeout"})
+_ASYNC_CONNECTOR_OPTIONS = frozenset({"connector_limit", "connector_limit_per_host", "keepalive_timeout"})
+_ASYNC_CONNECTOR_INT_OPTIONS = frozenset({"connector_limit", "connector_limit_per_host"})
+_ASYNC_CONNECTOR_FLOAT_OPTIONS = frozenset({"keepalive_timeout"})
+_TRUE_BOOL_VALUES = frozenset({"1", "on", "true", "y", "yes"})
+_FALSE_BOOL_VALUES = frozenset({"0", "false", "n", "no", "off"})
+_NO_OPTIONS: frozenset[str] = frozenset()
+
 
 def __getattr__(name):
     if name == "AsyncClient":
@@ -105,6 +134,38 @@ def _pop_headers_arg(headers: Any | None, kwargs: dict[str, Any]) -> Any | None:
         if headers is None:
             headers = kwargs_headers
     return headers
+
+
+def _coerce_bool_options(kwargs: dict[str, Any]) -> None:
+    """Normalize pure boolean options from DSNs and generic arguments."""
+    for name, value in kwargs.items():
+        if name not in _BOOL_OPTIONS or not isinstance(value, str):
+            continue
+        normalized = value.strip().lower()
+        if normalized in _TRUE_BOOL_VALUES:
+            kwargs[name] = True
+        elif normalized in _FALSE_BOOL_VALUES:
+            kwargs[name] = False
+        else:
+            raise ProgrammingError(f"Invalid value {value!r} for option {name}")
+
+
+def _coerce_numeric_options(
+    kwargs: dict[str, Any],
+    int_options: frozenset[str],
+    float_options: frozenset[str] = _NO_OPTIONS,
+) -> None:
+    """Normalize numeric options from DSNs and generic arguments."""
+    for name, value in kwargs.items():
+        if not isinstance(value, str):
+            continue
+        try:
+            if name in int_options:
+                kwargs[name] = int(value)
+            elif name in float_options:
+                kwargs[name] = float(value)
+        except ValueError as ex:
+            raise ProgrammingError(f"Invalid value {value!r} for option {name}") from ex
 
 
 def _validate_headers(headers: Any | None) -> None:
@@ -217,7 +278,8 @@ def create_client(
       will be extracted from this string if not set otherwise. A chdb scheme selects the chdb backend, e.g.
       chdb://memory, chdb://memory/my_database, or chdb:///on/disk/path. As with HTTP connections, a database
       named in the DSN must already exist, so the my_database form only works when joining an engine where an
-      earlier client created it.
+      earlier client created it. String values for pure boolean and numeric HTTP client options are converted to their
+      declared types.
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
@@ -314,6 +376,8 @@ def create_client(
                     if name.startswith("ch_"):
                         name = name[3:]
                     settings[name] = value
+        _coerce_bool_options(kwargs)
+        _coerce_numeric_options(kwargs, _SYNC_INT_OPTIONS)
         # token auth may also arrive via generic_args (DB-API connect_args); pop both so neither is passed twice
         generic_access = kwargs.pop("access_token", None)
         generic_token = kwargs.pop("token_provider", None)
@@ -352,9 +416,9 @@ async def create_async_client(
     settings: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     generic_args: dict[str, Any] | None = None,
-    connector_limit: int = 100,
-    connector_limit_per_host: int = 20,
-    keepalive_timeout: float = 30.0,
+    connector_limit: int | None = None,
+    connector_limit_per_host: int | None = None,
+    keepalive_timeout: float | None = None,
     **kwargs,
 ) -> AsyncClient:
     """
@@ -379,16 +443,18 @@ async def create_async_client(
       or interface=https.
     :param secure: Use https/TLS. This overrides inferred values from the interface or port arguments.
     :param dsn: A string in standard DSN (Data Source Name) format. Other connection values (such as host or user)
-      will be extracted from this string if not set otherwise.
+      will be extracted from this string if not set otherwise. Pure boolean and numeric async client options in the
+      DSN are converted to their declared types.
     :param settings: ClickHouse server settings to be used with the session/every request
     :param headers: Additional HTTP headers to send with every request. This can be used for proxy or gateway
       authentication, such as Cloudflare Access service token headers. These headers are applied after driver defaults,
       so they can intentionally override headers such as Authorization or User-Agent.
     :param generic_args: Used internally to parse DBAPI connection strings into keyword arguments and ClickHouse settings.
       It is not recommended to use this parameter externally
-    :param connector_limit: Maximum number of allowable connections to the server
-    :param connector_limit_per_host: Maximum number of connections per host
-    :param keepalive_timeout: Time limit on idle keepalive connections
+    :param connector_limit: Maximum number of allowable connections to the server. Defaults to 100.
+    :param connector_limit_per_host: Maximum number of connections per host. Defaults to 20.
+    :param keepalive_timeout: Time limit on idle keepalive connections. Defaults to 30 seconds. Explicit non-None
+      connector arguments take precedence over DSN and generic_args values; generic_args take precedence over the DSN.
     :param kwargs: Recognized keyword arguments (used by the async HTTP client), see below
 
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
@@ -455,16 +521,20 @@ async def create_async_client(
     host, username, password, port, database, interface = _parse_connection_params(
         host, username, password, port, database, interface, secure, dsn, kwargs
     )
+    dsn_connector_options = {name: kwargs.pop(name, None) for name in _ASYNC_CONNECTOR_OPTIONS}
     headers = _pop_headers_arg(headers, kwargs)
     _validate_access_token(access_token, token_provider, username, password)
 
     settings = settings or {}
+    generic_connector_options: dict[str, Any] = {}
     if generic_args:
         client_params = signature(_AsyncClient).parameters
         for name, value in generic_args.items():
             if name == "headers":
                 if headers is None:
                     headers = value
+            elif name in _ASYNC_CONNECTOR_OPTIONS:
+                generic_connector_options[name] = value
             elif name in client_params:
                 kwargs[name] = value
             elif name == "compression":
@@ -477,6 +547,25 @@ async def create_async_client(
 
     if "autogenerate_session_id" not in kwargs:
         kwargs["autogenerate_session_id"] = False
+
+    _coerce_bool_options(kwargs)
+    _coerce_numeric_options(kwargs, _ASYNC_INT_OPTIONS, _ASYNC_FLOAT_OPTIONS)
+    connector_options: dict[str, Any] = {}
+    for name, explicit_value, default in (
+        ("connector_limit", connector_limit, 100),
+        ("connector_limit_per_host", connector_limit_per_host, 20),
+        ("keepalive_timeout", keepalive_timeout, 30.0),
+    ):
+        value = explicit_value
+        if value is None:
+            value = generic_connector_options.get(name)
+        if value is None:
+            value = dsn_connector_options.get(name)
+        connector_options[name] = default if value is None else value
+    _coerce_numeric_options(connector_options, _ASYNC_CONNECTOR_INT_OPTIONS, _ASYNC_CONNECTOR_FLOAT_OPTIONS)
+    connector_limit = connector_options["connector_limit"]
+    connector_limit_per_host = connector_options["connector_limit_per_host"]
+    keepalive_timeout = connector_options["keepalive_timeout"]
 
     # token auth may also arrive via generic_args (DB-API connect_args); pop both so neither is passed twice
     generic_access = kwargs.pop("access_token", None)

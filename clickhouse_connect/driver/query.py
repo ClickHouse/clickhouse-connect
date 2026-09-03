@@ -15,7 +15,7 @@ from clickhouse_connect.driver.binding import (
     _strip_trailing_semicolons,
     bind_query,
 )
-from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, dict_copy, empty_gen, get_rename_method
+from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, _close_async, dict_copy, empty_gen, get_rename_method
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.external import ExternalData
@@ -445,6 +445,16 @@ class QueryResult(Closable):
         if self._block_gen is not None:
             self._block_gen.close()
             self._block_gen = None
+
+    async def aclose(self) -> None:
+        source, self.source = self.source, None
+        block_gen, self._block_gen = self._block_gen, None
+        try:
+            if source:
+                await _close_async(source)
+        finally:
+            if block_gen is not None:
+                block_gen.close()
 
 
 comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--)[^\n]*$)", re.MULTILINE | re.DOTALL)

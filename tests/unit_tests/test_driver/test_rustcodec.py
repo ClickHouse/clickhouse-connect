@@ -347,6 +347,23 @@ def test_build_insert_probe_not_implemented_non_strict(monkeypatch):
     assert rust_ctx.insert_exception is None
 
 
+def test_build_insert_python_fallback_forwards_error_handler(monkeypatch):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise NotImplementedError("unsupported")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    context = _uint64_ctx([("not an integer",)])
+    errors = []
+
+    chunks = list(_RustNativeTransform(strict=False).build_insert(context, errors.append))
+
+    assert chunks == [b"INTERNAL EXCEPTION WHILE SERIALIZING"]
+    assert context.insert_exception is None
+    assert len(errors) == 1
+
+
 def test_build_insert_probe_not_implemented_strict(monkeypatch):
     class FakeCore:
         @staticmethod
@@ -358,7 +375,8 @@ def test_build_insert_probe_not_implemented_strict(monkeypatch):
         _RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
 
 
-def test_build_insert_mid_block_failure(monkeypatch):
+@pytest.mark.parametrize("use_error_handler", [False, True])
+def test_build_insert_mid_block_failure(monkeypatch, use_error_handler):
     calls = {"n": 0}
 
     class FakeCore:
@@ -373,14 +391,21 @@ def test_build_insert_mid_block_failure(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+    errors = []
+    error_handler = errors.append if use_error_handler else None
 
-    chunks = list(_RustNativeTransform(strict=False).build_insert(ctx))
+    chunks = list(_RustNativeTransform(strict=False).build_insert(ctx, error_handler))
 
     assert chunks == [b"rust_block", b"INTERNAL EXCEPTION WHILE SERIALIZING"]
     # Binding ValueErrors surface as DataError with the binding's message.
-    assert isinstance(ctx.insert_exception, DataError)
-    assert str(ctx.insert_exception) == "late"
-    assert isinstance(ctx.insert_exception.__cause__, ValueError)
+    recorded = errors[0] if use_error_handler else ctx.insert_exception
+    assert isinstance(recorded, DataError)
+    assert str(recorded) == "late"
+    assert isinstance(recorded.__cause__, ValueError)
+    if use_error_handler:
+        assert ctx.insert_exception is None
+    else:
+        assert ctx.insert_exception is recorded
 
 
 def test_build_insert_global_write_format_strict_raises(monkeypatch, clean_formats):
@@ -677,6 +702,7 @@ def test_decode_feed_error_disambiguation(monkeypatch, error, exception_tag, chu
     [
         pytest.param(ValueError("Malformed payload"), False, id="decoder_value_error_false"),
         pytest.param(EOFError("Truncated payload"), "scrub", id="decoder_eof_scrub"),
+        pytest.param(EOFError("Truncated payload"), True, id="decoder_eof_full"),
     ],
 )
 def test_decode_untagged_server_error_honors_detail_policy(monkeypatch, decoder_error, mode):
@@ -694,12 +720,19 @@ def test_decode_untagged_server_error_honors_detail_policy(monkeypatch, decoder_
         _RustNativeTransform(strict=True).parse_response(src, context)
 
     message = str(excinfo.value)
+    assert excinfo.value.code == 62
     if mode is False:
         assert message == GENERIC_CLICKHOUSE_ERROR
-    else:
+        assert excinfo.value.name is None
+    elif mode == "scrub":
+        assert excinfo.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
         assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in message
         assert "version" not in message.lower()
         assert "http://" not in message
+    else:
+        assert excinfo.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+        assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in message
+        assert "version 26.8.1.2041" in message
     assert src.closed is True
 
 

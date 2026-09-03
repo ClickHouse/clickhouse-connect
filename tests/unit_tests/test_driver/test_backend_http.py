@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -8,6 +9,7 @@ from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _pla
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend, _plan_fields
 from clickhouse_connect.driver._backend.httpcommon import (
     QueryRequestPlan,
+    apply_http_server_settings,
     plan_command_request,
     plan_data_insert_request,
     plan_query_request,
@@ -16,6 +18,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
 )
 from clickhouse_connect.driver._backend.models import Capabilities, QueryRuntime
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from tests.helpers import run_in_new_loop
 
 
 def make_context(
@@ -501,6 +504,22 @@ def make_async_backend(url="http://localhost:8123"):
     )
 
 
+def test_fractional_timeout_produces_integer_progress_interval():
+    client = Mock()
+    client._initial_settings = {}
+    client._setting_status.return_value = SimpleNamespace(is_set=True, is_writable=True)
+    transport = SimpleNamespace(
+        compression=None,
+        progress_interval=None,
+        send_comp_setting=False,
+        send_progress=None,
+    )
+
+    apply_http_server_settings(client, transport, None, 19.25)
+
+    assert transport.progress_interval == "14250"
+
+
 class TestBackendContracts:
     """The HTTP backends satisfy the contracts.py protocols (the same
     conformance is enforced statically by the _contract_conformance
@@ -613,6 +632,13 @@ class TestSyncRequestTargetPath:
     def test_explicit_proxy_path_untouched(self):
         assert self._sent_url("http://localhost:8123/clickhouse") == "http://localhost:8123/clickhouse?database=db1"
 
+    def test_ping_normalizes_trailing_proxy_path_slash(self):
+        backend = make_sync_backend("http://localhost:8123/clickhouse/")
+        backend.http.request = Mock(return_value=SimpleNamespace(status=200))
+
+        assert backend.ping() is True
+        assert backend.http.request.call_args.args[:2] == ("GET", "http://localhost:8123/clickhouse/ping")
+
 
 class TestAsyncRequestTargetPath:
     """The async request-target must normalize only an empty path to "/"."""
@@ -639,3 +665,93 @@ class TestAsyncRequestTargetPath:
         sent_url, params = await self._sent_url(url)
         assert sent_url == expected_url
         assert params == {"database": "db1"}
+
+    @pytest.mark.asyncio
+    async def test_ping_normalizes_trailing_proxy_path_slash(self):
+        class ResponseContext:
+            async def __aenter__(self):
+                return SimpleNamespace(status=200)
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+        backend = make_async_backend("http://localhost:8123/clickhouse/")
+        get = Mock(return_value=ResponseContext())
+        backend.session = SimpleNamespace(closed=False, get=get)
+
+        assert await backend.ping() is True
+        assert get.call_args.args == ("http://localhost:8123/clickhouse/ping",)
+
+
+class TestAsyncSessionLoop:
+    @staticmethod
+    def _session():
+        return SimpleNamespace(closed=False, request=AsyncMock(return_value=SimpleNamespace(status=200, headers={})))
+
+    def test_request_rejects_session_from_another_event_loop(self):
+        backend = make_async_backend()
+        run_in_new_loop(self._bind_session(backend))
+
+        with pytest.raises(ProgrammingError, match="owning event loop") as exc_info:
+            run_in_new_loop(backend.request(b"SELECT 1", {}, server_wait=False))
+        assert "current event loop" in str(exc_info.value)
+
+    def test_ping_returns_false_for_session_from_another_event_loop(self):
+        backend = make_async_backend()
+        run_in_new_loop(self._bind_session(backend))
+
+        assert run_in_new_loop(backend.ping()) is False
+
+    @pytest.mark.asyncio
+    async def test_missing_session_error_explains_how_to_reopen(self):
+        backend = make_async_backend()
+
+        with pytest.raises(ProgrammingError, match=r"await client\._initialize\(\).+reopen"):
+            await backend.request(b"SELECT 1", {}, server_wait=False)
+
+    @pytest.mark.asyncio
+    async def test_session_closed_while_waiting_for_lock_uses_reopen_error(self):
+        backend = make_async_backend()
+        backend.session = self._session()
+        await backend.session_lock.acquire()
+        request = asyncio.create_task(backend.request(b"SELECT 1", {}, server_wait=False))
+        await asyncio.sleep(0)
+
+        backend.session_lease = None
+        backend.session_lock.release()
+
+        with pytest.raises(ProgrammingError, match=r"await client\._initialize\(\).+reopen"):
+            await request
+
+    @pytest.mark.asyncio
+    async def test_request_rechecks_session_loop_while_holding_lock(self):
+        backend = make_async_backend()
+        backend.session = self._session()
+        await backend.session_lock.acquire()
+        request = asyncio.create_task(backend.request(b"SELECT 1", {}, server_wait=False))
+        await asyncio.sleep(0)
+
+        backend.session = self._session()
+        backend.session_lease._owner_loop = object()
+        backend.session_lock.release()
+
+        with pytest.raises(ProgrammingError, match="current event loop"):
+            await request
+
+    @pytest.mark.asyncio
+    async def test_ping_rechecks_session_loop_while_holding_lock(self):
+        backend = make_async_backend()
+        backend.session = self._session()
+        await backend.session_lock.acquire()
+        ping = asyncio.create_task(backend.ping())
+        await asyncio.sleep(0)
+
+        backend.session = self._session()
+        backend.session_lease._owner_loop = object()
+        backend.session_lock.release()
+
+        assert await ping is False
+
+    @classmethod
+    async def _bind_session(cls, backend):
+        backend.session = cls._session()

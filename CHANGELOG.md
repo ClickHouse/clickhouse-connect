@@ -2,6 +2,49 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- Added a native async SQLAlchemy dialect for SQLAlchemy 2.0.44 and later. Install `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. The first release supports buffered Core and ORM execution, inserts, per-query settings and read formats, server-side parameters, DDL and reflection through `run_sync()`, Alembic online migrations through `AsyncConnection.run_sync()`, offline Alembic compilation, and direct access to the native `AsyncClient`. A checked-in async Alembic environment demonstrates both migration paths. Alembic now adds its integration tag to async client User-Agent headers. SQLAlchemy pool pre-ping uses its standard `SELECT 1` check. Closed native sessions are invalidated and replaced, while execution-time server and transport errors keep reusable open HTTP sessions. Pooled connections use distinct generated ClickHouse session IDs by default. A fixed session ID requires a single-connection pool or external serialization. Server-side cursors and `AsyncConnection.stream()` remain unsupported. `AsyncSession.stream()` returns a buffered result, and the native client provides streaming APIs for large results. Async executemany inserts issue one request per parameter set instead of using the Native bulk insert protocol. For bulk data, borrow the pool-owned `driver_connection` and call `AsyncClient.insert()`. Naive `datetime` values on the executemany path use `naive_datetime_binding`, and default client-side binding omits their fractional seconds.
+
+### Bug Fixes
+
+- Async Rust codec query, NumPy, and Pandas stream contexts now use asynchronous read-ahead cleanup on early exit,
+  so thread shutdown no longer blocks the event loop. Abandoned read-ahead streams finish their thread shutdown
+  off the event loop and dispatch synchronous source cleanup without leaving an unclosed response or pending task.
+- Async clients now report a driver `ProgrammingError` before network I/O when a live aiohttp session is used from a different event loop. Close the client or dispose its SQLAlchemy engine in the owning loop before transfer when possible. If that loop has already closed, perform cleanup in the current loop before reuse, then reopen a directly reused client with `_initialize()`.
+- Native sync and async `ping()` calls now normalize a trailing slash in `proxy_path`, so a path such as `/clickhouse/` sends `/clickhouse/ping` instead of `/clickhouse//ping`.
+- Checked-out async SQLAlchemy connections now close when returned after awaited engine disposal or when garbage
+  collected. Recycle and invalidation use an explicit cancellation-safe terminate path with synchronous aiohttp
+  transport fallback when graceful close cannot complete.
+- Cancelling `AsyncClient.close()`, context-manager exit, or explicit connection-pool rotation now force-closes the
+  detached aiohttp transport before propagating cancellation. Failed graceful session cleanup receives the same
+  fallback. Automatic connection-age rotation retires the old session in owned background cleanup, so cancellation
+  of the triggering request cannot interrupt or replay another request still using that session. Requests interrupted
+  by an explicitly force-closed session are not retried, preventing teardown from replaying an insert body. Concurrent
+  close callers do not inherit one another's cancellation while they wait on the same retired session cleanup.
+- Cancelling an `AsyncClient` insert while its Native serializer is blocked on the bounded request-body queue now
+  shuts down the queue before awaiting the serializer. Async-generator cleanup no longer waits indefinitely, and
+  reusable insert contexts release their data and serializer error state after every attempt. External task
+  cancellation remains cancellation even when the serializer concurrently reports an error.
+- Cancelling an `AsyncClient` query while its Native response is being handed to the parser now closes the response
+  source and releases its session lease. Streaming startup and columns-only response reads also close and release
+  their responses when interrupted, so later client shutdown no longer waits indefinitely for those abandoned queries.
+- `AsyncClient` now closes its newly created aiohttp session when token provider or token installation fails, or when
+  cancellation interrupts token resolution or server initialization. These paths no longer leak the session when
+  `create_async_client` exits without returning a client. Initialization is serialized per client so cancellation of
+  one overlapping context entry cannot close a session initialized successfully by another.
+- Async coroutine token providers, including `functools.partial` wrappers, now work when asyncio debug mode is enabled.
+  Synchronous providers still run outside the event loop, and synchronous callables that return an awaitable remain
+  supported. If cancellation wins while a synchronous provider is still running, a late native coroutine result is
+  closed instead of emitting a never-awaited coroutine warning.
+- `create_client` and `create_async_client` now convert string-valued pure boolean options from a DSN or `generic_args`,
+  including `on` and `off`, so false values no longer act as truthy strings. Both factories report invalid boolean and
+  numeric strings as `ProgrammingError`. The async factory preserves fractional timeout values and also
+  accepts `connector_limit`, `connector_limit_per_host`, and `keepalive_timeout` from those sources without passing
+  duplicate constructor keywords. Explicit non-None connector arguments take precedence over `generic_args`, which
+  take precedence over the DSN. `None` falls through to the next source and then the documented defaults.
+- The DB-API module now exposes the driver's PEP 249 exception hierarchy. `except clickhouse_connect.dbapi.Error` now catches errors raised by the driver, and SQLAlchemy wraps them in the matching `DBAPIError` subclass instead of allowing them to escape its DB-API exception handling. `StreamFailureError` is now also an `OperationalError`, while remaining catchable by its existing class. Mid-stream failures now expose the numeric ClickHouse error code, and the symbolic error name when error details are enabled.
+
 ## 1.8.0, 2026-09-02
 
 ### Improvements
