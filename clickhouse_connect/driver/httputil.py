@@ -1,7 +1,6 @@
 import atexit
 import http.client
 import logging
-import multiprocessing
 import os
 import socket
 import sys
@@ -190,13 +189,28 @@ def check_env_proxy(scheme: str, host: str, port: int) -> str | None:
 
 
 _default_pool_manager = get_pool_manager()
+_default_pool_pid = os.getpid()
 
 
 def default_pool_manager():
-    if multiprocessing.current_process().name == "MainProcess":
-        return _default_pool_manager
-    #  PoolManagers don't seem to be safe for some multiprocessing environments, always return a new one
-    return get_pool_manager()
+    """Return the process-local shared PoolManager.
+
+    urllib3 pools are not fork-safe, so a child must not reuse the parent's
+    manager. Within a process the same manager is reused so closing clients
+    does not retain one PoolManager per client.
+    """
+    global _default_pool_manager, _default_pool_pid
+    pid = os.getpid()
+    if pid != _default_pool_pid:
+        old = _default_pool_manager
+        _default_pool_manager = get_pool_manager()
+        _default_pool_pid = pid
+        try:
+            old.clear()
+        except Exception:
+            logger.debug("failed to clear inherited pool manager after fork", exc_info=True)
+        all_managers.pop(old, None)
+    return _default_pool_manager
 
 
 class ResponseSource:
