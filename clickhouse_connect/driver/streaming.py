@@ -650,9 +650,10 @@ class ReadAheadSource(Closable):
         self._stop_event.set()
         cancelled: asyncio.CancelledError | None = None
         cleanup_error: BaseException | None = None
+        loop = asyncio.get_running_loop()
         if self._thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
-            join_future = asyncio.get_running_loop().run_in_executor(None, self._thread.join, 1.0)
+            join_future = loop.run_in_executor(None, self._thread.join, 1.0)
             try:
                 cancelled = await _wait_for_cleanup(join_future, cancelled)
             except BaseException as ex:  # noqa: BLE001 - source cleanup must still run
@@ -667,6 +668,15 @@ class ReadAheadSource(Closable):
                 else:
                     source.close()
             except BaseException as ex:  # noqa: BLE001 - preserve cancellation after cleanup
+                if cleanup_error is None:
+                    cleanup_error = ex
+        # A source close can unblock a producer whose in-flight read outlived the first bounded join.
+        # Wait once more so async cleanup does not return while that producer is still unwinding.
+        if self._thread.is_alive():
+            join_future = loop.run_in_executor(None, self._thread.join, 1.0)
+            try:
+                cancelled = await _wait_for_cleanup(join_future, cancelled)
+            except BaseException as ex:  # noqa: BLE001 - preserve the first cleanup failure
                 if cleanup_error is None:
                     cleanup_error = ex
         if cancelled is not None:
