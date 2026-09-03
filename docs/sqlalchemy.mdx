@@ -33,7 +33,7 @@ with engine.connect() as conn:
 
 ### ClickHouse session IDs {#sqlalchemy-session-ids}
 
-Each pooled connection in either the synchronous or async dialect generates a distinct ClickHouse session ID by default. When requests for that connection reach the same ClickHouse server process, settings changed with `SET` and temporary tables persist for that connection. Named-session state and same-session overlap checks are process-local. If you configure a fixed `session_id`, use `pool_size=1, max_overflow=0` or serialize access before requests reach ClickHouse. In ClickHouse Cloud or other load-balanced deployments, requests with the same session ID can reach different servers, so do not rely on a fixed `session_id` as distributed state or as a distributed mutex.
+Each pooled connection in either the synchronous or async dialect generates a distinct ClickHouse session ID by default. When requests for that connection reach the same ClickHouse server process, settings changed with `SET` and temporary tables persist for that connection. Named-session state and same-session overlap checks are process-local. On one server process, an overlapping request for the same user and session ID is rejected immediately with server code 373 instead of being queued. If you configure a fixed `session_id`, use `pool_size=1, max_overflow=0` or serialize access before requests reach ClickHouse. In ClickHouse Cloud or other load-balanced deployments, requests with the same session ID can reach different servers, so do not rely on a fixed `session_id` as distributed state or as a distributed mutex.
 
 ### Async connections {#sqlalchemy-async-connections}
 
@@ -513,6 +513,14 @@ For migrations through the async dialect, install both extras:
 ```bash
 pip install "clickhouse-connect[alembic,sqlalchemy-async]"
 ```
+
+Create an async Alembic project, then replace its generated environment with the ClickHouse-aware example:
+
+```bash
+alembic init -t async alembic
+```
+
+The generated `alembic.ini` uses `script_location = %(here)s/alembic`. Keep that setting when the migration directory is named `alembic`, or update it to the directory passed to `alembic init`. Replace `alembic/env.py` with the checked-in [async Alembic `env.py` example](https://github.com/ClickHouse/clickhouse-connect/blob/main/examples/alembic_async/env.py), then set `sqlalchemy.url` in `alembic.ini`.
 
 Import `clickhouse_connect.cc_sqlalchemy.alembic` in Alembic's `env.py` to register the dialect integration. Autogenerate supports common table evolution, including table creation and removal, column add/alter/drop, defaults, and comments. Use manual operations for table and column renames. Review every generated migration before applying it.
 

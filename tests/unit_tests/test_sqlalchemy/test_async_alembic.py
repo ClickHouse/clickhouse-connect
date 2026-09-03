@@ -53,9 +53,7 @@ def test_checked_in_async_alembic_environment_carries_clickhouse_hooks():
     )
 
     class SyncConnection:
-        def exec_driver_sql(self, statement):
-            assert statement == "SELECT currentDatabase()"
-            return SimpleNamespace(scalar=lambda: "default")
+        dialect = SimpleNamespace(default_schema_name="default")
 
     class AsyncConnection:
         async def __aenter__(self):
@@ -84,9 +82,12 @@ def test_checked_in_async_alembic_environment_carries_clickhouse_hooks():
     ):
         environment = runpy.run_path(str(env_path))
         offline_options = configure.call_args.kwargs
+        assert offline_options["url"] == "clickhousedb+async://user:password@localhost:8123/default"
+        assert offline_options["literal_binds"] is True
+        assert offline_options["dialect_opts"] == {"paramstyle": "named"}
         assert offline_options["compare_server_default"] is True
         assert offline_options["include_object"] is ch_alembic.include_object
-        assert offline_options["dialect_name"] == "clickhousedb"
+        assert "dialect_name" not in offline_options
         assert offline_options["version_table"] == "alembic_version"
 
         configure.reset_mock()
