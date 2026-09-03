@@ -264,7 +264,10 @@ def test_client_execute_operation_dispatch():
     assert result is client.command.return_value
     client.command.assert_called_once_with("SELECT version()", settings=None, use_database=False)
     Client._execute_operation(client, QueryOp("SELECT 1", settings={"max_threads": "4"}))
-    client.query.assert_called_once_with("SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
+    client.create_query_context.assert_called_once_with(query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
+    context = client.create_query_context.return_value
+    assert context.internal is True
+    client._query_with_context.assert_called_once_with(context)
     Client._execute_operation(client, RawQueryOp("SELECT 1", fmt="Native"))
     client.raw_query.assert_called_once_with("SELECT 1", settings=None, fmt="Native")
     with pytest.raises(TypeError, match="Unsupported operation type"):
@@ -276,8 +279,12 @@ def test_async_client_execute_operation_dispatch():
     result = run_in_new_loop(AsyncClient._execute_operation(client, CommandOp("SELECT version()", use_database=False)))
     assert result is client.command.return_value
     client.command.assert_awaited_once_with("SELECT version()", settings=None, use_database=False)
+    client.create_query_context = Mock()
     run_in_new_loop(AsyncClient._execute_operation(client, QueryOp("SELECT 1", settings={"max_threads": "4"})))
-    client.query.assert_awaited_once_with("SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
+    client.create_query_context.assert_called_once_with(query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
+    context = client.create_query_context.return_value
+    assert context.internal is True
+    client._query_with_context.assert_awaited_once_with(context)
     run_in_new_loop(AsyncClient._execute_operation(client, RawQueryOp("SELECT 1", fmt="Native")))
     client.raw_query.assert_awaited_once_with("SELECT 1", settings=None, fmt="Native")
     with pytest.raises(TypeError, match="Unsupported operation type"):

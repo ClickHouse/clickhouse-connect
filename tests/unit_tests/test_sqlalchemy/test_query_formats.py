@@ -8,7 +8,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
-from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
+from clickhouse_connect.cc_sqlalchemy.inspector import (
+    _INTERNAL_QUERY_OPTION,
+    _INTERNAL_QUERY_SENTINEL,
+    with_internal_query_formats,
+)
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
@@ -31,6 +35,40 @@ class _FakeContext:
     def __init__(self, execution_options, invoked_statement=None):
         self.execution_options = execution_options
         self.invoked_statement = invoked_statement
+
+
+class _PreviousSignatureCursor(Cursor):
+    def __init__(self, client):
+        super().__init__(client)
+        self.execute_called = False
+
+    def execute(
+        self,
+        operation: str,
+        parameters: Any = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+        *,
+        pyformat_encoded: bool = True,
+    ) -> None:
+        self.execute_called = True
+        super().execute(
+            operation,
+            parameters,
+            settings,
+            query_formats,
+            pyformat_encoded=pyformat_encoded,
+        )
+
+
+class _IncompatiblePrivateExecuteCursor(Cursor):
+    def __init__(self, client):
+        super().__init__(client)
+        self.private_execute_called = False
+
+    def _execute(self, operation):
+        self.private_execute_called = True
+        raise AssertionError(f"subclass private method received {operation}")
 
 
 def _mock_client():
@@ -107,6 +145,81 @@ def test_dialect_statement_query_formats_take_wildcard_precedence():
 def test_with_internal_query_formats_sets_execution_option():
     clause = with_internal_query_formats(text("SHOW TABLES"))
     assert clause.get_execution_options()["query_formats"] == dict(_INTERNAL_QUERY_FORMATS)
+    assert clause.get_execution_options()[_INTERNAL_QUERY_OPTION] is _INTERNAL_QUERY_SENTINEL
+
+
+def test_cursor_private_execute_internal_marks_query_context():
+    client = _mock_client()
+    Cursor(client)._execute(
+        "SHOW TABLES",
+        query_formats=dict(_INTERNAL_QUERY_FORMATS),
+        internal=True,
+    )
+    assert client.create_query_context.return_value.internal is True
+
+
+def test_cursor_execute_is_not_internal():
+    client = _mock_client()
+    Cursor(client).execute("SELECT 13")
+    client.create_query_context.assert_not_called()
+
+
+@pytest.mark.parametrize("statement_level", [True, False])
+def test_dialect_do_execute_forwards_internal_marker(statement_level):
+    client = _mock_client()
+    if statement_level:
+        context = _FakeContext({}, with_internal_query_formats(text("SHOW TABLES")))
+    else:
+        context = _FakeContext({_INTERNAL_QUERY_OPTION: _INTERNAL_QUERY_SENTINEL, "query_formats": dict(_INTERNAL_QUERY_FORMATS)})
+    ClickHouseDialect().do_execute(Cursor(client), "SHOW TABLES", None, context=context)
+    assert client.create_query_context.return_value.internal is True
+
+
+@pytest.mark.parametrize("statement_level", [True, False])
+@pytest.mark.parametrize("marker", [None, True])
+def test_dialect_do_execute_user_statement_is_not_internal(statement_level, marker):
+    client = _mock_client()
+    execution_options: dict[str, Any] = {"query_formats": {"String": "bytes"}}
+    if marker is not None:
+        execution_options[_INTERNAL_QUERY_OPTION] = marker
+    if statement_level:
+        context = _FakeContext({}, text("SELECT 13").execution_options(**execution_options))
+    else:
+        context = _FakeContext(execution_options)
+    ClickHouseDialect().do_execute(Cursor(client), "SELECT 13", None, context=context)
+    client.create_query_context.assert_not_called()
+
+
+@pytest.mark.parametrize("no_params", [False, True])
+def test_dialect_user_statement_uses_previous_cursor_execute_signature(no_params):
+    client = _mock_client()
+    cursor = _PreviousSignatureCursor(client)
+    context = _FakeContext({_INTERNAL_QUERY_OPTION: True, "query_formats": {"String": "bytes"}})
+
+    if no_params:
+        ClickHouseDialect().do_execute_no_params(cursor, "SELECT 13", context=context)
+    else:
+        ClickHouseDialect().do_execute(cursor, "SELECT 13", None, context=context)
+
+    assert cursor.execute_called is True
+    client.create_query_context.assert_not_called()
+
+
+@pytest.mark.parametrize("internal", [False, True])
+def test_dialect_bypasses_incompatible_subclass_private_execute(internal):
+    client = _mock_client()
+    cursor = _IncompatiblePrivateExecuteCursor(client)
+    context = (
+        _FakeContext({}, with_internal_query_formats(text("SHOW TABLES"))) if internal else _FakeContext({_INTERNAL_QUERY_OPTION: True})
+    )
+
+    ClickHouseDialect().do_execute(cursor, "SHOW TABLES", None, context=context)
+
+    assert cursor.private_execute_called is False
+    if internal:
+        assert client.create_query_context.return_value.internal is True
+    else:
+        client.create_query_context.assert_not_called()
 
 
 class _StubColType:

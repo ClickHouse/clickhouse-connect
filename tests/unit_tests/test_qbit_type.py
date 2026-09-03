@@ -238,6 +238,53 @@ def test_transpose_large_dimension():
     assert result == pytest.approx(vector, rel=1e-6)
 
 
+def test_transpose_reverses_native_byte_groups(monkeypatch):
+    """Native stores eight-element groups from the end of each plane."""
+    qbit = get_from_name("QBit(Float32, 9)")
+    vector = [-1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -8.0, -9.0]
+
+    # Plane zero is the sign bit. Element 8 occupies bit zero of the first
+    # byte; elements 0 and 7 occupy bits zero and seven of the second byte.
+    assert qbit._transpose_row(vector)[0] == b"\x01\x81"
+
+    monkeypatch.setattr(options, "np", None)
+    transposed = qbit._transpose_row(vector)
+    assert transposed[0] == b"\x01\x81"
+    assert qbit._untranspose_row(transposed) == pytest.approx(vector)
+
+
+def test_transpose_reverses_three_native_byte_groups(monkeypatch):
+    """A three-byte plane pins complete group reversal, not a two-byte swap."""
+    qbit = get_from_name("QBit(Float32, 17)")
+    vector = [0.0] * 17
+    for index in (0, 7, 8, 9, 16):
+        vector[index] = -0.0
+
+    assert qbit._transpose_row(vector)[0] == b"\x01\x03\x81"
+    monkeypatch.setattr(options, "np", None)
+    transposed = qbit._transpose_row(vector)
+    assert transposed[0] == b"\x01\x03\x81"
+    assert [math.copysign(1.0, value) for value in qbit._untranspose_row(transposed)] == [
+        -1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        -1.0,
+        -1.0,
+        -1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        -1.0,
+    ]
+
+
 def test_untranspose_manual_bit_pattern():
     """Test untranspose with a manually constructed bit pattern"""
     qbit = get_from_name("QBit(Float32, 2)")

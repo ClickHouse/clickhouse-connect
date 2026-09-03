@@ -1,25 +1,29 @@
 import asyncio
 from datetime import timezone
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 pytest.importorskip("pytest_asyncio")
 pytest.importorskip("sqlalchemy", minversion="2.0.44")
 
+from sqlalchemy import text
 from sqlalchemy.dialects import registry
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool, PoolProxiedConnection
 from sqlalchemy.util.concurrency import await_only, greenlet_spawn
 
 from clickhouse_connect import dbapi
-from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect, _AsyncAdaptedConnection
+from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect, _AsyncAdaptedConnection, _AsyncClientFacade
+from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import create_async_client
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.exceptions import StreamFailureError
-from clickhouse_connect.driver.query import QueryResult
+from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
 from tests.helpers import run_in_new_loop
 
@@ -55,6 +59,34 @@ def test_async_dbapi_mirrors_pep249_surface():
         assert getattr(async_dbapi, name) is getattr(dbapi, name)
     assert async_dbapi.Binary([0, 255]) == b"\x00\xff"
     assert async_dbapi.DateFromTicks(0) == dbapi.DateFromTicks(0)
+
+
+@pytest.mark.asyncio
+async def test_async_facade_executes_internal_query_context():
+    raw_client = AsyncMock()
+    query_context = QueryContext(query="SHOW TABLES", query_formats={"String": "string"})
+    raw_client.create_query_context = Mock(return_value=query_context)
+    raw_client.query.return_value = QueryResult([])
+    facade = _AsyncClientFacade(raw_client, asyncio.Lock())
+    statement = with_internal_query_formats(text("SHOW TABLES"))
+    execution_context = SimpleNamespace(execution_options={}, invoked_statement=statement, compiled=None)
+
+    await greenlet_spawn(lambda: ClickHouseAsyncDialect().do_execute(Cursor(facade), "SHOW TABLES", None, context=execution_context))
+
+    raw_client.create_query_context.assert_called_once_with(
+        query="SHOW TABLES",
+        parameters=None,
+        settings=None,
+        query_formats={"String": "string"},
+    )
+    assert query_context.internal is True
+    raw_client.query.assert_awaited_once_with(
+        query="SHOW TABLES",
+        parameters=None,
+        settings=None,
+        query_formats={"String": "string"},
+        context=query_context,
+    )
 
 
 @pytest.mark.asyncio

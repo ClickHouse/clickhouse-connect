@@ -40,7 +40,7 @@ from clickhouse_connect.dbapi.cursor import Cursor  # noqa: E402
 from clickhouse_connect.driver import create_async_client  # noqa: E402
 from clickhouse_connect.driver.binding import _query_is_insert  # noqa: E402
 from clickhouse_connect.driver.external import ExternalData  # noqa: E402
-from clickhouse_connect.driver.query import QueryResult  # noqa: E402
+from clickhouse_connect.driver.query import QueryContext, QueryResult  # noqa: E402
 from clickhouse_connect.driver.summary import QuerySummary  # noqa: E402
 
 if TYPE_CHECKING:
@@ -65,6 +65,7 @@ class _AsyncClientFacade:
         parameters: Sequence | dict[str, Any] | None,
         settings: dict[str, Any] | None,
         query_formats: dict[str, str] | None,
+        context: QueryContext | None,
     ) -> QueryResult:
         async with self._execute_mutex:
             return await self.driver_connection.query(
@@ -72,6 +73,7 @@ class _AsyncClientFacade:
                 parameters=parameters,
                 settings=settings,
                 query_formats=query_formats,
+                context=context,
             )
 
     def query(
@@ -80,8 +82,23 @@ class _AsyncClientFacade:
         parameters: Sequence | dict[str, Any] | None = None,
         settings: dict[str, Any] | None = None,
         query_formats: dict[str, str] | None = None,
+        context: QueryContext | None = None,
     ) -> QueryResult:
-        return await_only(self._query(query, parameters, settings, query_formats))
+        return await_only(self._query(query, parameters, settings, query_formats, context))
+
+    def create_query_context(
+        self,
+        query: str | None = None,
+        parameters: Sequence | dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        query_formats: dict[str, str] | None = None,
+    ) -> QueryContext:
+        return self.driver_connection.create_query_context(
+            query=query,
+            parameters=parameters,
+            settings=settings,
+            query_formats=query_formats,
+        )
 
     async def _insert(
         self,

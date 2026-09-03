@@ -146,7 +146,7 @@ class Client(ABC):
 
     compression: str | None = None
     write_compression: str | None = None
-    protocol_version = 0
+    protocol_version: int = 0
     # User-supplied initial ClickHouse settings, set by subclasses before
     # initialization so generated setting defaults never overwrite them
     _initial_settings: dict[str, Any] | None = None
@@ -158,8 +158,8 @@ class Client(ABC):
     # setting and silently corrupt the request.
     _reserved_setting_names: set[str] = set()
     _reserved_setting_prefixes: tuple[str, ...] = ()
-    database = None
-    max_error_message = 0
+    database: str | None = None
+    max_error_message: int = 0
     _tz_source: TzSource = "auto"
     _apply_server_tz = False
     tz_mode: TzMode = "naive_utc"
@@ -170,7 +170,7 @@ class Client(ABC):
         return self._tz_source
 
     @tz_source.setter
-    def tz_source(self, value: TzSource):
+    def tz_source(self, value: TzSource) -> None:
         if value not in _VALID_TZ_SOURCES:
             raise ProgrammingError(f'tz_source must be "auto", "server", or "local", got "{value}"')
         self._tz_source = value
@@ -250,7 +250,9 @@ class Client(ABC):
         if isinstance(operation, CommandOp):
             return self.command(operation.text, settings=settings, use_database=operation.use_database)
         if isinstance(operation, QueryOp):
-            return self.query(operation.text, settings=settings, query_formats=dict(_INTERNAL_QUERY_FORMATS))
+            context = self.create_query_context(query=operation.text, settings=settings, query_formats=dict(_INTERNAL_QUERY_FORMATS))
+            context.internal = True
+            return self._query_with_context(context)
         if isinstance(operation, RawQueryOp):
             return self.raw_query(operation.text, settings=settings, fmt=operation.fmt)
         raise TypeError(f"Unsupported operation type: {type(operation).__name__}")

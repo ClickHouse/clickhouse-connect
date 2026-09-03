@@ -15,7 +15,7 @@ from clickhouse_connect.driver.binding import (
     _strip_trailing_semicolons,
     bind_query,
 )
-from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, dict_copy, empty_gen, get_rename_method
+from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, _close_async, dict_copy, empty_gen, get_rename_method
 from clickhouse_connect.driver.context import BaseQueryContext
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.external import ExternalData
@@ -49,6 +49,9 @@ class QueryContext(BaseQueryContext):
     """
     Argument/parameter object for queries.  This context is used to set thread/query specific formats
     """
+
+    bind_params: dict[str, str]
+    uncommented_query: str
 
     def __init__(
         self,
@@ -116,10 +119,10 @@ class QueryContext(BaseQueryContext):
         )
         self.query = query
         self.parameters = parameters or {}
-        self.use_none = True if use_none is None else use_none
-        self.column_oriented = False if column_oriented is None else column_oriented
-        self.use_numpy = use_numpy if use_numpy is not None else False
-        self.max_str_len = 0 if max_str_len is None else max_str_len
+        self.use_none: bool = True if use_none is None else use_none
+        self.column_oriented: bool = False if column_oriented is None else column_oriented
+        self.use_numpy: bool = use_numpy if use_numpy is not None else False
+        self.max_str_len: int = 0 if max_str_len is None else max_str_len
         self.server_tz = server_tz
         self.apply_server_tz = apply_server_tz
         self.external_data = external_data
@@ -147,6 +150,8 @@ class QueryContext(BaseQueryContext):
         self.column_tz: str | tzinfo | None = None
         self.response_tz: tzinfo | None = None
         self.block_info = False
+        # Marks driver-internal metadata queries, which always decode with the Python codec
+        self.internal = False
         self.as_pandas = as_pandas
         self.streaming = streaming
         self.show_clickhouse_errors: ShowClickHouseErrors = True
@@ -245,7 +250,7 @@ class QueryContext(BaseQueryContext):
         Creates Query context copy with parameters overridden/updated as appropriate.
         """
         resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
-        return QueryContext(
+        copy = QueryContext(
             query=query or self.query,
             parameters=(
                 dict_copy(self.parameters, parameters if isinstance(parameters, dict) else None)
@@ -272,6 +277,8 @@ class QueryContext(BaseQueryContext):
             transport_settings=self.transport_settings if transport_settings is None else transport_settings,
             rename_response_column=self.rename_response_column if rename_response_column is None else rename_response_column,
         )
+        copy.internal = self.internal
+        return copy
 
     def _update_query(self):
         query = self.query
@@ -438,6 +445,16 @@ class QueryResult(Closable):
         if self._block_gen is not None:
             self._block_gen.close()
             self._block_gen = None
+
+    async def aclose(self) -> None:
+        source, self.source = self.source, None
+        block_gen, self._block_gen = self._block_gen, None
+        try:
+            if source:
+                await _close_async(source)
+        finally:
+            if block_gen is not None:
+                block_gen.close()
 
 
 comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--)[^\n]*$)", re.MULTILINE | re.DOTALL)

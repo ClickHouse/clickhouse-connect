@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "clickhouse-connect-core"
+dynamic = ["version"]
+description = "Compiled Rust native-format codec for clickhouse-connect"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://github.com/ClickHouse/clickhouse-connect"
+Repository = "https://github.com/ClickHouse/clickhouse-connect"
+Issues = "https://github.com/ClickHouse/clickhouse-connect/issues"
+Documentation = "https://clickhouse.com/docs/integrations/language-clients/python/rust-codec"
+
+[tool.maturin]
+module-name = "_ch_core"
+features = ["pyo3/extension-module"]

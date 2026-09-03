@@ -98,6 +98,8 @@ def parse_name(name: str) -> tuple[str, str, TypeDef]:
         if len(base) > 4:
             keys, values = parse_columns(base[4:], preserve_names=True)
         base = "JSON"
+    elif base == "GEOMETRY":
+        base = "Geometry"
     elif base == "Point":
         values = ("Float64", "Float64")
     else:

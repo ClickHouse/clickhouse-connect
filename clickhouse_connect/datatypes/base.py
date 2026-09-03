@@ -150,6 +150,8 @@ class ClickHouseType(ABC):  # noqa: B024
     def _data_size(self, sample: Collection) -> int:
         if self.byte_size:
             return self.byte_size
+        if len(sample) == 0:
+            return 1
         total = 0
         for x in sample:
             total += len(str(x))

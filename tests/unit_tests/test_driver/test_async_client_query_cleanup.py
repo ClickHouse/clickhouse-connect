@@ -11,8 +11,9 @@ from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, Sess
 from clickhouse_connect.driver._backend.httpcommon import QueryRequestPlan
 from clickhouse_connect.driver._backend.models import QueryExecution, QueryRuntime
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
-from clickhouse_connect.driver.streaming import StreamingResponseSource
+from clickhouse_connect.driver.streaming import ReadAheadSource, StreamingResponseSource
 
 
 def _build_backend() -> HttpAsyncBackend:
@@ -156,6 +157,190 @@ class _StaticSource:
 
     def close(self) -> None:
         pass
+
+
+class _AsyncResultSource:
+    def __init__(self):
+        self.aclose_calls = 0
+        self.sync_close_calls = 0
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+
+    def close(self) -> None:
+        self.sync_close_calls += 1
+
+
+class _CancellingResultSource(_AsyncResultSource):
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+        raise asyncio.CancelledError
+
+
+def _empty_blocks():
+    if False:
+        yield []
+
+
+def _failing_blocks():
+    raise ValueError("stream decode failed")
+    yield []
+
+
+def _tracked_blocks(closed: threading.Event):
+    try:
+        yield []
+    finally:
+        closed.set()
+
+
+def _failing_close_blocks():
+    try:
+        yield []
+    finally:
+        raise RuntimeError("block generator close failed")
+
+
+@pytest.mark.parametrize("result_type", [QueryResult, NumpyResult])
+@pytest.mark.asyncio
+async def test_async_stream_context_closes_result_source_asynchronously(result_type):
+    source = _AsyncResultSource()
+    result = result_type(block_gen=_empty_blocks(), source=source)
+    stream = result.rows_stream if isinstance(result, QueryResult) else result.np_stream
+
+    async with stream:
+        pass
+
+    assert source.aclose_calls == 1
+    assert source.sync_close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_async_stream_iteration_error_closes_result_source_asynchronously():
+    source = _AsyncResultSource()
+    result = QueryResult(block_gen=_failing_blocks(), source=source)
+
+    with pytest.raises(ValueError, match="stream decode failed"):
+        async with result.rows_stream as stream:
+            await stream.__anext__()
+
+    assert source.aclose_calls == 1
+    assert source.sync_close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_async_stream_context_preserves_cancellation_while_closing_result():
+    source = _AsyncResultSource()
+    result = QueryResult(block_gen=_empty_blocks(), source=source)
+    entered = asyncio.Event()
+
+    async def consume() -> None:
+        async with result.rows_stream:
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert source.aclose_calls == 1
+    assert source.sync_close_calls == 0
+
+
+@pytest.mark.parametrize("result_type", [QueryResult, NumpyResult])
+@pytest.mark.asyncio
+async def test_async_result_detaches_resources_when_source_close_propagates_cancellation(result_type):
+    source = _CancellingResultSource()
+    block_closed = threading.Event()
+    block_gen = _tracked_blocks(block_closed)
+    next(block_gen)
+    result = result_type(block_gen=block_gen, source=source)
+
+    with pytest.raises(asyncio.CancelledError):
+        await result.aclose()
+
+    assert result.source is None
+    assert result._block_gen is None
+    assert block_closed.is_set()
+
+
+@pytest.mark.parametrize("result_type", [QueryResult, NumpyResult])
+@pytest.mark.asyncio
+async def test_async_result_closes_source_before_propagating_block_generator_close_error(result_type):
+    source = _AsyncResultSource()
+    block_gen = _failing_close_blocks()
+    next(block_gen)
+    result = result_type(block_gen=block_gen, source=source)
+
+    with pytest.raises(RuntimeError, match="block generator close failed"):
+        await result.aclose()
+
+    assert source.aclose_calls == 1
+    assert source.sync_close_calls == 0
+    assert result.source is None
+    assert result._block_gen is None
+
+
+class _LoopReleasedReadSource:
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self.loop = loop
+        self.read_started = threading.Event()
+        self.read_finished = threading.Event()
+        self.release_read = threading.Event()
+        self.async_close_calls = 0
+        self.sync_close_calls = 0
+
+    @property
+    def gen(self):
+        self.read_started.set()
+        try:
+            self.release_read.wait(timeout=5)
+            yield b"late"
+        finally:
+            self.read_finished.set()
+
+    async def aclose(self) -> None:
+        self.async_close_calls += 1
+        self.release_read.set()
+        closed = await asyncio.to_thread(self.read_finished.wait, 1)
+        if not closed:
+            raise TimeoutError("read-ahead producer did not finish")
+
+    def close(self) -> None:
+        self.sync_close_calls += 1
+        self.loop.call_soon(self.release_read.set)
+
+
+@pytest.mark.asyncio
+async def test_async_result_close_keeps_event_loop_responsive_and_joins_read_ahead():
+    loop = asyncio.get_running_loop()
+    source = _LoopReleasedReadSource(loop)
+    read_ahead = ReadAheadSource(source)
+    ticked = asyncio.Event()
+
+    async def tick() -> None:
+        await asyncio.sleep(0.01)
+        ticked.set()
+
+    tick_task = asyncio.create_task(tick())
+    try:
+        assert await asyncio.to_thread(source.read_started.wait, 1)
+        result = QueryResult(block_gen=_empty_blocks(), source=read_ahead)
+
+        async with result.rows_stream:
+            pass
+
+        assert ticked.is_set()
+        assert read_ahead._thread.is_alive() is False
+        assert source.async_close_calls == 1
+        assert source.sync_close_calls == 0
+    finally:
+        source.release_read.set()
+        await asyncio.to_thread(read_ahead._thread.join, 1)
+        await tick_task
 
 
 class _ReturningTransform:

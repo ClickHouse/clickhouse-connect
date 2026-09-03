@@ -21,6 +21,21 @@ _SCRUBBED_STREAM_ERROR_MESSAGE = (
 )
 
 
+def test_gen_and_exception_tag_exposed():
+    class Source:
+        def __init__(self):
+            self.gen = iter([b"chunk_1", b"chunk_2"])
+            self.exception_tag = "TAG13"
+
+        def close(self, ex: Exception | None = None):
+            pass
+
+    for cls in CResponseBuffer, PyResponseBuffer:
+        buff = cls(Source())
+        assert next(buff.gen) == b"chunk_1"
+        assert buff.exception_tag == "TAG13"
+
+
 def test_read_ints():
     for cls in CResponseBuffer, PyResponseBuffer:
         buff = bytes_source("05 20 00 00 00 00 00 00 68 10 83 03 77", cls=cls)

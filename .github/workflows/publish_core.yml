@@ -28,9 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, manylinux: auto }
+          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, manylinux: 2_28 }
           - { runner: ubuntu-latest, arch: x86_64, libc: musllinux, manylinux: musllinux_1_2 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, manylinux: auto }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, manylinux: 2_28 }
           - { runner: ubuntu-24.04-arm, arch: aarch64, libc: musllinux, manylinux: musllinux_1_2 }
     steps:
       - uses: actions/checkout@v6
@@ -38,7 +38,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           manylinux: ${{ matrix.manylinux }}
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse --find-interpreter
+          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i 3.10 3.11 3.12 3.13 3.14
       - uses: actions/upload-artifact@v7
         with:
           name: core-${{ matrix.libc }}-${{ matrix.arch }}
@@ -127,7 +127,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64-pc-windows-msvc
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse
+          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python3.10
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-arm64-3.10

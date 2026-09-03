@@ -1,7 +1,10 @@
 import asyncio
+import gc
 import gzip
+import logging
 import threading
 import time
+import weakref
 import zlib
 from contextlib import suppress
 from unittest.mock import Mock
@@ -11,11 +14,15 @@ import pytest
 
 from clickhouse_connect.driver._backend.http_async import SessionLease, _one_shot
 from clickhouse_connect.driver.compression import _zstd_compress
-from clickhouse_connect.driver.exceptions import OperationalError
+from clickhouse_connect.driver.exceptions import NotSupportedError, OperationalError
 from clickhouse_connect.driver.streaming import (
+    ReadAheadSource,
     StreamingInsertSource,
     StreamingResponseSource,
+    _finalize_read_ahead_off_loop,
+    _SyncStreamingInsertSource,
 )
+from tests.helpers import run_in_new_loop
 
 
 class MockAsyncIterator:
@@ -550,6 +557,40 @@ async def test_producer_releases_lease_when_queue_shutdown_fails():
 
 
 @pytest.mark.asyncio
+async def test_cancelled_producer_closes_response_before_releasing_lease():
+    read_started = asyncio.Event()
+    cleanup_events = []
+    release_lease = Mock(side_effect=lambda: cleanup_events.append("release"))
+
+    class BlockingContent:
+        async def read(self, _size):
+            read_started.set()
+            await asyncio.Event().wait()
+
+    response = MockResponse([])
+
+    def close_response():
+        cleanup_events.append("close")
+        response.closed = True
+
+    response.content = BlockingContent()
+    response.close = Mock(side_effect=close_response)
+    response._lease_release = _one_shot(release_lease)
+    source = StreamingResponseSource(response)
+
+    await source.start_producer(asyncio.get_running_loop())
+    await asyncio.wait_for(read_started.wait(), timeout=1)
+    source._producer_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await source._producer_task
+
+    assert response.closed is True
+    release_lease.assert_called_once_with()
+    assert cleanup_events == ["close", "release"]
+
+
+@pytest.mark.asyncio
 async def test_async_close_releases_lease_when_queue_shutdown_fails():
     shutdown_error = RuntimeError("queue shutdown failed")
     release_lease = Mock()
@@ -769,6 +810,76 @@ async def test_streaming_insert_error_propagation():
 
     # Should have received first chunk before error
     assert chunks == [b"chunk1"]
+    assert isinstance(source.insert_exception, ValueError)
+    assert str(source.insert_exception) == "Serialization error"
+    assert getattr(context, "insert_exception", None) is None
+
+
+def test_sync_streaming_insert_error_propagation():
+    """Test that insert producer errors are propagated to sync consumer."""
+    transform = FailingTransform()
+    context = MockContext()
+
+    source = _SyncStreamingInsertSource(transform, context)
+    source.start_producer()
+
+    chunks = []
+    with pytest.raises(ValueError, match="Serialization error"):
+        for chunk in source.gen:
+            chunks.append(chunk)
+
+    assert isinstance(context.insert_exception, ValueError)
+
+    assert chunks == [b"chunk1"]
+
+
+class RefusingTransform:
+    """Mock transform whose build_insert raises a deterministic driver refusal at call time."""
+
+    @staticmethod
+    def build_insert(context, error_handler=None):
+        raise NotSupportedError("strict refusal")
+
+
+def _streaming_error_records(caplog):
+    records = [r for r in caplog.records if r.name == "clickhouse_connect.driver.streaming"]
+    return [r for r in records if r.levelno >= logging.ERROR]
+
+
+@pytest.mark.asyncio
+async def test_streaming_insert_driver_error_logs_debug(caplog):
+    """Deterministic driver refusals propagate without ERROR-level noise."""
+    context = MockContext()
+    loop = asyncio.get_running_loop()
+
+    source = StreamingInsertSource(RefusingTransform(), context, loop)
+    with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.driver.streaming"):
+        source.start_producer()
+        with pytest.raises(NotSupportedError, match="strict refusal"):
+            async for _chunk in source.async_generator():
+                pass
+    await source.close()
+
+    assert isinstance(source.insert_exception, NotSupportedError)
+    assert getattr(context, "insert_exception", None) is None
+    assert not _streaming_error_records(caplog)
+    assert any("Insert producer error" in r.getMessage() for r in caplog.records)
+
+
+def test_sync_streaming_insert_driver_error_logs_debug(caplog):
+    """Deterministic driver refusals propagate without ERROR-level noise."""
+    context = MockContext()
+
+    source = _SyncStreamingInsertSource(RefusingTransform(), context)
+    with caplog.at_level(logging.DEBUG, logger="clickhouse_connect.driver.streaming"):
+        source.start_producer()
+        with pytest.raises(NotSupportedError, match="strict refusal"):
+            for _chunk in source.gen:
+                pass
+
+    assert isinstance(context.insert_exception, NotSupportedError)
+    assert not _streaming_error_records(caplog)
+    assert any("Insert producer error" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -817,6 +928,340 @@ async def test_streaming_insert_generator_close_unblocks_backpressured_producer(
     finally:
         source.queue.shutdown()
         await source.close()
+
+
+class MockByteSource:
+    """Mock ByteSource for ReadAheadSource tests."""
+
+    def __init__(self, chunks, exception_tag=None, error=None):
+        self._chunks = list(chunks)
+        self._error = error
+        self.exception_tag = exception_tag
+        self.closed = False
+
+    @property
+    def gen(self):
+        yield from self._chunks
+        if self._error is not None:
+            raise self._error
+
+    def close(self):
+        self.closed = True
+
+
+class AsyncCloseByteSource:
+    def __init__(self):
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
+        self.closed = False
+        self.sync_close_called = False
+
+    @property
+    def gen(self):
+        if False:
+            yield b""
+
+    async def aclose(self):
+        self.close_started.set()
+        await self.close_release.wait()
+        self.closed = True
+
+    def close(self):
+        self.sync_close_called = True
+        self.closed = True
+        self.close_release.set()
+
+
+class ReadBlockedByteSource:
+    def __init__(self):
+        self.read_started = threading.Event()
+        self.release_read = threading.Event()
+        self.closed = False
+        self.close_thread_id = None
+
+    @property
+    def gen(self):
+        self.read_started.set()
+        self.release_read.wait(timeout=5.0)
+        yield b"late"
+
+    def close(self):
+        self.close_thread_id = threading.get_ident()
+        self.closed = True
+        self.release_read.set()
+
+
+class AsyncCloseReadBlockedSource:
+    def __init__(self, loop, close_delay=0.0):
+        self.loop = loop
+        self.close_delay = close_delay
+        self.read_started = threading.Event()
+        self.read_finished = threading.Event()
+        self.release_read = threading.Event()
+        self.async_close_calls = 0
+        self.async_close_finished = False
+        self.sync_close_calls = 0
+        self.sync_close_finished = False
+
+    @property
+    def gen(self):
+        self.read_started.set()
+        try:
+            self.release_read.wait(timeout=5)
+            yield b"late"
+        finally:
+            self.read_finished.set()
+
+    async def aclose(self):
+        self.async_close_calls += 1
+        self.release_read.set()
+        closed = await asyncio.to_thread(self.read_finished.wait, 1)
+        if not closed:
+            raise TimeoutError("read-ahead producer did not finish")
+        await asyncio.sleep(self.close_delay)
+        self.async_close_finished = True
+
+    def close(self):
+        self.sync_close_calls += 1
+        self.loop.call_soon_threadsafe(self._finish_sync_close)
+
+    def _finish_sync_close(self):
+        self.release_read.set()
+        self.sync_close_finished = True
+
+
+def test_read_ahead_chunk_order():
+    src = MockByteSource([b"a", b"b", b"c"])
+    read_source = ReadAheadSource(src)
+    assert list(read_source.gen) == [b"a", b"b", b"c"]
+    read_source.close()
+    assert src.closed is True
+
+
+def test_read_ahead_gen_cached():
+    read_source = ReadAheadSource(MockByteSource([b"a"]))
+    assert read_source.gen is read_source.gen
+    read_source.close()
+
+
+def test_read_ahead_error_forwarded_verbatim():
+    err = ValueError("boom")
+    src = MockByteSource([b"a", b"b"], error=err)
+    read_source = ReadAheadSource(src)
+    collected = []
+    with pytest.raises(ValueError, match="boom") as excinfo:
+        for chunk in read_source.gen:
+            collected.append(chunk)
+    assert collected == [b"a", b"b"]  # forwarded in stream order, error last
+    assert excinfo.value is err  # verbatim, not re-wrapped
+    read_source.close()
+
+
+def test_read_ahead_tagged_exception_chunk_unchanged():
+    # exception_tag is delegated and the chunk passes through verbatim so the codec scanner can find it.
+    src = MockByteSource([b"prefix __exception__T\r\nboom\r\n"], exception_tag="T")
+    read_source = ReadAheadSource(src)
+    assert read_source.exception_tag == "T"
+    assert list(read_source.gen) == [b"prefix __exception__T\r\nboom\r\n"]
+    read_source.close()
+
+
+def test_read_ahead_close_during_block_terminates_thread():
+    # A large producer fills the bounded queue while the consumer reads nothing, so the producer blocks in _put.
+    src = MockByteSource([bytes([i % 256]) for i in range(500)])
+    read_source = ReadAheadSource(src, maxsize=2)
+    assert next(read_source.gen) == b"\x00"
+    read_source.close()
+    assert src.closed is True
+    assert read_source._thread.is_alive() is False
+
+
+def test_read_ahead_join_on_close():
+    src = MockByteSource([b"a", b"b"])
+    read_source = ReadAheadSource(src)
+    read_source.close()
+    assert read_source._thread.is_alive() is False
+    assert src.closed is True
+
+
+@pytest.mark.asyncio
+async def test_read_ahead_async_close_awaits_source_aclose():
+    src = AsyncCloseByteSource()
+    read_source = ReadAheadSource(src)
+
+    close_task = asyncio.create_task(read_source.aclose())
+    await asyncio.wait_for(src.close_started.wait(), timeout=1.0)
+
+    assert close_task.done() is False
+    assert src.sync_close_called is False
+    src.close_release.set()
+    await close_task
+
+    assert src.closed is True
+    assert read_source.source is None
+
+
+@pytest.mark.asyncio
+async def test_read_ahead_async_close_finishes_cleanup_before_propagating_cancellation():
+    loop = asyncio.get_running_loop()
+    src = AsyncCloseReadBlockedSource(loop)
+    read_source = ReadAheadSource(src)
+    try:
+        assert await asyncio.to_thread(src.read_started.wait, 1)
+
+        close_task = asyncio.create_task(read_source.aclose())
+        await asyncio.sleep(0.01)
+        close_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+
+        assert read_source.source is None
+        assert read_source._thread.is_alive() is False
+        assert src.async_close_calls == 1
+        assert src.sync_close_calls == 0
+    finally:
+        src.release_read.set()
+        await asyncio.to_thread(read_source._thread.join, 1)
+
+
+@pytest.mark.asyncio
+async def test_read_ahead_finalizer_schedules_source_close():
+    src = AsyncCloseByteSource()
+    read_source = ReadAheadSource(src)
+    read_source_ref = weakref.ref(read_source)
+
+    del read_source
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while not src.sync_close_called:
+        if loop.time() >= deadline:
+            raise TimeoutError("read-ahead source finalizer did not finish")
+        await asyncio.sleep(0.001)
+
+    assert read_source_ref() is None
+    assert src.close_started.is_set() is False
+    assert src.closed is True
+
+
+def test_read_ahead_finalizer_completes_during_loop_shutdown(caplog):
+    source_holder = []
+
+    async def launch_owner() -> None:
+        owner_ready = asyncio.Event()
+
+        async def own_source() -> None:
+            source = AsyncCloseReadBlockedSource(asyncio.get_running_loop(), close_delay=0.05)
+            read_source = ReadAheadSource(source)
+            source_holder.append(source)
+            assert await asyncio.to_thread(source.read_started.wait, 1)
+            owner_ready.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                del read_source
+
+        asyncio.create_task(own_source())
+        await owner_ready.wait()
+
+    with caplog.at_level("ERROR", logger="asyncio"):
+        run_in_new_loop(launch_owner())
+        gc.collect()
+
+    source = source_holder[0]
+    assert source.async_close_calls == 0
+    assert source.async_close_finished is False
+    assert source.sync_close_calls == 1
+    assert source.sync_close_finished is True
+    assert source.read_finished.is_set()
+    assert not any("Task was destroyed but it is pending" in message for message in caplog.messages)
+
+
+def test_read_ahead_abandoned_source_is_collected():
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    try:
+        src = MockByteSource([bytes([i % 256]) for i in range(500)])
+        read_source = ReadAheadSource(src, maxsize=2)
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+
+        assert next(read_source.gen) == b"\x00"
+        deadline = time.time() + 1.0
+        while time.time() < deadline and not read_source.queue.full():
+            time.sleep(0.01)
+        assert read_source.queue.full()
+
+        del read_source
+        thread.join(timeout=1.0)
+        assert read_source_ref() is None
+        assert thread.is_alive() is False
+        assert src.closed is True
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        if gc_was_enabled:
+            gc.enable()
+
+
+@pytest.mark.asyncio
+async def test_read_ahead_abandoned_source_does_not_block_event_loop():
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    read_source_ref = None
+    source = ReadBlockedByteSource()
+    thread = None
+    try:
+        read_source = ReadAheadSource(source)
+        thread = read_source._thread
+        read_source_ref = weakref.ref(read_source)
+        _ = read_source.gen
+        assert await asyncio.to_thread(source.read_started.wait, 1.0)
+
+        loop = asyncio.get_running_loop()
+        loop_thread_id = threading.get_ident()
+        loop_ticked = asyncio.Event()
+        loop.call_soon(loop_ticked.set)
+        started = time.monotonic()
+        del read_source
+
+        await asyncio.wait_for(loop_ticked.wait(), timeout=0.5)
+        assert time.monotonic() - started < 0.5
+        assert read_source_ref() is None
+
+        deadline = loop.time() + 2.0
+        while loop.time() < deadline and not source.closed:
+            await asyncio.sleep(0.01)
+        assert source.closed is True
+        assert source.close_thread_id != loop_thread_id
+        await asyncio.to_thread(thread.join, 1.0)
+        assert thread.is_alive() is False
+    finally:
+        if read_source_ref is not None:
+            leaked_source = read_source_ref()
+            if leaked_source is not None:
+                leaked_source.close()
+        source.release_read.set()
+        if thread is not None:
+            await asyncio.to_thread(thread.join, 1.0)
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_read_ahead_finalizer_off_loop_fallback_releases_source():
+    src = MockByteSource([bytes([i % 256]) for i in range(500)])
+    read_source = ReadAheadSource(src, maxsize=2)
+    read_source._stop_event.set()
+    source, read_source.source = read_source.source, None
+    assert source is not None
+
+    _finalize_read_ahead_off_loop(source, read_source.queue, read_source._thread)
+
+    assert read_source._thread.is_alive() is False
+    assert src.closed is True
 
 
 if __name__ == "__main__":
