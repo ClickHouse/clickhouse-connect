@@ -290,6 +290,14 @@ class MultiLineString(ChSqlaType, UserDefinedType):  # type: ignore[misc]
     python_type = list
 
 
+class MultiPoint(ChSqlaType, UserDefinedType):  # type: ignore[misc]
+    python_type = list
+
+
+class Geometry(ChSqlaType, UserDefinedType):  # type: ignore[misc]
+    python_type = object
+
+
 class Date(ChSqlaType, SqlaDate):  # type: ignore[misc]
     pass
 
@@ -1138,6 +1146,7 @@ __all__ = [
     "FixedString",
     "Float32",
     "Float64",
+    "Geometry",
     "IPv4",
     "IPv6",
     "Int128",
@@ -1150,6 +1159,7 @@ __all__ = [
     "LineString",
     "Map",
     "MultiLineString",
+    "MultiPoint",
     "MultiPolygon",
     "Nested",
     "Nothing",

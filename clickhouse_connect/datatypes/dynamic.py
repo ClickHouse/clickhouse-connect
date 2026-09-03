@@ -95,8 +95,8 @@ def typed_variant(value: Any, type_name: str) -> TypedVariant:
 
 class Variant(ClickHouseType):
     __slots__ = ("element_types", "_python_map", "_name_index")
-    python_type = object
-    valid_formats = "typed", "native"
+    python_type: type | None = object
+    valid_formats: str | tuple[str, ...] = "typed", "native"
     _type_args = _TypeArgs(1, None, variadic_nested=0)
 
     def __init__(self, type_def: TypeDef):
@@ -200,8 +200,13 @@ def read_variant_column(
     # We have to count up how many of each discriminator there are in the block to read the sub columns correctly
     disc_rows = [0] * v_count
     for disc in discriminators:
-        if disc != 255:
+        if disc < v_count:
             disc_rows[disc] += 1
+        elif disc != 255:
+            raise DataError(
+                f"Column '{ctx.column_name or '<unknown>'}' has Variant discriminator {disc}, but the type definition has "
+                f"{v_count} alternatives. The server sent an unknown type member or the Native stream is corrupt."
+            )
     sub_columns: list[Sequence] = [[]] * v_count
     # Read all the sub-columns
     for ix in range(v_count):

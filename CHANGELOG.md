@@ -2,6 +2,31 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- DB-API `Cursor.executemany()` now preserves the supplied INSERT statement and applies each parameter set through the normal SQL binding path. Expressions, literals, reordered or repeated named binds, target modifiers, INSERT SELECT, quoted identifiers, and server-side coercion are no longer discarded by a heuristic Native rewrite. Parameterized DB-API inserts issue one HTTP request per parameter set, so rows written before a later failure remain committed. Use `Client.insert()` when one Native block and its throughput are required. INSERT row counts now aggregate the server's `written_rows` summaries and report `-1` when no reliable count is available. SQLAlchemy keeps Native bulk inserts for compiler-generated plain INSERT statements, while raw SQL and expression-bearing statements use the SQL path. The established placeholder-less `INSERT INTO table (columns) VALUES` form also keeps its Native compatibility path. In that form, doubled `%%` in identifiers follows the pyformat contract and sends a literal `%` identifier. Closes [#930](https://github.com/ClickHouse/clickhouse-connect/issues/930), [#932](https://github.com/ClickHouse/clickhouse-connect/issues/932), and [#934](https://github.com/ClickHouse/clickhouse-connect/issues/934).
+
+## 1.8.0, 2026-09-02
+
+### Improvements
+
+- Added native query and insert support for the ClickHouse `MultiPoint` type in the Python and Rust codecs, including containers and SQLAlchemy reflection. Inserting `MultiPoint` values requires ClickHouse 26.8 or later. `Geometry` now supports the `MultiPoint` member added in ClickHouse 26.8 at Native discriminator 6 while preserving the original discriminators 0 through 5. `Geometry` also supports the `typed` query format when selected with the `Geometry` type key. `Variant` format settings do not apply to `Geometry`. The Rust extra now requires `clickhouse-connect-core>=0.2.0,<0.3`.
+- Rust codec setup guidance now recommends `pip install "clickhouse-connect[rust,arrow]"` for evaluation because its NumPy and Pandas output paths require PyArrow in 1.8. The lean `rust` extra remains available for standard Python row queries, block streams, and inserts. A missing PyArrow dependency now logs a warning before `native_codec="rust"` falls back to Python.
+
+### Bug Fixes
+
+- SQLAlchemy and Alembic now connect and reflect with `native_codec="rust_strict"`. Dialect metadata statements are marked as driver-internal, so they decode with the Python codec in every codec mode instead of tripping the strict `query_formats` check. Compatible ordinary statements still use the Rust codec.
+- Rust codec streaming queries now honor `show_clickhouse_errors`. Mid-stream server errors return the generic message when the setting is `False` and drop the server version trailer when it is `"scrub"`, matching the Python codec on both the sync and async clients.
+- Rust codec streams that are discarded without entering their context now close their response and stop the read-ahead thread as soon as the stream is discarded. Previously each abandoned stream retained a thread, socket, and buffered response data for the life of the process.
+
+### Compatibility
+
+- The experimental Rust codec targets Python codec parity, with documented differences in some result cell types, insert validation errors, accepted insert conversions, and `Dynamic` shared-value decoding. See the Rust codec documentation for the full list of known behavior differences.
+
+See the `1.8.0rc1`, `1.8.0rc2`, and `1.8.0rc3` entries below for the other changes included in 1.8.0.
+
+## 1.8.0rc3, 2026-08-27
+
 ### Improvements
 
 - SQLAlchemy JSON typed-path validation now reads ClickHouse type arity and numeric bounds from shared driver metadata. Invalid hints that combine a wrong outer argument count with a malformed surplus nested argument now report the outer arity error instead of the nested parsing error. Accepted hints and canonical type names are unchanged. Closes [#990](https://github.com/ClickHouse/clickhouse-connect/issues/990).
@@ -14,7 +39,7 @@
 
 ### Bug Fixes
 
-- DB-API `Cursor.executemany()` now preserves the supplied INSERT statement and applies each parameter set through the normal SQL binding path. Expressions, literals, reordered or repeated named binds, target modifiers, INSERT SELECT, quoted identifiers, and server-side coercion are no longer discarded by a heuristic Native rewrite. Parameterized DB-API inserts issue one HTTP request per parameter set, so rows written before a later failure remain committed. Use `Client.insert()` when one Native block and its throughput are required. INSERT row counts now aggregate the server's `written_rows` summaries and report `-1` when no reliable count is available. SQLAlchemy keeps Native bulk inserts for compiler-generated plain INSERT statements, while raw SQL and expression-bearing statements use the SQL path. The established placeholder-less `INSERT INTO table (columns) VALUES` form also keeps its Native compatibility path. In that form, doubled `%%` in identifiers follows the pyformat contract and sends a literal `%` identifier. Closes [#930](https://github.com/ClickHouse/clickhouse-connect/issues/930), [#932](https://github.com/ClickHouse/clickhouse-connect/issues/932), and [#934](https://github.com/ClickHouse/clickhouse-connect/issues/934).
+- Rust codec NumPy and Pandas queries now support `Time64(0)` with second resolution, including typed JSON paths. Unsupported statically declared `Time64` scales, including nullable, container, `Nested`, `Variant`, and typed JSON types, now raise the same `ProgrammingError` as the Python codec instead of leaking a `KeyError`. The remaining `Dynamic(Time64)` cell type and validation limitations are documented.
 - Empty `Tuple()` definitions no longer parse as if they contain a phantom element, and their columns now consume and emit the Native format's per-row marker bytes. Root, nested, named, array-wrapped, and nullable empty tuples now query and insert without misaligning adjacent columns, corrupting values, or failing insert block sizing. Closes [#971](https://github.com/ClickHouse/clickhouse-connect/issues/971).
 - Alembic autogenerate now emits valid Python for `SimpleAggregateFunction` and `AggregateFunction` columns, including aggregate names that collide with Python builtins and arguments containing named `Tuple` types. Closes [#992](https://github.com/ClickHouse/clickhouse-connect/issues/992).
 - SQLAlchemy can now reflect standalone `Variant` columns, and Alembic autogeneration can compare and round-trip them. Closes [#989](https://github.com/ClickHouse/clickhouse-connect/issues/989).
@@ -29,6 +54,18 @@
 ### Compatibility
 
 - SQLAlchemy: the `alembic` extra now requires `alembic>=1.18`. Earlier versions satisfied the package metadata but failed when importing the ClickHouse Alembic integration because the priority-dispatch API it uses was added in Alembic 1.18. See [#983](https://github.com/ClickHouse/clickhouse-connect/pull/983).
+
+## 1.8.0rc2, 2026-08-20
+
+Follow-up release candidate to 1.8.0rc1, rebased on 1.7.2 so all bug fixes from that stable release are included. The optional Rust codec itself is unchanged.
+
+## 1.8.0rc1, 2026-08-12
+
+### Improvements
+
+- Added an experimental `native_codec` client option that selects the codec for FORMAT Native query decode and insert encode. `python` is the default and uses the existing codec. `rust` prefers the compiled Rust codec and falls back to the Python codec for unsupported options and types, while `rust_strict` raises instead of falling back. Python codec parity is the target, with known differences documented on the rust-codec page. The Arrow methods are unaffected. The compiled codec ships as the separate clickhouse-connect-core wheel, installed with `pip install clickhouse-connect[rust]`. See the rust-codec documentation page for details. This is early access for benchmarking and is not yet a supported path.
+- Added native query and insert support for the ClickHouse `Geometry` type. Point values use 2-tuples and the other geometry members use nested lists. SQLAlchemy reflection exposes the public `Geometry` type.
+- Added support for all ClickHouse `Interval*` types as signed 64-bit counts in the interval type's unit.
 
 ## 1.7.2, 2026-08-19
 
@@ -91,6 +128,8 @@
 - `AsyncClient` initialization no longer overwrites user-supplied session settings with generated defaults. A client created with `settings={'date_time_input_format': 'basic'}` previously had that value replaced by the generated `best_effort` default. User settings now always win, matching the sync client.
 - An `AsyncClient` created with both client certificates and an access token now sends the mutual TLS authentication headers and the `Authorization: Bearer` header together, matching the sync client. The certificates previously suppressed the token at construction, while the `token_provider` option re-added its token right after initialization, so the two async token paths disagreed with each other. The server resolves the credential precedence.
 - Dict-valued settings such as `additional_table_filters` no longer crash with `DB::Exception: Cannot parse quoted string` when passed through `query()`'s `settings` parameter. The value was rendered with Python's own `str()`/`repr()` of the dict, which mixes single and double quotes and is not valid ClickHouse map-literal syntax; it is now rendered as a properly single-quoted, escaped ClickHouse map literal. Closes [#501](https://github.com/ClickHouse/clickhouse-connect/issues/501).
+- Explicit NaN and infinity values in nullable `BFloat16` row inserts are now stored instead of being written as 0.
+- Inserting an `Array(Dynamic)` column no longer raises `ZeroDivisionError` when a sampled row holds an empty array. The insert block size estimate now treats an empty sample as minimal instead of dividing by its length.
 
 ### Improvements
 - Async clients now emit URL query parameters in the same order as the sync client on every request. The parameter names and values are unchanged, so this is only visible to systems that match or sign the exact request URL.
