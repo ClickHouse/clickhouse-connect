@@ -31,7 +31,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     UInt64,
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.custom import CreateDatabase, DropDatabase
-from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree, ReplacingMergeTree, engine_map
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree, ReplacingMergeTree, SummingMergeTree, engine_map
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.driver.binding import quote_identifier
 from tests.integration_tests.conftest import TestConfig
@@ -96,6 +96,27 @@ def test_create_table(test_engine: Engine, test_db: str, test_table_engine: str)
             table_cls("key_col"),
         )
         table.create(conn)
+
+
+def test_summing_merge_tree_columns_round_trip(test_engine: Engine, test_db: str):
+    with test_engine.begin() as conn:
+        metadata = MetaData(schema=test_db)
+        table = db.Table(
+            "summing_columns_test",
+            metadata,
+            db.Column("id", UInt32),
+            db.Column("delta", UInt64),
+            db.Column("n_tx", UInt64),
+            SummingMergeTree(order_by="id", columns=("delta", "n_tx")),
+        )
+        table.drop(conn, checkfirst=True)
+        try:
+            table.create(conn)
+            reflected = db.Table("summing_columns_test", MetaData(), schema=test_db, autoload_with=conn)
+            assert isinstance(reflected.engine, SummingMergeTree)
+            assert "columns='(delta, n_tx)'" in repr(reflected.engine)
+        finally:
+            table.drop(conn, checkfirst=True)
 
 
 def test_declarative(test_engine: Engine, test_db: str, test_table_engine: str):
