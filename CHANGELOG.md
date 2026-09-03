@@ -8,8 +8,8 @@
 
 ### Bug Fixes
 
-- Async Rust codec streams now await response cleanup when their query, NumPy, or Pandas stream context exits early,
-  so read-ahead shutdown no longer blocks the event loop. Abandoned read-ahead streams finish their thread shutdown
+- Async Rust codec query, NumPy, and Pandas stream contexts now use asynchronous read-ahead cleanup on early exit,
+  so thread shutdown no longer blocks the event loop. Abandoned read-ahead streams finish their thread shutdown
   off the event loop and dispatch synchronous source cleanup without leaving an unclosed response or pending task.
 - Async clients now report a driver `ProgrammingError` before network I/O when a live aiohttp session is used from a different event loop. Close the client or dispose its SQLAlchemy engine in the owning loop before transfer when possible. If that loop has already closed, perform cleanup in the current loop before reuse, then reopen a directly reused client with `_initialize()`.
 - Native sync and async `ping()` calls now normalize a trailing slash in `proxy_path`, so a path such as `/clickhouse/` sends `/clickhouse/ping` instead of `/clickhouse//ping`.
@@ -43,7 +43,7 @@
   accepts `connector_limit`, `connector_limit_per_host`, and `keepalive_timeout` from those sources without passing
   duplicate constructor keywords. Explicit non-None connector arguments take precedence over `generic_args`, which
   take precedence over the DSN. `None` falls through to the next source and then the documented defaults.
-- The DB-API module now exposes the driver's PEP 249 exception hierarchy. `except clickhouse_connect.dbapi.Error` now catches errors raised by the driver, and SQLAlchemy wraps them in the matching `DBAPIError` subclass instead of a generic `StatementError`. `StreamFailureError` is now also an `OperationalError`, while remaining catchable by its existing class. Mid-stream failures now expose the numeric ClickHouse error code, and the symbolic error name when error details are enabled.
+- The DB-API module now exposes the driver's PEP 249 exception hierarchy. `except clickhouse_connect.dbapi.Error` now catches errors raised by the driver, and SQLAlchemy wraps them in the matching `DBAPIError` subclass instead of allowing them to escape its DB-API exception handling. `StreamFailureError` is now also an `OperationalError`, while remaining catchable by its existing class. Mid-stream failures now expose the numeric ClickHouse error code, and the symbolic error name when error details are enabled.
 
 ## 1.8.0, 2026-09-02
 
