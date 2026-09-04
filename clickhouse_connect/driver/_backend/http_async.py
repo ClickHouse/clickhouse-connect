@@ -132,6 +132,8 @@ def release_lease(response: aiohttp.ClientResponse | None) -> None:
 
 
 def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
+    if isinstance(error, aiohttp.ConnectionTimeoutError):
+        return True
     if isinstance(error, (aiohttp.ServerTimeoutError, aiohttp.ClientConnectorError, aiohttp.ServerFingerprintMismatch)):
         return False
     if isinstance(error, aiohttp.ServerDisconnectedError):

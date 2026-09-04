@@ -197,10 +197,6 @@ async def test_async_retry_on_remote_close_client_connection_error(test_native_a
             id="socket_timeout",
         ),
         pytest.param(
-            lambda: aiohttp.ConnectionTimeoutError("Connection timeout to host http://localhost:8123/"),
-            id="connection_timeout",
-        ),
-        pytest.param(
             _client_connector_reset_error,
             id="connector_reset_error",
         ),
@@ -227,6 +223,27 @@ async def test_async_non_remote_close_connection_errors_are_not_retried(test_nat
 
     assert attempts == 1
     assert isinstance(excinfo.value.__cause__, aiohttp.ClientConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_async_connection_timeout_is_retried(test_native_async_client, mocker):
+    """aiohttp.ConnectionTimeoutError is a connect-phase error; like urllib3's connect retry, it should be retried once."""
+    real_request = test_native_async_client._session.request
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise aiohttp.ConnectionTimeoutError("Connection timeout to host http://localhost:8123/")
+        return await real_request(*args, **kwargs)
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+
+    result = await test_native_async_client.query("SELECT 13")
+
+    assert attempts == 2
+    assert result.result_rows[0][0] == 13
 
 
 @pytest.mark.parametrize(
