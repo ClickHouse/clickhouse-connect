@@ -5,6 +5,7 @@
 ### Bug Fixes
 
 - Multiprocessing workers now reuse one process-local urllib3 `PoolManager`. Creating and closing clients inside workers no longer retains one unused manager per client. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
+- The async client now retries connection timeouts once for queries, rebuildable inserts, and `raw_insert` with bytes or strings. Raw generator and file bodies still raise the timeout because redirects may have consumed them. Socket read timeouts, connector errors, and certificate errors remain non-retryable. Closes [#1012](https://github.com/ClickHouse/clickhouse-connect/issues/1012).
 
 ## 1.8.0, 2026-09-02
 

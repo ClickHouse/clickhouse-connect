@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+_CONNECTION_TIMEOUT_ERROR: type[aiohttp.ServerTimeoutError] | None = getattr(aiohttp, "ConnectionTimeoutError", None)
 
 
 def _plan_files(plan: QueryRequestPlan) -> dict[str, Any] | None:
@@ -131,9 +132,13 @@ def release_lease(response: aiohttp.ClientResponse | None) -> None:
         release()
 
 
-def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
-    if isinstance(error, aiohttp.ConnectionTimeoutError):
-        return True
+def _is_async_connection_timeout(error: aiohttp.ClientConnectionError) -> bool:
+    if _CONNECTION_TIMEOUT_ERROR is not None:
+        return isinstance(error, _CONNECTION_TIMEOUT_ERROR)
+    return isinstance(error, aiohttp.ServerTimeoutError) and isinstance(error.__cause__, asyncio.TimeoutError)
+
+
+def _is_retryable_async_remote_close(error: aiohttp.ClientConnectionError) -> bool:
     if isinstance(error, (aiohttp.ServerTimeoutError, aiohttp.ClientConnectorError, aiohttp.ServerFingerprintMismatch)):
         return False
     if isinstance(error, aiohttp.ServerDisconnectedError):
@@ -452,6 +457,7 @@ class HttpAsyncBackend:
         query_session = final_params.get("session_id")
         attempts = 0
         auth_retried = False
+        connection_timeout_retried = False
 
         while True:
             attempts += 1
@@ -537,7 +543,20 @@ class HttpAsyncBackend:
 
             except aiohttp.ClientConnectionError as e:
                 msg = str(e)
-                if _is_retryable_async_connection_error(e):
+                if _is_async_connection_timeout(e):
+                    # A redirect may consume the body before a later connection times out.
+                    if not connection_timeout_retried and (
+                        retry_body is not None or data is None or isinstance(data, (bytes, bytearray, str, dict))
+                    ):
+                        connection_timeout_retried = True
+                        # The one connect retry does not consume the request retry budget.
+                        attempts -= 1
+                        if retry_body is not None:
+                            data = await retry_body()
+                        logger.debug("Retrying after connection timeout (attempt 1/2)")
+                        await asyncio.sleep(0.1)
+                        continue
+                elif _is_retryable_async_remote_close(e):
                     # Always allow at least one retry on a clean connection error so a single stale
                     # keep-alive socket doesn't surface to the caller, and additionally honor the
                     # retries budget when it is larger (e.g. query_retries for reads), so that
@@ -553,7 +572,7 @@ class HttpAsyncBackend:
                             logger.debug("Retrying after connection error from remote host (attempt %s/%s)", attempts, max_attempts)
                             await asyncio.sleep(0.1 * attempts)
                             continue
-                logger.debug("Non-retryable aiohttp connection error type=%s", type(e).__name__)
+                logger.debug("Not retrying aiohttp connection error type=%s", type(e).__name__)
                 if self.show_clickhouse_errors is True:
                     raise OperationalError(f"Network Error: {msg}") from e
                 logger.warning("Unexpected aiohttp connection error", exc_info=True)

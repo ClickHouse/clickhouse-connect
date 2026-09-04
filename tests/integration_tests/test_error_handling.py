@@ -1,4 +1,7 @@
+import asyncio
+import io
 import logging
+import ssl
 from types import SimpleNamespace
 
 import aiohttp
@@ -30,6 +33,23 @@ def _client_connector_reset_error() -> aiohttp.ClientConnectorError:
     )
     error.__cause__ = error.os_error
     return error
+
+
+def _client_certificate_error() -> aiohttp.ClientConnectorCertificateError:
+    connection_key = SimpleNamespace(host="localhost", port=8123, ssl=True, is_ssl=True)
+    return aiohttp.ClientConnectorCertificateError(connection_key, ssl.CertificateError("certificate verify failed"))
+
+
+def _connection_timeout_error() -> aiohttp.ServerTimeoutError:
+    error_class = getattr(aiohttp, "ConnectionTimeoutError", aiohttp.ServerTimeoutError)
+    error = error_class("Connection timeout to host http://localhost:8123/")
+    error.__cause__ = asyncio.TimeoutError()
+    return error
+
+
+def _socket_timeout_error() -> aiohttp.ServerTimeoutError:
+    error_class = getattr(aiohttp, "SocketTimeoutError", aiohttp.ServerTimeoutError)
+    return error_class("Timeout on reading data from socket")
 
 
 def test_wrong_port_error_message(client_factory, test_config: TestConfig):
@@ -193,12 +213,16 @@ async def test_async_retry_on_remote_close_client_connection_error(test_native_a
             id="generic_connection_error",
         ),
         pytest.param(
-            lambda: aiohttp.SocketTimeoutError("Timeout on reading data from socket"),
+            _socket_timeout_error,
             id="socket_timeout",
         ),
         pytest.param(
             _client_connector_reset_error,
             id="connector_reset_error",
+        ),
+        pytest.param(
+            _client_certificate_error,
+            id="certificate_error",
         ),
         pytest.param(
             lambda: aiohttp.ServerFingerprintMismatch(b"expected", b"got", "localhost", 8123),
@@ -227,7 +251,7 @@ async def test_async_non_remote_close_connection_errors_are_not_retried(test_nat
 
 @pytest.mark.asyncio
 async def test_async_connection_timeout_is_retried(test_native_async_client, mocker):
-    """aiohttp.ConnectionTimeoutError is a connect-phase error; like urllib3's connect retry, it should be retried once."""
+    """A connect-phase timeout gets the same one retry as the sync transport."""
     real_request = test_native_async_client._session.request
     attempts = 0
 
@@ -235,7 +259,7 @@ async def test_async_connection_timeout_is_retried(test_native_async_client, moc
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise aiohttp.ConnectionTimeoutError("Connection timeout to host http://localhost:8123/")
+            raise _connection_timeout_error()
         return await real_request(*args, **kwargs)
 
     mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
@@ -244,6 +268,193 @@ async def test_async_connection_timeout_is_retried(test_native_async_client, moc
 
     assert attempts == 2
     assert result.result_rows[0][0] == 13
+
+
+@pytest.mark.asyncio
+async def test_async_connection_timeout_stops_after_one_retry(test_native_async_client, mocker):
+    """The connect retry is independent of the larger query retry budget."""
+    errors = []
+
+    async def failing_request(*args, **kwargs):
+        error = _connection_timeout_error()
+        errors.append(error)
+        raise error
+
+    request = mocker.patch.object(test_native_async_client._session, "request", side_effect=failing_request)
+
+    with pytest.raises(OperationalError) as excinfo:
+        await test_native_async_client.query("SELECT 13")
+
+    assert request.call_count == 2
+    assert excinfo.value.__cause__ is errors[-1]
+
+
+@pytest.mark.asyncio
+async def test_async_connection_timeout_does_not_consume_query_retry_budget(test_native_async_client, mocker):
+    """A connect timeout leaves both query retries available for HTTP status failures."""
+    real_request = test_native_async_client._session.request
+    response_503 = mocker.Mock(status=503, headers={})
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise _connection_timeout_error()
+        if attempts < 4:
+            return response_503
+        return await real_request(*args, **kwargs)
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+
+    result = await test_native_async_client.query("SELECT 13")
+
+    assert attempts == 4
+    assert response_503.close.call_count == 2
+    assert result.result_rows == [(13,)]
+
+
+@pytest.mark.asyncio
+async def test_async_remote_close_keeps_shared_query_retry_budget(test_native_async_client, mocker):
+    """An earlier HTTP retry still counts against later stale connection failures."""
+    response_503 = mocker.Mock(status=503, headers={})
+    attempts = 0
+
+    async def failing_request(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return response_503
+        raise aiohttp.ServerDisconnectedError()
+
+    mocker.patch.object(test_native_async_client._session, "request", side_effect=failing_request)
+
+    with pytest.raises(OperationalError) as excinfo:
+        await test_native_async_client.query("SELECT 13")
+
+    assert attempts == 3
+    assert response_503.close.call_count == 1
+    assert isinstance(excinfo.value.__cause__, aiohttp.ServerDisconnectedError)
+
+
+@pytest.mark.asyncio
+async def test_async_connection_timeout_does_not_replay_consumed_generator(test_native_async_client, mocker, table_context):
+    """A redirect can consume a raw generator before a connection timeout."""
+    real_request = test_native_async_client._session.request
+    consumed = 0
+    attempts = 0
+
+    async def chunks():
+        nonlocal consumed
+        consumed += 1
+        yield b"13\n"
+
+    body = chunks()
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        data = kwargs.get("data")
+        if data is body:
+            attempts += 1
+            if attempts == 1:
+                async for _ in data:
+                    pass
+                raise _connection_timeout_error()
+        return await real_request(*args, **kwargs)
+
+    with table_context("raw_insert_generator_connect_timeout", ["key Int32"]):
+        mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+        with pytest.raises(OperationalError):
+            await test_native_async_client.raw_insert("raw_insert_generator_connect_timeout", ["key"], body, fmt="CSV")
+        rows = (await test_native_async_client.query("SELECT key FROM raw_insert_generator_connect_timeout")).result_rows
+
+    assert attempts == 1
+    assert consumed == 1
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_async_connection_timeout_does_not_replay_consumed_binary_io(test_native_async_client, mocker, table_context):
+    """A redirect can consume a raw file body before a connection timeout."""
+    real_request = test_native_async_client._session.request
+    body = io.BytesIO(b"13\n")
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        data = kwargs.get("data")
+        if data is body:
+            attempts += 1
+            if attempts == 1:
+                assert data.read() == b"13\n"
+                raise _connection_timeout_error()
+        return await real_request(*args, **kwargs)
+
+    with table_context("raw_insert_connect_timeout", ["key Int32"]):
+        mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+        with pytest.raises(OperationalError):
+            await test_native_async_client.raw_insert("raw_insert_connect_timeout", ["key"], body, fmt="CSV")
+        rows = (await test_native_async_client.query("SELECT key FROM raw_insert_connect_timeout")).result_rows
+
+    assert attempts == 1
+    assert rows == []
+
+
+@pytest.mark.parametrize("body", [b"13\n79\n", bytearray(b"13\n79\n"), "13\n79\n"], ids=["bytes", "bytearray", "str"])
+@pytest.mark.asyncio
+async def test_async_connection_timeout_retries_replayable_body(test_native_async_client, mocker, table_context, body):
+    """A consumed wrapper is replaced before retrying a replayable raw insert."""
+    real_request = test_native_async_client._session.request
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        data = kwargs.get("data")
+        if isinstance(data, io.BytesIO):
+            attempts += 1
+            if attempts == 1:
+                assert data.read().endswith(b"13\n79\n")
+                raise _connection_timeout_error()
+        return await real_request(*args, **kwargs)
+
+    with table_context("raw_insert_replayable_connect_timeout", ["key Int32"]):
+        request = mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+        await test_native_async_client.raw_insert("raw_insert_replayable_connect_timeout", ["key"], body, fmt="CSV")
+        mocker.stop(request)
+        rows = (await test_native_async_client.query("SELECT key FROM raw_insert_replayable_connect_timeout ORDER BY key")).result_rows
+
+    assert attempts == 2
+    assert rows == [(13,), (79,)]
+
+
+@pytest.mark.asyncio
+async def test_async_connection_timeout_rebuilds_consumed_insert_body(test_native_async_client, mocker, table_context):
+    """A consumed Native insert body is rebuilt before retrying a connection timeout."""
+    real_request = test_native_async_client._session.request
+    attempts = 0
+
+    async def flaky_request(*args, **kwargs):
+        nonlocal attempts
+        data = kwargs.get("data")
+        if hasattr(data, "__aiter__"):
+            attempts += 1
+            if attempts == 1:
+                chunks = [chunk async for chunk in data]
+                assert b"".join(chunks)
+                raise _connection_timeout_error()
+        return await real_request(*args, **kwargs)
+
+    with table_context("insert_rebuild_connect_timeout", ["key Int32", "name String"]):
+        mocker.patch.object(test_native_async_client._session, "request", side_effect=flaky_request)
+        await test_native_async_client.insert(
+            "insert_rebuild_connect_timeout",
+            [[13, "user_1"], [79, "user_2"]],
+            column_names=["key", "name"],
+        )
+        rows = (await test_native_async_client.query("SELECT key, name FROM insert_rebuild_connect_timeout ORDER BY key")).result_rows
+
+    assert attempts == 2
+    assert rows == [(13, "user_1"), (79, "user_2")]
 
 
 @pytest.mark.parametrize(
