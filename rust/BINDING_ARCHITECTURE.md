@@ -1,9 +1,9 @@
 # The _ch_core binding
 
-How the PyO3 binding layer works and how to consume it efficiently. The
-core's wire and Arrow contract is documented in ch-core-rs
+How the PyO3 binding layer works and how ClickHouse Connect integrates it.
+The core's wire and Arrow contract is documented in ch-core-rs
 `DECODER_CONTRACT.md`. This document covers the binding crate `ch-core-py`
-and the integration pattern above it.
+and the integration layer above it.
 
 ## Design
 
@@ -54,7 +54,7 @@ The division of labor is strict:
 |---|---|---|
 | core (ch-core-rs) | ClickHouse knowledge | wire framing, type parsing, schema rules, Arrow layout |
 | binding (ch-core-py) | Python value policy | what a `DateTime64(6,'America/New_York')` becomes, GIL rules, exception types |
-| integration (driver `rustcodec.py`, POC `rust_client.py`) | transport | HTTP, decompression, threads, queues, connection cleanup |
+| integration (driver `rustcodec.py`) | transport | HTTP, decompression, threads, queues, connection cleanup |
 
 The core knows nothing about Python, the binding knows nothing about HTTP,
 and the integration layer never sees a wire byte. The binding is the layer
@@ -152,8 +152,7 @@ The driver layer translates these into `DataError` for its public surface.
 A producer thread reads and decompresses the socket while a consumer thread
 calls `StreamDecoder.feed`. Both make progress at once because neither
 holds the GIL during its expensive part. The reference implementation is
-the driver's `rustcodec.py`, with `rust_client.py` as the standalone POC
-version. The essentials of the protocol:
+the driver's `rustcodec.py`. The essentials of the protocol:
 
 - Queue items are tagged data, error, or EOF, and the producer uses a
   timeout put-loop with a stop flag so it can never block forever on a full

@@ -44,7 +44,7 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `autogenerate_query_id` | bool or None | Global setting, `True` | Override automatic UUID query ID generation. |
 | `http_proxy` | str or None | Environment/default | Per-client HTTP proxy address. |
 | `https_proxy` | str or None | Environment/default | Per-client HTTPS proxy address. |
-| `pool_mgr` | `urllib3.PoolManager` or None | Shared default | Custom pool manager for the synchronous client only. |
+| `pool_mgr` | `urllib3.PoolManager` or None | Shared per process | Custom pool manager for the synchronous client only. |
 | `tz_source` | str or None | `"auto"` | Fallback timezone source for columns without timezone metadata: `"auto"`, `"server"`, or `"local"`. |
 | `tz_mode` | str or None | `"naive_utc"` | UTC result policy: `"naive_utc"`, `"aware"`, or `"schema"`. See [Time zones](/integrations/language-clients/python/advanced-querying#time-zones). |
 | `show_clickhouse_errors` | bool, boolean string, `"scrub"`, or None | `True` | Controls `str(exc)` for server errors, transport errors, and mid-stream `StreamFailureError`. `True` includes the request URL and server version trailer. `"scrub"` keeps the SQL error text and symbolic name but strips the host/URL and `(version ...)` trailer. `False` returns a generic message (`code` is still set for server errors). Boolean strings are accepted. Other strings raise `ProgrammingError`. For transport errors, `__cause__` and tracebacks still contain the original transport exception. |
