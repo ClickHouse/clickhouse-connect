@@ -4,6 +4,7 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -43,6 +44,7 @@ core_socket_options = [
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 _proxy_managers: dict[str, PoolManager] = {}
 all_managers: dict[PoolManager, int] = {}
+_inherited_managers: list[PoolManager] = []
 
 
 @atexit.register
@@ -190,9 +192,24 @@ def check_env_proxy(scheme: str, host: str, port: int) -> str | None:
 
 _default_pool_manager = get_pool_manager()
 _default_pool_pid = os.getpid()
+_default_pool_lock = threading.Lock()
 
 
-def default_pool_manager():
+def _reset_pool_state_after_fork() -> None:
+    global _default_pool_lock, _default_pool_pid
+    # Keep inherited managers alive. Deallocating one runs urllib3 pool finalizers that take inherited locks.
+    _inherited_managers.extend([_default_pool_manager, *all_managers])
+    _default_pool_lock = threading.Lock()
+    _default_pool_pid = -1
+    _proxy_managers.clear()
+    all_managers.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_pool_state_after_fork)
+
+
+def default_pool_manager() -> PoolManager:
     """Return the process-local shared PoolManager.
 
     urllib3 pools are not fork-safe, so a child must not reuse the parent's
@@ -201,16 +218,12 @@ def default_pool_manager():
     """
     global _default_pool_manager, _default_pool_pid
     pid = os.getpid()
-    if pid != _default_pool_pid:
-        old = _default_pool_manager
-        _default_pool_manager = get_pool_manager()
-        _default_pool_pid = pid
-        try:
-            old.clear()
-        except Exception:
-            logger.debug("failed to clear inherited pool manager after fork", exc_info=True)
-        all_managers.pop(old, None)
-    return _default_pool_manager
+    with _default_pool_lock:
+        # The child hook forces this mismatch. Keep the PID check for fork paths where the hook is not invoked.
+        if pid != _default_pool_pid:
+            _default_pool_manager = get_pool_manager()
+            _default_pool_pid = pid
+        return _default_pool_manager
 
 
 class ResponseSource:

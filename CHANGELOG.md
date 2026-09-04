@@ -4,7 +4,7 @@
 
 ### Bug Fixes
 
-- Child processes now reuse one process-local urllib3 `PoolManager` instead of creating a new manager for every client. Closing clients in a worker no longer grows `all_managers` without bound. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
+- Multiprocessing workers now reuse one process-local urllib3 `PoolManager`. Creating and closing clients inside workers no longer retains one unused manager per client. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
 
 ## 1.8.0, 2026-09-02
 
