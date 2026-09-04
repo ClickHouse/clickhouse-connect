@@ -1,9 +1,11 @@
-"""Compile-time tests for the opt-in server_side_params mode (issue #735)."""
+"""SQLAlchemy parameter compilation and multi-row INSERT tests."""
 
 from datetime import timedelta
+from unittest.mock import Mock, patch
 
 import pytest
-from sqlalchemy import Integer, String, TypeDecorator, bindparam, column, select, table, text, tuple_
+from sqlalchemy import Integer, String, TypeDecorator, bindparam, column, create_engine, func, insert, select, table, text, tuple_
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import CompileError
 
 from clickhouse_connect import dbapi
@@ -81,6 +83,87 @@ def test_flag_off_keeps_pyformat():
     sql = _sql(select(events.c.id).where(events.c.id == 13), server_side=False)
     assert "%(id_1)s" in sql
     assert "{id_1:" not in sql
+
+
+@pytest.mark.parametrize("server_side", [False, True], ids=["client-side", "server-side"])
+@pytest.mark.parametrize(
+    ("values", "client_sql", "server_sql", "expected_params"),
+    [
+        (
+            [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}],
+            "INSERT INTO `events` (`id`, `name`) VALUES (%(id_m0)s, %(name_m0)s), (%(id_m1)s, %(name_m1)s)",
+            "INSERT INTO `events` (`id`, `name`) VALUES ({id_m0:Int32}, {name_m0:String}), ({id_m1:Int32}, {name_m1:String})",
+            {"id_m0": 13, "name_m0": "user_1", "id_m1": 79, "name_m1": "user_2"},
+        ),
+        (
+            [(13, "user_1"), (79, "user_2")],
+            "INSERT INTO `events` (`id`, `name`) VALUES (%(id_m0)s, %(name_m0)s), (%(id_m1)s, %(name_m1)s)",
+            "INSERT INTO `events` (`id`, `name`) VALUES ({id_m0:Int32}, {name_m0:String}), ({id_m1:Int32}, {name_m1:String})",
+            {"id_m0": 13, "name_m0": "user_1", "id_m1": 79, "name_m1": "user_2"},
+        ),
+        (
+            [{"id": 13, "name": func.lower("USER_1")}, {"id": 79, "name": func.lower("USER_2")}],
+            "INSERT INTO `events` (`id`, `name`) VALUES (%(id_m0)s, lower(%(lower_1)s)), (%(id_m1)s, lower(%(lower_2)s))",
+            "INSERT INTO `events` (`id`, `name`) VALUES ({id_m0:Int32}, lower({lower_1:String})), ({id_m1:Int32}, lower({lower_2:String}))",
+            {"id_m0": 13, "lower_1": "USER_1", "id_m1": 79, "lower_2": "USER_2"},
+        ),
+    ],
+    ids=["dicts", "tuples", "per-row-expressions"],
+)
+def test_multivalues_insert_compiles(server_side, values, client_sql, server_sql, expected_params):
+    compiled = _compile(insert(events).values(values), server_side=server_side)
+
+    assert str(compiled) == (server_sql if server_side else client_sql)
+    assert compiled.params == expected_params
+
+
+class _StubColumnType:
+    name = "String"
+
+
+class _StubQueryResult:
+    result_set = [["default"]]
+    column_names = ["currentDatabase()"]
+    column_types = [_StubColumnType()]
+    summary = {}
+
+
+class _StubInsertResult:
+    written_rows = 2
+    summary = {}
+
+
+@pytest.fixture(name="routing_engine")
+def routing_engine_fixture():
+    client = Mock()
+    client.server_tz = "UTC"
+    client.query.return_value = _StubQueryResult()
+    client.insert.return_value = _StubInsertResult()
+    with patch("clickhouse_connect.dbapi.connection.create_client", return_value=client):
+        engine: Engine = create_engine("clickhousedb://user_1:pwd@localhost:8123/default")
+        try:
+            yield engine, client
+        finally:
+            engine.dispose()
+
+
+def test_multivalues_insert_dispatch(routing_engine):
+    engine, client = routing_engine
+    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
+
+    with engine.begin() as conn:
+        client.query.reset_mock()
+        client.insert.reset_mock()
+        conn.execute(insert(events).values(rows))
+
+        client.query.assert_called_once()
+        client.insert.assert_not_called()
+
+        client.query.reset_mock()
+        conn.execute(insert(events), rows)
+
+        client.query.assert_not_called()
+        client.insert.assert_called_once_with("`events`", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
 
 
 def test_double_percents_disabled_only_when_enabled():

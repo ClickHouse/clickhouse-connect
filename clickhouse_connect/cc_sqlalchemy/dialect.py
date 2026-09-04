@@ -34,6 +34,7 @@ class ClickHouseDialect(DefaultDialect):
     default_schema_name = "default"
     supports_native_decimal = True
     supports_native_boolean = True
+    supports_multivalues_insert = True
     supports_statement_cache = False
     supports_comments = True
     inline_comments = True
