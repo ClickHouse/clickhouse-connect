@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Multiprocessing workers now reuse one process-local urllib3 `PoolManager`. Creating and closing clients inside workers no longer retains one unused manager per client. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
+
 ## 1.8.0, 2026-09-02
 
 ### Improvements
