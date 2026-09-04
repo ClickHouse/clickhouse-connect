@@ -50,6 +50,7 @@ See the `1.8.0rc1`, `1.8.0rc2`, and `1.8.0rc3` entries below for the other chang
 ### Compatibility
 
 - SQLAlchemy: the `alembic` extra now requires `alembic>=1.18`. Earlier versions satisfied the package metadata but failed when importing the ClickHouse Alembic integration because the priority-dispatch API it uses was added in Alembic 1.18. See [#983](https://github.com/ClickHouse/clickhouse-connect/pull/983).
+- The deprecated `License :: OSI Approved :: Apache Software License` classifier has been removed in favor of the PEP 639 SPDX expression the package already declares. Building now requires `setuptools>=77.0.3`, the first release that reads `license` as an SPDX expression. Closes [#996](https://github.com/ClickHouse/clickhouse-connect/issues/996).
 
 ## 1.8.0rc2, 2026-08-20
 
