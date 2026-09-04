@@ -200,9 +200,10 @@ class TestDefaultPoolManager:
         finally:
             release_pool.set()
             lock_thread.join(timeout=5)
+            process.join(timeout=5)
             if process.is_alive():
                 process.terminate()
-            process.join(timeout=5)
+                process.join(timeout=5)
             receiver.close()
             if unowned_manager_ref is not None:
                 unowned_manager = unowned_manager_ref()
@@ -238,9 +239,10 @@ class TestDefaultPoolManager:
             if received:
                 status = receiver.recv()
         finally:
+            process.join(timeout=5)
             if process.is_alive():
                 process.terminate()
-            process.join(timeout=5)
+                process.join(timeout=5)
             receiver.close()
 
         assert received, "child blocked while replacing the inherited proxy manager"
