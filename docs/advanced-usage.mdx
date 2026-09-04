@@ -161,7 +161,7 @@ In this case ClickHouse Connect doesn't send a `session_id`; the server doesn't 
 
 ## Customizing the HTTP connection pool {#customizing-the-http-connection-pool}
 
-ClickHouse Connect uses `urllib3` connection pools to handle the underlying HTTP connection to the server. By default, all client instances share the same connection pool, which is sufficient for the majority of use cases. This default pool maintains up to 8 HTTP Keep Alive connections to each ClickHouse server used by the application.
+ClickHouse Connect uses `urllib3` connection pools to handle the underlying HTTP connection to the server. By default, all synchronous client instances in a process share the same connection pool, which is sufficient for the majority of use cases. Each multiprocessing worker gets its own process-local default pool and reuses it across clients created in that worker. A client created before a fork keeps the parent's pool and should not be used in the child. The default pool maintains up to 8 HTTP Keep Alive connections to each ClickHouse server used by the application.
 
 For large multi-threaded applications, separate connection pools may be appropriate. Customized connection pools can be provided as the `pool_mgr` keyword argument to the main `clickhouse_connect.get_client` function:
 
