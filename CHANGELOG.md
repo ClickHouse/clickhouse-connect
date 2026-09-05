@@ -2,10 +2,15 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- SQLAlchemy multi-row `Insert.values()` statements now compile and execute. Rows can be dictionaries, tuples in table column order, or rows containing SQL expressions, with client-side or server-side bind parameters. This also enables Pandas `to_sql(method="multi")`. See the SQLAlchemy documentation for column selection rules and the bind parameter ceiling that applies to server-side parameters on ClickHouse 26.4 and newer. Closes [#1024](https://github.com/ClickHouse/clickhouse-connect/issues/1024).
+
 ### Bug Fixes
 
 - DB-API `Cursor.executemany()` now preserves the supplied INSERT statement and applies each parameter set through the normal SQL binding path. Expressions, literals, reordered or repeated named binds, target modifiers, INSERT SELECT, quoted identifiers, and server-side coercion are no longer discarded by a heuristic Native rewrite. Parameterized DB-API inserts issue one HTTP request per parameter set, so rows written before a later failure remain committed. Use `Client.insert()` when one Native block and its throughput are required. INSERT row counts now aggregate the server's `written_rows` summaries and report `-1` when no reliable count is available. SQLAlchemy keeps Native bulk inserts for compiler-generated plain INSERT statements, while raw SQL and expression-bearing statements use the SQL path. The established placeholder-less `INSERT INTO table (columns) VALUES` form also keeps its Native compatibility path. In that form, doubled `%%` in identifiers follows the pyformat contract and sends a literal `%` identifier. Closes [#930](https://github.com/ClickHouse/clickhouse-connect/issues/930), [#932](https://github.com/ClickHouse/clickhouse-connect/issues/932), and [#934](https://github.com/ClickHouse/clickhouse-connect/issues/934).
 - Multiprocessing workers now reuse one process-local urllib3 `PoolManager`. Creating and closing clients inside workers no longer retains one unused manager per client. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
+- The async client now retries connection timeouts once for queries, rebuildable inserts, and `raw_insert` with bytes or strings. Raw generator and file bodies still raise the timeout because redirects may have consumed them. Socket read timeouts, connector errors, and certificate errors remain non-retryable. Closes [#1012](https://github.com/ClickHouse/clickhouse-connect/issues/1012).
 
 ## 1.8.0, 2026-09-02
 
