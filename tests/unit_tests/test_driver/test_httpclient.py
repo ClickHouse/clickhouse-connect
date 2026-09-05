@@ -1744,6 +1744,90 @@ class TestInsertArrowTransportSettings:
         assert transport not in raw_insert.call_args.args
 
 
+class TestInsertArrowTableQuoting:
+    """insert_arrow quotes table/database identifiers like insert() via quote_identifier()."""
+
+    @staticmethod
+    def _sync_client() -> HttpClient:
+        with patch.object(Client, "_init_common_settings", autospec=True):
+            client = HttpClient(
+                interface="http",
+                host="localhost",
+                port=8123,
+                username="default",
+                password="",
+                database="default",
+            )
+        client.write_compression = None
+        return client
+
+    @staticmethod
+    def _async_client() -> AsyncClient:
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.write_compression = None
+        return client
+
+    def _sync_raw_insert_table(self, table: str, database: str | None = None) -> str:
+        client = self._sync_client()
+        with (
+            patch("clickhouse_connect.driver.client.check_arrow"),
+            patch("clickhouse_connect.driver.client.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", return_value=Mock()) as raw_insert,
+        ):
+            client.insert_arrow(table, Mock(), database=database)
+        return raw_insert.call_args.args[0]
+
+    async def _async_raw_insert_table(self, table: str, database: str | None = None) -> str:
+        client = self._async_client()
+        with (
+            patch("clickhouse_connect.driver.asyncclient.check_arrow"),
+            patch("clickhouse_connect.driver.asyncclient.arrow_buffer", return_value=(["col_1"], b"block")),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", new=AsyncMock(return_value=Mock())) as raw_insert,
+        ):
+            await client.insert_arrow(table, Mock(), database=database)
+        return raw_insert.call_args.args[0]
+
+    @pytest.mark.parametrize(
+        "table, database, expected",
+        [
+            ("my-table", None, "`my-table`"),
+            ("my-table", "default", "`default`.`my-table`"),
+            ("`my-table`", None, "`my-table`"),
+            ("`my-table`", "default", "`default`.`my-table`"),
+            ("default.my-table", None, "default.my-table"),
+            ("default.my-table", "other", "default.my-table"),
+            ("user events", "my-db", "`my-db`.`user events`"),
+        ],
+    )
+    def test_insert_arrow_quotes_table_for_raw_insert(self, table, database, expected):
+        assert self._sync_raw_insert_table(table, database) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "table, database, expected",
+        [
+            ("my-table", None, "`my-table`"),
+            ("my-table", "default", "`default`.`my-table`"),
+            ("`my-table`", None, "`my-table`"),
+            ("`my-table`", "default", "`default`.`my-table`"),
+            ("default.my-table", None, "default.my-table"),
+            ("default.my-table", "other", "default.my-table"),
+            ("user events", "my-db", "`my-db`.`user events`"),
+        ],
+    )
+    async def test_async_insert_arrow_quotes_table_for_raw_insert(self, table, database, expected):
+        assert await self._async_raw_insert_table(table, database) == expected
+
+
 class TestIPv6HostBrackets:
     """RFC 3986 3.2.2: an IPv6 literal in a URI authority must be bracketed."""
 
