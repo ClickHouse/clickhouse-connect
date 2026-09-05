@@ -140,6 +140,56 @@ def test_compiled_executemany_uses_native_insert(test_engine: Engine, test_model
         assert result.rowcount == 2
 
 
+@pytest.mark.parametrize("rewrite", ["unchanged", "target", "expression"])
+def test_compiled_executemany_preserves_before_cursor_execute_rewrites(
+    test_engine: Engine,
+    table_context: Callable,
+    test_db: str,
+    rewrite: str,
+):
+    source_name = "sqlalchemy_event_source"
+    target_name = "sqlalchemy_event_target"
+    with (
+        table_context(source_name, ["id UInt64", "value String"]),
+        table_context(target_name, ["id UInt64", "value String"]),
+    ):
+        source = db.Table(
+            source_name,
+            MetaData(schema=test_db),
+            db.Column("id", UInt64),
+            db.Column("value", String),
+        )
+        with test_engine.begin() as conn:
+            observed_statements = []
+
+            @db.event.listens_for(conn, "before_cursor_execute", retval=True)
+            def rewrite_insert(_conn, _cursor, statement, parameters, context, executemany):
+                if executemany:
+                    original = statement
+                    if rewrite == "target":
+                        statement = statement.replace(source_name, target_name)
+                    elif rewrite == "expression":
+                        statement = statement.replace("%(value)s", "hex(%(value)s)")
+                    observed_statements.append((context.statement, original, statement))
+                return statement, parameters
+
+            client = conn.connection.driver_connection.client
+            with patch.object(client, "insert", wraps=client.insert) as native_insert:
+                result = conn.execute(db.insert(source), [{"id": 13, "value": "user_1"}, {"id": 79, "value": "user_2"}])
+
+            assert native_insert.call_count == (1 if rewrite == "unchanged" else 0)
+            assert result.rowcount == 2
+            assert len(observed_statements) == 1
+            context_statement, original, rewritten = observed_statements[0]
+            assert context_statement == original
+            assert (rewritten == original) is (rewrite == "unchanged")
+            expected = [(13, "757365725F31"), (79, "757365725F32")] if rewrite == "expression" else [(13, "user_1"), (79, "user_2")]
+            assert conn.execute(db.select(source.c.id, source.c.value).order_by(source.c.id)).all() == (
+                [] if rewrite == "target" else expected
+            )
+            assert conn.execute(text(f"SELECT id, value FROM {target_name} ORDER BY id")).all() == (expected if rewrite == "target" else [])
+
+
 def test_compiled_executemany_uses_escaped_bind_name(
     test_engine: Engine,
     table_context: Callable,

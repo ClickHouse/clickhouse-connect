@@ -178,7 +178,7 @@ def _parse_column_list(sql: str, pos: int) -> tuple[tuple[str, ...], int] | None
         if parsed is None:
             return None
         raw_column, pos = parsed
-        columns.append(unescape_identifier(raw_column.replace("%%", "%")))
+        columns.append(unescape_identifier(raw_column))
         pos = _skip_whitespace(sql, pos)
         if pos >= len(sql):
             return None
@@ -189,10 +189,12 @@ def _parse_column_list(sql: str, pos: int) -> tuple[tuple[str, ...], int] | None
         pos += 1
 
 
-def _bare_values_insert(scan: _ScannedSql) -> _BareValuesInsert | None:
+def _bare_values_insert(scan: _ScannedSql, *, pyformat_encoded: bool) -> _BareValuesInsert | None:
     if not scan.valid:
         return None
     sql = scan.text.strip()
+    if pyformat_encoded:
+        sql = sql.replace("%%", "%")
     if sql.endswith(";"):
         sql = sql[:-1].rstrip()
     pos = _parse_keyword(sql, 0, "INSERT")
@@ -218,7 +220,7 @@ def _bare_values_insert(scan: _ScannedSql) -> _BareValuesInsert | None:
     pos = _parse_keyword(sql, pos, "VALUES")
     if pos is None or _skip_whitespace(sql, pos) != len(sql):
         return None
-    return _BareValuesInsert(table.replace("%%", "%"), column_names)
+    return _BareValuesInsert(table, column_names)
 
 
 def _cursor_null_ok(ch_type: Any) -> bool | None:
@@ -488,7 +490,7 @@ class Cursor:
         if not parameters:
             return
         scan = _scan_insert_sql(operation)
-        bare_values_plan = _bare_values_insert(scan)
+        bare_values_plan = _bare_values_insert(scan, pyformat_encoded=pyformat_encoded)
         if bare_values_plan is not None:
             self._executemany_bare_values(bare_values_plan, parameters, settings)
             return

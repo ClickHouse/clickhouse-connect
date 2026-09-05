@@ -376,6 +376,25 @@ def test_executemany_bare_values_supports_sequence_and_mapping_rows(rows, expect
     assert cursor.fetchall() == []
 
 
+@pytest.mark.parametrize("pyformat_encoded", [False, True])
+@pytest.mark.parametrize("mapping_rows", [False, True], ids=["tuples", "mappings"])
+def test_executemany_bare_values_preserves_percent_provenance(pyformat_encoded, mapping_rows):
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+    expected_table = "`events%2026`" if pyformat_encoded else "`events%%2026`"
+    column = "value%pct" if pyformat_encoded else "value%%pct"
+    rows = [{column: 13}, {column: 79}] if mapping_rows else [(13,), (79,)]
+
+    cursor.executemany(
+        "INSERT INTO `events%%2026` (`value%%pct`) VALUES",
+        rows,
+        pyformat_encoded=pyformat_encoded,
+    )
+
+    client.insert.assert_called_once_with(expected_table, [[13], [79]], (column,), settings=None)
+    client.query.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "rows, expected_columns, expected_data",
     [

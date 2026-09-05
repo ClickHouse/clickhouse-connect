@@ -87,6 +87,40 @@ def test_executemany_with_percent_identifiers(dbapi_connection, table_context: C
         assert cursor.fetchall() == [(13,), (79,), (97,), (101,)]
 
 
+@pytest.mark.parametrize("pyformat_encoded", [False, True])
+@pytest.mark.parametrize("mapping_rows", [False, True], ids=["tuples", "mappings"])
+def test_executemany_bare_values_preserves_percent_provenance(
+    dbapi_connection,
+    table_context: Callable,
+    pyformat_encoded: bool,
+    mapping_rows: bool,
+):
+    columns = ["value%pct UInt32", "value%%pct UInt32"]
+    with (
+        table_context("dbapi%bare_values", columns),
+        table_context("dbapi%%bare_values", columns),
+    ):
+        cursor = dbapi_connection.cursor()
+        column = "value%pct" if pyformat_encoded else "value%%pct"
+        rows = [{column: 13}, {column: 79}] if mapping_rows else [(13,), (79,)]
+        cursor.executemany(
+            "INSERT INTO `dbapi%%bare_values` (`value%%pct`) VALUES",
+            rows,
+            pyformat_encoded=pyformat_encoded,
+        )
+        assert cursor.rowcount == 2
+        cursor.execute(
+            "SELECT `value%pct`, `value%%pct` FROM `dbapi%bare_values` ORDER BY `value%pct`",
+            pyformat_encoded=False,
+        )
+        assert cursor.fetchall() == ([(13, 0), (79, 0)] if pyformat_encoded else [])
+        cursor.execute(
+            "SELECT `value%pct`, `value%%pct` FROM `dbapi%%bare_values` ORDER BY `value%%pct`",
+            pyformat_encoded=False,
+        )
+        assert cursor.fetchall() == ([] if pyformat_encoded else [(0, 13), (0, 79)])
+
+
 def test_executemany_preserves_values_expressions_and_rowcount(dbapi_connection, table_context: Callable):
     with table_context("dbapi_executemany_expr", ["raw String", "encoded String", "fixed UInt32"]):
         cursor = dbapi_connection.cursor()

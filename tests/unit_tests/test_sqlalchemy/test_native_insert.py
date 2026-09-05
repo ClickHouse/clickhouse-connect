@@ -21,6 +21,7 @@ def _context(statement, dialect, column_keys=None, schema_translate_map=None):
         execution_options["schema_translate_map"] = schema_translate_map
     return SimpleNamespace(
         compiled=compiled,
+        statement=str(compiled),
         execution_options=execution_options,
         invoked_statement=statement,
     )
@@ -88,6 +89,28 @@ def test_plain_compiled_insert_supports_schema_translation_and_python_defaults()
     assert plan.column_names == ("id", "category")
     assert plan.parameter_keys == ("id", "category")
     assert plan.settings == {"max_threads": 3}
+
+
+@pytest.mark.parametrize("statement_metadata", ["missing", "none", "rewritten"])
+def test_native_insert_requires_original_execution_statement(statement_metadata):
+    dialect = ClickHouseDialect(dbapi=dbapi)
+    table = sa.Table("events", sa.MetaData(), sa.Column("id", sa.Integer))
+    context = _context(sa.insert(table), dialect, ["id"])
+    operation = context.statement
+    if statement_metadata == "missing":
+        del context.statement
+    elif statement_metadata == "none":
+        context.statement = None
+    else:
+        operation = operation.replace("`events`", "`redirected_events`")
+    parameters = [{"id": 13}, {"id": 79}]
+    client = Mock()
+    client.query.return_value = _query_result({"written_rows": "1"})
+
+    dialect.do_executemany(Cursor(client), operation, parameters, context)
+
+    client.insert.assert_not_called()
+    assert [item.args[:2] for item in client.query.call_args_list] == [(operation, row) for row in parameters]
 
 
 def test_escaped_bind_name_uses_compiled_parameter_key():

@@ -273,7 +273,9 @@ class ClickHouseDialect(DefaultDialect):
     def do_executemany(self, cursor, statement, parameters, context=None):
         ch_cursor = cast(Cursor, cursor)
         settings = self._ch_query_settings(context)
-        native_plan = self._ch_native_insert_plan(context, settings)
+        native_plan = None
+        if statement == getattr(context, "statement", None):
+            native_plan = self._ch_native_insert_plan(context, settings)
         if native_plan is not None:
             ch_cursor._executemany_native(native_plan, parameters)
             return
