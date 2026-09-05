@@ -515,6 +515,15 @@ def quote_identifier(identifier: str) -> str:
     return _format_identifier(identifier)
 
 
+def _qualified_table(table: str, database: str | None = None) -> str:
+    # Dotted names stay as-is so existing db.table callers keep working.
+    if "." in table:
+        return table
+    if database:
+        return f"{quote_identifier(database)}.{quote_identifier(table)}"
+    return quote_identifier(table)
+
+
 def _format_identifier(identifier: str) -> str:
     """Format a decoded identifier value, including literal boundary quotes."""
     return f"`{escape_str(identifier)}`"
