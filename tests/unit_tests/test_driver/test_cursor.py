@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.dbapi.cursor import Cursor
+from clickhouse_connect.dbapi.cursor import Cursor, _NativeInsertPlan
 from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
 
 
@@ -226,121 +226,299 @@ def test_empty_result_set():
     assert cursor.fetchmany(5) == []
 
 
-def test_executemany_bulk_insert_with_tuple_rows():
-    """Sequence rows (PEP 249 seq_of_parameters) must use the bulk insert path
-    with column names taken from the INSERT statement.
-    """
+@pytest.mark.parametrize(
+    "operation, rows",
+    [
+        (
+            'INSERT INTO test_db . test_table ("id", "name") VALUES (%s, hex(%s))',
+            [(13, b"user_1"), (79, b"user_2")],
+        ),
+        (
+            "INSERT INTO test_table (id, name) SELECT %(id)s, hex(%(name)s) AS VALUES",
+            [{"id": 13, "name": b"user_1"}, {"name": b"user_2", "id": 79}],
+        ),
+        (
+            "INSERT INTO test_table (id, name) VALUESgarbage (%(id)s, %(name)s)",
+            [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}],
+        ),
+        ("INSERT INTO FUNCTION null('id UInt32') VALUES (%s)", [(13,), (79,)]),
+        ("INSERT INTO TABLE FUNCTION null('id UInt32') VALUES (%s)", [(13,), (79,)]),
+        ("INSERT INTO test_table\n(id)\nVALUES (%s)", [(13,), (79,)]),
+        ("INSERT INTO test_table ", [(13,), (79,)]),
+    ],
+)
+def test_executemany_preserves_operation_and_each_parameter_row(operation, rows):
     client = Mock()
+    client.query.return_value = create_mock_query_result([])
     cursor = Cursor(client)
 
-    rows = [(13, "user_1"), (79, "user_2")]
-    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+    cursor.executemany(operation, rows)
 
-    client.insert.assert_called_once_with("test_table", rows, ["id", "name"], settings=None)
+    assert [call.args for call in client.query.call_args_list] == [(operation, row) for row in rows]
+    client.insert.assert_not_called()
+
+
+def test_executemany_native_projects_ordered_mapping_keys_and_settings():
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+    plan = _NativeInsertPlan(
+        "`test_db`.`test_table`",
+        ("db_name", "db_id"),
+        ("name", "id"),
+        {"max_threads": 3},
+    )
+    rows = [{"id": 13, "name": "user_1"}, {"name": "user_2", "id": 79}]
+
+    cursor._executemany_native(plan, rows)
+
+    client.insert.assert_called_once_with(
+        "`test_db`.`test_table`",
+        [["user_1", 13], ["user_2", 79]],
+        ("db_name", "db_id"),
+        settings={"max_threads": 3},
+    )
+    assert cursor.rowcount == 2
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"id": 13, "name": "user_1"}, {"id": 79}],
+        [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2", "extra": 97}],
+        [{"id": 13, "name": "user_1"}, (79, "user_2")],
+    ],
+)
+def test_executemany_native_validates_all_rows_before_insert(rows):
+    client = Mock()
+    cursor = Cursor(client)
+    plan = _NativeInsertPlan("test_table", ("id", "name"), ("id", "name"))
+
+    with pytest.raises(ProgrammingError, match="matching mapping parameters"):
+        cursor._executemany_native(plan, rows)
+
+    client.insert.assert_not_called()
     client.query.assert_not_called()
 
 
-def test_executemany_bulk_insert_tuple_rows_without_column_list():
-    """Without an explicit column list, sequence rows insert into all columns."""
+def test_executemany_native_validation_resets_previous_results():
+    client = Mock()
+    client.query.return_value = create_mock_query_result(
+        [(13,)],
+        column_names=["value"],
+        column_types=[get_from_name("UInt32")],
+    )
+    cursor = Cursor(client)
+    cursor.execute("SELECT 13")
+    plan = _NativeInsertPlan("test_table", ("id", "name"), ("id", "name"))
+
+    with pytest.raises(ProgrammingError, match="matching mapping parameters"):
+        cursor._executemany_native(plan, [{"id": 79}])
+
+    assert cursor.rowcount == 0
+    assert cursor.description == []
+    assert cursor.fetchall() == []
+
+
+def test_executemany_native_rejects_non_sequence_parameters():
     client = Mock()
     cursor = Cursor(client)
+    plan = _NativeInsertPlan("test_table", ("id",), ("id",))
 
-    rows = [(13, "user_1"), (79, "user_2")]
-    cursor.executemany("INSERT INTO test_table VALUES (%s, %s)", rows)
+    with pytest.raises(ProgrammingError, match="sequence of mapping parameters"):
+        cursor._executemany_native(plan, {"id": 13})
 
-    client.insert.assert_called_once_with("test_table", rows, "*", settings=None)
+    client.insert.assert_not_called()
     client.query.assert_not_called()
 
 
-def test_executemany_bulk_insert_with_dict_rows():
-    """Mapping rows keep the existing bulk insert behavior."""
-    client = Mock()
+def test_executemany_native_dml_fetches_use_result_data_bounds():
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+    plan = _NativeInsertPlan("test_table", ("id",), ("id",))
+
+    cursor._executemany_native(plan, [{"id": 13}, {"id": 79}])
+
+    assert cursor.rowcount == 2
+    assert cursor.fetchone() is None
+    assert cursor.fetchmany() == []
+    assert cursor.fetchall() == []
+
+
+@pytest.mark.parametrize(
+    "rows, expected_data",
+    [
+        ([(13, "user_1"), (79, "user_2")], [[13, "user_1"], [79, "user_2"]]),
+        (
+            [{"value%pct": "user_1", "id": 13}, {"id": 79, "value%pct": "user_2"}],
+            [[13, "user_1"], [79, "user_2"]],
+        ),
+    ],
+)
+def test_executemany_bare_values_supports_sequence_and_mapping_rows(rows, expected_data):
+    client, summary = _mock_insert_client(written_rows=2, summary_extra={"written_bytes": "64"})
     cursor = Cursor(client)
 
-    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
-    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%(id)s, %(name)s)", rows)
-
-    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
-    client.query.assert_not_called()
-
-
-def test_executemany_bulk_insert_with_simple_backtick_columns():
-    """Backtick-quoted simple column names still match the row dict keys, so the
-    bulk insert fast path is kept (contrast case: behavior unchanged by the fix).
-    """
-    client = Mock()
-    cursor = Cursor(client)
-
-    rows = [{"id": 13, "name": "user_1"}, {"id": 79, "name": "user_2"}]
-    cursor.executemany("INSERT INTO test_table (`id`, `name`) VALUES (%(id)s, %(name)s)", rows)
-
-    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
-    client.query.assert_not_called()
-
-
-def test_executemany_bulk_insert_with_dotted_backtick_columns():
-    """Backtick-quoted dotted column names (the wire form of Nested sub-columns)
-    must unescape to directory.id so they match the row dict keys and keep the
-    bulk insert fast path instead of silently degrading to per-row execution.
-    See https://github.com/ClickHouse/clickhouse-go/issues/1587 (Python sibling).
-    """
-    client = Mock()
-    cursor = Cursor(client)
-
-    rows = [
-        {"directory.id": 13, "directory.type": "user_1"},
-        {"directory.id": 79, "directory.type": "user_2"},
-    ]
     cursor.executemany(
-        "INSERT INTO test_table (`directory`.`id`, `directory`.`type`) VALUES (%(directory.id)s, %(directory.type)s)",
+        '/* leading */ INSERT INTO TABLE `test%%db` . "events%%2026" (`id`, "value%%pct") VALUES; -- trailing',
         rows,
+        settings={"max_threads": 3},
     )
 
-    client.insert.assert_called_once_with("test_table", [[13, "user_1"], [79, "user_2"]], ["directory.id", "directory.type"], settings=None)
+    client.insert.assert_called_once_with(
+        '`test%db`."events%2026"',
+        expected_data,
+        ("id", "value%pct"),
+        settings={"max_threads": 3},
+    )
+    client.query.assert_not_called()
+    assert cursor.rowcount == 2
+    assert cursor.summary == [summary]
+    assert cursor.fetchall() == []
+
+
+@pytest.mark.parametrize("pyformat_encoded", [False, True])
+@pytest.mark.parametrize("mapping_rows", [False, True], ids=["tuples", "mappings"])
+def test_executemany_bare_values_preserves_percent_provenance(pyformat_encoded, mapping_rows):
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+    expected_table = "`events%2026`" if pyformat_encoded else "`events%%2026`"
+    column = "value%pct" if pyformat_encoded else "value%%pct"
+    rows = [{column: 13}, {column: 79}] if mapping_rows else [(13,), (79,)]
+
+    cursor.executemany(
+        "INSERT INTO `events%%2026` (`value%%pct`) VALUES",
+        rows,
+        pyformat_encoded=pyformat_encoded,
+    )
+
+    client.insert.assert_called_once_with(expected_table, [[13], [79]], (column,), settings=None)
     client.query.assert_not_called()
 
 
-def test_executemany_bulk_insert_unescapes_percent_identifiers_for_dict_rows():
-    client = Mock()
+@pytest.mark.parametrize(
+    "rows, expected_columns, expected_data",
+    [
+        ([(13, "user_1"), (79, "user_2")], "*", [[13, "user_1"], [79, "user_2"]]),
+        (
+            [{"id": 13, "name": "user_1"}, {"name": "user_2", "id": 79}],
+            ("id", "name"),
+            [[13, "user_1"], [79, "user_2"]],
+        ),
+    ],
+)
+def test_executemany_bare_values_without_columns_uses_row_layout(rows, expected_columns, expected_data):
+    client, _ = _mock_insert_client(written_rows=2)
     cursor = Cursor(client)
 
-    rows = [{"value%pct": 13}, {"value%pct": 79}]
-    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES (%(value_pct)s)", rows)
+    cursor.executemany("INSERT INTO events VALUES", rows)
 
-    client.insert.assert_called_once_with("`events%2026`", [[13], [79]], ["value%pct"], settings=None)
+    client.insert.assert_called_once_with("events", expected_data, expected_columns, settings=None)
+
+
+def test_executemany_bare_values_accepts_generator_rows():
+    client, _ = _mock_insert_client(written_rows=2)
+    cursor = Cursor(client)
+
+    rows = ({"id": value} for value in (13, 79))
+    cursor.executemany("INSERT INTO events (id) VALUES", rows)
+
+    client.insert.assert_called_once_with("events", [[13], [79]], ("id",), settings=None)
     client.query.assert_not_called()
 
 
-def test_executemany_bulk_insert_unescapes_percent_identifiers_for_tuple_rows():
-    client = Mock()
+@pytest.mark.parametrize(
+    "operation, expected_table, expected_columns",
+    [
+        ("INSERT INTO `event/*log*/` (id) VALUES", "`event/*log*/`", ("id",)),
+        ("INSERT INTO `event--log` (id) VALUES", "`event--log`", ("id",)),
+        ('INSERT INTO "event//log" (id) VALUES', '"event//log"', ("id",)),
+        ("INSERT INTO events (`directory`.`id`) VALUES", "events", ("directory.id",)),
+        ("INSERT INTO events (id) VALUES // trailing %(ignored)s", "events", ("id",)),
+        ("INSERT INTO events (id) VALUES # trailing %s", "events", ("id",)),
+        ("INSERT INTO events (id) VALUES -- trailing {ignored:UInt32}", "events", ("id",)),
+    ],
+)
+def test_executemany_bare_values_preserves_quoted_comment_text_and_ignores_trailing_comments(
+    operation,
+    expected_table,
+    expected_columns,
+):
+    client, _ = _mock_insert_client(written_rows=1)
     cursor = Cursor(client)
 
-    rows = [(13,), (79,)]
-    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES (%s)", rows)
+    cursor.executemany(operation, [(13,)])
 
-    client.insert.assert_called_once_with("`events%2026`", rows, ["value%pct"], settings=None)
+    client.insert.assert_called_once_with(expected_table, [[13]], expected_columns, settings=None)
     client.query.assert_not_called()
 
 
-def test_executemany_bulk_insert_keeps_percents_for_server_side_statements():
+def test_executemany_heredoc_insert_uses_sql_path():
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+    operation = "INSERT INTO events (payload) VALUES ($text$line 1\nline 2$text$)"
+
+    cursor.executemany(operation, [{}, {}])
+
+    assert client.query.call_count == 2
+    client.query.assert_any_call(operation, {}, settings=None, query_formats=None)
+    client.insert.assert_not_called()
+
+
+@pytest.mark.parametrize("bind_name", ["$name", "123name"])
+def test_executemany_server_bind_name_uses_sql_path(bind_name):
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+    operation = f"INSERT INTO events SELECT {{{bind_name}:UInt32}} AS VALUES"
+
+    cursor.executemany(operation, [{bind_name: 13}])
+
+    client.query.assert_called_once_with(
+        operation,
+        {bind_name: 13},
+        settings=None,
+        query_formats=None,
+    )
+    client.insert.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "rows, message",
+    [
+        ([{"id": 13, "name": "user_1"}, {"id": 79}], "matching mapping rows"),
+        ([{"id": 13, "name": "user_1"}, (79, "user_2")], "matching mapping rows"),
+        ([(13, "user_1"), (79,)], "equal-width sequence rows"),
+        ([(13, "user_1"), {"id": 79, "name": "user_2"}], "equal-width sequence rows"),
+    ],
+)
+def test_executemany_bare_values_validates_every_row_before_insert(rows, message):
     client = Mock()
     cursor = Cursor(client)
 
-    rows = [(13,), (79,)]
-    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES ({v:UInt32})", rows)
+    with pytest.raises(ProgrammingError, match=message):
+        cursor.executemany("INSERT INTO events (id, name) VALUES", rows)
 
-    client.insert.assert_called_once_with("`events%%2026`", rows, ["value%%pct"], settings=None)
+    client.insert.assert_not_called()
     client.query.assert_not_called()
 
 
-def test_executemany_bulk_insert_keeps_percents_for_server_side_dict_rows():
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "INSERT INTO FUNCTION null('value%s UInt32') VALUES",
+        "INSERT INTO events (id) VALUES /* unterminated",
+        "INSERT INTO events FORMAT Values",
+    ],
+)
+def test_executemany_unsupported_bare_values_fails_before_execution(operation):
     client = Mock()
     cursor = Cursor(client)
 
-    rows = [{"value%%pct": 13}, {"value%%pct": 79}]
-    cursor.executemany("INSERT INTO `events%%2026` (`value%%pct`) VALUES ({v:UInt32})", rows)
+    with pytest.raises(ProgrammingError, match="cannot safely route this placeholder-less INSERT"):
+        cursor.executemany(operation, [{"id": 13}])
 
-    client.insert.assert_called_once_with("`events%%2026`", [[13], [79]], ["value%%pct"], settings=None)
+    client.insert.assert_not_called()
     client.query.assert_not_called()
 
 
@@ -600,26 +778,87 @@ def _mock_insert_client(written_rows: int, summary_extra: dict | None = None):
     return client, summary_dict
 
 
-def test_executemany_bulk_insert_rowcount_equals_written_rows():
-    """rowcount after a bulk executemany reflects the actual number of inserted rows."""
-    client, _ = _mock_insert_client(written_rows=2)
+def test_executemany_insert_rowcount_aggregates_written_rows():
+    client = Mock()
+    first = create_mock_query_result([])
+    first.summary = {"written_rows": "1"}
+    second = create_mock_query_result([])
+    second.summary = {"written_rows": "2"}
+    client.query.side_effect = [first, second]
     cursor = Cursor(client)
 
     rows = [(13, "user_1"), (79, "user_2")]
     cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+
+    assert cursor.rowcount == 3
+
+
+def test_executemany_generic_dml_fetches_use_result_data_bounds():
+    client = Mock()
+    result = create_mock_query_result([])
+    result.summary = {"written_rows": "1"}
+    client.query.return_value = result
+    cursor = Cursor(client)
+
+    cursor.executemany("INSERT INTO test_table (id) VALUES (%s)", [(13,), (79,)])
+
+    assert cursor.rowcount == 2
+    assert cursor.fetchone() is None
+    assert cursor.fetchmany() == []
+    assert cursor.fetchall() == []
+
+
+def test_executemany_with_insert_uses_written_rows_summary():
+    client = Mock()
+    result = create_mock_query_result([])
+    result.summary = {"written_rows": "1"}
+    client.query.return_value = result
+    cursor = Cursor(client)
+
+    cursor.executemany("WITH 13 AS value INSERT INTO test_table SELECT value", [{}, {}])
 
     assert cursor.rowcount == 2
 
 
-def test_executemany_bulk_insert_appends_summary():
-    """summary is populated from the insert response after a bulk executemany."""
-    client, summary_dict = _mock_insert_client(written_rows=2, summary_extra={"written_bytes": "64"})
+@pytest.mark.parametrize(
+    "operation, expected_rowcount",
+    [
+        ("WITH 13 AS value INSERT INTO test_table SELECT value", -1),
+        ("WITH 13 AS value SELECT value WHERE 0", 0),
+    ],
+)
+def test_executemany_with_prefix_without_written_rows_uses_statement_type(operation, expected_rowcount):
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
     cursor = Cursor(client)
 
-    rows = [(13, "user_1"), (79, "user_2")]
-    cursor.executemany("INSERT INTO test_table (id, name) VALUES (%s, %s)", rows)
+    cursor.executemany(operation, [{}, {}])
 
-    assert cursor.summary == [summary_dict]
+    assert cursor.rowcount == expected_rowcount
+
+
+def test_executemany_insert_rowcount_is_unknown_without_written_rows():
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor.executemany("INSERT INTO test_table (id) VALUES (%s)", [(13,), (79,)])
+
+    assert cursor.rowcount == -1
+
+
+def test_executemany_result_rowcount_counts_returned_rows():
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([(13,)], ["value"], [get_from_name("UInt32")]),
+        create_mock_query_result([(79,)], ["value"], [get_from_name("UInt32")]),
+    ]
+    cursor = Cursor(client)
+
+    cursor.executemany("SELECT %(value)s AS value", [{"value": 13}, {"value": 79}])
+
+    assert cursor.rowcount == 2
+    assert cursor.fetchall() == [(13,), (79,)]
 
 
 def test_executemany_generator_falls_through_to_row_by_row():

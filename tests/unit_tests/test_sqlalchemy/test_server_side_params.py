@@ -133,14 +133,14 @@ class _StubInsertResult:
     summary = {}
 
 
-@pytest.fixture(name="routing_engine")
-def routing_engine_fixture():
+@pytest.fixture(name="routing_engine", params=[False, True], ids=["client-side", "server-side"])
+def routing_engine_fixture(request):
     client = Mock()
     client.server_tz = "UTC"
     client.query.return_value = _StubQueryResult()
     client.insert.return_value = _StubInsertResult()
     with patch("clickhouse_connect.dbapi.connection.create_client", return_value=client):
-        engine: Engine = create_engine("clickhousedb://user_1:pwd@localhost:8123/default")
+        engine: Engine = create_engine("clickhousedb://user_1:pwd@localhost:8123/default", server_side_params=request.param)
         try:
             yield engine, client
         finally:
@@ -163,7 +163,7 @@ def test_multivalues_insert_dispatch(routing_engine):
         conn.execute(insert(events), rows)
 
         client.query.assert_not_called()
-        client.insert.assert_called_once_with("`events`", [[13, "user_1"], [79, "user_2"]], ["id", "name"], settings=None)
+        client.insert.assert_called_once_with("`events`", [[13, "user_1"], [79, "user_2"]], ("id", "name"), settings=None)
 
 
 def test_double_percents_disabled_only_when_enabled():
