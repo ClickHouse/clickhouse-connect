@@ -377,6 +377,10 @@ with engine.connect() as conn:
     )
 ```
 
+Explicit multi-row `insert(events).values([...])` statements work with dictionary rows, tuples in table column order, and per-row SQL expressions. Pandas `to_sql(method="multi")` uses this form. It inserts the rows but returns `0` because textual INSERT statements report a row count of `0` through the DB-API cursor. SQLAlchemy determines the column list from the first row. Extra dictionary keys in later rows and tuple values outside that selected column list are ignored. A later row missing a selected value fails compilation. Give every row the same columns.
+
+With the default HTTP form limits in ClickHouse 26.4 and newer, `server_side_params=True` is suitable only for small explicit batches, below about 1000 bind values with headroom for other fields. Server configuration can raise this ceiling. For large plain batches, pass rows as the second argument to `execute()` so the driver can use its Native bulk insert path.
+
 ```python
 import sqlalchemy as db
 from sqlalchemy import MetaData

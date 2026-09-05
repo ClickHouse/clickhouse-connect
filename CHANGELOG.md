@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- SQLAlchemy multi-row `Insert.values()` statements now compile and execute. Rows can be dictionaries, tuples in table column order, or rows containing SQL expressions, with client-side or server-side bind parameters. This also enables Pandas `to_sql(method="multi")`. See the SQLAlchemy documentation for column selection rules and the bind parameter ceiling that applies to server-side parameters on ClickHouse 26.4 and newer. Closes [#1024](https://github.com/ClickHouse/clickhouse-connect/issues/1024).
 ### Bug Fixes
 
 - Multiprocessing workers now reuse one process-local urllib3 `PoolManager`. Creating and closing clients inside workers no longer retains one unused manager per client. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
