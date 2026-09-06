@@ -1,6 +1,6 @@
 import ipaddress
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum as PyEnum
 from typing import Any, TypeVar, cast, overload
 
@@ -27,6 +27,7 @@ from sqlalchemy.types import (
 from sqlalchemy.types import (
     String as SqlaString,
 )
+from sqlalchemy.util import memoized_property
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import json_subcolumn
@@ -142,6 +143,11 @@ class Boolean(Bool):
 
 class Decimal(ChSqlaType, Numeric):  # type: ignore[misc]
     dec_size = 0
+
+    @memoized_property
+    def _expression_adaptations(self) -> dict[Callable[..., Any], dict[type[TypeEngine[Any]], type[TypeEngine[Any]]]]:
+        """Use Numeric affinity to retain configured operand types during arithmetic."""
+        return Numeric()._expression_adaptations
 
     def __init__(self, precision: int = 0, scale: int = 0, type_def: TypeDef | None = None):
         """
