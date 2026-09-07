@@ -3,7 +3,7 @@ import logging
 from abc import ABC
 from collections.abc import Collection, MutableSequence, Sequence
 from dataclasses import dataclass
-from math import log
+from math import copysign, log
 from typing import Any, NamedTuple
 
 from clickhouse_connect.driver import ctypes as driver_ctypes
@@ -304,22 +304,24 @@ class ClickHouseType(ABC):  # noqa: B024
                 if x is None:
                     keys.append(0)
                 else:
-                    ix = rmg(x)
+                    map_key = _NEGATIVE_ZERO_KEY if type(x) is float and x == 0.0 and copysign(1.0, x) < 0.0 else x
+                    ix = rmg(map_key)
                     if ix is None:
                         keys.append(key)
                         index.append(x)
-                        rev_map[x] = key
+                        rev_map[map_key] = key
                         key += 1
                     else:
                         keys.append(ix)
         else:
             key = 0
             for x in column:
-                ix = rmg(x)
+                map_key = _NEGATIVE_ZERO_KEY if type(x) is float and x == 0.0 and copysign(1.0, x) < 0.0 else x
+                ix = rmg(map_key)
                 if ix is None:
                     keys.append(key)
                     index.append(x)
-                    rev_map[x] = key
+                    rev_map[map_key] = key
                     key += 1
                 else:
                     keys.append(ix)
@@ -332,6 +334,12 @@ class ClickHouseType(ABC):  # noqa: B024
 
     def _active_null(self, _ctx: QueryContext) -> Any:
         return None
+
+
+# Sentinel dictionary key for negative zero.  In Python ``0.0 == -0.0`` and their hashes match, so a
+# plain dict would merge them into one LowCardinality dictionary entry even though they encode to
+# different bytes (``0x00000000`` vs ``0x80000000``), silently dropping the sign of the value.
+_NEGATIVE_ZERO_KEY = object()
 
 
 EMPTY_TYPE_DEF = TypeDef()
