@@ -5,7 +5,7 @@ from sqlalchemy.sql import ColumnElement
 from typing_extensions import assert_type
 
 import clickhouse_connect.cc_sqlalchemy as cc_sa
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, LowCardinality, Nullable, String, UInt32
 
 book = sa.table(
     "book",
@@ -61,3 +61,11 @@ assert_type(typed_json_path, ColumnElement[int])
 typed_json_path_from_class = cc_sa.json_subcolumn(json_payload, "request_id", type_=UInt32)
 assert_type(typed_json_path_from_class, ColumnElement[int])
 cc_sa.json_subcolumn(json_payload, 13)  # type: ignore[call-overload]
+
+# Nullable and LowCardinality return an instance of the wrapped type, so the result is a TypeEngine that Column accepts.
+assert_type(Nullable(String), String)
+assert_type(Nullable(UInt32()), UInt32)
+assert_type(LowCardinality(String), String)
+assert_type(LowCardinality(Nullable(String())), String)
+sa.Column("hostname", LowCardinality(String))
+sa.Column("user_id", Nullable(UInt32))
