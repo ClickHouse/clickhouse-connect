@@ -153,15 +153,18 @@ def test_datetime64_shared_bind_compatibility(test_engine, table_context, test_d
         )
         statement = table.insert().values(first=sa.bindparam("stamp"), second=sa.bindparam("stamp"))
         with test_engine.begin() as conn:
-            parameters = {"stamp": STAMP}
-            conn.execute(statement, [parameters, parameters] if executemany else parameters)
+            # Distinct timestamps avoid insert deduplication across fallback requests.
+            offsets = range(2 if executemany else 1)
+            parameters = [{"stamp": STAMP + timedelta(seconds=offset)} for offset in offsets]
+            conn.execute(statement, parameters if executemany else parameters[0])
             first_expected = NAIVE_STAMP
             second_expected = NAIVE_STAMP
             if isinstance(first_type, DateTime):
                 first_expected = second_expected = NAIVE_STAMP.replace(microsecond=0)
             elif first_type.ch_type.scale == 3:
                 first_expected = NAIVE_STAMP.replace(microsecond=123000)
-            assert conn.execute(sa.select(table)).all() == [(first_expected, second_expected)] * (2 if executemany else 1)
+            expected = [(first_expected + timedelta(seconds=offset), second_expected + timedelta(seconds=offset)) for offset in offsets]
+            assert conn.execute(sa.select(table).order_by(table.c.second)).all() == expected
 
 
 @pytest.mark.parametrize("tuple_bind", [False, True])
