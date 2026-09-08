@@ -36,7 +36,7 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `compress` | bool or str | `True` | Enable compression or select `"lz4"`, `"zstd"`, `"br"`, or `"gzip"`. See [Compression](/integrations/language-clients/python/additional-options#compression). |
 | `query_limit` | int | `0` | Default row limit appended to eligible queries. Zero means unlimited. Stream large results instead of materializing them all in memory. |
 | `query_retries` | int | `2` | Retry budget for retryable read failures. Commands and inserts are not generally retried because replay can duplicate side effects. |
-| `connect_timeout` | int | `10` | Connection timeout in seconds. |
+| `connect_timeout` | int | `10` | Timeout in seconds for establishing a new connection. Waiting for a free connection pool slot is excluded. |
 | `send_receive_timeout` | int | `300` | Socket read timeout in seconds. |
 | `client_name` | str or None | `None` | Prefix added to the HTTP User-Agent for identification in `system.query_log`. |
 | `session_id` | str or None | Generated for sync | Explicit ClickHouse session ID. Synchronous clients generate one by default; async clients do not. |

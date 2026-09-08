@@ -8,6 +8,7 @@
 
 ### Bug Fixes
 
+- Async requests waiting for a free connection no longer fail when the pool wait exceeds `connect_timeout`. The timeout still covers DNS, TCP, TLS, and proxy connection setup after a pool slot is available. Closes [#1013](https://github.com/ClickHouse/clickhouse-connect/issues/1013).
 - SQLAlchemy SQL-text inserts, comparisons, and literal rendering now preserve fractional seconds for typed `DateTime64` values, including nested arrays and tuples. `DateTime` formatting, timezone handling, and Native bulk inserts retain their existing behavior. SQLAlchemy column types must match the server schema: declaring `DateTime64` over a server `DateTime` column can now raise conversion errors, including in `IN` comparisons. Closes [#1030](https://github.com/ClickHouse/clickhouse-connect/issues/1030).
 - Native inserts into `Date` and `Date32` columns now accept timezone-aware datetimes and mixed `date` and `datetime` values. They preserve each value's calendar date without converting its timezone, including in nullable and nested columns. Low cardinality columns also preserve different calendar dates when their datetime values represent the same instant. Closes [#1031](https://github.com/ClickHouse/clickhouse-connect/issues/1031).
 - SQLAlchemy arithmetic on ClickHouse `Decimal` columns and aggregates no longer raises an invalid precision or scale error. Expressions preserve configured operand types and existing numeric promotion behavior. Closes [#1027](https://github.com/ClickHouse/clickhouse-connect/issues/1027).

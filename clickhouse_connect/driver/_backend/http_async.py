@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
+from aiohttp.helpers import ceil_timeout
 
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.httpcommon import (
@@ -41,6 +42,9 @@ from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingEr
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
+    from aiohttp.client_proto import ResponseHandler
+    from aiohttp.tracing import Trace
+
     from clickhouse_connect.driver._backend.contracts import AsyncBackend
     from clickhouse_connect.driver._backend.httpcommon import QueryRequestPlan
     from clickhouse_connect.driver.external import ExternalData
@@ -150,6 +154,16 @@ def _is_retryable_async_remote_close(error: aiohttp.ClientConnectionError) -> bo
     return isinstance(error.__context__, _REMOTE_CLOSE_ERRORS)
 
 
+class _TCPConnector(aiohttp.TCPConnector):
+    """Apply the connection deadline after acquiring a pool slot."""
+
+    # This adapter uses aiohttp's private _create_connection and helpers.ceil_timeout hooks.
+    async def _create_connection(self, req: aiohttp.ClientRequest, traces: list[Trace], timeout: aiohttp.ClientTimeout) -> ResponseHandler:
+        # Include DNS, TLS, and proxy negotiation in the connection budget.
+        async with ceil_timeout(timeout.sock_connect, ceil_threshold=timeout.ceil_threshold):
+            return await super()._create_connection(req, traces, timeout)
+
+
 class HttpAsyncBackend:
     capabilities = Capabilities(native_async=True, sessions=True)
 
@@ -202,7 +216,7 @@ class HttpAsyncBackend:
         self.session_lease = SessionLease(value) if value is not None else None
 
     def _new_session(self) -> aiohttp.ClientSession:
-        connector = aiohttp.TCPConnector(**self.connector_kwargs)
+        connector = _TCPConnector(**self.connector_kwargs)
         return aiohttp.ClientSession(
             connector=connector,
             timeout=self.timeout,
