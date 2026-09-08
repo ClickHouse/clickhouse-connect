@@ -178,3 +178,5 @@ client2 = clickhouse_connect.get_client(pool_mgr=big_pool_mgr)
 Clients can share a pool manager, or each client can use a separate manager. For more details, see the [`urllib3` PoolManager documentation](https://urllib3.readthedocs.io/en/stable/advanced-usage.html#customizing-pool-behavior).
 
 The async client owns an aiohttp pool rather than using `urllib3`. Configure it through `connector_limit`, `connector_limit_per_host`, and `keepalive_timeout` on `get_async_client`. Calling `await async_client.close_connections()` rotates the pool without interrupting in-flight requests.
+
+For async queries and inserts, waiting for a free pool slot has no timeout. Fully read or close streaming responses to release their pool slots. `connect_timeout` starts after a slot is available and covers DNS resolution, TCP and TLS setup, and proxy negotiation. `send_receive_timeout` limits socket reads. To set a deadline for the whole operation, including pool waiting, use `asyncio.wait_for`, for example `await asyncio.wait_for(client.query("SELECT 13"), timeout=30)`.
