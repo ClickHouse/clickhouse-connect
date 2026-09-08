@@ -144,7 +144,7 @@ async def test_async_numeric_options_are_coerced(source):
         },
     )
 
-    assert client._timeout.connect == 11.25
+    assert client._timeout.connect is None
     assert client._timeout.sock_connect == 11.25
     assert client._timeout.sock_read == 19.5
     assert client.query_limit == 17

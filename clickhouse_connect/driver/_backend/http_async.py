@@ -21,6 +21,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
+from aiohttp.helpers import ceil_timeout
 
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.httpcommon import (
@@ -43,6 +44,9 @@ from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingEr
 from clickhouse_connect.driver.streaming import start_streaming_response
 
 if TYPE_CHECKING:
+    from aiohttp.client_proto import ResponseHandler
+    from aiohttp.tracing import Trace
+
     from clickhouse_connect.driver._backend.contracts import AsyncBackend
     from clickhouse_connect.driver._backend.httpcommon import QueryRequestPlan
     from clickhouse_connect.driver.external import ExternalData
@@ -52,6 +56,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _REMOTE_CLOSE_ERRORS = (ConnectionResetError, BrokenPipeError)
+_CONNECTION_TIMEOUT_ERROR: type[aiohttp.ServerTimeoutError] | None = getattr(aiohttp, "ConnectionTimeoutError", None)
 _SESSION_UNAVAILABLE_ERROR = (
     "Client session is unavailable. Call 'await client._initialize()' before making requests or to reopen a closed client."
 )
@@ -198,7 +203,13 @@ async def _close_session_lease(lease: SessionLease) -> None:
         raise
 
 
-def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -> bool:
+def _is_async_connection_timeout(error: aiohttp.ClientConnectionError) -> bool:
+    if _CONNECTION_TIMEOUT_ERROR is not None:
+        return isinstance(error, _CONNECTION_TIMEOUT_ERROR)
+    return isinstance(error, aiohttp.ServerTimeoutError) and isinstance(error.__cause__, asyncio.TimeoutError)
+
+
+def _is_retryable_async_remote_close(error: aiohttp.ClientConnectionError) -> bool:
     if isinstance(error, (aiohttp.ServerTimeoutError, aiohttp.ClientConnectorError, aiohttp.ServerFingerprintMismatch)):
         return False
     if isinstance(error, aiohttp.ServerDisconnectedError):
@@ -208,6 +219,16 @@ def _is_retryable_async_connection_error(error: aiohttp.ClientConnectionError) -
     if isinstance(error.__cause__, _REMOTE_CLOSE_ERRORS):
         return True
     return isinstance(error.__context__, _REMOTE_CLOSE_ERRORS)
+
+
+class _TCPConnector(aiohttp.TCPConnector):
+    """Apply the connection deadline after acquiring a pool slot."""
+
+    # This adapter uses aiohttp's private _create_connection and helpers.ceil_timeout hooks.
+    async def _create_connection(self, req: aiohttp.ClientRequest, traces: list[Trace], timeout: aiohttp.ClientTimeout) -> ResponseHandler:
+        # Include DNS, TLS, and proxy negotiation in the connection budget.
+        async with ceil_timeout(timeout.sock_connect, ceil_threshold=timeout.ceil_threshold):
+            return await super()._create_connection(req, traces, timeout)
 
 
 class HttpAsyncBackend:
@@ -265,7 +286,7 @@ class HttpAsyncBackend:
         self.session_lease = SessionLease(value) if value is not None else None
 
     def _new_session(self) -> aiohttp.ClientSession:
-        connector = aiohttp.TCPConnector(**self.connector_kwargs)
+        connector = _TCPConnector(**self.connector_kwargs)
         return aiohttp.ClientSession(
             connector=connector,
             timeout=self.timeout,
@@ -605,6 +626,7 @@ class HttpAsyncBackend:
         query_session = final_params.get("session_id")
         attempts = 0
         auth_retried = False
+        connection_timeout_retried = False
 
         while True:
             attempts += 1
@@ -694,7 +716,20 @@ class HttpAsyncBackend:
 
             except aiohttp.ClientConnectionError as e:
                 msg = str(e)
-                if not session.closed and _is_retryable_async_connection_error(e):
+                if not session.closed and _is_async_connection_timeout(e):
+                    # A redirect may consume the body before a later connection times out.
+                    if not connection_timeout_retried and (
+                        retry_body is not None or data is None or isinstance(data, (bytes, bytearray, str, dict))
+                    ):
+                        connection_timeout_retried = True
+                        # The one connect retry does not consume the request retry budget.
+                        attempts -= 1
+                        if retry_body is not None:
+                            data = await retry_body()
+                        logger.debug("Retrying after connection timeout (attempt 1/2)")
+                        await asyncio.sleep(0.1)
+                        continue
+                elif not session.closed and _is_retryable_async_remote_close(e):
                     # Always allow at least one retry on a clean connection error so a single stale
                     # keep-alive socket doesn't surface to the caller, and additionally honor the
                     # retries budget when it is larger (e.g. query_retries for reads), so that
@@ -710,7 +745,7 @@ class HttpAsyncBackend:
                             logger.debug("Retrying after connection error from remote host (attempt %s/%s)", attempts, max_attempts)
                             await asyncio.sleep(0.1 * attempts)
                             continue
-                logger.debug("Non-retryable aiohttp connection error type=%s", type(e).__name__)
+                logger.debug("Not retrying aiohttp connection error type=%s", type(e).__name__)
                 if self.show_clickhouse_errors is True:
                     raise OperationalError(f"Network Error: {msg}") from e
                 logger.warning("Unexpected aiohttp connection error", exc_info=True)

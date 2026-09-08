@@ -190,18 +190,17 @@ class _AsyncClientFacade:
 class _AsyncCursor(Cursor):
     _awaitable_cursor_close = False
 
-    def _try_bulk_insert(self, operation: str, data: Any, settings: dict[str, Any] | None = None) -> bool:
-        return False
-
     def executemany(
         self,
         operation: str,
         parameters: Any,
         settings: dict[str, Any] | None = None,
         query_formats: dict[str, str] | None = None,
+        *,
+        pyformat_encoded: bool = True,
     ) -> None:
         summary_start = len(self._summary)
-        super().executemany(operation, parameters, settings, query_formats)
+        super().executemany(operation, parameters, settings, query_formats, pyformat_encoded=pyformat_encoded)
         if not _query_is_insert(operation):
             return
         call_summaries = self._summary[summary_start:]
@@ -554,6 +553,11 @@ class ClickHouseAsyncDialect(ClickHouseDialect):
     poolclass = _ClickHouseAsyncAdaptedQueuePool
     supports_server_side_cursors: bool = False
     supports_statement_cache: bool = False
+
+    @staticmethod
+    def _ch_native_insert_plan(context: Any, settings: dict[str, Any] | None) -> None:
+        # Preserve per-parameter SQL execution, including the shared DateTime64 bind planning.
+        return None
 
     @classmethod
     def import_dbapi(cls) -> DBAPIModule:

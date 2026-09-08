@@ -151,6 +151,10 @@ ClickHouse does not behave like a row-store OLTP database with meaningful row-le
 - Pandas / Arrow: `client.insert_df("t", df)` or `client.insert_arrow("t", arrow_table)`
 - Schema changes: Alembic `op.execute(...)`
 
+`clickhouse-connect` also accepts explicit multi-row Core inserts, such as `engine.connect().execute(t.insert().values(list_of_row_dicts))`. Rows can be dictionaries, tuples in table column order, or rows with SQL expressions. Pandas `to_sql(method="multi")` uses this form. It inserts the rows but returns `0` because textual INSERT statements report a row count of `0` through the DB-API cursor. SQLAlchemy determines the column list from the first row. Extra dictionary keys in later rows and tuple values outside that selected column list are ignored. A later row missing a selected value fails compilation. Give every row the same columns.
+
+With the default HTTP form limits in ClickHouse 26.4 and newer, `server_side_params=True` is suitable only for small explicit batches, below about 1000 bind values with headroom for other fields. Server configuration can raise this ceiling. For large plain batches, keep the rows as the second `execute()` argument so the driver can use its Native bulk insert path.
+
 Session for reads (`session.execute(select(...))`) is fine. Custom `Session` or `Query` subclasses for event hooks, telemetry, or filter helpers (not `clickhouse-sqlalchemy`'s `ClickHouseQuery`, which you drop per the rewrite table) still compose: `sessionmaker(bind=engine, class_=YourSession, query_cls=YourQuery)`.
 
 ### Escaper

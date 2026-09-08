@@ -1,10 +1,10 @@
-"""End-to-end tests for the opt-in server_side_params mode (issue #735)."""
+"""End-to-end SQLAlchemy parameter and multi-row INSERT tests."""
 
 from collections.abc import Iterator
 
 import pytest
 from pytest import fixture
-from sqlalchemy import Integer, MetaData, Table, bindparam, insert, inspect, select, text, tuple_
+from sqlalchemy import Integer, MetaData, Table, bindparam, func, insert, inspect, select, text, tuple_
 from sqlalchemy.engine import Engine, create_engine
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Int32
@@ -112,6 +112,52 @@ def test_insert_then_select(server_side_engine: Engine, ssp_table: Table):
     stmt = select(ssp_table.c.name).where(ssp_table.c.id == 21)
     with server_side_engine.connect() as conn:
         assert [row[0] for row in conn.execute(stmt)] == ["user_3"]
+
+
+@pytest.mark.parametrize(
+    ("server_side", "first_id"),
+    [(False, 101), (True, 111)],
+    ids=["client-side", "server-side"],
+)
+def test_multivalues_insert(
+    server_side: bool,
+    first_id: int,
+    test_engine: Engine,
+    server_side_engine: Engine,
+    ssp_table: Table,
+):
+    engine = server_side_engine if server_side else test_engine
+    statements = [
+        insert(ssp_table).values(
+            [{"id": first_id, "name": "dict_1"}, {"id": first_id + 1, "name": "dict_2"}],
+        ),
+        insert(ssp_table).values([(first_id + 2, "tuple_1"), (first_id + 3, "tuple_2")]),
+        insert(ssp_table).values(
+            [
+                {"id": first_id + 4, "name": func.lower("EXPRESSION_1")},
+                {"id": first_id + 5, "name": func.lower("EXPRESSION_2")},
+            ],
+        ),
+    ]
+
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(statement)
+        rows = conn.execute(
+            select(ssp_table.c.id, ssp_table.c.name)
+            .where(ssp_table.c.id >= first_id)
+            .where(ssp_table.c.id < first_id + 6)
+            .order_by(ssp_table.c.id),
+        ).all()
+
+    assert rows == [
+        (first_id, "dict_1"),
+        (first_id + 1, "dict_2"),
+        (first_id + 2, "tuple_1"),
+        (first_id + 3, "tuple_2"),
+        (first_id + 4, "expression_1"),
+        (first_id + 5, "expression_2"),
+    ]
 
 
 def test_reflection_has_table(server_side_engine: Engine, test_db: str):

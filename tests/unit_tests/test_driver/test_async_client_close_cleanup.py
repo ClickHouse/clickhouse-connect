@@ -197,6 +197,7 @@ class _RequestSession:
 
     def __init__(self, name: str):
         self.name = name
+        self.connection_error: aiohttp.ClientConnectionError | None = None
         self.closed = False
         self.close_calls = 0
         self.headers = {}
@@ -210,6 +211,8 @@ class _RequestSession:
         self.request_started.set()
         await self.request_finished.wait()
         if self.connector.force_close_calls:
+            if self.connection_error is not None:
+                raise self.connection_error
             raise aiohttp.ServerDisconnectedError("retired session was force-closed")
         return _RequestResponse(self.name)
 
@@ -307,9 +310,14 @@ async def test_close_waits_for_background_automatic_rotation_cleanup(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_cancelled_explicit_rotation_does_not_retry_request_from_closed_session(monkeypatch):
+@pytest.mark.parametrize("connection_timeout", [False, True])
+async def test_cancelled_explicit_rotation_does_not_retry_request_from_closed_session(monkeypatch, connection_timeout):
     backend = _build_backend()
     old_session = _RequestSession("retired")
+    if connection_timeout:
+        timeout_type = getattr(aiohttp, "ConnectionTimeoutError", aiohttp.ServerTimeoutError)
+        old_session.connection_error = timeout_type("connection timed out during session close")
+        old_session.connection_error.__cause__ = asyncio.TimeoutError()
     replacement_session = _RequestSession("replacement")
     replacement_session.request_finished.set()
     backend.session_lease = SessionLease(old_session)

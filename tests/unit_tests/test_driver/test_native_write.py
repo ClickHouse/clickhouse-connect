@@ -1,10 +1,23 @@
+import struct
+from datetime import date, datetime, timedelta, timezone, tzinfo
+
 import pytest
 
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
-from tests.helpers import native_insert_block, to_bytes
+from clickhouse_connect.driver.query import QueryContext
+from tests.helpers import bytes_source, native_insert_block, to_bytes
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
+
+
+class NoOffsetTZ(tzinfo):
+    def utcoffset(self, dt):
+        return None
+
+    def dst(self, dt):
+        return None
+
 
 LOW_CARD_OUTPUT = """
 0101 0576 616c 7565 204c 6f77 4361 7264
@@ -174,3 +187,192 @@ def test_bad_columns():
         native_insert_block(data, names, types)
     except ProgrammingError:
         pass
+
+
+@pytest.mark.parametrize("type_name, code", [("Date", "H"), ("Date32", "i")])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize(
+    "values, days",
+    [
+        pytest.param([date(1970, 1, 14), date(1970, 3, 21)], [13, 79], id="dates"),
+        pytest.param([datetime(1970, 1, 14), datetime(1970, 3, 21, 23, 59, 59, 999999)], [13, 79], id="naive"),
+        pytest.param(
+            [
+                datetime(1970, 1, 14, 0, 30, tzinfo=timezone(timedelta(hours=14))),
+                datetime(1970, 3, 21, 23, 30, tzinfo=timezone(timedelta(hours=-12))),
+                datetime(1970, 1, 14, 12, 30, tzinfo=timezone.utc),
+            ],
+            [13, 79, 13],
+            id="aware",
+        ),
+        pytest.param(
+            [date(1970, 1, 14), datetime(1970, 3, 21), datetime(1970, 1, 14, tzinfo=timezone.utc)],
+            [13, 79, 13],
+            id="date-first",
+        ),
+        pytest.param(
+            [datetime(1970, 1, 14, tzinfo=timezone.utc), date(1970, 3, 21), datetime(1970, 1, 14)],
+            [13, 79, 13],
+            id="datetime-first",
+        ),
+    ],
+)
+def test_date_native_calendar_days(type_name, code, nullable, values, days):
+    ch_type = get_from_name(f"Nullable({type_name})" if nullable else type_name)
+    ctx = InsertContext("table", ["value"], [ch_type], server_tz=timezone(timedelta(hours=-12)))
+    if nullable:
+        values = [None, *values, None]
+        days = [0, *days, 0]
+    dest = bytearray()
+    ch_type.write_column(values, dest, ctx)
+
+    nulls = bytes([1, *([0] * (len(values) - 2)), 1]) if nullable else b""
+    assert dest == nulls + struct.pack(f"<{len(days)}{code}", *days)
+
+
+@pytest.mark.parametrize("type_name, code", [("Date", "H"), ("Date32", "i")])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("write_format", ["native", "int"])
+def test_date_native_integer_days(type_name, code, nullable, write_format):
+    ch_type = get_from_name(f"Nullable({type_name})" if nullable else type_name)
+    ctx = InsertContext("table", ["value"], [ch_type], query_formats={type_name: write_format})
+    values = [0, 13, 79]
+    if nullable:
+        values = [None, *values, None]
+    dest = bytearray()
+    ch_type.write_column(values, dest, ctx)
+
+    nulls = b"\x01\x00\x00\x00\x01" if nullable else b""
+    days = [0, 0, 13, 79, 0] if nullable else values
+    assert dest == nulls + struct.pack(f"<{len(days)}{code}", *days)
+    if nullable:
+        dest.clear()
+        ch_type.write_column([None, None], dest, ctx)
+        assert dest == b"\x01\x01" + struct.pack(f"<2{code}", 0, 0)
+
+
+def test_date32_native_before_epoch():
+    ch_type = get_from_name("Date32")
+    values = [date(1900, 1, 1), datetime(1969, 12, 31, 23, 59, 59, tzinfo=timezone(timedelta(hours=-12)))]
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert dest == struct.pack("<2i", -25567, -1)
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Date32"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_date_low_cardinality_preserves_calendar_days(type_name, nullable):
+    inner_type = f"Nullable({type_name})" if nullable else type_name
+    ch_type = get_from_name(f"LowCardinality({inner_type})")
+    values = [
+        datetime(2024, 1, 1, 0, 30, tzinfo=timezone(timedelta(hours=14))),
+        datetime(2023, 12, 31, 10, 30, tzinfo=timezone.utc),
+    ]
+    expected = [date(2024, 1, 1), date(2023, 12, 31)]
+    assert values[0] == values[1]
+    if nullable:
+        values = [None, *values, None]
+        expected = [None, *expected, None]
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert ch_type.read_column(bytes_source(bytes(dest)), len(values), QueryContext()) == expected
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Date32"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_date_low_cardinality_none_offset_matches_naive(type_name, nullable):
+    inner_type = f"Nullable({type_name})" if nullable else type_name
+    ch_type = get_from_name(f"LowCardinality({inner_type})")
+    naive = [datetime(2024, 1, 1), datetime(2024, 1, 1, 12), datetime(2024, 1, 1)]
+    values = [x.replace(tzinfo=NoOffsetTZ()) for x in naive]
+    if nullable:
+        naive = [None, *naive, None]
+        values = [None, *values, None]
+    ctx = InsertContext("table", ["value"], [ch_type])
+    expected = bytearray()
+    ch_type.write_column(naive, expected, ctx)
+    dest = bytearray()
+    ch_type.write_column(values, dest, ctx)
+
+    assert dest == expected
+
+
+@pytest.mark.parametrize(
+    "type_name, values, error",
+    [
+        ("Date", [date(1969, 12, 31)], DataError),
+        ("Date", [date(2149, 6, 7)], DataError),
+        ("Date32", [2**31], DataError),
+        ("Date32", [-(2**31) - 1], DataError),
+        ("Date", [None], TypeError),
+        ("Date32", [None], TypeError),
+        ("Date", ["2024-01-01"], TypeError),
+        ("Date32", ["2024-01-01"], TypeError),
+        ("Date", [13.5], TypeError),
+        ("Nullable(Date32)", [None, "2024-01-01"], TypeError),
+    ],
+)
+def test_date_native_invalid_values(type_name, values, error):
+    ch_type = get_from_name(type_name)
+    with pytest.raises(error) as caught:
+        ch_type.write_column(values, bytearray(), InsertContext("table", ["value"], [ch_type]))
+    if error is TypeError:
+        assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Nullable(Date32)"])
+@pytest.mark.parametrize(
+    "values",
+    [
+        [datetime(2024, 1, 1, tzinfo=timezone.utc), "invalid"],
+        [date(2024, 1, 1), datetime(2024, 1, 1), "invalid"],
+        [datetime(2024, 1, 1), date(2024, 1, 1), "invalid"],
+    ],
+)
+def test_date_native_invalid_value_after_valid_dates(type_name, values):
+    ch_type = get_from_name(type_name)
+    with pytest.raises(TypeError, match="'str'") as caught:
+        ch_type.write_column(values, bytearray(), InsertContext("table", ["value"], [ch_type]))
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Date32", "Nullable(Date32)", "LowCardinality(Date32)"])
+def test_date_native_rejects_pandas_nat(type_name):
+    pd = pytest.importorskip("pandas")
+    ch_type = get_from_name(type_name)
+    with pytest.raises(DataError):
+        ch_type.write_column([pd.NaT], bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Nullable(Date32)", "LowCardinality(Date)", "LowCardinality(Nullable(Date32))"])
+def test_date_native_none_offset_with_pandas_nat(type_name):
+    pd = pytest.importorskip("pandas")
+    ch_type = get_from_name(type_name)
+    values = [datetime(2024, 1, 1, tzinfo=NoOffsetTZ()), pd.NaT]
+    with pytest.raises(DataError):
+        ch_type.write_column(values, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Nullable(Date32)"])
+def test_date_native_aware_datetime_with_pandas_nat(type_name):
+    pd = pytest.importorskip("pandas")
+    ch_type = get_from_name(type_name)
+    values = [datetime(2024, 1, 1, tzinfo=timezone.utc), pd.NaT]
+    with pytest.raises(DataError):
+        ch_type.write_column(values, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize("type_name, code", [("Date", "H"), ("Date32", "i")])
+@pytest.mark.parametrize("error", [AttributeError, ValueError])
+def test_date_native_subclass_without_ordinal(type_name, code, error):
+    class LegacyDate(date):
+        def toordinal(self):
+            raise error("ordinal unavailable")
+
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column([LegacyDate(1970, 1, 14)], dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert dest == struct.pack(f"<{code}", 13)

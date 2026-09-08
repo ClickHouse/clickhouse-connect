@@ -292,7 +292,7 @@ def create_client(
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
       compression method (lz4).  A str of 'lz4', 'zstd', 'br', or 'gzip' can be used to use a specific compression type
     :param query_limit: Default LIMIT on returned rows.  0 means no limit
-    :param connect_timeout:  Timeout in seconds for the http connection
+    :param connect_timeout: Timeout in seconds for establishing a new HTTP connection, excluding pool wait time.
     :param send_receive_timeout: Read timeout in seconds for http connection
     :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
       in the ClickHouse system.query_log.
@@ -460,7 +460,7 @@ async def create_async_client(
     :param compress: Enable compression for ClickHouse HTTP inserts and query results.  True will select the preferred
       compression method (lz4).  A str of 'lz4', 'zstd', 'br', or 'gzip' can be used to use a specific compression type
     :param query_limit: Default LIMIT on returned rows.  0 means no limit
-    :param connect_timeout:  Timeout in seconds for the http connection
+    :param connect_timeout: Timeout in seconds for establishing a new HTTP connection, excluding pool wait time.
     :param send_receive_timeout: Read timeout in seconds for http connection
     :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
       in the ClickHouse system.query_log.

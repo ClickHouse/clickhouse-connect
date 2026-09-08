@@ -1,12 +1,20 @@
 from typing import Any, cast
 
 import sqlalchemy.schema as sa_schema
+from sqlalchemy import __version__ as sa_version
 from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import NoResultFound, NoSuchTableError
+from sqlalchemy.sql.dml import Insert
+from sqlalchemy.sql.sqltypes import TupleType
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import (
+    _datetime64_bind_signature,
+    _datetime64_query_value,
+    _DateTime64QuerySignature,
+)
 from clickhouse_connect.cc_sqlalchemy.inspector import (
     _INTERNAL_QUERY_OPTION,
     _INTERNAL_QUERY_SENTINEL,
@@ -19,8 +27,11 @@ from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
-from clickhouse_connect.dbapi.cursor import Cursor
+from clickhouse_connect.dbapi.cursor import Cursor, _NativeInsertPlan
 from clickhouse_connect.driver.binding import quote_identifier
+
+_MISSING = object()
+_SQLALCHEMY_MAJOR_VERSION = int(sa_version.partition(".")[0])
 
 
 class ClickHouseDialect(DefaultDialect):
@@ -34,6 +45,7 @@ class ClickHouseDialect(DefaultDialect):
     default_schema_name = "default"
     supports_native_decimal = True
     supports_native_boolean = True
+    supports_multivalues_insert = True
     supports_statement_cache = False
     supports_comments = True
     inline_comments = True
@@ -120,8 +132,182 @@ class ClickHouseDialect(DefaultDialect):
             return True
         return bool(getattr(compiled.preparer, "_double_percents", True))
 
+    @staticmethod
+    def _ch_native_insert_plan(context: Any, settings: dict[str, Any] | None) -> _NativeInsertPlan | None:
+        compiled = getattr(context, "compiled", _MISSING)
+        if compiled is _MISSING or getattr(compiled, "isinsert", _MISSING) is not True:
+            return None
+        compile_state = getattr(compiled, "compile_state", _MISSING)
+        if compile_state is _MISSING:
+            return None
+        statement = getattr(compile_state, "statement", _MISSING)
+        if not isinstance(statement, Insert):
+            return None
+        statement_attrs = {
+            attr: getattr(statement, attr, _MISSING)
+            for attr in (
+                "_values",
+                "_multi_values",
+                "select",
+                "_prefixes",
+                "_hints",
+                "_independent_ctes",
+                "_post_values_clause",
+                "_returning",
+                "table",
+            )
+        }
+        if any(value is _MISSING for value in statement_attrs.values()):
+            return None
+        if (
+            statement_attrs["_values"] is not None
+            or statement_attrs["_multi_values"]
+            or statement_attrs["select"] is not None
+            or statement_attrs["_prefixes"]
+            or statement_attrs["_hints"]
+            or statement_attrs["_independent_ctes"]
+            or statement_attrs["_post_values_clause"] is not None
+            or statement_attrs["_returning"]
+        ):
+            return None
+
+        compiled_attrs = {
+            attr: getattr(compiled, attr, _MISSING)
+            for attr in (
+                "returning",
+                "literal_execute_params",
+                "post_compile_params",
+                "bind_names",
+                "escaped_bind_names",
+                "insert_prefetch",
+                "preparer",
+                "dialect",
+            )
+        }
+        if any(value is _MISSING for value in compiled_attrs.values()) or any(
+            compiled_attrs[attr] for attr in ("returning", "literal_execute_params", "post_compile_params")
+        ):
+            return None
+        if _SQLALCHEMY_MAJOR_VERSION >= 2:
+            returning_attrs = [getattr(compiled, attr, _MISSING) for attr in ("effective_returning", "implicit_returning")]
+            if any(value is _MISSING for value in returning_attrs) or any(returning_attrs):
+                return None
+        elif any(getattr(compiled, attr, ()) for attr in ("effective_returning", "implicit_returning")):
+            return None
+
+        table = cast(Any, statement_attrs["table"])
+        table_columns = tuple(table.columns)
+        if any(column.default is not None and getattr(column.default, "is_clause_element", False) for column in table_columns):
+            return None
+
+        column_names: list[str] = []
+        parameter_keys: list[str] = []
+        resolved_columns: list[Any] = []
+        escaped_bind_names = cast(Any, compiled_attrs["escaped_bind_names"]) or {}
+        for bind, compiled_name in cast(Any, compiled_attrs["bind_names"]).items():
+            if not getattr(bind, "_is_crud", False):
+                return None
+            bind_type = getattr(bind, "type", _MISSING)
+            if bind_type is _MISSING:
+                return None
+            try:
+                dialect_type = cast(Any, bind_type).dialect_impl(compiled_attrs["dialect"])
+                has_bind_expression = getattr(dialect_type, "_has_bind_expression", _MISSING)
+            except Exception:
+                return None
+            if has_bind_expression is not False:
+                return None
+            bind_column_keys = {
+                str(key) for key in (compiled_name, getattr(bind, "key", None), getattr(bind, "_orig_key", None)) if key is not None
+            }
+            matches = [column for column in table_columns if str(column.key) in bind_column_keys]
+            if len(matches) != 1 or any(matches[0] is column for column in resolved_columns):
+                return None
+            parameter_key = escaped_bind_names.get(compiled_name, compiled_name)
+            if parameter_key in parameter_keys:
+                return None
+            resolved_columns.append(matches[0])
+            column_names.append(str(matches[0].name))
+            parameter_keys.append(str(parameter_key))
+
+        if not column_names:
+            return None
+        if any(
+            not any(prefetch_column is resolved_column for resolved_column in resolved_columns)
+            for prefetch_column in cast(Any, compiled_attrs["insert_prefetch"])
+        ):
+            return None
+
+        preparer = cast(Any, compiled_attrs["preparer"])
+        double_percents = getattr(preparer, "_double_percents", _MISSING)
+        if double_percents is _MISSING:
+            return None
+        table_name = preparer.format_table(table)
+        execution_options = getattr(context, "execution_options", _MISSING)
+        if execution_options is _MISSING:
+            return None
+        schema_translate_map = cast(Any, execution_options).get("schema_translate_map")
+        if schema_translate_map:
+            if not hasattr(preparer, "_render_schema_translates"):
+                return None
+            table_name = preparer._render_schema_translates(table_name, dict(schema_translate_map))
+        if double_percents:
+            table_name = table_name.replace("%%", "%")
+        return _NativeInsertPlan(table_name, tuple(column_names), tuple(parameter_keys), settings)
+
+    @staticmethod
+    def _ch_datetime64_parameter_plan(context: Any) -> dict[str, _DateTime64QuerySignature]:
+        compiled = getattr(context, "compiled", None)
+        bind_names = getattr(compiled, "bind_names", None)
+        if compiled is None or not bind_names or getattr(compiled.dialect, "server_side_params", False):
+            return {}
+        resolved = []
+        has_datetime64 = False
+        for bind, name in bind_names.items():
+            types = bind.type.types if isinstance(bind.type, TupleType) else (bind.type,)
+            signatures = tuple(_datetime64_bind_signature(type_, compiled.dialect) for type_ in types)
+            if isinstance(bind.type, TupleType) and not bind.expanding:
+                # Defensive handling for single-key tuple values at the dialect boundary.
+                signatures = (("tuple", signatures) if any(signatures) else False,)
+            has_datetime64 = has_datetime64 or any(signatures)
+            resolved.append((name, signatures))
+        if not has_datetime64:
+            return {}
+        escaped_names = compiled.escaped_bind_names or {}
+        expanded = getattr(context, "_expanded_parameters", {})
+        parameter_types: dict[str, _DateTime64QuerySignature] = {}
+        conflicts: set[str] = set()
+        for name, signatures in resolved:
+            names = expanded.get(name)
+            if names is None:
+                names = (escaped_names.get(name, name),)
+            for index, key in enumerate(names):
+                signature = signatures[index % len(signatures)]
+                if key in parameter_types and signature != parameter_types[key]:
+                    conflicts.add(key)
+                parameter_types[key] = signature
+        # A shared key must remain valid for every occurrence, including DateTime.
+        return {key: signature for key, signature in parameter_types.items() if signature and key not in conflicts}
+
+    @staticmethod
+    def _ch_datetime64_parameters(parameters: Any, plan: dict[str, _DateTime64QuerySignature]) -> Any:
+        if not plan or not isinstance(parameters, dict):
+            return parameters
+        result = parameters
+        for key, signature in plan.items():
+            if key not in parameters:
+                continue
+            value = _datetime64_query_value(signature, parameters[key])
+            if value is not parameters[key]:
+                if result is parameters:
+                    result = parameters.copy()
+                result[key] = value
+        return result
+
     def do_execute(self, cursor, statement, parameters, context=None):
         ch_cursor = cast(Cursor, cursor)
+        if parameters:
+            parameters = self._ch_datetime64_parameters(parameters, self._ch_datetime64_parameter_plan(context))
         if self._ch_internal_query(context):
             Cursor._execute(
                 ch_cursor,
@@ -142,11 +328,23 @@ class ClickHouseDialect(DefaultDialect):
             )
 
     def do_executemany(self, cursor, statement, parameters, context=None):
-        cast(Cursor, cursor).executemany(
+        ch_cursor = cast(Cursor, cursor)
+        settings = self._ch_query_settings(context)
+        native_plan = None
+        if statement == getattr(context, "statement", None):
+            native_plan = self._ch_native_insert_plan(context, settings)
+        if native_plan is not None:
+            ch_cursor._executemany_native(native_plan, parameters)
+            return
+        datetime64_plan = self._ch_datetime64_parameter_plan(context)
+        if datetime64_plan:
+            parameters = [self._ch_datetime64_parameters(row, datetime64_plan) for row in parameters]
+        ch_cursor.executemany(
             statement,
             parameters,
-            settings=self._ch_query_settings(context),
+            settings=settings,
             query_formats=self._ch_query_formats(context),
+            pyformat_encoded=self._ch_pyformat_encoded(context),
         )
 
     def do_execute_no_params(self, cursor, statement, context=None):

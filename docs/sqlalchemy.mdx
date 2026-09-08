@@ -79,7 +79,7 @@ async def stream_events(engine):
 
 Do not use the SQLAlchemy connection concurrently with its raw client. Finish raw-client streams before leaving the SQLAlchemy connection block, and do not keep the raw client after the connection returns to the pool. SQLAlchemy owns the borrowed client's lifecycle, so never call `client.close()` or any of its private lifecycle methods. SQLAlchemy's pool owns connection concurrency. Each pooled connection owns one native async client and defaults its aiohttp connector limits to one connection and one connection per host. Set `connector_limit`, `connector_limit_per_host`, or `keepalive_timeout` in the URL or `connect_args` to override those transport settings. With `pool_pre_ping=True`, SQLAlchemy checks reused connections with `SELECT 1` when a pooled connection is checked out.
 
-Async SQLAlchemy executemany inserts currently send one HTTP request for each parameter set instead of using the driver's Native bulk insert protocol. Use this path only for small batches. For bulk data, use the pool-owned `driver_connection` access pattern above and await `client.insert()` before returning the SQLAlchemy connection to the pool. Because async executemany uses query parameter binding, naive `datetime` values follow `naive_datetime_binding`, not the `naive_datetime_insert` setting used by synchronous Native executemany. Default client-side binding also omits fractional seconds from naive `datetime` values. Use timezone-aware values for unambiguous timezone behavior. Typed SQLAlchemy `DateTime64` binds preserve naive fractional seconds with `server_side_params=True`. Untyped `%s` or `%(name)s` parameters passed to `exec_driver_sql()` do not gain that behavior. Use `client.insert()` for Native bulk semantics.
+Async SQLAlchemy executemany inserts currently send one HTTP request for each parameter set instead of using the driver's Native bulk insert protocol. Use this path only for small batches. For bulk data, use the pool-owned `driver_connection` access pattern above and await `client.insert()` before returning the SQLAlchemy connection to the pool. Because async executemany uses query parameter binding, naive `datetime` values follow `naive_datetime_binding`, not the `naive_datetime_insert` setting used by synchronous Native executemany. Typed SQLAlchemy `DateTime64` binds preserve fractional seconds with both client-side and server-side parameters. Untyped `%s` or `%(name)s` parameters passed to `exec_driver_sql()` retain the default whole-second formatting for naive `datetime` values. Use timezone-aware values for unambiguous timezone behavior. Use `client.insert()` for Native bulk semantics.
 
 Create and dispose an async engine in the event loop where it is used. Return every checked-out connection, then await `engine.dispose()` during shutdown and before using the engine from another event loop. If the engine's owning loop has already closed, await `engine.dispose()` in the current loop before reuse. aiohttp may still report an unclosed transport when cleanup begins only after the owning loop has closed, so dispose before transfer when possible. `pool_pre_ping=True` is not a replacement for disposal when moving a pooled async engine between event loops. To share one engine across event loops without retaining loop-bound connections, configure `poolclass=NullPool`. If disposal runs while a connection is still checked out, the dialect closes that connection when it is returned or garbage collected. Do not call `engine.sync_engine.dispose()` from synchronous code. SQLAlchemy cannot await async connection cleanup there and may log the error instead of closing pooled transports.
 
@@ -214,6 +214,14 @@ with engine.connect() as conn:
 ### Literal rendering {#sqlalchemy-literal-rendering}
 
 When SQLAlchemy inlines a bound value through `literal_binds` or `literal_execute`, the dialect uses ClickHouse quoting for generic string types and ClickHouse types. This also applies through `TypeDecorator` wrappers and `with_variant()` selections. String values retain percent signs and backslashes even when other bound parameters remain.
+
+Python `datetime` values with a ClickHouse `DateTime64` SQLAlchemy type retain their microseconds in client-side parameters and inline literals, including nullable values and values nested in arrays and tuples. ClickHouse applies the declared precision. Python `datetime` provides up to six fractional digits. Plain `DateTime` values retain whole-second formatting. For a `text()` statement, supply the type explicitly with `bindparam("ts", type_=DateTime64(6))` to preserve fractional seconds.
+
+SQLAlchemy column types must match the server schema. Declaring `DateTime64` over a server `DateTime` column renders fractional seconds and can raise conversion errors on insert and in `IN` comparisons.
+
+On SQLAlchemy 2.x, inline literals of generic `sqlalchemy.ARRAY` types containing ClickHouse `Tuple` items need `dimensions=1`, or the appropriate higher dimension count for nested arrays, so SQLAlchemy treats each tuple as one item. SQLAlchemy 1.4 does not support inline literals for generic `ARRAY` types.
+
+If a named datetime parameter is reused, every occurrence needs a compatible `DateTime64` bind type to preserve fractions. An untyped occurrence or a conflicting type keeps whole-second formatting. Set `type_=DateTime64(6)` on each `bindparam`, or use distinct parameter names with the appropriate types.
 
 ### JSON type hints {#sqlalchemy-json-type-hints}
 
@@ -472,6 +480,12 @@ with engine.connect() as conn:
         ],
     )
 ```
+
+For the synchronous dialect, plain Core `executemany` inserts generated by the SQLAlchemy compiler use one Native bulk insert. Async executemany sends one request per parameter set, as described in [Async connections](#sqlalchemy-async-connections). Raw SQL and inserts with expressions or other semantics that cannot be routed safely preserve the original SQL and execute once for each parameter set. If a later parameter set fails, rows written by earlier parameter sets remain committed.
+
+Explicit multi-row `insert(events).values([...])` statements work with dictionary rows, tuples in table column order, and per-row SQL expressions. Pandas `to_sql(method="multi")` uses this form. It inserts the rows but returns `0` because textual INSERT statements report a row count of `0` through the DB-API cursor. SQLAlchemy determines the column list from the first row. Extra dictionary keys in later rows and tuple values outside that selected column list are ignored. A later row missing a selected value fails compilation. Give every row the same columns.
+
+With the default HTTP form limits in ClickHouse 26.4 and newer, `server_side_params=True` is suitable only for small explicit batches, below about 1000 bind values with headroom for other fields. Server configuration can raise this ceiling. For large plain batches with the synchronous dialect, pass rows as the second argument to `execute()` so the driver can use its Native bulk insert path. For async bulk data, await the native `AsyncClient.insert()` method.
 
 ```python
 import sqlalchemy as db

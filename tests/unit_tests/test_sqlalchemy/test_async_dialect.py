@@ -1336,6 +1336,22 @@ async def test_async_cursor_executemany_rowcount(summaries, expected_rowcount):
     assert cursor.rowcount == expected_rowcount
 
 
+@pytest.mark.parametrize("server_side_params", [False, True])
+@pytest.mark.asyncio
+async def test_async_executemany_preserves_literal_percents(server_side_params):
+    dialect = ClickHouseAsyncDialect(server_side_params=server_side_params)
+    statement = text("INSERT INTO events (label) VALUES ('single% adjacent%%')")
+    compiled = statement.compile(dialect=dialect)
+    context = SimpleNamespace(compiled=compiled, execution_options={}, invoked_statement=statement)
+    client = _InsertRoutingClient()
+    adapted = _AsyncAdaptedConnection(ClickHouseAsyncDialect.import_dbapi(), client)  # type: ignore[arg-type]
+
+    await greenlet_spawn(lambda: dialect.do_executemany(adapted.cursor(), str(compiled), [{}, {}], context))
+
+    assert client.query_calls == [(str(statement), {})] * 2
+    assert client.insert_calls == 0
+
+
 @pytest.mark.asyncio
 async def test_async_cursor_executemany_rowcount_ignores_prior_summaries():
     async_dbapi = ClickHouseAsyncDialect.import_dbapi()

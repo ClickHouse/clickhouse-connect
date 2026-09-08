@@ -4,6 +4,7 @@ import time
 import uuid
 import weakref
 from contextlib import AsyncExitStack
+from datetime import datetime
 
 import pytest
 
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base
 
 from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime64, String, UInt32
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
 from clickhouse_connect.driver.asyncclient import AsyncClient
@@ -150,6 +151,38 @@ async def test_async_sqlalchemy_ddl_reflection_and_percent_identifiers(test_conf
         assert len(insert_result.context.cursor.summary) == 2
         assert rows == [(13, "user_1"), (79, "user_2")]
         assert reflected == (True, [value_name, "label"], [value_name, "label"], "MergeTree")
+    finally:
+        try:
+            async with engine.connect() as connection:
+                await connection.run_sync(metadata.drop_all)
+        finally:
+            await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("server_side_params", [False, True])
+async def test_async_sqlalchemy_typed_datetime64_executemany(test_config: TestConfig, server_side_params: bool) -> None:
+    engine = create_async_engine(_async_url(test_config), server_side_params=server_side_params)
+    metadata = sa.MetaData()
+    table = sa.Table(
+        f"test_async_datetime64_{uuid.uuid4().hex}",
+        metadata,
+        sa.Column("id", UInt32),
+        sa.Column("stamp", DateTime64(6, "UTC")),
+        MergeTree(order_by="id"),
+    )
+    stamp = datetime(2024, 6, 13, 7, 8, 9, 123456)
+
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(metadata.create_all)
+            result = await connection.execute(table.insert(), [{"id": key, "stamp": stamp} for key in (13, 79)])
+            assert result.rowcount == 2
+            assert len(result.context.cursor.summary) == 2
+            rows = (await connection.execute(sa.select(table).order_by(table.c.id))).all()
+            assert rows == [(13, stamp), (79, stamp)]
+            matched = await connection.execute(sa.select(table.c.id).where(table.c.stamp == stamp).order_by(table.c.id))
+            assert matched.all() == [(13,), (79,)]
     finally:
         try:
             async with engine.connect() as connection:
