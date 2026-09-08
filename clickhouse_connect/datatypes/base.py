@@ -290,9 +290,7 @@ class ClickHouseType(ABC):  # noqa: B024
     def _build_lc_nullable_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         return data_conv.build_lc_nullable_column(index, keys, self._active_null(ctx))
 
-    def _write_column_low_card(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        if len(column) == 0:
-            return
+    def _build_lc_dictionary(self, column: Sequence, _ctx: InsertContext) -> tuple[list[Any], list[int]]:
         keys: list[int] = []
         index: list[Any] = []
         rev_map: dict[Any, int] = {}
@@ -323,6 +321,12 @@ class ClickHouseType(ABC):  # noqa: B024
                     key += 1
                 else:
                     keys.append(ix)
+        return index, keys
+
+    def _write_column_low_card(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if len(column) == 0:
+            return
+        index, keys = self._build_lc_dictionary(column, ctx)
         ix_type = int(log(len(index), 2)) >> 3  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(index), dest)
