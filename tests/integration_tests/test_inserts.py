@@ -2,7 +2,7 @@ import os
 import time as time_module
 import zoneinfo
 from collections.abc import Callable
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv6Address
 from uuid import UUID
@@ -109,6 +109,49 @@ def test_insert_context_uses_client_server_timezone(param_client: Client, call):
         assert context.server_tz == server_tz
     finally:
         param_client.server_tz = original_server_tz
+
+
+@pytest.mark.parametrize("type_name", ["Date", "Date32"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_insert_date_calendar_values(param_client, call, table_context, type_name, reverse):
+    columns = [
+        "id UInt8",
+        f"d {type_name}",
+        f"n Nullable({type_name})",
+        f"a Array({type_name})",
+        f"t Tuple({type_name})",
+        f"at Array(Tuple(Nullable({type_name})))",
+        f"lc LowCardinality({type_name})",
+        f"lcn LowCardinality(Nullable({type_name}))",
+        f"alc Array(LowCardinality(Nullable({type_name})))",
+    ]
+    values = [
+        datetime(2024, 1, 1, 0, 30, tzinfo=timezone(timedelta(hours=14))),
+        datetime(2023, 12, 31, 10, 30, tzinfo=timezone.utc),
+        datetime(2023, 12, 31, 23, 30, tzinfo=timezone(timedelta(hours=-12))),
+        datetime(2024, 2, 29, 23, 59, 59, 999999),
+        date(2024, 3, 21),
+    ]
+    expected = [date(2024, 1, 1), date(2023, 12, 31), date(2023, 12, 31), date(2024, 2, 29), date(2024, 3, 21)]
+    if type_name == "Date32":
+        values.append(datetime(1969, 12, 31, 23, 30, tzinfo=timezone(timedelta(hours=-12))))
+        expected.append(date(1969, 12, 31))
+    if reverse:
+        values.reverse()
+        expected.reverse()
+    rows = [
+        [i, value, None if i == 0 else value, [value], (value,), [(None,), (value,)], value, value, [None, value]]
+        for i, value in enumerate(values)
+    ]
+    expected_rows = [
+        (i, value, None if i == 0 else value, [value], (value,), [(None,), (value,)], value, value, [None, value])
+        for i, value in enumerate(expected)
+    ]
+
+    with table_context("test_date_calendar_values", columns):
+        call(param_client.insert, "test_date_calendar_values", rows)
+        result = call(param_client.query, "SELECT * FROM test_date_calendar_values ORDER BY id")
+        assert result.result_rows == expected_rows
 
 
 def test_decimal_conv(param_client: Client, call, table_context: Callable):
