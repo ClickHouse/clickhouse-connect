@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import Callable
 
+import aiohttp
 import pytest
 
 from clickhouse_connect import get_async_client
@@ -154,6 +155,64 @@ async def test_connection_pool_reuse(test_config):
             assert result.result_rows[0][0] == i
 
         assert elapsed < 10.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limits", [(1, 0), (2, 1)], ids=["global", "per_host"])
+async def test_pool_wait_does_not_use_connect_timeout(test_config, mocker, limits):
+    async with await get_async_client(
+        **make_client_config(
+            test_config,
+            connect_timeout=1,
+            connector_limit=limits[0],
+            connector_limit_per_host=limits[1],
+            autogenerate_session_id=False,
+        )
+    ) as client:
+        session = client._session
+        connector = session.connector
+        queued = asyncio.Event()
+        queue_entries = 0
+
+        async def on_queued(*_):
+            nonlocal queue_entries
+            queue_entries += 1
+            if queue_entries == 2:
+                queued.set()
+
+        trace = aiohttp.TraceConfig()
+        trace.on_connection_queued_start.append(on_queued)
+        trace.freeze()
+        session.trace_configs.append(trace)
+        connect = mocker.spy(connector, "connect")
+        await client.query("SELECT 13")
+        request = connect.call_args.args[0]
+        mocker.stop(connect)
+        # Hold the real pool slot until both requests have queued.
+        held = await connector.connect(request, traces=[], timeout=session.timeout)
+        query = asyncio.create_task(client.query("SELECT 13"))
+        cancelled = asyncio.create_task(client.query("SELECT 79"))
+        try:
+            try:
+                await asyncio.wait_for(queued.wait(), 5)
+                cancelled.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await cancelled
+
+                # Exceed both connect deadlines and the driver's retry delay.
+                await asyncio.sleep(2.5)
+                assert not query.done()
+                assert queue_entries == 2
+            finally:
+                held.release()
+            result = await asyncio.wait_for(query, 10)
+            assert result.result_rows == [(13,)]
+            assert client._backend.session_lease._inflight == 0
+            assert (await client.query("SELECT 79")).result_rows == [(79,)]
+        finally:
+            query.cancel()
+            cancelled.cancel()
+            await asyncio.gather(query, cancelled, return_exceptions=True)
 
 
 @pytest.mark.asyncio
