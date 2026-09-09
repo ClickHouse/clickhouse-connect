@@ -234,7 +234,7 @@ class HttpClient(SyncBackendClient):
         except BaseException:
             if owned_pool is not None:
                 # Keep the construction error if pool cleanup also fails.
-                with suppress(BaseException):
+                with suppress(Exception):
                     _close_pool_manager(owned_pool)
             raise
 

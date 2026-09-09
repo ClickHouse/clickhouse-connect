@@ -97,9 +97,12 @@ def test_constructor_error_releases_owned_pool(pools, monkeypatch, stage, error_
     assert manager not in httputil.all_managers
 
 
-@pytest.mark.parametrize("cleanup_error_type", [RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize(
+    ("cleanup_error_type", "raised_type"),
+    [(RuntimeError, OperationalError), (KeyboardInterrupt, KeyboardInterrupt)],
+)
 @pytest.mark.parametrize("stage", ["token", "initialization"])
-def test_cleanup_failure_preserves_construction_error(pools, monkeypatch, cleanup_error_type, stage):
+def test_cleanup_failure_preserves_construction_error(pools, monkeypatch, cleanup_error_type, raised_type, stage):
     error = OperationalError("construction failed")
 
     def fail(*_args):
@@ -110,10 +113,14 @@ def test_cleanup_failure_preserves_construction_error(pools, monkeypatch, cleanu
     if stage == "initialization":
         monkeypatch.setattr(Client, "_init_common_settings", fail)
 
-    with pytest.raises(OperationalError) as caught:
+    with pytest.raises(raised_type) as caught:
         make_client(**options)
 
-    assert caught.value is error
+    if raised_type is OperationalError:
+        assert caught.value is error
+    else:
+        # An interrupt during cleanup propagates and keeps the construction error as context.
+        assert caught.value.__context__ is error
     pools[0].clear.assert_called_once_with()
     assert pools[0] not in httputil.all_managers
 
