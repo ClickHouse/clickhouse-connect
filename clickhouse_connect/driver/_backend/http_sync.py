@@ -37,7 +37,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
 from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.common import ShowClickHouseErrors, dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
-from clickhouse_connect.driver.httputil import ResponseSource, all_managers, check_conn_expiration, get_response_data
+from clickhouse_connect.driver.httputil import ResponseSource, _close_pool_manager, check_conn_expiration, get_response_data
 
 if TYPE_CHECKING:
     from clickhouse_connect.driver._backend.contracts import SyncBackend
@@ -399,8 +399,7 @@ class HttpSyncBackend:
 
     def close(self) -> None:
         if self.owns_pool_manager:
-            cast(PoolManager, self.http).clear()
-            all_managers.pop(cast(PoolManager, self.http), None)
+            _close_pool_manager(cast(PoolManager, self.http))
 
 
 if TYPE_CHECKING:
