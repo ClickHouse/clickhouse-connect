@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.9.0rc1, 2026-09-09
+
 ### Improvements
 
 - Added a native async SQLAlchemy dialect for SQLAlchemy 2.0.44 and later. Install `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. The first release supports buffered Core and ORM execution, inserts, per-query settings and read formats, server-side parameters, DDL and reflection through `run_sync()`, Alembic online migrations through `AsyncConnection.run_sync()`, offline Alembic compilation, and direct access to the native `AsyncClient`. A checked-in async Alembic environment demonstrates both migration paths. Alembic now adds its integration tag to async client User-Agent headers. SQLAlchemy pool pre-ping uses its standard `SELECT 1` check. Closed native sessions are invalidated and replaced, while execution-time server and transport errors keep reusable open HTTP sessions. Pooled connections use distinct generated ClickHouse session IDs by default. A fixed session ID requires a single-connection pool or external serialization. Server-side cursors and `AsyncConnection.stream()` remain unsupported. `AsyncSession.stream()` returns a buffered result, and the native client provides streaming APIs for large results. Async executemany inserts issue one request per parameter set instead of using the Native bulk insert protocol. For bulk data, borrow the pool-owned `driver_connection` and call `AsyncClient.insert()`. Naive `datetime` values on the executemany path use `naive_datetime_binding`. Typed SQLAlchemy `DateTime64` binds preserve fractional seconds with client-side and server-side parameters; untyped client-side parameters retain their existing formatting.
