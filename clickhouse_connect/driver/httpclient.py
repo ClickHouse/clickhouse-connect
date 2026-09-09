@@ -2,6 +2,7 @@ import logging
 import uuid
 from base64 import b64encode
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any, cast
 
 from urllib3 import Timeout
@@ -36,6 +37,7 @@ from clickhouse_connect.driver.common import (
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httputil import (
     ResponseSource,  # noqa: F401  (compatibility re-export)
+    _close_pool_manager,
     check_env_proxy,
     default_pool_manager,
     get_pool_manager,
@@ -122,109 +124,119 @@ class HttpClient(SyncBackendClient):
         self.params = dict_copy(HttpClient.params)
         ch_settings = dict_copy(settings, self.params)
         pool = pool_mgr
-        if interface == "https":
-            if isinstance(verify, str) and verify.lower() == "proxy":
-                verify = True
-                tls_mode = tls_mode or "proxy"
-            if not https_proxy:
-                https_proxy = check_env_proxy("https", host, port)
-            verify = coerce_bool(verify)
-            if client_cert and (tls_mode is None or tls_mode == "mutual"):
-                if not username:
-                    raise ProgrammingError("username parameter is required for Mutual TLS authentication")
-                client_headers["X-ClickHouse-User"] = username
-                client_headers["X-ClickHouse-SSL-Certificate-Auth"] = "on"
+        owned_pool: PoolManager | None = None
+        try:
+            if interface == "https":
+                if isinstance(verify, str) and verify.lower() == "proxy":
+                    verify = True
+                    tls_mode = tls_mode or "proxy"
+                if not https_proxy:
+                    https_proxy = check_env_proxy("https", host, port)
+                verify = coerce_bool(verify)
+                if client_cert and (tls_mode is None or tls_mode == "mutual"):
+                    if not username:
+                        raise ProgrammingError("username parameter is required for Mutual TLS authentication")
+                    client_headers["X-ClickHouse-User"] = username
+                    client_headers["X-ClickHouse-SSL-Certificate-Auth"] = "on"
 
-            if not pool and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
-                options: dict[str, Any] = {"verify": verify}
-                dict_add(options, "ca_cert", ca_cert)
-                dict_add(options, "client_cert", client_cert)
-                dict_add(options, "client_cert_key", client_cert_key)
-                if server_host_name:
-                    if options["verify"]:
-                        options["assert_hostname"] = server_host_name
-                    options["server_hostname"] = server_host_name
-                pool = get_pool_manager(https_proxy=https_proxy, **options)
-                self._owns_pool_manager = True
-        if not pool:
-            if not http_proxy:
-                http_proxy = check_env_proxy("http", host, port)
-            if http_proxy:
-                pool = get_proxy_manager(host, http_proxy)
-            else:
-                pool = default_pool_manager()
+                if not pool and (server_host_name or ca_cert or client_cert or not verify or https_proxy):
+                    options: dict[str, Any] = {"verify": verify}
+                    dict_add(options, "ca_cert", ca_cert)
+                    dict_add(options, "client_cert", client_cert)
+                    dict_add(options, "client_cert_key", client_cert_key)
+                    if server_host_name:
+                        if options["verify"]:
+                            options["assert_hostname"] = server_host_name
+                        options["server_hostname"] = server_host_name
+                    pool = owned_pool = get_pool_manager(https_proxy=https_proxy, **options)
+                    self._owns_pool_manager = True
+            if not pool:
+                if not http_proxy:
+                    http_proxy = check_env_proxy("http", host, port)
+                if http_proxy:
+                    pool = get_proxy_manager(host, http_proxy)
+                else:
+                    pool = default_pool_manager()
 
-        if token_provider:
-            access_token = token_provider()
-        if access_token:
-            client_headers["Authorization"] = f"Bearer {access_token}"
-        elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
-            client_headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
+            if token_provider:
+                access_token = token_provider()
+            if access_token:
+                client_headers["Authorization"] = f"Bearer {access_token}"
+            elif (not client_cert or tls_mode in ("strict", "proxy")) and username:
+                client_headers["Authorization"] = "Basic " + b64encode(f"{username}:{password}".encode()).decode()
 
-        self._reported_libs: set[str] = set()
-        client_headers["User-Agent"] = common.build_client_name(client_name)
-        if headers:
-            client_headers.update(headers)
-        self._write_format = "Native"
-        self._transform = _make_native_transform(native_codec)
-        if not isinstance(self._transform, NativeTransform):
-            # The codec is a client-level choice, so the tag is applied at construction rather than per call.
-            add_integration_tag(client_headers, self._reported_libs, "clickhouse-connect-core")
+            self._reported_libs: set[str] = set()
+            client_headers["User-Agent"] = common.build_client_name(client_name)
+            if headers:
+                client_headers.update(headers)
+            self._write_format = "Native"
+            self._transform = _make_native_transform(native_codec)
+            if not isinstance(self._transform, NativeTransform):
+                # The codec is a client-level choice, so the tag is applied at construction rather than per call.
+                add_integration_tag(client_headers, self._reported_libs, "clickhouse-connect-core")
 
-        # There are use cases when the client needs to disable timeouts.
-        if connect_timeout is not None:
-            connect_timeout = coerce_int(connect_timeout)
-        if send_receive_timeout is not None:
-            send_receive_timeout = coerce_int(send_receive_timeout)
-        self._rename_response_column = rename_response_column
+            # There are use cases when the client needs to disable timeouts.
+            if connect_timeout is not None:
+                connect_timeout = coerce_int(connect_timeout)
+            if send_receive_timeout is not None:
+                send_receive_timeout = coerce_int(send_receive_timeout)
+            self._rename_response_column = rename_response_column
 
-        # allow to override the global autogenerate_session_id setting via the constructor params
-        _autogenerate_session_id = (
-            common.get_setting("autogenerate_session_id") if autogenerate_session_id is None else autogenerate_session_id
-        )
+            # allow to override the global autogenerate_session_id setting via the constructor params
+            _autogenerate_session_id = (
+                common.get_setting("autogenerate_session_id") if autogenerate_session_id is None else autogenerate_session_id
+            )
 
-        if session_id:
-            ch_settings["session_id"] = session_id
-        elif "session_id" not in ch_settings and _autogenerate_session_id:
-            ch_settings["session_id"] = str(uuid.uuid4())
+            if session_id:
+                ch_settings["session_id"] = session_id
+            elif "session_id" not in ch_settings and _autogenerate_session_id:
+                ch_settings["session_id"] = str(uuid.uuid4())
 
-        compression, write_compression = negotiate_compression(compress)
-        if write_compression:
-            self.write_compression = write_compression
+            compression, write_compression = negotiate_compression(compress)
+            if write_compression:
+                self.write_compression = write_compression
 
-        # The backend owns transport state. The params dict is shared by
-        # reference with this facade, so it is mutated in place, never rebound.
-        self._backend = HttpSyncBackend(
-            url=self.url,
-            pool_manager=pool,
-            owns_pool_manager=self._owns_pool_manager,
-            headers=client_headers,
-            params=self.params,
-            timeout=Timeout(connect=connect_timeout, read=send_receive_timeout),
-            server_host_name=server_host_name,
-            token_provider=token_provider,
-            # allow to override the global autogenerate_query_id setting via the constructor params
-            autogenerate_query_id=(common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id),
-            read_format="Native",
-            form_encode_query_params=form_encode_query_params,
-        )
-        self._initial_settings = settings
-        # Stashed for _init_common_settings, which needs the discovered server
-        # settings and so runs as part of the connect step inside super().__init__
-        self._ch_settings = ch_settings
-        self._negotiated_compression = compression
-        self._send_receive_timeout = send_receive_timeout
-        super().__init__(
-            database=database,
-            uri=self.url,
-            query_limit=query_limit,
-            query_retries=query_retries,
-            server_host_name=server_host_name,
-            tz_source=tz_source,
-            tz_mode=cast(TzMode | None, tz_mode),
-            show_clickhouse_errors=show_clickhouse_errors,
-            autoconnect=True,
-        )
+            # The backend owns transport state. The params dict is shared by
+            # reference with this facade, so it is mutated in place, never rebound.
+            self._backend = HttpSyncBackend(
+                url=self.url,
+                pool_manager=pool,
+                owns_pool_manager=self._owns_pool_manager,
+                headers=client_headers,
+                params=self.params,
+                timeout=Timeout(connect=connect_timeout, read=send_receive_timeout),
+                server_host_name=server_host_name,
+                token_provider=token_provider,
+                # allow to override the global autogenerate_query_id setting via the constructor params
+                autogenerate_query_id=(
+                    common.get_setting("autogenerate_query_id") if autogenerate_query_id is None else autogenerate_query_id
+                ),
+                read_format="Native",
+                form_encode_query_params=form_encode_query_params,
+            )
+            self._initial_settings = settings
+            # Stashed for _init_common_settings, which needs the discovered server
+            # settings and so runs as part of the connect step inside super().__init__
+            self._ch_settings = ch_settings
+            self._negotiated_compression = compression
+            self._send_receive_timeout = send_receive_timeout
+            super().__init__(
+                database=database,
+                uri=self.url,
+                query_limit=query_limit,
+                query_retries=query_retries,
+                server_host_name=server_host_name,
+                tz_source=tz_source,
+                tz_mode=cast(TzMode | None, tz_mode),
+                show_clickhouse_errors=show_clickhouse_errors,
+                autoconnect=True,
+            )
+        except BaseException:
+            if owned_pool is not None:
+                # Keep the construction error if pool cleanup also fails.
+                with suppress(BaseException):
+                    _close_pool_manager(owned_pool)
+            raise
 
     def _init_common_settings(self, tz_source: TzSource) -> None:
         super()._init_common_settings(tz_source)

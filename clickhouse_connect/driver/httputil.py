@@ -53,6 +53,13 @@ def close_managers():
         manager.clear()
 
 
+def _close_pool_manager(manager: PoolManager) -> None:
+    try:
+        manager.clear()
+    finally:
+        all_managers.pop(manager, None)
+
+
 def resolve_ca_cert(ca_cert: str | None) -> str | None:
     if ca_cert == "certifi":
         return certifi.where()
