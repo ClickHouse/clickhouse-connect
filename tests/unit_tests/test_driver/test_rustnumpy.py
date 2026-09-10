@@ -541,3 +541,62 @@ def test_refinalize_nullable_named_timezone_datetimes(type_name):
 
     assert result[0][0] is pd.NaT
     assert result[0][1] == pd.Timestamp(value)
+
+
+class _ColBatch:
+    """Mock ColBatch exposing the python-object exit."""
+
+    def __init__(self, columns):
+        self._columns = columns
+
+    def column_data(self, index):
+        return list(self._columns[index])
+
+
+def _extended_pandas_context():
+    return QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+
+
+def test_string_converter_extended_pandas_builds_from_arrow():
+    pa = pytest.importorskip("pyarrow")
+    pd = pytest.importorskip("pandas")
+    converter = rustnumpy._build_converter(get_from_name("String"), _extended_pandas_context())
+    assert converter.needs_arrow is True
+    values = ["a", "", "\u00e9", "b" * 40]
+    result = converter(pa.table({"c": pa.array(values)}), _ColBatch([values]), 0)
+    pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
+
+
+def test_nullable_string_converter_extended_pandas_uses_na():
+    pa = pytest.importorskip("pyarrow")
+    pd = pytest.importorskip("pandas")
+    converter = rustnumpy._build_converter(get_from_name("Nullable(String)"), _extended_pandas_context())
+    assert converter.needs_arrow is True
+    values = ["a", None, "", "b"]
+    result = converter(pa.table({"c": pa.array(values)}), _ColBatch([values]), 0)
+    pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
+
+
+def test_string_converter_invalid_utf8_falls_back_to_object_exit():
+    pa = pytest.importorskip("pyarrow")
+    pd = pytest.importorskip("pandas")
+    converter = rustnumpy._build_converter(get_from_name("String"), _extended_pandas_context())
+    binary = pa.array([b"\xff", b"ok"], type=pa.binary())
+    forged = pa.Array.from_buffers(pa.string(), len(binary), binary.buffers(), null_count=0)
+    # The binding renders invalid UTF-8 as hex, so the object exit sees these values.
+    result = converter(pa.table({"c": forged}), _ColBatch([["ff", "ok"]]), 0)
+    pd.testing.assert_extension_array_equal(result, pd.array(["ff", "ok"], dtype=pd.StringDtype()))
+
+
+@pytest.mark.parametrize(
+    ("type_name", "context"),
+    [
+        ("String", QueryContext(use_numpy=True)),
+        ("String", QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=False)),
+        ("LowCardinality(String)", QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)),
+        ("FixedString(3)", QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)),
+    ],
+    ids=["numpy", "pandas_plain", "low_card", "fixed_string"],
+)
+def test_string_converter_other_outputs_keep_object_exit(type_name, context):
+    assert rustnumpy._build_converter(get_from_name(type_name), context).needs_arrow is False
