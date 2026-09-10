@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.9.0rc2, 2026-09-10
+
 ### Improvements
 
 - The Rust codec no longer starts a read-ahead thread for responses that fit in a single chunk. The first chunk is delivered immediately, and the thread starts only after the consumer requests and receives a second chunk. This removes a per-query cost that made many small concurrent queries slower than the Python codec.
