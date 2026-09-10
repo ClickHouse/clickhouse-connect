@@ -5,6 +5,8 @@
 ### Improvements
 
 - SQLAlchemy multi-row `Insert.values()` statements now compile and execute. Rows can be dictionaries, tuples in table column order, or rows containing SQL expressions, with client-side or server-side bind parameters. This also enables Pandas `to_sql(method="multi")`. See the SQLAlchemy documentation for column selection rules and the bind parameter ceiling that applies to server-side parameters on ClickHouse 26.4 and newer. Closes [#1024](https://github.com/ClickHouse/clickhouse-connect/issues/1024).
+- The Rust codec no longer starts a read-ahead thread for responses that fit in a single chunk. The first chunk is delivered immediately, and the thread starts only after the consumer requests and receives a second chunk. This removes a per-query cost that made many small concurrent queries slower than the Python codec.
+- The Rust codec now builds pandas `StringDtype` columns for `query_df` and `query_df_stream` directly from its Arrow buffers instead of materializing Python strings first. Output values and dtypes are unchanged. String columns that contain invalid UTF-8 keep the existing hex rendering.
 
 ### Bug Fixes
 

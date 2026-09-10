@@ -4,9 +4,9 @@ The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds wi
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
 the Python codec by construction. Non-nullable numeric and temporal columns take the Arrow exit. Time and
-Time64 keep their declared duration units through NumPy and extended pandas output. Strings, enums,
-and remaining nullable columns take the rust python-object exit and are finalized through the driver's own
-_finalize_column.
+Time64 keep their declared duration units through NumPy and extended pandas output. Extended pandas output
+builds String columns from the Arrow buffers. Other strings, enums, and remaining nullable columns take the rust
+python-object exit and are finalized through the driver's own _finalize_column.
 """
 
 import logging
@@ -18,6 +18,7 @@ from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.container import Array, Map, Nested, Tuple
 from clickhouse_connect.datatypes.numeric import BFloat16, Interval
 from clickhouse_connect.datatypes.special import SimpleAggregateFunction
+from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import first_value
@@ -636,6 +637,23 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
     return convert
 
 
+def _make_string_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+    # Extended pandas String output built from the Arrow buffers instead of a Python str list. The rust export
+    # does not validate UTF-8, so a block with invalid bytes takes the object exit and renders them as hex.
+    pd_dtype = options.pd.StringDtype()
+    object_convert = _make_object_convert(ch_type, context)
+
+    def convert(arrow_table: Any, col_batch: Any, index: int) -> Any:
+        column = arrow_table.column(index)
+        try:
+            column.validate(full=True)
+        except options.arrow.ArrowInvalid:
+            return object_convert(arrow_table, col_batch, index)
+        return pd_dtype.__from_arrow__(column)
+
+    return convert
+
+
 def _make_nullable_int_convert(pd_dtype: Any) -> BlockConverter:
     def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
         return pd_dtype.__from_arrow__(_arrow_column(arrow_table, index))
@@ -690,6 +708,14 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         return _Converter(True, _make_array_time_convert(leaf, depth, context))
     if _contains_nested_time(ch_type):
         return _Converter(False, _make_nested_time_convert(ch_type, context))
+    if (
+        isinstance(ch_type, String)
+        and not ch_type.low_card
+        and context.as_pandas
+        and context.use_extended_dtypes
+        and ch_type.read_format(context) == "native"
+    ):
+        return _Converter(True, _make_string_convert(ch_type, context))
     if not ch_type.nullable and not ch_type.low_card:
         if isinstance(ch_type, DateTime64):
             _ = ch_type.np_type  # ProgrammingError for precisions outside {0,3,6,9}, matching the Python codec
