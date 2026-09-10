@@ -2,6 +2,7 @@ import asyncio
 import logging
 import queue
 import threading
+import weakref
 import zlib
 from collections.abc import Callable, Iterable, Iterator
 from typing import cast
@@ -494,7 +495,7 @@ class StreamingInsertSource:
 
 
 def _read_ahead_producer(
-    source: ByteSource,
+    src_gen: Iterator[bytes],
     out: queue.Queue[tuple[str, object]],
     stop_event: threading.Event,
 ) -> None:
@@ -508,7 +509,7 @@ def _read_ahead_producer(
         return False
 
     try:
-        for chunk in source.gen:
+        for chunk in src_gen:
             if not put(("data", chunk)):
                 return
     except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
@@ -526,6 +527,46 @@ def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Itera
             raise cast(BaseException, payload)
         else:  # eof
             return
+
+
+def _read_ahead_stream(
+    owner_ref: "weakref.ref[ReadAheadSource]",
+    source: ByteSource,
+    out: queue.Queue[tuple[str, object]],
+    stop_event: threading.Event,
+) -> Iterator[bytes]:
+    # Return the first chunk immediately. Read the second only when the consumer asks for more, so empty and
+    # single-chunk responses never start a producer. The weak owner reference lets abandoned sources finalize.
+    if stop_event.is_set():
+        return
+    src_gen = source.gen
+    try:
+        first = next(src_gen)
+    except StopIteration:
+        return
+    yield first
+    if stop_event.is_set():
+        return
+    try:
+        second = next(src_gen)
+    except StopIteration:
+        return
+    owner = owner_ref()
+    if owner is None or stop_event.is_set():
+        return
+    thread = threading.Thread(
+        target=_read_ahead_producer,
+        args=(src_gen, out, stop_event),
+        name="clickhouse-read-ahead",
+        daemon=True,
+    )
+    owner._thread = thread
+    del owner
+    thread.start()
+    # Let the producer finalize the iterator when it exits, including during async source cleanup.
+    del src_gen
+    yield second
+    yield from _read_ahead_consumer(out)
 
 
 def _drain_read_ahead_queue(source_queue: queue.Queue[tuple[str, object]]) -> None:
@@ -563,10 +604,10 @@ async def _wait_for_cleanup(
 def _finalize_read_ahead_off_loop(
     source: ByteSource,
     source_queue: queue.Queue[tuple[str, object]],
-    producer_thread: threading.Thread,
+    producer_thread: threading.Thread | None,
 ) -> None:
     try:
-        if producer_thread.is_alive():
+        if producer_thread is not None and producer_thread.is_alive():
             producer_thread.join(timeout=1.0)
     except Exception:  # noqa: BLE001 - finalizers must not raise
         pass
@@ -576,8 +617,10 @@ def _finalize_read_ahead_off_loop(
 class ReadAheadSource(Closable):
     """Reads chunks from a byte source on a daemon thread into a bounded queue so transport overlaps decode.
 
-    The consumer generator re-raises any producer-side exception verbatim, in stream order, so the wrapping
-    codec's error mapping, exception-tag scanning, and last-chunk heuristics run unchanged on the consumer thread.
+    The producer thread starts lazily, once the source yields a second chunk, so empty and single-chunk responses
+    never pay for it. The consumer generator re-raises any producer-side exception verbatim, in stream order, so
+    the wrapping codec's error mapping, exception-tag scanning, and last-chunk heuristics run unchanged on the
+    consumer thread.
     """
 
     def __init__(self, source: ByteSource, maxsize: int = 16):
@@ -586,13 +629,7 @@ class ReadAheadSource(Closable):
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
         self._gen_cache: Iterator[bytes] | None = None
-        self._thread = threading.Thread(
-            target=_read_ahead_producer,
-            args=(source, self.queue, self._stop_event),
-            name="clickhouse-read-ahead",
-            daemon=True,
-        )
-        self._thread.start()
+        self._thread: threading.Thread | None = None
 
     def __del__(self) -> None:
         try:
@@ -624,7 +661,10 @@ class ReadAheadSource(Closable):
     @property
     def gen(self) -> Iterator[bytes]:
         if self._gen_cache is None:
-            self._gen_cache = _read_ahead_consumer(self.queue)
+            source = self.source
+            if source is None:
+                raise RuntimeError("ReadAheadSource is closed")
+            self._gen_cache = _read_ahead_stream(weakref.ref(self), source, self.queue, self._stop_event)
         return self._gen_cache
 
     def _drain(self):
@@ -641,8 +681,9 @@ class ReadAheadSource(Closable):
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
         # which would race a producer still reading it.
         self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
         self._drain()
         self._release_source()
 
@@ -651,9 +692,10 @@ class ReadAheadSource(Closable):
         cancelled: asyncio.CancelledError | None = None
         cleanup_error: BaseException | None = None
         loop = asyncio.get_running_loop()
-        if self._thread.is_alive():
+        thread = self._thread
+        if thread is not None and thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
-            join_future = loop.run_in_executor(None, self._thread.join, 1.0)
+            join_future = loop.run_in_executor(None, thread.join, 1.0)
             try:
                 cancelled = await _wait_for_cleanup(join_future, cancelled)
             except BaseException as ex:  # noqa: BLE001 - source cleanup must still run
@@ -672,8 +714,8 @@ class ReadAheadSource(Closable):
                     cleanup_error = ex
         # A source close can unblock a producer whose in-flight read outlived the first bounded join.
         # Wait once more so async cleanup does not return while that producer is still unwinding.
-        if self._thread.is_alive():
-            join_future = loop.run_in_executor(None, self._thread.join, 1.0)
+        if thread is not None and thread.is_alive():
+            join_future = loop.run_in_executor(None, thread.join, 1.0)
             try:
                 cancelled = await _wait_for_cleanup(join_future, cancelled)
             except BaseException as ex:  # noqa: BLE001 - preserve the first cleanup failure

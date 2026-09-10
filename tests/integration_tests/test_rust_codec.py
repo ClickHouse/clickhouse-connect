@@ -1,4 +1,5 @@
 import array
+import asyncio
 import gc
 import logging
 import time
@@ -1296,6 +1297,7 @@ NP_DF_MATRIX = {
     "nullable_uint64": "CAST(if(number % 3 = 0, NULL, number) AS Nullable(UInt64))",
     "nullable_float": "CAST(if(number % 3 = 0, NULL, toFloat64(number) / 2) AS Nullable(Float64))",
     "nullable_string": "CAST(if(number % 3 = 0, NULL, toString(number)) AS Nullable(String))",
+    "invalid_utf8_string": "if(number % 2 = 0, unhex('ff'), toString(number))",
     "nullable_datetime": "CAST(if(number % 3 = 0, NULL, toDateTime(number)) AS Nullable(DateTime))",
     "nullable_datetime64": "CAST(if(number % 3 = 0, NULL, toDateTime64(number, 3)) AS Nullable(DateTime64(3)))",
     "low_card_string": "CAST(toString(number % 3) AS LowCardinality(String))",
@@ -1584,8 +1586,19 @@ def test_rust_codec_abandoned_stream_no_read_ahead_thread(client_factory, call, 
         # abandonment. A small result the producer fully buffers would exit on its own and hide a close() leak.
         stream = call(rust_client.query_column_block_stream, "SELECT number FROM numbers(20000000)")
         read_source = stream.source.source
-        thread = read_source._thread
         read_source_ref = weakref.ref(read_source)
+
+        def start_read_ahead(stream_context):
+            # Decode until the second transport chunk starts the producer, then abandon the active stream.
+            while stream_context.source.source._thread is None:
+                next(stream_context.gen)
+
+        if client_mode == "sync":
+            start_read_ahead(stream)
+        else:
+            call(asyncio.to_thread, start_read_ahead, stream)
+        thread = read_source._thread
+        assert thread is not None
         del read_source
 
         if client_mode == "sync":

@@ -6,6 +6,7 @@ import threading
 import time
 import weakref
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from unittest.mock import Mock
 
@@ -950,7 +951,8 @@ class MockByteSource:
 
 
 class AsyncCloseByteSource:
-    def __init__(self):
+    def __init__(self, chunks=()):
+        self.chunks = chunks
         self.close_started = asyncio.Event()
         self.close_release = asyncio.Event()
         self.closed = False
@@ -958,8 +960,7 @@ class AsyncCloseByteSource:
 
     @property
     def gen(self):
-        if False:
-            yield b""
+        yield from self.chunks
 
     async def aclose(self):
         self.close_started.set()
@@ -973,7 +974,8 @@ class AsyncCloseByteSource:
 
 
 class ReadBlockedByteSource:
-    def __init__(self):
+    def __init__(self, early_chunks=(b"early_1", b"early_2")):
+        self.early_chunks = early_chunks
         self.read_started = threading.Event()
         self.release_read = threading.Event()
         self.closed = False
@@ -981,6 +983,8 @@ class ReadBlockedByteSource:
 
     @property
     def gen(self):
+        # By default, two immediate chunks start the producer before the third read blocks.
+        yield from self.early_chunks
         self.read_started.set()
         self.release_read.wait(timeout=5.0)
         yield b"late"
@@ -1005,6 +1009,8 @@ class AsyncCloseReadBlockedSource:
 
     @property
     def gen(self):
+        yield b"early_1"
+        yield b"early_2"
         self.read_started.set()
         try:
             self.release_read.wait(timeout=5)
@@ -1034,7 +1040,9 @@ def test_read_ahead_chunk_order():
     src = MockByteSource([b"a", b"b", b"c"])
     read_source = ReadAheadSource(src)
     assert list(read_source.gen) == [b"a", b"b", b"c"]
+    assert read_source._thread is not None
     read_source.close()
+    assert read_source._thread.is_alive() is False
     assert src.closed is True
 
 
@@ -1042,6 +1050,23 @@ def test_read_ahead_gen_cached():
     read_source = ReadAheadSource(MockByteSource([b"a"]))
     assert read_source.gen is read_source.gen
     read_source.close()
+
+
+def test_read_ahead_first_chunk_does_not_wait_for_second():
+    src = ReadBlockedByteSource(early_chunks=(b"early_1",))
+    read_source = ReadAheadSource(src)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(next, read_source.gen)
+        try:
+            assert first.result(timeout=1.0) == b"early_1"
+            assert read_source._thread is None
+            assert not src.read_started.is_set()
+        finally:
+            src.release_read.set()
+            first.result(timeout=1.0)
+            read_source.close()
+    assert list(read_source.gen) == []
+    assert not src.read_started.is_set()
 
 
 def test_read_ahead_error_forwarded_verbatim():
@@ -1071,34 +1096,60 @@ def test_read_ahead_close_during_block_terminates_thread():
     src = MockByteSource([bytes([i % 256]) for i in range(500)])
     read_source = ReadAheadSource(src, maxsize=2)
     assert next(read_source.gen) == b"\x00"
+    assert next(read_source.gen) == b"\x01"
     read_source.close()
     assert src.closed is True
     assert read_source._thread.is_alive() is False
 
 
-def test_read_ahead_join_on_close():
-    src = MockByteSource([b"a", b"b"])
+@pytest.mark.parametrize("chunks", [[], [b"a"], [b"a", b"b", b"c"]])
+def test_read_ahead_close_before_consumption_never_starts_thread(chunks):
+    src = MockByteSource(chunks)
     read_source = ReadAheadSource(src)
+    consumer = read_source.gen
     read_source.close()
-    assert read_source._thread.is_alive() is False
     assert src.closed is True
+    assert list(consumer) == []
+    assert read_source._thread is None
+
+    closed = ReadAheadSource(MockByteSource([b"a"]))
+    closed.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = closed.gen
 
 
 @pytest.mark.asyncio
-async def test_read_ahead_async_close_awaits_source_aclose():
-    src = AsyncCloseByteSource()
+@pytest.mark.parametrize("chunks_consumed", [0, 1, 2])
+@pytest.mark.parametrize("cancel_close", [False, True])
+async def test_read_ahead_async_close_awaits_source_aclose(chunks_consumed, cancel_close):
+    chunks = (b"a", b"b", b"c")
+    src = AsyncCloseByteSource(chunks)
     read_source = ReadAheadSource(src)
+    for chunk in chunks[:chunks_consumed]:
+        assert next(read_source.gen) == chunk
+    thread = read_source._thread
+    assert (thread is not None) is (chunks_consumed == 2)
 
     close_task = asyncio.create_task(read_source.aclose())
     await asyncio.wait_for(src.close_started.wait(), timeout=1.0)
 
     assert close_task.done() is False
     assert src.sync_close_called is False
+    if cancel_close:
+        close_task.cancel()
+        await asyncio.sleep(0)
+        assert close_task.done() is False
     src.close_release.set()
-    await close_task
+    if cancel_close:
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+    else:
+        await close_task
 
     assert src.closed is True
     assert read_source.source is None
+    if thread is not None:
+        assert thread.is_alive() is False
 
 
 @pytest.mark.asyncio
@@ -1107,18 +1158,22 @@ async def test_read_ahead_async_close_finishes_cleanup_before_propagating_cancel
     src = AsyncCloseReadBlockedSource(loop)
     read_source = ReadAheadSource(src)
     try:
+        assert next(read_source.gen) == b"early_1"
+        assert next(read_source.gen) == b"early_2"
         assert await asyncio.to_thread(src.read_started.wait, 1)
 
         close_task = asyncio.create_task(read_source.aclose())
         await asyncio.sleep(0.01)
         close_task.cancel()
 
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError) as excinfo:
             await close_task
 
+        assert excinfo.value.__cause__ is None
         assert read_source.source is None
         assert read_source._thread.is_alive() is False
         assert src.async_close_calls == 1
+        assert src.async_close_finished is True
         assert src.sync_close_calls == 0
     finally:
         src.release_read.set()
@@ -1154,6 +1209,8 @@ def test_read_ahead_finalizer_completes_during_loop_shutdown(caplog):
             source = AsyncCloseReadBlockedSource(asyncio.get_running_loop(), close_delay=0.05)
             read_source = ReadAheadSource(source)
             source_holder.append(source)
+            assert next(read_source.gen) == b"early_1"
+            assert next(read_source.gen) == b"early_2"
             assert await asyncio.to_thread(source.read_started.wait, 1)
             owner_ready.set()
             try:
@@ -1177,26 +1234,31 @@ def test_read_ahead_finalizer_completes_during_loop_shutdown(caplog):
     assert not any("Task was destroyed but it is pending" in message for message in caplog.messages)
 
 
-def test_read_ahead_abandoned_source_is_collected():
+@pytest.mark.parametrize("chunks_consumed", [1, 2])
+def test_read_ahead_abandoned_source_is_collected(chunks_consumed):
     gc_was_enabled = gc.isenabled()
     gc.disable()
     read_source_ref = None
     try:
         src = MockByteSource([bytes([i % 256]) for i in range(500)])
         read_source = ReadAheadSource(src, maxsize=2)
-        thread = read_source._thread
         read_source_ref = weakref.ref(read_source)
 
-        assert next(read_source.gen) == b"\x00"
-        deadline = time.time() + 1.0
-        while time.time() < deadline and not read_source.queue.full():
-            time.sleep(0.01)
-        assert read_source.queue.full()
+        for i in range(chunks_consumed):
+            assert next(read_source.gen) == bytes([i])
+        thread = read_source._thread
+        assert (thread is not None) is (chunks_consumed == 2)
+        if thread is not None:
+            deadline = time.time() + 1.0
+            while time.time() < deadline and not read_source.queue.full():
+                time.sleep(0.01)
+            assert read_source.queue.full()
 
         del read_source
-        thread.join(timeout=1.0)
+        if thread is not None:
+            thread.join(timeout=1.0)
+            assert thread.is_alive() is False
         assert read_source_ref() is None
-        assert thread.is_alive() is False
         assert src.closed is True
     finally:
         if read_source_ref is not None:
@@ -1216,9 +1278,10 @@ async def test_read_ahead_abandoned_source_does_not_block_event_loop():
     thread = None
     try:
         read_source = ReadAheadSource(source)
-        thread = read_source._thread
         read_source_ref = weakref.ref(read_source)
-        _ = read_source.gen
+        assert next(read_source.gen) == b"early_1"
+        assert next(read_source.gen) == b"early_2"
+        thread = read_source._thread
         assert await asyncio.to_thread(source.read_started.wait, 1.0)
 
         loop = asyncio.get_running_loop()
@@ -1254,6 +1317,8 @@ async def test_read_ahead_abandoned_source_does_not_block_event_loop():
 def test_read_ahead_finalizer_off_loop_fallback_releases_source():
     src = MockByteSource([bytes([i % 256]) for i in range(500)])
     read_source = ReadAheadSource(src, maxsize=2)
+    assert next(read_source.gen) == b"\x00"
+    assert next(read_source.gen) == b"\x01"
     read_source._stop_event.set()
     source, read_source.source = read_source.source, None
     assert source is not None
@@ -1261,6 +1326,46 @@ def test_read_ahead_finalizer_off_loop_fallback_releases_source():
     _finalize_read_ahead_off_loop(source, read_source.queue, read_source._thread)
 
     assert read_source._thread.is_alive() is False
+    assert src.closed is True
+
+
+@pytest.mark.parametrize("chunks", [[], [b"only"]])
+def test_read_ahead_short_stream_no_thread(chunks):
+    src = MockByteSource(chunks)
+    read_source = ReadAheadSource(src)
+    assert list(read_source.gen) == chunks
+    assert read_source._thread is None
+    read_source.close()
+    assert src.closed is True
+
+
+@pytest.mark.parametrize("chunk_count", [0, 1, 2, 3])
+def test_read_ahead_error_at_any_position_forwarded_verbatim(chunk_count):
+    # Errors before the handoff propagate directly from the consuming thread, later ones through the queue.
+    err = ValueError("boom")
+    chunks = [bytes([i]) for i in range(chunk_count)]
+    src = MockByteSource(chunks, error=err)
+    read_source = ReadAheadSource(src)
+    collected = []
+    with pytest.raises(ValueError, match="boom") as excinfo:
+        for chunk in read_source.gen:
+            collected.append(chunk)
+    assert collected == chunks
+    assert excinfo.value is err
+    assert (read_source._thread is not None) is (chunk_count >= 2)
+    read_source.close()
+    assert src.closed is True
+
+
+@pytest.mark.asyncio
+async def test_read_ahead_aclose_after_multi_chunk_stream():
+    src = MockByteSource([b"a", b"b", b"c", b"d"])
+    read_source = ReadAheadSource(src, maxsize=2)
+    assert await asyncio.to_thread(list, read_source.gen) == [b"a", b"b", b"c", b"d"]
+    thread = read_source._thread
+    assert thread is not None
+    await read_source.aclose()
+    assert thread.is_alive() is False
     assert src.closed is True
 
 

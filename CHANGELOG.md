@@ -2,6 +2,11 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- The Rust codec no longer starts a read-ahead thread for responses that fit in a single chunk. The first chunk is delivered immediately, and the thread starts only after the consumer requests and receives a second chunk. This removes a per-query cost that made many small concurrent queries slower than the Python codec.
+- The Rust codec now builds pandas `StringDtype` columns for `query_df` and `query_df_stream` directly from its Arrow buffers instead of materializing Python strings first. Output values and dtypes are unchanged. String columns that contain invalid UTF-8 keep the existing hex rendering.
+
 ## 1.9.0rc1, 2026-09-09
 
 ### Improvements

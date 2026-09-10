@@ -295,6 +295,8 @@ class _LoopReleasedReadSource:
 
     @property
     def gen(self):
+        yield b"early_1"
+        yield b"early_2"
         self.read_started.set()
         try:
             self.release_read.wait(timeout=5)
@@ -327,6 +329,8 @@ async def test_async_result_close_keeps_event_loop_responsive_and_joins_read_ahe
 
     tick_task = asyncio.create_task(tick())
     try:
+        assert next(read_ahead.gen) == b"early_1"
+        assert next(read_ahead.gen) == b"early_2"
         assert await asyncio.to_thread(source.read_started.wait, 1)
         result = QueryResult(block_gen=_empty_blocks(), source=read_ahead)
 
