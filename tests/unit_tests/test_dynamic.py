@@ -89,3 +89,48 @@ def test_dynamic_prefix_sorts_shared_variant():
 
     column = read_variant_column(source, 1, ctx, state.variant_types, state.variant_states)
     assert column == [100]
+
+
+def test_nest_value_overlapping_path_deeper_holds_nothing():
+    """A null deeper path gives way so the scalar already at that key survives."""
+    target = {}
+    dynamic._nest_value(target, "a", 5)
+    dynamic._nest_value(target, "a.b", None)
+
+    assert target == {"a": 5}
+
+
+def test_nest_value_overlapping_path_deeper_holds_value():
+    """A deeper path carrying a value replaces the scalar, matching a dynamic path overwrite."""
+    target = {}
+    dynamic._nest_value(target, "a", 5)
+    dynamic._nest_value(target, "a.b", 7)
+
+    assert target == {"a": {"b": 7}}
+
+
+def test_nest_value_overlapping_path_multiple_levels():
+    target = {}
+    dynamic._nest_value(target, "a", 5)
+    dynamic._nest_value(target, "a.b.c", None)
+
+    assert target == {"a": 5}
+
+
+def test_nest_value_scalar_still_overwrites_container():
+    """The pre-existing behavior of a later scalar replacing a container is unchanged."""
+    target = {}
+    dynamic._nest_value(target, "a.b", 7)
+    dynamic._nest_value(target, "a", 5)
+
+    assert target == {"a": 5}
+
+
+def test_nest_value_plain_paths_unchanged():
+    target = {}
+    dynamic._nest_value(target, "a", 1)
+    dynamic._nest_value(target, "b.c", 2)
+    dynamic._nest_value(target, "b.d", 3)
+    dynamic._nest_value(target, "e", None)
+
+    assert target == {"a": 1, "b": {"c": 2, "d": 3}, "e": None}

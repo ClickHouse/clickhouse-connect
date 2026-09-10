@@ -45,12 +45,22 @@ def _json_path_segments(path: str) -> list[str]:
 
 
 def _nest_value(target: dict, path: str, value) -> None:
-    """Insert a value into a nested dict structure using a dot-separated path."""
+    """Insert a value into a nested dict structure using a dot-separated path.
+
+    A JSON column can declare one path as both a value and the parent of a deeper path, e.g.
+    ``JSON(a Int64, a.b Nullable(Int64))``. Typed paths are read in lexicographic order, so the
+    scalar at ``a`` is always written before ``a.b`` walks through it. When the deeper path holds
+    nothing it gives way and the scalar survives; otherwise it replaces the scalar, which is what
+    an overlapping dynamic path already does.
+    """
     chain = _json_path_segments(path)
     item = target
     for key in chain[:-1]:
         child = item.get(key)
-        if child is None:
+        if not isinstance(child, dict):
+            if child is not None and value is None:
+                # The deeper path carries no value, so keep the occupant rather than discard it.
+                return
             child = {}
             item[key] = child
         item = child
