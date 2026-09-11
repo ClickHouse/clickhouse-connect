@@ -267,8 +267,11 @@ jobs:
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
         run: pip install -r tests/test_requirements.txt
-      - name: Install sqlalchemy 1.x
-        run: pip install "sqlalchemy>=1.4.40,<2.0" # Override sqa version
+      - name: Install SQLAlchemy 1.x and compatible Alembic
+        run: |
+          # Resolve both together because newer Alembic versions require SQLAlchemy 2.x.
+          pip install "sqlalchemy>=1.4.40,<2.0" "alembic>=1.18"
+          pip check
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
