@@ -122,7 +122,7 @@ class ClickHouseImpl(DefaultImpl):
         if (
             not self.as_sql
             and self.context_opts.get("include_schemas")
-            and not self.context_opts.get("version_table_schema")
+            and self.context_opts.get("version_table_schema") is None
             and self.connection is not None
         ):
             current_database = self.connection.execute(with_internal_query_formats(text("SELECT currentDatabase()"))).scalar()

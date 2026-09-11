@@ -260,8 +260,13 @@ def test_clickhouse_impl_current_database_uses_internal_query_formats():
 
 @pytest.mark.parametrize(
     "opts",
-    [{}, {"include_schemas": False}, {"include_schemas": True, "version_table_schema": "migration_db"}],
-    ids=["default", "schemas-disabled", "explicit-schema"],
+    [
+        {},
+        {"include_schemas": False},
+        {"include_schemas": True, "version_table_schema": ""},
+        {"include_schemas": True, "version_table_schema": "migration_db"},
+    ],
+    ids=["default", "schemas-disabled", "empty-schema", "explicit-schema"],
 )
 def test_clickhouse_impl_skips_unneeded_current_database_lookup(opts):
     connection = Mock()
