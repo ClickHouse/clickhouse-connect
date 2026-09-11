@@ -1,5 +1,7 @@
 import multiprocessing
 import os
+import socket
+import sys
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -97,6 +99,61 @@ def restore_default_pool_manager(restore_manager_registries):
     httputil._default_pool_pid = pid
     httputil._default_pool_lock = lock
     httputil._inherited_managers[:] = inherited
+
+
+def test_default_socket_options():
+    options = httputil.get_pool_manager_options(keep_interval=13, keep_count=7, keep_idle=79)["socket_options"]
+
+    assert (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1) in options
+    assert (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) in options
+    assert not any(level == socket.SOL_SOCKET and option in (socket.SO_SNDBUF, socket.SO_RCVBUF) for level, option, _ in options)
+    for name, value in (("TCP_KEEPINTVL", 13), ("TCP_KEEPCNT", 7), ("TCP_KEEPIDLE", 79)):
+        if hasattr(socket, name):
+            assert (socket.IPPROTO_TCP, getattr(socket, name), value) in options
+    if sys.platform == "darwin":
+        assert (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPALIVE", 0x10), 13) in options
+
+
+@pytest.mark.parametrize(
+    "socket_options",
+    [None, [], [(socket.SOL_SOCKET, socket.SO_SNDBUF, 128 * 1024), (socket.IPPROTO_TCP, socket.TCP_NODELAY, 0)]],
+    ids=["none", "empty", "custom"],
+)
+def test_explicit_socket_options(socket_options):
+    original = None if socket_options is None else socket_options.copy()
+    options = httputil.get_pool_manager_options(socket_options=socket_options)
+
+    assert options["socket_options"] == original
+    assert socket_options == original
+
+
+@pytest.mark.parametrize(
+    ("scheme", "proxy_options"),
+    [
+        ("http", {}),
+        ("https", {}),
+        ("http", {"http_proxy": "http://proxy.test:8080"}),
+        ("https", {"https_proxy": "https://proxy.test:8443"}),
+    ],
+    ids=["http", "https", "http_proxy", "https_proxy"],
+)
+@pytest.mark.parametrize(
+    "options",
+    [{}, {"socket_options": None}, {"socket_options": []}, {"socket_options": [(socket.SOL_SOCKET, socket.SO_SNDBUF, 128 * 1024)]}],
+    ids=["default", "none", "empty", "custom"],
+)
+def test_pool_socket_options(scheme, proxy_options, options):
+    expected = options.get("socket_options", httputil.get_pool_manager_options()["socket_options"])
+    manager = httputil.get_pool_manager(**proxy_options, **options)
+    try:
+        pool = manager.connection_from_host("clickhouse.test", scheme=scheme)
+        connection = pool._new_conn()
+        try:
+            assert connection.socket_options == expected
+        finally:
+            connection.close()
+    finally:
+        httputil._close_pool_manager(manager)
 
 
 class TestDefaultPoolManager:
