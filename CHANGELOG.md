@@ -2,17 +2,30 @@
 
 ## UNRELEASED
 
-### Improvements
-
-- SQLAlchemy multi-row `Insert.values()` statements now compile and execute. Rows can be dictionaries, tuples in table column order, or rows containing SQL expressions, with client-side or server-side bind parameters. This also enables Pandas `to_sql(method="multi")`. See the SQLAlchemy documentation for column selection rules and the bind parameter ceiling that applies to server-side parameters on ClickHouse 26.4 and newer. Closes [#1024](https://github.com/ClickHouse/clickhouse-connect/issues/1024).
-- The Rust codec no longer starts a read-ahead thread for responses that fit in a single chunk. The first chunk is delivered immediately, and the thread starts only after the consumer requests and receives a second chunk. This removes a per-query cost that made many small concurrent queries slower than the Python codec.
-- The Rust codec now builds pandas `StringDtype` columns for `query_df` and `query_df_stream` directly from its Arrow buffers instead of materializing Python strings first. Output values and dtypes are unchanged. String columns that contain invalid UTF-8 keep the existing hex rendering.
+## 1.9.0rc3, 2026-09-11
 
 ### Bug Fixes
 
 - SQLAlchemy `Memory`, `Log`, `StripeLog`, `TinyLog`, `Null`, and `Set` engines now accept the zero-argument and `settings=` constructor calls emitted by Alembic. SummingMergeTree engines now accept keyword-only `columns` and preserve explicit summing columns through reflection and Alembic. Existing positional arguments and engine inheritance remain compatible. Closes [#946](https://github.com/ClickHouse/clickhouse-connect/issues/946).
 - Synchronous HTTP connections no longer set `SO_SNDBUF` to 256 KiB, which disabled automatic buffer sizing and could slow large uploads. The operating system now sizes the buffer. The pool manager helpers also honor explicit `socket_options` instead of replacing them with defaults. Closes [#1044](https://github.com/ClickHouse/clickhouse-connect/issues/1044).
 - Alembic offline SQL generation no longer fails when `include_schemas=True` and `version_table_schema` is unset. Offline mode now skips the current database lookup. Online version table updates and deletes also work when `version_table_schema=""`. Closes [#1045](https://github.com/ClickHouse/clickhouse-connect/issues/1045).
+
+## 1.9.0rc2, 2026-09-10
+
+### Improvements
+
+- The Rust codec no longer starts a read-ahead thread for responses that fit in a single chunk. The first chunk is delivered immediately, and the thread starts only after the consumer requests and receives a second chunk. This removes a per-query cost that made many small concurrent queries slower than the Python codec.
+- The Rust codec now builds pandas `StringDtype` columns for `query_df` and `query_df_stream` directly from its Arrow buffers instead of materializing Python strings first. Output values and dtypes are unchanged. String columns that contain invalid UTF-8 keep the existing hex rendering.
+
+## 1.9.0rc1, 2026-09-09
+
+### Improvements
+
+- Added a native async SQLAlchemy dialect for SQLAlchemy 2.0.44 and later. Install `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. The first release supports buffered Core and ORM execution, inserts, per-query settings and read formats, server-side parameters, DDL and reflection through `run_sync()`, Alembic online migrations through `AsyncConnection.run_sync()`, offline Alembic compilation, and direct access to the native `AsyncClient`. A checked-in async Alembic environment demonstrates both migration paths. Alembic now adds its integration tag to async client User-Agent headers. SQLAlchemy pool pre-ping uses its standard `SELECT 1` check. Closed native sessions are invalidated and replaced, while execution-time server and transport errors keep reusable open HTTP sessions. Pooled connections use distinct generated ClickHouse session IDs by default. A fixed session ID requires a single-connection pool or external serialization. Server-side cursors and `AsyncConnection.stream()` remain unsupported. `AsyncSession.stream()` returns a buffered result, and the native client provides streaming APIs for large results. Async executemany inserts issue one request per parameter set instead of using the Native bulk insert protocol. For bulk data, borrow the pool-owned `driver_connection` and call `AsyncClient.insert()`. Naive `datetime` values on the executemany path use `naive_datetime_binding`. Typed SQLAlchemy `DateTime64` binds preserve fractional seconds with client-side and server-side parameters; untyped client-side parameters retain their existing formatting.
+- SQLAlchemy multi-row `Insert.values()` statements now compile and execute. Rows can be dictionaries, tuples in table column order, or rows containing SQL expressions, with client-side or server-side bind parameters. This also enables Pandas `to_sql(method="multi")`. See the SQLAlchemy documentation for column selection rules and the bind parameter ceiling that applies to server-side parameters on ClickHouse 26.4 and newer. Closes [#1024](https://github.com/ClickHouse/clickhouse-connect/issues/1024).
+
+### Bug Fixes
+
 - Failed synchronous client construction now releases its dedicated urllib3 pool manager. Repeated connection or configuration failures no longer leave unused pool managers registered. Caller-supplied and shared pool managers are unchanged.
 - Async requests waiting for a free connection no longer fail when the pool wait exceeds `connect_timeout`. The timeout still covers DNS, TCP, TLS, and proxy connection setup after a pool slot is available. Closes [#1013](https://github.com/ClickHouse/clickhouse-connect/issues/1013).
 - SQLAlchemy SQL-text inserts, comparisons, and literal rendering now preserve fractional seconds for typed `DateTime64` values, including nested arrays and tuples. `DateTime` formatting, timezone handling, and Native bulk inserts retain their existing behavior. SQLAlchemy column types must match the server schema: declaring `DateTime64` over a server `DateTime` column can now raise conversion errors, including in `IN` comparisons. Closes [#1030](https://github.com/ClickHouse/clickhouse-connect/issues/1030).
@@ -21,6 +34,42 @@
 - DB-API `Cursor.executemany()` now preserves the supplied INSERT statement and applies each parameter set through the normal SQL binding path. Expressions, literals, reordered or repeated named binds, target modifiers, INSERT SELECT, quoted identifiers, and server-side coercion are no longer discarded by a heuristic Native rewrite. Parameterized DB-API inserts issue one HTTP request per parameter set, so rows written before a later failure remain committed. Use `Client.insert()` when one Native block and its throughput are required. INSERT row counts now aggregate the server's `written_rows` summaries and report `-1` when no reliable count is available. SQLAlchemy keeps Native bulk inserts for compiler-generated plain INSERT statements, while raw SQL and expression-bearing statements use the SQL path. The established placeholder-less `INSERT INTO table (columns) VALUES` form also keeps its Native compatibility path. In that form, doubled `%%` in identifiers follows the pyformat contract and sends a literal `%` identifier. Closes [#930](https://github.com/ClickHouse/clickhouse-connect/issues/930), [#932](https://github.com/ClickHouse/clickhouse-connect/issues/932), and [#934](https://github.com/ClickHouse/clickhouse-connect/issues/934).
 - Multiprocessing workers now reuse one process-local urllib3 `PoolManager`. Creating and closing clients inside workers no longer retains one unused manager per client. Closes [#1016](https://github.com/ClickHouse/clickhouse-connect/issues/1016).
 - The async client now retries connection timeouts once for queries, rebuildable inserts, and `raw_insert` with bytes or strings. Raw generator and file bodies still raise the timeout because redirects may have consumed them. Socket read timeouts, connector errors, and certificate errors remain non-retryable. Closes [#1012](https://github.com/ClickHouse/clickhouse-connect/issues/1012).
+- Async Rust codec query, NumPy, and Pandas stream contexts now use asynchronous read-ahead cleanup on early exit,
+  so thread shutdown no longer blocks the event loop. Abandoned read-ahead streams finish their thread shutdown
+  off the event loop and dispatch synchronous source cleanup without leaving an unclosed response or pending task.
+- Async clients now report a driver `ProgrammingError` before network I/O when a live aiohttp session is used from a different event loop. Close the client or dispose its SQLAlchemy engine in the owning loop before transfer when possible. If that loop has already closed, perform cleanup in the current loop before reuse, then reopen a directly reused client with `_initialize()`.
+- Native sync and async `ping()` calls now normalize a trailing slash in `proxy_path`, so a path such as `/clickhouse/` sends `/clickhouse/ping` instead of `/clickhouse//ping`.
+- Checked-out async SQLAlchemy connections now close when returned after awaited engine disposal or when garbage
+  collected. Recycle and invalidation use an explicit cancellation-safe terminate path with synchronous aiohttp
+  transport fallback when graceful close cannot complete.
+- Cancelling `AsyncClient.close()`, context-manager exit, or explicit connection-pool rotation now force-closes the
+  detached aiohttp transport before propagating cancellation. Failed graceful session cleanup receives the same
+  fallback. Automatic connection-age rotation retires the old session in owned background cleanup, so cancellation
+  of the triggering request cannot interrupt or replay another request still using that session. Requests interrupted
+  by an explicitly force-closed session are not retried, preventing teardown from replaying an insert body. Concurrent
+  close callers do not inherit one another's cancellation while they wait on the same retired session cleanup.
+- Cancelling an `AsyncClient` insert while its Native serializer is blocked on the bounded request-body queue now
+  shuts down the queue before awaiting the serializer. Async-generator cleanup no longer waits indefinitely, and
+  reusable insert contexts release their data and serializer error state after every attempt. External task
+  cancellation remains cancellation even when the serializer concurrently reports an error.
+- Cancelling an `AsyncClient` query while its Native response is being handed to the parser now closes the response
+  source and releases its session lease. Streaming startup and columns-only response reads also close and release
+  their responses when interrupted, so later client shutdown no longer waits indefinitely for those abandoned queries.
+- `AsyncClient` now closes its newly created aiohttp session when token provider or token installation fails, or when
+  cancellation interrupts token resolution or server initialization. These paths no longer leak the session when
+  `create_async_client` exits without returning a client. Initialization is serialized per client so cancellation of
+  one overlapping context entry cannot close a session initialized successfully by another.
+- Async coroutine token providers, including `functools.partial` wrappers, now work when asyncio debug mode is enabled.
+  Synchronous providers still run outside the event loop, and synchronous callables that return an awaitable remain
+  supported. If cancellation wins while a synchronous provider is still running, a late native coroutine result is
+  closed instead of emitting a never-awaited coroutine warning.
+- `create_client` and `create_async_client` now convert string-valued pure boolean options from a DSN or `generic_args`,
+  including `on` and `off`, so false values no longer act as truthy strings. Both factories report invalid boolean and
+  numeric strings as `ProgrammingError`. The async factory preserves fractional timeout values and also
+  accepts `connector_limit`, `connector_limit_per_host`, and `keepalive_timeout` from those sources without passing
+  duplicate constructor keywords. Explicit non-None connector arguments take precedence over `generic_args`, which
+  take precedence over the DSN. `None` falls through to the next source and then the documented defaults.
+- The DB-API module now exposes the driver's PEP 249 exception hierarchy. `except clickhouse_connect.dbapi.Error` now catches errors raised by the driver, and SQLAlchemy wraps them in the matching `DBAPIError` subclass instead of allowing them to escape its DB-API exception handling. `StreamFailureError` is now also an `OperationalError`, while remaining catchable by its existing class. Mid-stream failures now expose the numeric ClickHouse error code, and the symbolic error name when error details are enabled.
 
 ## 1.8.0, 2026-09-02
 

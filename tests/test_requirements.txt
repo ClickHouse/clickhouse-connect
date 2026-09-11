@@ -2,7 +2,7 @@ urllib3>=1.26
 setuptools
 certifi
 aiohttp>=3.9.0
-sqlalchemy>=2.0,<3.0
+sqlalchemy[asyncio]>=2.0,<3.0
 alembic>=1.18
 cython==3.2.5
 pyarrow

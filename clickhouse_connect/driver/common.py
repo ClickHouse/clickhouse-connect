@@ -1,12 +1,13 @@
 import array
 import asyncio
+import inspect
 import ipaddress
 import logging
 import struct
 import sys
 from collections.abc import Callable, Generator, MutableSequence, Sequence
 from io import IOBase
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.types import Closable
@@ -47,6 +48,20 @@ array_sizes["d"] = 8
 np_date_types = {0: "[s]", 3: "[ms]", 6: "[us]", 9: "[ns]"}
 
 ShowClickHouseErrors = bool | Literal["scrub"]
+
+
+class _CloseableSource(Protocol):
+    def close(self) -> object: ...
+
+
+async def _close_async(source: _CloseableSource) -> None:
+    aclose = getattr(source, "aclose", None)
+    if aclose is not None:
+        await aclose()
+        return
+    close_result = source.close()
+    if inspect.isawaitable(close_result):
+        await close_result
 
 
 def array_type(size: int, signed: bool):
@@ -364,11 +379,7 @@ class StreamContext:
         except Exception as ex:
             if not isinstance(ex, StreamClosedError):
                 self._in_context = False
-                if hasattr(self.source, "close"):
-                    if hasattr(self.source.close, "__await__"):
-                        await self.source.close()
-                    else:
-                        self.source.close()
+                await _close_async(self.source)
                 self.gen = None
             raise ex
 
@@ -380,14 +391,10 @@ class StreamContext:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self._in_context = False
-        if hasattr(self.source, "aclose"):
-            await self.source.aclose()
-        elif hasattr(self.source, "close"):
-            if hasattr(self.source.close, "__await__"):
-                await self.source.close()
-            else:
-                self.source.close()
-        self.gen = None
+        try:
+            await _close_async(self.source)
+        finally:
+            self.gen = None
 
 
 def get_rename_method(method: str | None) -> Callable[[str], str] | None:

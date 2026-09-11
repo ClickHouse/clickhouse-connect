@@ -1,9 +1,11 @@
+import asyncio
 import math
 import random
 import re
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from datetime import timezone, tzinfo
 from pathlib import Path
+from typing import Any, TypeVar
 
 from clickhouse_connect.driverc.buffer import ResponseBuffer
 
@@ -72,6 +74,40 @@ total_weight = sum(all_weights)
 all_weights = [x / total_weight for x in all_weights]
 unsupported_types = set()
 native_transform = NativeTransform()
+T = TypeVar("T")
+
+
+def _cancel_all_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    tasks = asyncio.all_tasks(loop)
+    if not tasks:
+        return
+    for task in tasks:
+        task.cancel()
+    loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+    for task in tasks:
+        if not task.cancelled() and task.exception() is not None:
+            loop.call_exception_handler(
+                {
+                    "message": "unhandled exception during test loop shutdown",
+                    "exception": task.exception(),
+                    "task": task,
+                }
+            )
+
+
+def run_in_new_loop(awaitable: Coroutine[Any, Any, T]) -> T:
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(awaitable)
+    finally:
+        try:
+            _cancel_all_tasks(loop)
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            loop.close()
 
 
 def random_type(depth: int = 0, low_card_perc: float = LOW_CARD_PERC, nullable_perc: float = NULLABLE_PERC, parent_type: str = None):

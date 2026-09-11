@@ -5,6 +5,7 @@ import time
 import pytest
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue, Empty
+from tests.helpers import run_in_new_loop
 
 
 def test_async_put_sync_get():
@@ -35,7 +36,7 @@ def test_async_put_sync_get():
         consumer_thread.join(timeout=5.0)
         assert not consumer_thread.is_alive(), "Consumer thread hung"
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     assert len(items_received) == 10
     assert items_received == [f"item_{i}" for i in range(10)]
@@ -69,7 +70,7 @@ def test_sync_put_async_get():
         producer_thread.join(timeout=5.0)
         assert not producer_thread.is_alive(), "Producer thread hung"
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     assert len(items_received) == 10
     assert items_received == [f"item_{i}" for i in range(10)]
@@ -107,7 +108,7 @@ def test_backpressure_async_producer():
         consumer_thread.join(timeout=5.0)
         assert not consumer_thread.is_alive()
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     assert len(consumed) == 10
     assert consumed == [f"item_{i}" for i in range(10)]
@@ -145,7 +146,7 @@ def test_backpressure_sync_producer():
         producer_thread.join(timeout=5.0)
         assert not producer_thread.is_alive()
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     assert len(consumed) == 10
     assert consumed == [f"item_{i}" for i in range(10)]
@@ -176,7 +177,7 @@ def test_shutdown_unblocks_consumer():
         consumer_thread.join(timeout=2.0)
         assert consumer_unblocked.is_set(), "Consumer was not unblocked by shutdown"
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
 
 def test_shutdown_unblocks_producer():
@@ -206,7 +207,7 @@ def test_shutdown_unblocks_producer():
         await producer_task
         assert producer_unblocked.is_set(), "Producer was not unblocked by shutdown"
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
 
 def test_multiple_producers_single_consumer():
@@ -236,7 +237,7 @@ def test_multiple_producers_single_consumer():
         consumer_thread.join(timeout=5.0)
         assert not consumer_thread.is_alive()
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     assert len(items_received) == 30
     assert len(set(items_received)) == 30
@@ -276,7 +277,7 @@ def test_exception_propagation():
         consumer_thread.join(timeout=5.0)
         assert not consumer_thread.is_alive()
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     assert len(exception_received) == 1
     assert isinstance(exception_received[0], ValueError)
@@ -346,7 +347,7 @@ def test_shutdown_then_cancel_no_invalid_state():
         finally:
             loop.set_exception_handler(old_handler)
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
     invalid_state_errors = [e for e in errors if isinstance(e, asyncio.InvalidStateError)]
     assert not invalid_state_errors, (
@@ -380,7 +381,7 @@ def test_shutdown_still_wakes_async_getter():
         await asyncio.wait_for(task, timeout=2.0)
         assert got_sentinel.is_set(), "Consumer should have received EOF_SENTINEL from shutdown"
 
-    asyncio.run(run_test())
+    run_in_new_loop(run_test())
 
 
 if __name__ == "__main__":

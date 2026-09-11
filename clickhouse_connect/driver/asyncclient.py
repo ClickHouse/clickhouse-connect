@@ -22,7 +22,12 @@ from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import ClickHouseType
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import httputil, options
-from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, release_lease
+from clickhouse_connect.driver._backend.http_async import (
+    HttpAsyncBackend,
+    _force_close_connector,
+    _owned_session_connector,
+    release_lease,
+)
 from clickhouse_connect.driver._backend.httpcommon import (
     add_integration_tag,
     apply_http_server_settings,
@@ -84,6 +89,16 @@ from clickhouse_connect.driver.types import Closable
 logger = logging.getLogger(__name__)
 
 
+def _serializer_error_takes_precedence(caught: BaseException) -> bool:
+    if isinstance(caught, asyncio.CancelledError):
+        if not hasattr(asyncio.Task, "cancelling"):
+            return False
+        task = asyncio.current_task()
+        cancelling = getattr(task, "cancelling", None)
+        return cancelling is not None and cancelling() == 0
+    return isinstance(caught, Exception)
+
+
 class BytesSource:
     """Wrapper to make bytes compatible with ResponseBuffer expectations."""
 
@@ -132,8 +147,8 @@ class AsyncClient(Client):
         access_token: str | None = None,
         token_provider: Callable[[], str | Awaitable[str]] | None = None,
         compress: bool | str = True,
-        connect_timeout: int = 10,
-        send_receive_timeout: int = 300,
+        connect_timeout: float = 10,
+        send_receive_timeout: float = 300,
         client_name: str | None = None,
         verify: bool | str = True,
         ca_cert: str | None = None,
@@ -258,6 +273,7 @@ class AsyncClient(Client):
         self._write_format = "Native"
         self._transform: Transform = _make_native_transform(native_codec)
         self._client_settings: dict[str, str] = {}
+        self._init_lock = asyncio.Lock()
         self._initialized = False
         self._reported_libs: set[str] = set()
         self.headers["User-Agent"] = self.headers["User-Agent"].replace("mode:sync;", "mode:async;")
@@ -359,53 +375,62 @@ class AsyncClient(Client):
     def compression(self, value: str | None) -> None:
         self._backend.compression = value
 
-    async def _initialize(self):
+    async def _initialize(self) -> None:
         """
         Async equivalent of Client._init_common_settings.
         Fetches server version, timezone, and settings.
         """
-        self._backend.ensure_session()
+        async with self._init_lock:
+            if self._initialized:
+                self._backend.ensure_session()
+                return
 
-        if self._initialized:
-            return
+            self._backend.ensure_session()
+            try:
+                if self._token_provider:
+                    self.set_access_token(await self._resolve_token())
 
-        if self._token_provider:
-            self.set_access_token(await self._resolve_token())
+                config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=self._deferred_tz_source)
+                init_result = await run_async(init_sequence(config), self._execute_operation)
+                self._apply_init_result(init_result)
 
-        try:
-            config = ClientConfig(settings=self._initial_settings or {}, timezone_policy=self._deferred_tz_source)
-            init_result = await run_async(init_sequence(config), self._execute_operation)
-            self._apply_init_result(init_result)
+                if self._initial_settings:
+                    for key, value in self._initial_settings.items():
+                        self.set_client_setting(key, value)
 
-            if self._initial_settings:
-                for key, value in self._initial_settings.items():
-                    self.set_client_setting(key, value)
+                compression, write_compression = negotiate_compression(self._compress_param)
+                if write_compression:
+                    self.write_compression = write_compression
 
-            compression, write_compression = negotiate_compression(self._compress_param)
-            if write_compression:
-                self.write_compression = write_compression
+                session_id = self._session_id_param
+                autogenerate_session_id = self._autogenerate_session_id_param
 
-            session_id = self._session_id_param
-            autogenerate_session_id = self._autogenerate_session_id_param
+                if autogenerate_session_id is None:
+                    autogenerate_session_id = common.get_setting("autogenerate_session_id")
 
-            if autogenerate_session_id is None:
-                autogenerate_session_id = common.get_setting("autogenerate_session_id")
+                if session_id:
+                    self.set_client_setting("session_id", session_id)
+                elif self.get_client_setting("session_id"):
+                    pass
+                elif autogenerate_session_id:
+                    self.set_client_setting("session_id", str(uuid.uuid4()))
 
-            if session_id:
-                self.set_client_setting("session_id", session_id)
-            elif self.get_client_setting("session_id"):
-                pass
-            elif autogenerate_session_id:
-                self.set_client_setting("session_id", str(uuid.uuid4()))
+                apply_http_server_settings(self, self._backend, compression, self._send_receive_timeout)
 
-            apply_http_server_settings(self, self._backend, compression, self._send_receive_timeout)
-
-            self._initialized = True
-        except Exception:
-            if self._session and not self._session.closed:
-                await self._session.close()
-                self._session = None
-            raise
+                self._initialized = True
+            except BaseException:
+                session = self._session
+                connector = _owned_session_connector(session) if session is not None else None
+                try:
+                    if session is not None and not session.closed:
+                        await session.close()
+                except BaseException:
+                    _force_close_connector(connector)
+                    logger.warning("Failed to close session after AsyncClient initialization error", exc_info=True)
+                finally:
+                    if self._session is session:
+                        self._session = None
+                raise
 
     async def _execute_operation(self, operation: Operation) -> object:
         """Execute an orchestration operation through this client's semantic methods."""
@@ -433,6 +458,9 @@ class AsyncClient(Client):
 
     async def close(self) -> None:  # type: ignore[override]
         await self._backend.close()
+
+    def _force_close(self) -> None:
+        self._backend.force_close()
 
     async def close_connections(self) -> None:  # type: ignore[override]
         """Rotate the connection pool: new requests use a fresh session; in-flight
@@ -495,8 +523,13 @@ class AsyncClient(Client):
         # Run parser in executor (pulls from queue, decompresses & parses)
         try:
             query_result = await loop.run_in_executor(None, parse_streaming)
-        except Exception:
-            await streaming_source.aclose()
+        except BaseException:
+            try:
+                await streaming_source.aclose()
+            except asyncio.CancelledError:
+                logger.debug("Streaming response cleanup was cancelled after AsyncClient query error", exc_info=True)
+            except BaseException:
+                logger.warning("Failed to close streaming response after AsyncClient query error", exc_info=True)
             raise
         query_result.summary = execution.summary
 
@@ -1198,20 +1231,19 @@ class AsyncClient(Client):
             context.compression = self.write_compression
 
         loop = asyncio.get_running_loop()
+        serializer_error: Exception | None = None
 
         active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
         active_source.start_producer()
 
         async def rebuild_body():
-            nonlocal active_source
-            recorded = context.insert_exception
-            if isinstance(recorded, Error):
-                # Deterministic client-side refusal; a rebuilt insert would fail identically.
-                context.insert_exception = None
-                raise recorded
-            # Reset so a failure on the rebuilt attempt is not masked by the first attempt's error.
-            context.insert_exception = None
+            nonlocal active_source, serializer_error
             await active_source.close(timeout=None)
+            if serializer_error is None:
+                serializer_error = active_source.insert_exception
+            if isinstance(serializer_error, Error):
+                # Deterministic client-side refusal; a rebuilt insert would fail identically.
+                raise serializer_error
             context.current_row = 0
             context.current_block = 0
             active_source = StreamingInsertSource(transform=self._transform, context=context, loop=loop, maxsize=10)
@@ -1219,20 +1251,30 @@ class AsyncClient(Client):
             return active_source.async_generator()
 
         runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
+        caught: BaseException | None = None
         try:
-            summary = await self._backend.execute_data_insert(context, runtime, active_source.async_generator(), rebuild_body)
-        except Exception:
-            await active_source.close()
-
-            if context.insert_exception:
-                ex = context.insert_exception
-                context.insert_exception = None
-                raise ex from None
-            raise
+            try:
+                summary = await self._backend.execute_data_insert(context, runtime, active_source.async_generator(), rebuild_body)
+            except BaseException as ex:
+                caught = ex
+                await active_source.close()
         finally:
-            await active_source.close()
-            context.data = None
+            try:
+                await active_source.close()
+            finally:
+                if serializer_error is None:
+                    serializer_error = active_source.insert_exception
+                context.data = None
+                context.insert_exception = None
 
+        if caught is not None:
+            if serializer_error is not None and _serializer_error_takes_precedence(caught):
+                raise serializer_error from None
+            if serializer_error is not None and isinstance(caught, asyncio.CancelledError):
+                raise caught from serializer_error
+            raise caught
+        if serializer_error is not None:
+            raise serializer_error from None
         return QuerySummary(summary)
 
     async def insert_df(  # type: ignore[override]

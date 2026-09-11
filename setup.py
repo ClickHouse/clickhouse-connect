@@ -93,6 +93,7 @@ def run_setup():
         ],
         extras_require={
             "sqlalchemy": ["sqlalchemy>=1.4.40,<3.0"],
+            "sqlalchemy-async": ["sqlalchemy[asyncio]>=2.0.44,<3.0", "aiohttp>=3.9.0"],
             "alembic": ["sqlalchemy>=1.4.40,<3.0", "alembic>=1.18"],
             "numpy": ["numpy"],
             "pandas": ["pandas>=2,<4"],
@@ -110,6 +111,7 @@ def run_setup():
             "sqlalchemy.dialects": [
                 "clickhousedb.connect=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect",
                 "clickhousedb=clickhouse_connect.cc_sqlalchemy.dialect:ClickHouseDialect",
+                "clickhousedb.async=clickhouse_connect.cc_sqlalchemy.asyncio:ClickHouseAsyncDialect",
             ]
         },
         classifiers=[

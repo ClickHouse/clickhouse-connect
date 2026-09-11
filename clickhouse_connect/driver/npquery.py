@@ -4,7 +4,7 @@ from collections.abc import Generator, Sequence
 from typing import Any
 
 from clickhouse_connect.driver import options
-from clickhouse_connect.driver.common import StreamContext, empty_gen
+from clickhouse_connect.driver.common import StreamContext, _close_async, empty_gen
 from clickhouse_connect.driver.exceptions import StreamClosedError
 from clickhouse_connect.driver.types import Closable
 
@@ -137,3 +137,13 @@ class NumpyResult(Closable):
         if self.source:
             self.source.close()
             self.source = None
+
+    async def aclose(self) -> None:
+        block_gen, self._block_gen = self._block_gen, None
+        source, self.source = self.source, None
+        try:
+            if source:
+                await _close_async(source)
+        finally:
+            if block_gen is not None:
+                block_gen.close()

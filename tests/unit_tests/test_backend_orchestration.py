@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import operator
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -25,6 +24,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.constants import PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.models import SettingDef
+from tests.helpers import run_in_new_loop
 
 PROTOCOL_RESPONSE = b"\x00" * 8 + b"\x01\x01\x05check"
 VERSION_OP = CommandOp("SELECT version(), timezone()", use_database=False)
@@ -95,7 +95,7 @@ def _run_both(
     async_backend = FakeAsyncExecutor(script)
 
     sync_result = run_sync(init_sequence(config), sync_backend.execute)
-    async_result = asyncio.run(run_async(init_sequence(config), async_backend.execute))
+    async_result = run_in_new_loop(run_async(init_sequence(config), async_backend.execute))
 
     assert sync_backend.operations == async_backend.operations
     assert sync_result == async_result
@@ -161,7 +161,7 @@ def test_fatal_errors_propagate_identically_through_both_drivers():
     with pytest.raises(OperationalError, match="connection refused"):
         run_sync(init_sequence(config), FakeSyncExecutor(responses).execute)
     with pytest.raises(OperationalError, match="connection refused"):
-        asyncio.run(run_async(init_sequence(config), FakeAsyncExecutor(responses).execute))
+        run_in_new_loop(run_async(init_sequence(config), FakeAsyncExecutor(responses).execute))
 
 
 @pytest.mark.parametrize(
@@ -215,7 +215,7 @@ def test_insert_context_sequence_describes_table_identically(column_names):
     async_backend = FakeAsyncExecutor([_describe_rows()])
 
     sync_context = run_sync(insert_context_sequence("target_table", column_names=column_names), sync_backend.execute)
-    async_context = asyncio.run(run_async(insert_context_sequence("target_table", column_names=column_names), async_backend.execute))
+    async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", column_names=column_names), async_backend.execute))
 
     assert sync_backend.operations == async_backend.operations == [QueryOp("DESCRIBE TABLE `target_table`")]
     for context in (sync_context, async_context):
@@ -235,7 +235,7 @@ def test_insert_context_sequence_describe_errors_propagate_through_both_drivers(
     with pytest.raises(OperationalError, match="table does not exist"):
         run_sync(insert_context_sequence("target_table"), FakeSyncExecutor(responses).execute)
     with pytest.raises(OperationalError, match="table does not exist"):
-        asyncio.run(run_async(insert_context_sequence("target_table"), FakeAsyncExecutor(responses).execute))
+        run_in_new_loop(run_async(insert_context_sequence("target_table"), FakeAsyncExecutor(responses).execute))
 
 
 def test_insert_context_sequence_skips_describe_with_explicit_types():
@@ -276,19 +276,19 @@ def test_client_execute_operation_dispatch():
 
 def test_async_client_execute_operation_dispatch():
     client = AsyncMock()
-    result = asyncio.run(AsyncClient._execute_operation(client, CommandOp("SELECT version()", use_database=False)))
+    result = run_in_new_loop(AsyncClient._execute_operation(client, CommandOp("SELECT version()", use_database=False)))
     assert result is client.command.return_value
     client.command.assert_awaited_once_with("SELECT version()", settings=None, use_database=False)
     client.create_query_context = Mock()
-    asyncio.run(AsyncClient._execute_operation(client, QueryOp("SELECT 1", settings={"max_threads": "4"})))
+    run_in_new_loop(AsyncClient._execute_operation(client, QueryOp("SELECT 1", settings={"max_threads": "4"})))
     client.create_query_context.assert_called_once_with(query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
     context = client.create_query_context.return_value
     assert context.internal is True
     client._query_with_context.assert_awaited_once_with(context)
-    asyncio.run(AsyncClient._execute_operation(client, RawQueryOp("SELECT 1", fmt="Native")))
+    run_in_new_loop(AsyncClient._execute_operation(client, RawQueryOp("SELECT 1", fmt="Native")))
     client.raw_query.assert_awaited_once_with("SELECT 1", settings=None, fmt="Native")
     with pytest.raises(TypeError, match="Unsupported operation type"):
-        asyncio.run(AsyncClient._execute_operation(client, SimpleNamespace(settings={})))
+        run_in_new_loop(AsyncClient._execute_operation(client, SimpleNamespace(settings={})))
 
 
 def test_backend_values_copy_and_protect_settings_mappings():

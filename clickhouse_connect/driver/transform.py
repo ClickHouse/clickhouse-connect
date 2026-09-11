@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Protocol
 
 from clickhouse_connect.datatypes import registry
@@ -10,6 +10,8 @@ from clickhouse_connect.driver.exceptions import (
     OperationalError,
     StreamCompleteException,
     StreamFailureError,
+    _error_code_from_message,
+    error_name_from_body,
     scrub_error_details,
 )
 from clickhouse_connect.driver.insert import InsertContext
@@ -29,7 +31,11 @@ class Transform(Protocol):
 
     def parse_response(self, source: ByteSource, context: QueryContext) -> NumpyResult | QueryResult: ...
 
-    def build_insert(self, context: InsertContext) -> Generator[bytes, None, None]: ...
+    def build_insert(
+        self,
+        context: InsertContext,
+        error_handler: Callable[[Exception], None] | None = None,
+    ) -> Generator[bytes, None, None]: ...
 
 
 class NativeTransform:
@@ -42,6 +48,14 @@ class NativeTransform:
         block_num = 0
         renamer = context.column_renamer
         show_clickhouse_errors = context.show_clickhouse_errors
+
+        def stream_failure(error_msg: str) -> StreamFailureError:
+            name = error_name_from_body(error_msg) if show_clickhouse_errors else None
+            return StreamFailureError(
+                format_stream_error(error_msg, show_clickhouse_errors),
+                code=_error_code_from_message(error_msg),
+                name=name,
+            )
 
         def extract_source_error(tagged_only: bool = False) -> str | None:
             if not source.last_message:
@@ -68,7 +82,7 @@ class NativeTransform:
                 except StreamCompleteException:
                     error_msg = extract_source_error(tagged_only=True)
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
+                        raise stream_failure(error_msg) from None
                     return None
                 num_rows = source.read_leb128()
                 for col_num in range(num_cols):
@@ -89,12 +103,14 @@ class NativeTransform:
                         result_block.append(column)
             except Exception as ex:
                 source.close()
+                if isinstance(ex, StreamFailureError):
+                    raise
                 if isinstance(ex, StreamCompleteException):
                     # We ran out of data before it was expected, this could be ClickHouse reporting an error
                     # in the response
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
+                        raise stream_failure(error_msg) from None
                     raise StreamFailureError("Stream ended unexpectedly (connection closed by server)") from ex
 
                 # A read failure partway through the stream: OperationalError from the sync reader,
@@ -103,7 +119,7 @@ class NativeTransform:
                 if isinstance(ex, OperationalError) or ex.__class__.__name__ == "ClientPayloadError":
                     error_msg = extract_source_error()
                     if error_msg:
-                        raise StreamFailureError(format_stream_error(error_msg, show_clickhouse_errors)) from None
+                        raise stream_failure(error_msg) from None
                     raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
 
                 raise
@@ -128,7 +144,10 @@ class NativeTransform:
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
-    def build_insert(context: InsertContext) -> Generator[bytes, None, None]:
+    def build_insert(
+        context: InsertContext,
+        error_handler: Callable[[Exception], None] | None = None,
+    ) -> Generator[bytes, None, None]:
         compression = context.compression if isinstance(context.compression, str) else None
         compressor = get_compressor(compression)
 
@@ -154,7 +173,10 @@ class NativeTransform:
                         # insert fails (using garbage data) to avoid a partial insert, and use the context to
                         # propagate the correct exception to the user
                         logger.error("Error serializing column `%s` into data type `%s`", col_name, col_type.name, exc_info=True)
-                        context.insert_exception = ex
+                        if error_handler is None:
+                            context.insert_exception = ex
+                        else:
+                            error_handler(ex)
                         yield b"INTERNAL EXCEPTION WHILE SERIALIZING"
                         return
                 yield compressor.compress_block(output)
