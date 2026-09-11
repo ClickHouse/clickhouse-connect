@@ -167,13 +167,17 @@ def _drop_version_table(conn, database: str):
     conn.execute(text(f"DROP TABLE IF EXISTS `{database}`.`alembic_version`"))
 
 
-def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name):
+@pytest.mark.parametrize("schema_setting", ["omitted", "none", "empty", "explicit"])
+def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name, schema_setting):
     version_table = ch_name("alembic_version")
+    opts = {"version_table": version_table, "include_schemas": True}
+    if schema_setting != "omitted":
+        opts["version_table_schema"] = {"none": None, "empty": "", "explicit": test_db}[schema_setting]
 
     with test_engine.begin() as conn:
         context = MigrationContext.configure(
             connection=conn,
-            opts={"version_table": version_table},
+            opts=opts,
         )
         assert isinstance(context.impl, ClickHouseImpl)
 
@@ -194,6 +198,10 @@ def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name):
 
         rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`{version_table}` ORDER BY version_num")).fetchall()
         assert rows == [("head",)]
+
+        context.impl._exec(version.delete().where(version.c.version_num == literal_column("'head'")))
+        rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`{version_table}`")).fetchall()
+        assert rows == []
 
 
 def test_alembic_user_agent_integration_tag(test_engine: Engine):

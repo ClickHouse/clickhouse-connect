@@ -258,6 +258,53 @@ def test_clickhouse_impl_current_database_uses_internal_query_formats():
     assert opts["version_table_schema"] == "default"
 
 
+@pytest.mark.parametrize(
+    "opts",
+    [
+        {},
+        {"include_schemas": False},
+        {"include_schemas": True, "version_table_schema": ""},
+        {"include_schemas": True, "version_table_schema": "migration_db"},
+    ],
+    ids=["default", "schemas-disabled", "empty-schema", "explicit-schema"],
+)
+def test_clickhouse_impl_skips_unneeded_current_database_lookup(opts):
+    connection = Mock()
+    original_opts = opts.copy()
+
+    ClickHouseImpl(ClickHouseDialect(), connection, False, False, StringIO(), opts)
+
+    connection.execute.assert_not_called()
+    assert opts == original_opts
+
+
+@pytest.mark.parametrize("include_schemas", [False, True])
+@pytest.mark.parametrize(
+    "schema_opts",
+    [{}, {"version_table_schema": None}, {"version_table_schema": ""}, {"version_table_schema": "migration_db"}],
+    ids=["omitted-schema", "none-schema", "empty-schema", "explicit-schema"],
+)
+def test_alembic_offline_schema_configuration(include_schemas, schema_opts):
+    buffer = StringIO()
+    context = MigrationContext.configure(
+        dialect=ClickHouseDialect(),
+        opts={"as_sql": True, "output_buffer": buffer, "include_schemas": include_schemas, **schema_opts},
+    )
+
+    assert buffer.getvalue() == ""
+    assert context._version.schema == schema_opts.get("version_table_schema")
+
+    context._ensure_version_table()
+    Operations(context).add_column("events", Column("value", types.UInt32(), nullable=False))
+
+    sql = buffer.getvalue()
+    version_table = "`migration_db`.`alembic_version`" if schema_opts.get("version_table_schema") else "`alembic_version`"
+    assert f"CREATE TABLE {version_table}" in sql
+    assert "Engine MergeTree" in sql
+    assert "ALTER TABLE `events` ADD COLUMN `value` UInt32;" in sql
+    assert "SELECT" not in sql
+
+
 def test_render_type_uses_clickhouse_names():
     context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"target_metadata": MetaData()})
     assert context.impl.render_type(types.Int32(), None) == "Int32"
