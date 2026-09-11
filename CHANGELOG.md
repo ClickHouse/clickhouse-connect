@@ -10,6 +10,7 @@
 
 ### Bug Fixes
 
+- SQLAlchemy `Memory`, `Log`, `StripeLog`, `TinyLog`, `Null`, and `Set` engines now accept the zero-argument and `settings=` constructor calls emitted by Alembic. SummingMergeTree engines now accept keyword-only `columns` and preserve explicit summing columns through reflection and Alembic. Existing positional arguments and engine inheritance remain compatible. Closes [#946](https://github.com/ClickHouse/clickhouse-connect/issues/946).
 - Synchronous HTTP connections no longer set `SO_SNDBUF` to 256 KiB, which disabled automatic buffer sizing and could slow large uploads. The operating system now sizes the buffer. The pool manager helpers also honor explicit `socket_options` instead of replacing them with defaults. Closes [#1044](https://github.com/ClickHouse/clickhouse-connect/issues/1044).
 - Alembic offline SQL generation no longer fails when `include_schemas=True` and `version_table_schema` is unset. Offline mode now skips the current database lookup. Online version table updates and deletes also work when `version_table_schema=""`. Closes [#1045](https://github.com/ClickHouse/clickhouse-connect/issues/1045).
 - Failed synchronous client construction now releases its dedicated urllib3 pool manager. Repeated connection or configuration failures no longer leave unused pool managers registered. Caller-supplied and shared pool managers are unchanged.

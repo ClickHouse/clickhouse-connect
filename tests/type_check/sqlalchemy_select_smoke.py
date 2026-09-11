@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
+from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql import ColumnElement
 from typing_extensions import assert_type
 
 import clickhouse_connect.cc_sqlalchemy as cc_sa
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, UInt32
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
+    Memory,
+    MergeTree,
+    ReplicatedMergeTree,
+    ReplicatedSummingMergeTree,
+    SummingMergeTree,
+)
 
 book = sa.table(
     "book",
@@ -61,3 +69,24 @@ assert_type(typed_json_path, ColumnElement[int])
 typed_json_path_from_class = cc_sa.json_subcolumn(json_payload, "request_id", type_=UInt32)
 assert_type(typed_json_path_from_class, ColumnElement[int])
 cc_sa.json_subcolumn(json_payload, 13)  # type: ignore[call-overload]
+
+assert_type(Memory(), Memory)
+assert_type(Memory({"settings": {"max_rows_to_keep": 13}}), Memory)
+assert_type(Memory(kwargs={}, settings={"max_rows_to_keep": 13}), Memory)
+
+
+def summing_engine_columns(attribute: InstrumentedAttribute[int]) -> None:
+    column = sa.Column("amount", UInt32)
+    names: list[str] = ["amount", "count"]
+    columns: list[sa.Column[int]] = [column]
+    assert_type(SummingMergeTree("id", columns="amount"), SummingMergeTree)
+    assert_type(SummingMergeTree("id", columns=names), SummingMergeTree)
+    assert_type(SummingMergeTree("id", columns=columns), SummingMergeTree)
+    assert_type(SummingMergeTree("id", columns=attribute), SummingMergeTree)
+    assert_type(SummingMergeTree("id", columns=[column, attribute, "count"]), SummingMergeTree)
+    merge_tree: MergeTree = SummingMergeTree("id", columns=(column, "count"))
+    replicated: ReplicatedMergeTree = ReplicatedSummingMergeTree("id", columns=[column])
+    assert_type(merge_tree, MergeTree)
+    assert_type(replicated, ReplicatedMergeTree)
+    SummingMergeTree("id", columns=13)  # type: ignore[arg-type]
+    SummingMergeTree("id", columns=sa.text("amount"))  # type: ignore[arg-type]
