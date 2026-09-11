@@ -119,7 +119,12 @@ class ClickHouseImpl(DefaultImpl):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._add_integration_tag()
-        if self.context_opts.get("include_schemas") and not self.context_opts.get("version_table_schema") and self.connection is not None:
+        if (
+            not self.as_sql
+            and self.context_opts.get("include_schemas")
+            and not self.context_opts.get("version_table_schema")
+            and self.connection is not None
+        ):
             current_database = self.connection.execute(with_internal_query_formats(text("SELECT currentDatabase()"))).scalar()
             if current_database:
                 self.context_opts["version_table_schema"] = current_database
