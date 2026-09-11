@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+## 1.9.0rc3, 2026-09-11
+
 ### Bug Fixes
 
 - SQLAlchemy `Memory`, `Log`, `StripeLog`, `TinyLog`, `Null`, and `Set` engines now accept the zero-argument and `settings=` constructor calls emitted by Alembic. SummingMergeTree engines now accept keyword-only `columns` and preserve explicit summing columns through reflection and Alembic. Existing positional arguments and engine inheritance remain compatible. Closes [#946](https://github.com/ClickHouse/clickhouse-connect/issues/946).
