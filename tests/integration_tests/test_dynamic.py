@@ -243,10 +243,8 @@ def test_json_escaped_dots_roundtrip(param_client: Client, call, table_context: 
     if param_client.server_settings.get("json_type_escape_dots_in_keys") is None:
         pytest.skip("json_type_escape_dots_in_keys setting unavailable on this server version")
 
-    # with escaping enabled dots are preserved in keys
-    if not param_client.get_client_setting("session_id"):
-        param_client.set_client_setting("session_id", str(UUID(int=0)))
-    call(param_client.command, "SET json_type_escape_dots_in_keys=1")
+    # Sent per request. A session SET only reaches one Cloud replica.
+    param_client.set_client_setting("json_type_escape_dots_in_keys", 1)
     with table_context("json_dots_escape", ["value JSON"], order_by="()"):
         payload = {"a.b": 123, "c": {"d.e": 456}}
         call(param_client.insert, "json_dots_escape", [[payload]])
@@ -260,7 +258,7 @@ def test_json_escaped_dots_roundtrip(param_client: Client, call, table_context: 
         assert returned["c"]["d.e"] == 456
 
     # with escaping disabled dots create nested structure
-    call(param_client.command, "SET json_type_escape_dots_in_keys=0")
+    param_client.set_client_setting("json_type_escape_dots_in_keys", 0)
     with table_context("json_dots_no_escape", ["value JSON"], order_by="()"):
         payload = {"a.b": 789}
         call(param_client.insert, "json_dots_no_escape", [[payload]])
