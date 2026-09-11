@@ -31,11 +31,14 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
     String,
     Tuple,
     UInt32,
+    UInt64,
 )
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
+    Memory,
     MergeTree,
     ReplacingMergeTree,
+    SummingMergeTree,
 )
 
 logging.getLogger("alembic").setLevel(logging.WARNING)
@@ -167,13 +170,17 @@ def _drop_version_table(conn, database: str):
     conn.execute(text(f"DROP TABLE IF EXISTS `{database}`.`alembic_version`"))
 
 
-def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name):
+@pytest.mark.parametrize("schema_setting", ["omitted", "none", "empty", "explicit"])
+def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name, schema_setting):
     version_table = ch_name("alembic_version")
+    opts = {"version_table": version_table, "include_schemas": True}
+    if schema_setting != "omitted":
+        opts["version_table_schema"] = {"none": None, "empty": "", "explicit": test_db}[schema_setting]
 
     with test_engine.begin() as conn:
         context = MigrationContext.configure(
             connection=conn,
-            opts={"version_table": version_table},
+            opts=opts,
         )
         assert isinstance(context.impl, ClickHouseImpl)
 
@@ -194,6 +201,10 @@ def test_alembic_version_table_live(test_engine: Engine, test_db: str, ch_name):
 
         rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`{version_table}` ORDER BY version_num")).fetchall()
         assert rows == [("head",)]
+
+        context.impl._exec(version.delete().where(version.c.version_num == literal_column("'head'")))
+        rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`{version_table}`")).fetchall()
+        assert rows == []
 
 
 def test_alembic_user_agent_integration_tag(test_engine: Engine):
@@ -483,6 +494,56 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
         assert "index_granularity = 1024" in engine_full
         rows = conn.execute(text(f"SELECT version_num FROM `{test_db}`.`alembic_version`")).fetchall()
         assert rows
+
+
+@pytest.mark.parametrize(
+    "engine_factory,rendered_engine,engine_fragments",
+    [
+        (
+            lambda amount: Memory({"settings": {"max_rows_to_keep": 13}}),
+            "clickhouse_engine=Memory(settings={'max_rows_to_keep': 13})",
+            ("Memory", "max_rows_to_keep = 13"),
+        ),
+        (
+            lambda amount: SummingMergeTree("id", columns=[amount, "n_tx"]),
+            "clickhouse_engine=SummingMergeTree(order_by='id', columns='(`net amount`, `n_tx`)')",
+            ("SummingMergeTree", "`net amount`", "n_tx", "ORDER BY id"),
+        ),
+    ],
+    ids=["memory-settings", "summing-columns"],
+)
+def test_alembic_autogenerate_engine_upgrade_downgrade_live(
+    test_engine: Engine, test_db: str, tmp_path: Path, ch_name, engine_factory, rendered_engine, engine_fragments
+):
+    table_name = ch_name("alembic_engine")
+    metadata = MetaData(schema=test_db)
+    amount = Column("net amount", UInt64, nullable=False)
+    Table(
+        table_name,
+        metadata,
+        Column("id", UInt64, nullable=False),
+        amount,
+        Column("n_tx", UInt64, nullable=False),
+        engine_factory(amount),
+    )
+    count_sql = text("SELECT count() FROM system.tables WHERE database = :database AND name = :table_name")
+    params = {"database": test_db, "table_name": table_name}
+
+    with test_engine.connect() as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create engine table", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        contents = Path(revision.path).read_text(encoding="utf-8")
+        assert rendered_engine in contents
+        command.upgrade(config, "head")
+        engine_full = conn.execute(
+            text("SELECT engine_full FROM system.tables WHERE database = :database AND name = :table_name"), params
+        ).scalar()
+        for fragment in engine_fragments:
+            assert fragment in engine_full
+        command.downgrade(config, "base")
+        assert conn.execute(count_sql, params).scalar() == 0
 
 
 def test_alembic_named_container_types_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):

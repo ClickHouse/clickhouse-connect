@@ -165,6 +165,8 @@ In this case ClickHouse Connect doesn't send a `session_id`; the server doesn't 
 
 ClickHouse Connect uses `urllib3` connection pools to handle the underlying HTTP connection to the server. By default, all synchronous client instances in a process share the same connection pool, which is sufficient for the majority of use cases. Each multiprocessing worker gets its own process-local default pool and reuses it across clients created in that worker. A client created before a fork keeps the parent's pool and should not be used in the child. The default pool maintains up to 8 HTTP Keep Alive connections to each ClickHouse server used by the application.
 
+The default socket options enable TCP keepalive and `TCP_NODELAY`. The operating system manages socket send and receive buffer sizes.
+
 For large multi-threaded applications, separate connection pools may be appropriate. Customized connection pools can be provided as the `pool_mgr` keyword argument to the main `clickhouse_connect.get_client` function:
 
 ```python
@@ -178,6 +180,8 @@ client2 = clickhouse_connect.get_client(pool_mgr=big_pool_mgr)
 ```
 
 Clients can share a pool manager, or each client can use a separate manager. For more details, see the [`urllib3` PoolManager documentation](https://urllib3.readthedocs.io/en/stable/advanced-usage.html#customizing-pool-behavior).
+
+To set socket options, pass `socket_options` to `httputil.get_pool_manager` or `httputil.get_pool_manager_options`. This replaces the entire default list, including keepalive options and `TCP_NODELAY`. Pass `[]` or `None` to apply no explicit socket options.
 
 The async client owns an aiohttp pool rather than using `urllib3`. Configure it through `connector_limit`, `connector_limit_per_host`, and `keepalive_timeout` on `get_async_client`. Calling `await async_client.close_connections()` rotates the pool without interrupting in-flight requests.
 

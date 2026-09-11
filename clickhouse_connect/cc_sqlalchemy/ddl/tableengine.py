@@ -1,7 +1,7 @@
 import logging
 import threading
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Column
 from sqlalchemy.engine.default import DefaultDialect
@@ -11,14 +11,20 @@ from sqlalchemy.sql.elements import ClauseElement, ColumnElement, TextClause
 from sqlalchemy.sql.schema import SchemaItem
 
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
-from clickhouse_connect.driver.binding import _decode_ch_string_literal, format_str, quote_identifier
+from clickhouse_connect.driver.binding import _decode_ch_string_literal, _format_identifier, format_str, quote_identifier
 from clickhouse_connect.driver.parser import parse_callable
 
 logger = logging.getLogger(__name__)
 
 engine_map: dict[str, type["TableEngine"]] = {}
-EngineExpr = str | TextClause | ColumnElement | InstrumentedAttribute
+if TYPE_CHECKING:
+    EngineExpr = str | TextClause | ColumnElement[Any] | InstrumentedAttribute[Any]
+    _SummingColumn = str | Column[Any] | InstrumentedAttribute[Any]
+else:
+    EngineExpr = str | TextClause | ColumnElement | InstrumentedAttribute
+    _SummingColumn = str | Column | InstrumentedAttribute
 EngineParam = EngineExpr | Sequence[EngineExpr] | None
+_SummingColumns = _SummingColumn | Sequence[_SummingColumn]
 ENGINE_CLAUSES = ("ORDER BY", "PARTITION BY", "PRIMARY KEY", "SAMPLE BY", "TTL", "SETTINGS")
 
 _engine_render_dialect: DefaultDialect | None = None
@@ -71,6 +77,27 @@ def _render_setting_value(value: Any) -> str:
     return format_str(str(value))
 
 
+def _render_summing_column(value: _SummingColumn) -> str:
+    value = _coerce_clause_element(value)
+    if isinstance(value, Column):
+        if not value.name:
+            raise ArgumentError("Summing columns must be named columns")
+        value = value.name
+    if isinstance(value, str):
+        return _format_identifier(value)
+    raise ArgumentError(f"Summing columns must be column names or mapped columns, got {type(value).__name__}")
+
+
+def _render_summing_columns(value: _SummingColumns | None) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, Sequence):
+        if not value:
+            raise ArgumentError("Summing columns must not be empty")
+        return f"({', '.join(_render_summing_column(column) for column in value)})"
+    return _render_summing_column(value)
+
+
 def tuple_expr(expr_name: str, value: EngineParam) -> str:
     """
     Create a table parameter with a tuple or list correctly formatted
@@ -120,8 +147,12 @@ class TableEngine(SchemaItem):
     def __init_subclass__(cls, **kwargs):
         engine_map[cls.__name__] = cls
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: dict[str, Any] | None = None, *, settings: dict[str, Any] | None = None) -> None:
         super().__init__()
+        if kwargs is None:
+            kwargs = {}
+        if settings is not None:
+            kwargs["settings"] = settings
         self.name = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()
@@ -260,7 +291,25 @@ class SharedMergeTree(MergeTree):
 
 
 class SummingMergeTree(MergeTree):
-    pass
+    arg_names: Sequence[str] = ["columns"]
+    optional_args: set[str] = set(arg_names)
+
+    def __init__(
+        self,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
+        *,
+        columns: _SummingColumns | None = None,
+    ) -> None:
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        columns = _render_summing_columns(columns)
+        # Bypasses MergeTree.__init__, which has no columns parameter.
+        TableEngine.__init__(self, locals())
 
 
 class AggregatingMergeTree(MergeTree):
@@ -386,7 +435,27 @@ class ReplicatedAggregatingMergeTree(ReplicatedMergeTree):
 
 
 class ReplicatedSummingMergeTree(ReplicatedMergeTree):
-    pass
+    arg_names: list[str] = ["zk_path", "replica", "columns"]
+    optional_args: set[str] = set(arg_names)
+
+    def __init__(
+        self,
+        order_by: EngineParam = None,
+        primary_key: EngineParam = None,
+        partition_by: EngineParam = None,
+        sample_by: EngineParam = None,
+        zk_path: str | None = None,
+        replica: str | None = None,
+        ttl: EngineExpr | None = None,
+        settings: dict[str, Any] | None = None,
+        *,
+        columns: _SummingColumns | None = None,
+    ) -> None:
+        if order_by is None and primary_key is None:
+            raise ArgumentError(None, "Either PRIMARY KEY or ORDER BY must be specified")
+        columns = _render_summing_columns(columns)
+        # Bypasses ReplicatedMergeTree.__init__, which has no columns parameter.
+        TableEngine.__init__(self, locals())
 
 
 class ReplicatedReplacingMergeTree(TableEngine):

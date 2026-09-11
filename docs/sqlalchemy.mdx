@@ -466,6 +466,19 @@ String values in `DEFAULT`, `MATERIALIZED`, `ALIAS`, and `TTL` clauses use Click
 
 MergeTree key arguments such as `order_by`, `partition_by`, `primary_key`, `sample_by`, and `ttl` accept SQLAlchemy column and SQL expressions as well as plain strings.
 
+`Memory()`, `Log()`, `StripeLog()`, `TinyLog()`, `Null()`, and `Set()` accept zero arguments and round-trip through Alembic autogeneration. The existing dictionary argument remains supported. Use `settings={...}` to supply engine settings.
+
+`SummingMergeTree` and `ReplicatedSummingMergeTree` accept an optional, keyword-only `columns` argument. Existing positional arguments keep their meaning, so `SummingMergeTree("id")` still sets `ORDER BY id`.
+
+```python
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import SummingMergeTree
+
+engine_clause = SummingMergeTree("id", columns=("delta", "n_tx"))
+# Sum delta and n_tx for rows with the same id.
+```
+
+Pass a string, a SQLAlchemy column, a mapped column attribute, or a non-empty list or tuple of those values. List and tuple string items are quoted as identifiers. A scalar string supplies raw SQL, such as `"delta"` or `"(delta, n_tx)"`. The server requires identifiers for these columns. Omit `columns` to let ClickHouse select the columns to sum. Reflection and Alembic autogeneration preserve an explicit column list.
+
 ## Inserts and basic ORM use {#sqlalchemy-inserts}
 
 Core inserts and simple ORM models are supported. For the synchronous dialect, prefer Core executemany inserts for compatible bulk data paths. For async bulk inserts, use the native `AsyncClient.insert()` path described in [Async connections](#sqlalchemy-async-connections).
