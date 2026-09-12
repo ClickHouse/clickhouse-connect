@@ -1327,13 +1327,13 @@ class TestQuery:
         # Create external data and context
         external_data = self.create_mock_external_data()
         context = self.create_mock_query_context(
-            query="SELECT * FROM file1 WHERE value > 10",
+            query="SELECT * FROM file1 WHERE value > 10 LIMIT 0",
             bind_params={"param_min_val": 10},
             external_data=external_data,
         )
-        context.uncommented_query = "SELECT * FROM file1 WHERE value > 10"
+        context.uncommented_query = "SELECT * FROM file1 WHERE value > 10 LIMIT 0"
         context.is_insert = False
-        context.final_query = "SELECT * FROM file1 WHERE value > 10"
+        context.final_query = "SELECT * FROM file1 WHERE value > 10 LIMIT 0"
         context.settings = {}
         context.transport_settings = {}
         context.streaming = False
