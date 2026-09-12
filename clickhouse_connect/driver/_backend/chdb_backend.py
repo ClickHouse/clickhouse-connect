@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import chdb
 
-from clickhouse_connect.driver._backend.httpcommon import columns_only_re
+from clickhouse_connect.driver._backend.httpcommon import columns_only_meta, is_columns_only_query
 from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import ShowClickHouseErrors
@@ -588,14 +588,14 @@ class ChdbBackend:
         params = _strip_param_prefix(context.bind_params)
         settings = self._engine_settings(runtime.settings)
 
-        if not context.is_insert and columns_only_re.search(context.uncommented_query):
+        if is_columns_only_query(context):
             # chdb emits zero Native bytes for LIMIT 0, so probe the column
             # metadata with FORMAT JSON like the HTTP backend does.
             probe_sql = context.final_query
             if settings:
                 probe_sql = f"{probe_sql}\n SETTINGS {_settings_clause(settings)}"
             result = self._run(f"{probe_sql}\n FORMAT JSON", "JSON", params=params, database=runtime.database)
-            return QueryExecution(columns=json.loads(result.bytes())["meta"])
+            return QueryExecution(columns=columns_only_meta(json.loads(result.bytes())))
 
         if context.is_insert:
             # Inline VALUES data must stay the final clause, so settings go

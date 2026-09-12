@@ -181,6 +181,62 @@ class TestChdbQuery:
         assert result.column_names == ("number", "s")
         assert [ch_type.name for ch_type in result.column_types] == ["UInt64", "String"]
 
+    @pytest.mark.parametrize(
+        "sql, expected_rows, expected_name, expected_type",
+        [
+            (
+                "SELECT number FROM numbers(9) // LIMIT 0",
+                [(i,) for i in range(9)],
+                "number",
+                "UInt64",
+            ),
+            (
+                "SELECT number AS `LIMIT 0--` FROM numbers(9)",
+                [(i,) for i in range(9)],
+                "LIMIT 0--",
+                "UInt64",
+            ),
+            (
+                "SELECT 'foo\\' LIMIT 0--bar' AS value",
+                [("foo' LIMIT 0--bar",)],
+                "value",
+                "String",
+            ),
+            (
+                "SELECT number FROM numbers(9) LIMIT 0",
+                [],
+                "number",
+                "UInt64",
+            ),
+        ],
+    )
+    def test_limit_zero_probe_classification(
+        self,
+        client,
+        monkeypatch,
+        sql,
+        expected_rows,
+        expected_name,
+        expected_type,
+    ):
+        backend = client._backend
+        original_run = backend._run
+        execution_count = 0
+
+        def counted_run(*args, **kwargs):
+            nonlocal execution_count
+            execution_count += 1
+            return original_run(*args, **kwargs)
+
+        monkeypatch.setattr(backend, "_run", counted_run)
+
+        result = client.query(sql)
+
+        assert execution_count == 1
+        assert result.result_rows == expected_rows
+        assert result.column_names == (expected_name,)
+        assert result.column_types[0].name == expected_type
+
     def test_per_query_settings(self, client):
         result = client.query("SELECT value FROM system.settings WHERE name = 'max_threads'", settings={"max_threads": 2})
         assert result.result_rows == [("2",)]
