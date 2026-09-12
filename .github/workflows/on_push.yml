@@ -87,8 +87,8 @@ jobs:
           "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent consumer_smoke.py
       - name: Public type completeness ratchet
         # SQLAlchemy must be installed while verifytypes scans the public cc_sqlalchemy annotations.
-        # Local measurement is 1066 with that optional surface resolved, plus 1 headroom for stub drift.
-        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1067 --python "$RUNNER_TEMP/consumer/bin/python"
+        # Local measurement is 1049 with that optional surface resolved, plus 1 headroom for stub drift.
+        run: python scripts/check_public_types.py clickhouse_connect --max-untyped 1050 --python "$RUNNER_TEMP/consumer/bin/python"
       - name: SQLAlchemy Select typing smoke test
         run: |
           cp tests/type_check/sqlalchemy_select_smoke.py "$RUNNER_TEMP"
@@ -267,8 +267,11 @@ jobs:
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
         run: pip install -r tests/test_requirements.txt
-      - name: Install sqlalchemy 1.x
-        run: pip install "sqlalchemy>=1.4.40,<2.0" # Override sqa version
+      - name: Install SQLAlchemy 1.x and compatible Alembic
+        run: |
+          # Resolve both together because newer Alembic versions require SQLAlchemy 2.x.
+          pip install "sqlalchemy>=1.4.40,<2.0" "alembic>=1.18"
+          pip check
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points

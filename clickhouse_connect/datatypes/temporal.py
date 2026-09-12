@@ -25,6 +25,17 @@ from clickhouse_connect.driver.types import ByteSource
 
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
+_EPOCH_ORDINAL = epoch_start_date.toordinal()
+
+
+def _legacy_days(value: Any, epoch: date) -> int | float:
+    toordinal = getattr(value, "toordinal", None)
+    if toordinal is not None:
+        try:
+            return toordinal() - _EPOCH_ORDINAL
+        except (AttributeError, ValueError):
+            pass
+    return (value - epoch).days
 
 
 def _localized_timestamp(value: datetime, target_tz: tzinfo) -> float:
@@ -58,16 +69,36 @@ class Date(ClickHouseType):
             if self.nullable:
                 column = [x if x else 0 for x in column]
         else:
-            esd: date
-            if isinstance(first, datetime):
-                esd = epoch_start_datetime
-            else:
-                esd = epoch_start_date
-            if self.nullable:
-                column = [0 if x is None else (x - esd).days for x in column]
-            else:
-                column = [(x - esd).days for x in column]
+            days = None
+            try:
+                if self.nullable:
+                    days = [0 if x is None else x.toordinal() - _EPOCH_ORDINAL for x in column]
+                else:
+                    days = [x.toordinal() - _EPOCH_ORDINAL for x in column]
+            except (AttributeError, ValueError):
+                pass
+            if days is None:
+                # Cold path for invalid values. Raises the previous error for the offending value.
+                epoch = epoch_start_datetime if isinstance(first, datetime) else epoch_start_date
+                if self.nullable:
+                    days = [0 if x is None else _legacy_days(x, epoch) for x in column]
+                else:
+                    days = [_legacy_days(x, epoch) for x in column]
+            column = days
         write_array(self._array_type, column, dest, ctx.column_name)
+
+    def _build_lc_dictionary(self, column: Sequence, ctx: InsertContext) -> tuple[list[Any], list[int]]:
+        index, keys = super()._build_lc_dictionary(column, ctx)
+        if isinstance(first_value(index, self.nullable), int) or self.write_format(ctx) == "int":
+            return index, keys
+        for x in index:
+            if isinstance(x, datetime) and x.tzinfo is not None and x.utcoffset() is not None:
+                break
+        else:
+            return index, keys
+        # Equal instants can have different calendar dates. Rebuild from dates so none are collapsed.
+        column = [x.date() if isinstance(x, datetime) and x.tzinfo is not None else x for x in column]
+        return super()._build_lc_dictionary(column, ctx)
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)

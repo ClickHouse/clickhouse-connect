@@ -205,7 +205,7 @@ class AsyncClient(Client):
 
         self._timeout = aiohttp.ClientTimeout(
             total=None,
-            connect=connect_timeout_val,
+            connect=None,
             sock_connect=connect_timeout_val,
             sock_read=send_receive_timeout_val,
         )

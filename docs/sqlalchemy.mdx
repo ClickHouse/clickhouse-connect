@@ -119,6 +119,14 @@ with engine.connect() as conn:
 
 When SQLAlchemy inlines a bound value through `literal_binds` or `literal_execute`, the dialect uses ClickHouse quoting for generic string types and ClickHouse types. This also applies through `TypeDecorator` wrappers and `with_variant()` selections. String values retain percent signs and backslashes even when other bound parameters remain.
 
+Python `datetime` values with a ClickHouse `DateTime64` SQLAlchemy type retain their microseconds in client-side parameters and inline literals, including nullable values and values nested in arrays and tuples. ClickHouse applies the declared precision. Python `datetime` provides up to six fractional digits. Plain `DateTime` values retain whole-second formatting. For a `text()` statement, supply the type explicitly with `bindparam("ts", type_=DateTime64(6))` to preserve fractional seconds.
+
+SQLAlchemy column types must match the server schema. Declaring `DateTime64` over a server `DateTime` column renders fractional seconds and can raise conversion errors on insert and in `IN` comparisons.
+
+On SQLAlchemy 2.x, inline literals of generic `sqlalchemy.ARRAY` types containing ClickHouse `Tuple` items need `dimensions=1`, or the appropriate higher dimension count for nested arrays, so SQLAlchemy treats each tuple as one item. SQLAlchemy 1.4 does not support inline literals for generic `ARRAY` types.
+
+If a named datetime parameter is reused, every occurrence needs a compatible `DateTime64` bind type to preserve fractions. An untyped occurrence or a conflicting type keeps whole-second formatting. Set `type_=DateTime64(6)` on each `bindparam`, or use distinct parameter names with the appropriate types.
+
 ### JSON type hints {#sqlalchemy-json-type-hints}
 
 Declare typed JSON paths with the `typed_paths` mapping. A path type can be a ClickHouse SQLAlchemy type class, a configured instance, or a ClickHouse type name string. Type name strings support types without a SQLAlchemy constructor, such as `Dynamic`, and can still be used for complex configured type expressions. They preserve names in a named `Tuple`.
@@ -361,6 +369,19 @@ Reflected columns carry `server_default` for `DEFAULT` expressions and dialect-s
 String values in `DEFAULT`, `MATERIALIZED`, `ALIAS`, and `TTL` clauses use ClickHouse string escaping. The same escaping applies to table, dictionary, and column comments, including comments emitted by Alembic.
 
 MergeTree key arguments such as `order_by`, `partition_by`, `primary_key`, `sample_by`, and `ttl` accept SQLAlchemy column and SQL expressions as well as plain strings.
+
+`Memory()`, `Log()`, `StripeLog()`, `TinyLog()`, `Null()`, and `Set()` accept zero arguments and round-trip through Alembic autogeneration. The existing dictionary argument remains supported. Use `settings={...}` to supply engine settings.
+
+`SummingMergeTree` and `ReplicatedSummingMergeTree` accept an optional, keyword-only `columns` argument. Existing positional arguments keep their meaning, so `SummingMergeTree("id")` still sets `ORDER BY id`.
+
+```python
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import SummingMergeTree
+
+engine_clause = SummingMergeTree("id", columns=("delta", "n_tx"))
+# Sum delta and n_tx for rows with the same id.
+```
+
+Pass a string, a SQLAlchemy column, a mapped column attribute, or a non-empty list or tuple of those values. List and tuple string items are quoted as identifiers. A scalar string supplies raw SQL, such as `"delta"` or `"(delta, n_tx)"`. The server requires identifiers for these columns. Omit `columns` to let ClickHouse select the columns to sum. Reflection and Alembic autogeneration preserve an explicit column list.
 
 ## Inserts and basic ORM use {#sqlalchemy-inserts}
 

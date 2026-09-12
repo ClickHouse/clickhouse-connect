@@ -37,8 +37,6 @@ SOCKET_TCP = socket.IPPROTO_TCP
 core_socket_options = [
     (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
     (SOCKET_TCP, socket.TCP_NODELAY, 1),
-    (socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 256),
-    (socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 256),
 ]
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -51,6 +49,13 @@ _inherited_managers: list[PoolManager] = []
 def close_managers():
     for manager in all_managers:
         manager.clear()
+
+
+def _close_pool_manager(manager: PoolManager) -> None:
+    try:
+        manager.clear()
+    finally:
+        all_managers.pop(manager, None)
 
 
 def resolve_ca_cert(ca_cert: str | None) -> str | None:
@@ -88,7 +93,7 @@ def get_pool_manager_options(
         options["cert_file"] = client_cert
     if client_cert_key:
         options["key_file"] = client_cert_key
-    options["socket_options"] = socket_options
+    options.setdefault("socket_options", socket_options)
     options["block"] = options.get("block", False)
     return options
 
