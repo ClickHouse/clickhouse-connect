@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from clickhouse_connect.driver import Client
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.options import arrow
 
 
@@ -31,6 +32,46 @@ def test_arrow(param_client: Client, call, table_context: Callable):
     assert arrow_schema.field(0).name == "number"
     assert arrow_schema.field(0).type.id == 8
     assert arrow_table.num_rows == 500
+
+
+@pytest.mark.parametrize("input_kind", ["arrow", "pandas", "polars"])
+@pytest.mark.parametrize("target_kind", ["unqualified", "database", "quoted", "qualified"])
+def test_arrow_insert_quoted_identifiers(param_client, call, table_context, test_db, input_kind, target_kind):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    data = arrow.table({"id": [13, 79]})
+    insert = param_client.insert_arrow
+    if input_kind == "pandas":
+        pd = pytest.importorskip("pandas")
+        data = data.to_pandas(types_mapper=pd.ArrowDtype)
+        insert = param_client.insert_df_arrow
+    elif input_kind == "polars":
+        pl = pytest.importorskip("polars")
+        data = pl.from_arrow(data)
+        insert = param_client.insert_df_arrow
+
+    # Use a separate database requiring quoting so the explicit database path is exercised.
+    database = f"{test_db}-arrow"
+    quoted_database = quote_identifier(database)
+    table = "arrow insert-table"
+    quoted_table = quote_identifier(table)
+    call(param_client.command, f"CREATE DATABASE {quoted_database}")
+    try:
+        target = quoted_table if target_kind == "unqualified" else f"{quoted_database}.{quoted_table}"
+        with table_context(target, ["id Int64"]):
+            if target_kind == "unqualified":
+                call(insert, table, data)
+            elif target_kind == "database":
+                call(insert, table, data, database=database)
+            elif target_kind == "quoted":
+                call(insert, quoted_table, data, database=quoted_database)
+            else:
+                # A qualified table takes precedence over the separate database argument.
+                call(insert, target, data, database="unused_database")
+            result = call(param_client.query, f"SELECT id FROM {target} ORDER BY id")
+            assert result.result_rows == [(13,), (79,)]
+    finally:
+        call(param_client.command, f"DROP DATABASE {quoted_database}")
 
 
 def test_arrow_stream(param_client: Client, call, table_context, consume_stream):

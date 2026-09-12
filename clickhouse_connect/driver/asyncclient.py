@@ -38,6 +38,7 @@ from clickhouse_connect.driver._backend.models import ClientConfig, QueryRuntime
 from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
 from clickhouse_connect.driver._backend.orchestration import init_sequence, insert_context_sequence, run_async
 from clickhouse_connect.driver.binding import (
+    _qualified_table,
     bind_query,
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
@@ -1071,7 +1072,7 @@ class AsyncClient(Client):
         """
         check_arrow()
         self._add_integration_tag("arrow")
-        full_table = table if "." in table or not database else f"{database}.{table}"
+        full_table = _qualified_table(table, database)
         compression = self.write_compression if self.write_compression in ("zstd", "lz4") else None
         column_names, insert_block = arrow_buffer(arrow_table, compression)
         if hasattr(insert_block, "to_pybytes"):

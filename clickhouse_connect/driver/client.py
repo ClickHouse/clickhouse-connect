@@ -30,6 +30,7 @@ from clickhouse_connect.driver.binding import (
     _binding_has_binary_values,
     _binding_keeps_query_structure,
     _needs_trailing_semicolon_lexer,
+    _qualified_table,
     _query_is_insert,
     _strip_trailing_semicolons,
     bind_query,
@@ -1184,7 +1185,7 @@ class Client(ABC):
         """
         check_arrow()
         self._add_integration_tag("arrow")
-        full_table = table if "." in table or not database else f"{database}.{table}"
+        full_table = _qualified_table(table, database)
         compression = self.write_compression if self.write_compression in ("zstd", "lz4") else None
         column_names, insert_block = arrow_buffer(arrow_table, compression)
         return self.raw_insert(full_table, column_names, insert_block, settings, "Arrow", transport_settings=transport_settings)
