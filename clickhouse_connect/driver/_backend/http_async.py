@@ -25,6 +25,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver._backend.httpcommon import (
     auth_failed_ex_code,
     build_http_error,
+    columns_only_meta,
     decompress_response,
     ex_header,
     ex_tag_header,
@@ -304,7 +305,7 @@ class HttpAsyncBackend:
                 return json.loads(decompressed_body)
 
             json_result = await loop.run_in_executor(None, decompress_and_parse_json)
-            return QueryExecution(columns=json_result["meta"])
+            return QueryExecution(columns=columns_only_meta(json_result))
         response = await self.request(
             plan.body,
             plan.params,
