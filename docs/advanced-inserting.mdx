@@ -60,7 +60,7 @@ It is normally unnecessary to override a write format, but the methods in `click
 | IPv4                  | `ipaddress.IPv4Address` | string            | Properly formatted strings can be inserted as IPv4 addresses                                                |
 | IPv6                  | `ipaddress.IPv6Address` | string            | Properly formatted strings can be inserted as IPv6 addresses                                                |
 | Tuple                 | dict or tuple           |                   | Use `()` for `Tuple()`.                                                                                    |
-| Map                   | dict                    |                   |                                                                                                             |
+| Map                   | dict                    |                   | The `pairs` read format doesn't change insert inputs. Use Arrow to round trip duplicate keys without loss.    |
 | Nested                | Sequence[dict]          |                   |                                                                                                             |
 | UUID                  | uuid.UUID               | string            | Properly formatted strings can be inserted as ClickHouse UUIDs                                              |
 | JSON                  | dict                    | string            | Dictionaries and JSON object strings are supported. The legacy `Object('json')` type is not supported.      |
