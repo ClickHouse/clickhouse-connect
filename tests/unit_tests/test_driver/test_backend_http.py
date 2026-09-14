@@ -8,6 +8,7 @@ from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _pla
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend, _plan_fields
 from clickhouse_connect.driver._backend.httpcommon import (
     QueryRequestPlan,
+    columns_only_meta,
     plan_command_request,
     plan_data_insert_request,
     plan_query_request,
@@ -15,7 +16,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
     plan_raw_query_request,
 )
 from clickhouse_connect.driver._backend.models import Capabilities, QueryRuntime
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import InternalError, ProgrammingError
 
 
 def make_context(
@@ -204,6 +205,41 @@ class TestProbePlan:
         assert result.columns_only is True
         assert result.body == "SELECT * FROM t LIMIT 0 /* trailing */\n FORMAT JSON"
 
+    @pytest.mark.parametrize(
+        "final_query, uncommented_query",
+        [
+            (
+                "SELECT number FROM numbers(9) // LIMIT 0",
+                "SELECT number FROM numbers(9) // LIMIT 0",
+            ),
+            (
+                "SELECT number AS `LIMIT 0--` FROM numbers(9)",
+                "SELECT number AS `LIMIT 0",
+            ),
+            (
+                "SELECT 'foo\\' LIMIT 0--bar' AS value",
+                "SELECT 'foo\\' LIMIT 0",
+            ),
+        ],
+    )
+    def test_probe_rejects_false_limit_zero_candidates(self, final_query, uncommented_query):
+        context = self.probe_context(final_query=final_query, uncommented_query=uncommented_query)
+        result = plan(context)
+
+        assert result.columns_only is False
+        assert result.body == f"{final_query}\n FORMAT Native"
+
+    def test_bytes_candidate_never_probes(self):
+        final_query = b"SELECT * FROM t LIMIT 0"
+        context = self.probe_context(
+            final_query=final_query,
+            uncommented_query="SELECT * FROM t LIMIT 0",
+        )
+        result = plan(context, prepped_query=final_query)
+
+        assert result.columns_only is False
+        assert result.body == b"SELECT * FROM t LIMIT 0\n FORMAT Native"
+
     def test_probe_rejects_genuine_multi_statement_query(self):
         context = self.probe_context(uncommented_query="SELECT * FROM t LIMIT 0; SELECT 13")
         result = plan(context)
@@ -213,6 +249,21 @@ class TestProbePlan:
         context = make_context(final_query="INSERT INTO t LIMIT 0", is_insert=True)
         result = plan(context)
         assert result.columns_only is False
+
+
+def test_columns_only_meta_accepts_empty_data():
+    meta = [{"name": "value", "type": "UInt64"}]
+    assert columns_only_meta({"meta": meta, "data": []}) == meta
+
+
+def test_columns_only_meta_rejects_rows():
+    with pytest.raises(InternalError, match="metadata probe unexpectedly returned rows"):
+        columns_only_meta(
+            {
+                "meta": [{"name": "value", "type": "UInt64"}],
+                "data": [{"value": 13}],
+            }
+        )
 
 
 def command_plan(bound_cmd="CREATE TABLE t (id UInt32) ENGINE Memory", **overrides):
