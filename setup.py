@@ -82,7 +82,7 @@ def run_setup():
         packages=find_packages(exclude=["tests*"]),
         package_data={"clickhouse_connect": ["py.typed"]},
         python_requires=">=3.10,<3.15",
-        license="Apache-2.0",
+        license_expression="Apache-2.0",
         install_requires=[
             "certifi",
             "urllib3>=1.26",
