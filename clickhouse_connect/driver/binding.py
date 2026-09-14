@@ -166,6 +166,60 @@ def _next_sql_token(query: str, index: int, heredoc_ends: dict[str, int]) -> tup
     return _SQL_TOKEN_OTHER, index + 1
 
 
+def _query_has_trailing_limit_zero(query: str) -> bool:
+    """Return whether the query ends in a real lexical LIMIT 0."""
+    heredoc_ends = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)} if "$" in query else {}
+
+    previous = None
+    current = None
+    candidate_before_semicolon = False
+    after_semicolon = False
+    index = 0
+    end = len(query)
+
+    def suffix_is_limit_zero() -> bool:
+        if previous is None or current is None:
+            return False
+
+        previous_token, previous_start, previous_end = previous
+        current_token, current_start, current_end = current
+
+        return (
+            previous_token == _SQL_TOKEN_WORD
+            and query[previous_start:previous_end].upper() == "LIMIT"
+            and current_token == _SQL_TOKEN_OTHER
+            and query[current_start:current_end] == "0"
+        )
+
+    while index < end:
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+
+        if token == _SQL_TOKEN_INVALID:
+            return False
+
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
+            continue
+
+        if token == _SQL_TOKEN_SEMICOLON:
+            if not after_semicolon:
+                candidate_before_semicolon = suffix_is_limit_zero()
+            after_semicolon = True
+            index = token_end
+            continue
+
+        if after_semicolon:
+            previous = None
+            current = None
+            candidate_before_semicolon = False
+            after_semicolon = False
+
+        previous, current = current, (token, index, token_end)
+        index = token_end
+
+    return candidate_before_semicolon if after_semicolon else suffix_is_limit_zero()
+
+
 def _strip_trailing_semicolons(query: str) -> str:
     """Remove query-final statement terminators while preserving trailing SQL trivia.
 

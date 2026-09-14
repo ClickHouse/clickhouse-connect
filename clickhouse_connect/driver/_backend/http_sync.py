@@ -24,6 +24,7 @@ from urllib3.response import HTTPResponse
 from clickhouse_connect.driver._backend.httpcommon import (
     auth_failed_ex_code,
     build_http_error,
+    columns_only_meta,
     ex_header,
     ex_tag_header,
     plan_command_request,
@@ -153,7 +154,7 @@ class HttpSyncBackend:
                 retries=runtime.retries,
                 fields=_plan_fields(plan),
             )
-            return QueryExecution(columns=json.loads(response.data)["meta"])
+            return QueryExecution(columns=columns_only_meta(json.loads(response.data)))
         response = self.request(
             plan.body if plan.body is not None else b"",
             plan.params,
