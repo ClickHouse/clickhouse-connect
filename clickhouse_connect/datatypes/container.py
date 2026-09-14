@@ -233,6 +233,7 @@ class Tuple(ClickHouseType):
 class Map(ClickHouseType):
     _slots = "key_type", "value_type", "_insert_name"
     python_type = dict
+    valid_formats = "native", "dict", "pairs"
     _type_args = _TypeArgs(2, 2, nested=(0, 1))
 
     @property
@@ -250,13 +251,23 @@ class Map(ClickHouseType):
         self._name_suffix = f"({', '.join(element_values)})"
         self._insert_name = f"Map({self.key_type.insert_name}, {self.value_type.insert_name})"
 
+    def _check_dict_values(self, column: Collection) -> None:
+        for value in column:
+            if not hasattr(value, "items"):
+                hint = " Pair lists from the pairs read format are not accepted." if isinstance(value, (list, tuple)) else ""
+                raise DataError(f"{self.name} insert values must be dictionaries, got {type(value).__name__}.{hint}") from None
+
     def _data_size(self, sample: Collection) -> int:
         total = 0
         if len(sample) == 0:
             return 0
-        for x in sample:
-            total += self.key_type.data_size(x.keys())
-            total += self.value_type.data_size(x.values())
+        try:
+            for x in sample:
+                total += self.key_type.data_size(x.keys())
+                total += self.value_type.data_size(x.values())
+        except AttributeError:
+            self._check_dict_values(sample)
+            raise
         return total // len(sample)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
@@ -269,10 +280,11 @@ class Map(ClickHouseType):
         total_rows = 0 if len(offsets) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx, read_state[0])
         values = self.value_type.read_column_data(source, total_rows, ctx, read_state[1])
+        map_type = list if self.read_format(ctx) == "pairs" else dict
         column = []
         prev = 0
         for offset in offsets:
-            column.append(dict(zip(keys[prev:offset], values[prev:offset])))
+            column.append(map_type(zip(keys[prev:offset], values[prev:offset])))
             prev = offset
         return column
 
@@ -281,7 +293,11 @@ class Map(ClickHouseType):
         self.value_type.write_column_prefix(dest)
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        keys, values = data_conv.build_map_columns(column, dest)
+        try:
+            keys, values = data_conv.build_map_columns(column, dest)
+        except AttributeError:
+            self._check_dict_values(column)
+            raise
         self.key_type.write_column_data(keys, dest, ctx)
         self.value_type.write_column_data(values, dest, ctx)
 

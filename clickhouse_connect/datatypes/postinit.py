@@ -1,6 +1,14 @@
 from clickhouse_connect.datatypes import dynamic, geometric, registry
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.datatypes.container import Map
+from clickhouse_connect.driver.context import BaseQueryContext
+
+
+class _SharedDataMap(Map, registered=False):
+    @classmethod
+    def read_format(cls, ctx: BaseQueryContext) -> str:
+        return "native"
+
 
 dynamic.STRING_DATA_TYPE = registry.get_from_name("String")
 
@@ -8,7 +16,7 @@ dynamic.STRING_DATA_TYPE = registry.get_from_name("String")
 # We must NOT reuse the cached registry instance because we replace
 # value_type with SharedDataString (reads raw bytes, encoding=None).
 # Mutating the cached instance would break all normal Map(String, String) columns.
-_shared_map = Map(TypeDef((), (), ("String", "String")))
+_shared_map = _SharedDataMap(TypeDef((), (), ("String", "String")))
 _shared_map.value_type = dynamic.SharedDataString(dynamic.STRING_DATA_TYPE.type_def)
 dynamic.SHARED_DATA_TYPE = _shared_map
 
