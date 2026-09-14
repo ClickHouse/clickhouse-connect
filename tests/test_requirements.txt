@@ -1,5 +1,5 @@
 urllib3>=1.26
-setuptools
+setuptools>=77.0.3
 certifi
 aiohttp>=3.9.0
 sqlalchemy>=2.0,<3.0
