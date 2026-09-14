@@ -1310,13 +1310,9 @@ class TestQuery:
         assert "_file1" in fields  # External data form fields
 
     @patch.object(HttpSyncBackend, "request")
-    @patch("clickhouse_connect.driver._backend.httpcommon.columns_only_re")
-    def test_query_with_context_schema_probe_form_encode_external_data(self, mock_columns_re, mock_raw_request):
+    def test_query_with_context_schema_probe_form_encode_external_data(self, mock_raw_request):
         """Test schema-probe queries (LIMIT 0) with both form encoding and external data"""
         self.client.form_encode_query_params = True
-
-        # Mock the columns_only_re to match LIMIT 0
-        mock_columns_re.search.return_value = True
 
         # Setup mock response for schema probe
         mock_response = Mock()

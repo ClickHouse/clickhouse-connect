@@ -63,7 +63,7 @@ def is_columns_only_query(context: QueryContext) -> bool:
 
 def columns_only_meta(json_result: dict[str, Any]) -> list[dict[str, Any]]:
     if json_result.get("data"):
-        raise InternalError("LIMIT 0 metadata probe unexpectedly returned rows")
+        raise InternalError("LIMIT 0 metadata probe unexpectedly returned rows. Use raw_query() to retrieve results for this SQL.")
     return json_result["meta"]
 
 
