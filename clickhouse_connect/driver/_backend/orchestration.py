@@ -13,7 +13,7 @@ from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver._backend.models import ClientConfig, ServerInfo
 from clickhouse_connect.driver._backend.operations import CommandOp, Operation, QueryOp, RawQueryOp
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.binding import _qualified_table
 from clickhouse_connect.driver.constants import PROTOCOL_VERSION_WITH_LOW_CARD
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
@@ -166,12 +166,7 @@ def insert_context_sequence(
     transport_settings: dict[str, str] | None = None,
     server_tz: tzinfo = timezone.utc,
 ) -> Generator[Operation, object, InsertContext]:
-    full_table = table
-    if "." not in table:
-        if database:
-            full_table = f"{quote_identifier(database)}.{quote_identifier(table)}"
-        else:
-            full_table = quote_identifier(table)
+    full_table = _qualified_table(table, database)
     column_defs: list[ColumnDef] = []
     if column_types is None and column_type_names is None:
         describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=settings or {})
