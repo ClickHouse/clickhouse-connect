@@ -3,7 +3,8 @@
 The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds with the timezone dropped,
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
-the Python codec by construction. Non-nullable 8-64-bit integers, Float32/64, and Booleans use typed buffers.
+the Python codec by construction. Primitive numerics and Booleans use typed buffers, including nullable
+integer and float columns in extended pandas output.
 Temporal columns take the Arrow exit. Time and Time64 keep their declared duration units through NumPy and
 extended pandas output. Extended pandas output builds String columns from the Arrow buffers. Other strings,
 enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
@@ -163,14 +164,34 @@ def _buffer_values(column: Any) -> Any:
     return options.np.frombuffer(column.values, dtype=dtype, count=column.length)
 
 
-def _make_numeric_buffer_convert(ch_type: ClickHouseType) -> BlockConverter:
+def _buffer_null_mask(column: Any) -> Any:
+    """Expand validity bits into a writable Boolean null mask."""
+    if column.validity is None:
+        return options.np.zeros(column.length, dtype=options.np.bool_)
+    packed = options.np.frombuffer(column.validity, dtype="uint8")
+    mask = options.np.unpackbits(packed, count=column.length, bitorder="little").view(options.np.bool_)
+    options.np.logical_not(mask, out=mask)
+    return mask
+
+
+def _make_numeric_buffer_convert(ch_type: ClickHouseType, nullable_alias: bool = False) -> BlockConverter:
     dtype = options.np.dtype(ch_type.np_type)
+    bool_objects = options.np.array([False, True, None], dtype=object) if nullable_alias and dtype.kind == "b" else None
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         columns = col_batch.column_buffers(index)
         if columns is None:
             raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
-        chunks = [_buffer_values(column) for column in columns]
+        chunks = []
+        for column in columns:
+            values = _buffer_values(column)
+            if nullable_alias and column.null_count:
+                null_mask = _buffer_null_mask(column)
+                if bool_objects is not None:
+                    values = bool_objects.take(options.np.where(null_mask, options.np.uint8(2), values.view(options.np.uint8)))
+                else:
+                    values = options.np.where(null_mask, options.np.nan, values)
+            chunks.append(values)
         if not chunks:
             return options.np.empty(0, dtype=dtype)
         if len(chunks) == 1:
@@ -688,8 +709,17 @@ def _make_string_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
 
 
 def _make_nullable_int_convert(pd_dtype: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        return pd_dtype.__from_arrow__(_arrow_column(arrow_table, index))
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {pd_dtype}")
+        values = [_buffer_values(column) for column in columns]
+        masks = [_buffer_null_mask(column) for column in columns]
+        if not values:
+            return options.pd.arrays.IntegerArray(options.np.empty(0, dtype=pd_dtype.numpy_dtype), options.np.empty(0, dtype="bool"))
+        data = values[0] if len(values) == 1 else options.np.concatenate(values)
+        mask = masks[0] if len(masks) == 1 else options.np.concatenate(masks)
+        return options.pd.arrays.IntegerArray(data.astype(pd_dtype.numpy_dtype, copy=False), mask, copy=False)
 
     return convert
 
@@ -702,8 +732,23 @@ def _make_nullable_interval_convert(pd_dtype: Any) -> BlockConverter:
     return convert
 
 
-def _nullable_float_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+def _nullable_float_buffer_convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
     # The Python codec renders nullable Float32/Float64 as a plain float64 array with NaN in null positions.
+    columns = col_batch.column_buffers(index)
+    if columns is None:
+        raise NotImplementedError("Unsupported column buffers for nullable float")
+    chunks = []
+    for column in columns:
+        values = _buffer_values(column)
+        if column.null_count:
+            values = options.np.where(_buffer_null_mask(column), options.np.nan, values)
+        chunks.append(values.astype("float64", copy=False))
+    if not chunks:
+        return options.np.empty(0, dtype="float64")
+    return chunks[0] if len(chunks) == 1 else options.np.concatenate(chunks)
+
+
+def _nullable_float_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
     return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("float64")
 
 
@@ -712,6 +757,14 @@ def _np_kind(ch_type: ClickHouseType) -> str | None:
         return str(options.np.dtype(ch_type.np_type).kind)
     except Exception:  # noqa: BLE001 - any non-numpy np_type is not an Arrow-numeric column
         return None
+
+
+def _numeric_buffer_type(ch_type: ClickHouseType) -> ClickHouseType | None:
+    while isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
+        ch_type = ch_type.element_type
+    if not ch_type.low_card and (ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean")):
+        return ch_type
+    return None
 
 
 def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Converter:
@@ -761,14 +814,18 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         if not declared_nullable and (ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean")):
             return _Converter(False, _make_numeric_buffer_convert(ch_type))
         if _np_kind(ch_type) in ("i", "u", "f", "b"):
+            physical_type = _numeric_buffer_type(ch_type)
+            if physical_type is not None:
+                return _Converter(False, _make_numeric_buffer_convert(physical_type, nullable_alias=True))
             return _Converter(True, _numeric_convert)
     elif ch_type.nullable and not ch_type.low_card and context.as_pandas and context.use_extended_dtypes:
-        # query_df renders nullable numeric via zero-copy pandas extension arrays. Building them from the Arrow
-        # validity+values buffers skips the per-value Python object list the object exit would otherwise create.
+        # Extended pandas output keeps integer masks and widens nullable floats to float64 with NaN.
         kind = _np_kind(ch_type)
         if kind in ("i", "u"):
-            return _Converter(True, _make_nullable_int_convert(options.pd.api.types.pandas_dtype(ch_type.base_type)))
+            return _Converter(False, _make_nullable_int_convert(options.pd.api.types.pandas_dtype(ch_type.base_type)))
         if kind == "f":
+            if _numeric_buffer_type(ch_type) is not None:
+                return _Converter(False, _nullable_float_buffer_convert)
             return _Converter(True, _nullable_float_convert)
     return _Converter(False, _make_object_convert(ch_type, context))
 

@@ -40,9 +40,9 @@ Three ideas carry the design:
 2. **You pay only at the exit you choose.** The Arrow exit hands consumers
    raw buffer pointers and costs near zero at any row count. The Python
    object exit allocates one object per cell and dominates decode itself.
-   The driver currently uses the Arrow exit for numeric NumPy/Pandas
-   conversion. A private column buffer exit also exposes the same memory
-   without an Arrow Python package, ready for later driver integration.
+   The driver uses the private column buffer exit for primitive numeric
+   NumPy/Pandas conversion. It exposes decoded memory without an Arrow
+   Python package. Converters that haven't migrated still use the Arrow exit.
    Use these exits for buffer-compatible dataframe columns. Never round-trip
    those columns through Python objects to reach a dataframe.
 
@@ -98,8 +98,18 @@ when every chunk is empty.
 the unchanged binding API 3, first packaged in core 0.2.1. The driver checks
 both versions before it selects either Rust codec mode. Non-nullable
 8-64-bit integer, Float32/64, and Boolean converters consume these buffers directly.
-Other converters keep their Arrow or Python-object exits, and the driver
+Extended Pandas output uses the public `IntegerArray` values/mask constructor
+for nullable integers and float64 arrays with NaN for nullable Float32/64.
+Primitive numeric SimpleAggregateFunction aliases retain their existing null-promotion
+rules. Other converters keep their Arrow or Python-object exits, and the driver
 still requires PyArrow for NumPy/Pandas queries during this migration.
+
+The integer adapter can retain a read-only Rust values buffer and an owned
+Boolean null mask. The existing result assembly preserves writable public
+DataFrames. Converters assemble multiple chunks in order and preserve typed
+empty outputs. Ordinary nullable integer and Boolean object paths stay in use
+where they define the output policy.
+
 `ColBatch.column_buffers(index)` returns a list
 of read-only descriptors, one per decoded chunk. Supported types are
 Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,

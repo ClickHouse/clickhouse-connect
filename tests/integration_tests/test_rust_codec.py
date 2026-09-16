@@ -1590,6 +1590,83 @@ def test_rust_codec_buffer_numeric_results(client_factory, call, consume_stream,
         frame.iloc[0, 0] = 79
 
 
+@pytest.mark.parametrize("extended", [False, True])
+def test_rust_codec_buffer_nullable_numeric_results(client_factory, call, consume_stream, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = """
+        SELECT
+            CAST(if(number % 3 = 0, NULL, toUInt64(18446744073709551615) - number) AS Nullable(UInt64)) AS u,
+            CAST(if(number % 3 = 0, NULL, toInt32(number) - 13) AS Nullable(Int32)) AS i,
+            CAST(if(number % 3 = 0, NULL, number / 4.0) AS Nullable(Float32)) AS f,
+            CAST(if(number % 3 = 0, NULL, number % 2) AS Nullable(Bool)) AS b,
+            [toInt32(number)] AS a
+        FROM numbers(79)
+    """
+    settings = {"max_block_size": 7}
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    if extended:
+        assert rust_df["u"].iloc[1] == 18446744073709551614
+        assert str(rust_df["u"].dtype) == "UInt64"
+        assert rust_df["f"].dtype == np.dtype("float64")
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    for frame in [rust_df, *frames]:
+        frame.iloc[0, 0] = 79
+        frame.iloc[0, 2] = 13.5
+        frame.iloc[0, 3] = True
+
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    numpy_blocks = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), numpy_blocks.append)
+    assert len(numpy_blocks) > 1
+    for output in (rust_np, np.concatenate(numpy_blocks)):
+        assert output.shape == python_np.shape == (79, 5)
+        for index in range(5):
+            if index == 2:
+                np.testing.assert_array_equal(output[:, index].astype("float64"), python_np[:, index].astype("float64"))
+            else:
+                np.testing.assert_array_equal(output[:, index], python_np[:, index])
+    for block in [rust_np, *numpy_blocks]:
+        assert block.flags.writeable
+        block[0, 0] = 79
+
+
+def test_rust_codec_buffer_nullable_alias_results(client_factory, call):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    query = """
+        SELECT
+            CAST(if(number % 3 = 0, NULL, toInt32(number) - 13) AS Nullable(SimpleAggregateFunction(anyLast, Int32))) AS i,
+            CAST(if(number % 3 = 0, NULL, number % 2 = 0) AS Nullable(SimpleAggregateFunction(anyLast, Bool))) AS b,
+            CAST(if(number % 3 = 0, NULL, number / 4) AS Nullable(SimpleAggregateFunction(anyLast, Float32))) AS f
+        FROM numbers(20)
+    """
+    expected_i = np.array([np.nan if n % 3 == 0 else n - 13 for n in range(20)], dtype="float64")
+    expected_b = [None if n % 3 == 0 else n % 2 == 0 for n in range(20)]
+    expected_f = np.array([np.nan if n % 3 == 0 else n / 4 for n in range(20)], dtype="float32")
+    result = call(rust_client.query_np, query)
+    assert result.dtype == np.dtype([("i", "float64"), ("b", "object"), ("f", "float32")])
+    np.testing.assert_array_equal(result["i"], expected_i)
+    assert list(result["b"]) == expected_b
+    np.testing.assert_array_equal(result["f"], expected_f)
+    frame = call(rust_client.query_df, query)
+    assert frame["i"].dtype == np.dtype("float64") and frame["f"].dtype == np.dtype("float32")
+    np.testing.assert_array_equal(frame["i"].to_numpy(), expected_i)
+    assert list(frame["b"]) == expected_b
+    np.testing.assert_array_equal(frame["f"].to_numpy(), expected_f)
+    frame.iloc[0, 0] = 79
+
+
 def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):
     pytest.importorskip("pandas")
     rust_client = client_factory(native_codec="rust_strict")
