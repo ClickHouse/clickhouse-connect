@@ -21,12 +21,12 @@ inspects wire bytes.
                            |
                         ColBatch
           Arc-shared, immutable, chunked columnar memory
-                       /          \
-        [Arrow exit]                [Python object exit]
-   __arrow_c_stream__              to_python_rows / columns
-   pointer handoff, no copy        one PyObject per cell
-        |                                 |
-   pyarrow / polars / pandas        list of tuples / lists
+            /                     |                      \
+      [Arrow exit]       [Numeric buffer exit]     [Python object exit]
+   __arrow_c_stream__      column_buffers          to_python_rows / columns
+   pointer handoff         read-only buffers       one PyObject per cell
+            |                     |                      |
+   Arrow consumers       memoryview / np.frombuffer   tuples / lists
 ```
 
 Three ideas carry the design:
@@ -40,8 +40,11 @@ Three ideas carry the design:
 2. **You pay only at the exit you choose.** The Arrow exit hands consumers
    raw buffer pointers and costs near zero at any row count. The Python
    object exit allocates one object per cell and dominates decode itself.
-   Going to pandas, polars, numpy, or any Arrow consumer, use the Arrow
-   exit. Never round-trip through Python objects to reach a dataframe.
+   The driver currently uses the Arrow exit for numeric NumPy/Pandas
+   conversion. A private numeric buffer exit also exposes the same memory
+   without an Arrow Python package, ready for later driver integration.
+   Use these exits for buffer-compatible dataframe columns. Never round-trip
+   those columns through Python objects to reach a dataframe.
 
 3. **The GIL is released wherever Python memory is not touched.** Intake
    copies each fed chunk out of Python-owned memory, then decodes with the
@@ -88,6 +91,36 @@ schema equality across inputs and keeps working column names and types even
 when every chunk is empty.
 
 ## Exits
+
+### Private numeric buffers
+
+`COLUMN_BUFFER_API_VERSION = 1` identifies an additive capability alongside
+the unchanged binding API 3. `ColBatch.column_buffers(index)` returns a list
+of read-only descriptors, one per decoded chunk. This initial slice supports
+Int8/16/32/64, UInt8/16/32/64, Float32/64, their nullable forms, and
+SimpleAggregateFunction aliases. Other types return `None`. Invalid indices
+and malformed supported storage raise instead of selecting an object fallback.
+
+Each descriptor contains `kind` such as `int64`, `itemsize` in bytes,
+`byteorder` as `little` or `big`, `length` in rows, `null_count`, `values`,
+and optional `validity`. Logical ClickHouse types stay in the batch schema.
+The buffers expose contiguous read-only bytes through Python's buffer
+protocol, so `memoryview(descriptor.values)` and `np.frombuffer` need no
+Arrow package. Validity contains exactly `ceil(length / 8)` bytes, with one
+bit per row, least significant bit first, where 1 means valid. Unused tail
+bits have no meaning. Ignore values in null rows. Descriptors have no Python
+constructor or writable properties.
+
+Each buffer holds an `Arc` to its source chunk. Views and derived slices
+remain valid after the batch or decoder is dropped. A retained view pins
+the whole source chunk, including other columns, but doesn't pin other
+chunks or transport resources. The final view releases that ownership.
+Chunks are never concatenated here. A supported schema with no chunks
+returns `[]`. A preserved empty chunk gets a zero-length descriptor.
+
+This capability doesn't change the driver converters, dependency requirements,
+or public output writeability. Later adapters must copy where the public
+output contract requires writable arrays.
 
 ### Arrow
 
