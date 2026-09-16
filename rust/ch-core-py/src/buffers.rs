@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch};
 use ch_core_rs::bitmap::Bitmap;
-use ch_core_rs::column::Column;
+use ch_core_rs::column::{Column, PrimitiveColumn};
 use ch_core_rs::schema::ChType;
 use pyo3::exceptions::{PyBufferError, PyValueError};
 use pyo3::ffi;
@@ -15,6 +15,7 @@ use pyo3::prelude::*;
 #[pyclass(name = "_ColumnBuffers", frozen, get_all)]
 pub(crate) struct ColumnBuffers {
     kind: &'static str,
+    // Bool packs one bit per row and reports itemsize 0.
     itemsize: usize,
     byteorder: &'static str,
     length: usize,
@@ -75,11 +76,11 @@ impl Buffer {
             .columns
             .get(self.index)
             .ok_or("Missing buffer column")?;
-        let numeric = numeric_column(column).ok_or("Unsupported buffer storage")?;
+        let scalar = scalar_column(column).ok_or("Unsupported buffer storage")?;
         match self.selection {
-            Selection::Values => numeric.values,
+            Selection::Values => scalar.values,
             Selection::Validity => {
-                let bitmap = numeric.validity.ok_or("Missing validity buffer")?;
+                let bitmap = scalar.validity.ok_or("Missing validity buffer")?;
                 validity_buffer(bitmap)
             }
         }
@@ -102,79 +103,105 @@ impl BufferData {
 }
 
 fn validity_buffer(bitmap: &Bitmap) -> Result<BufferData, &'static str> {
-    let bytes = bitmap
-        .as_bytes()
-        .get(..bitmap.len().div_ceil(8))
-        .ok_or("Validity buffer storage is shorter than its logical length")?;
+    bitmap_buffer(bitmap.as_bytes(), bitmap.len())
+}
+
+fn bitmap_buffer(bytes: &[u8], length: usize) -> Result<BufferData, &'static str> {
+    let bytes = bytes
+        .get(..length.div_ceil(8))
+        .ok_or("Bitmap buffer storage is shorter than its logical length")?;
     BufferData::new(bytes.as_ptr().cast(), bytes.len(), 1)
 }
 
-struct NumericColumn<'a> {
+const NATIVE_BYTEORDER: &str = if cfg!(target_endian = "little") {
+    "little"
+} else {
+    "big"
+};
+
+struct ScalarColumn<'a> {
     kind: &'static str,
     itemsize: usize,
+    byteorder: &'static str,
     length: usize,
     values: Result<BufferData, &'static str>,
     validity: Option<&'a Bitmap>,
 }
 
-fn numeric_column(column: &Column) -> Option<NumericColumn<'_>> {
-    macro_rules! numeric {
-        ($column:expr, $kind:literal, $ty:ty) => {{
-            let values = $column.values.as_slice();
-            let itemsize = std::mem::size_of::<$ty>();
-            NumericColumn {
-                kind: $kind,
-                itemsize,
-                length: values.len(),
-                values: BufferData::new(values.as_ptr().cast(), values.len(), itemsize),
-                validity: $column.validity.as_ref(),
-            }
-        }};
+fn primitive<'a, T: Clone>(
+    column: &'a PrimitiveColumn<T>,
+    kind: &'static str,
+    byteorder: &'static str,
+) -> ScalarColumn<'a> {
+    let values = column.values.as_slice();
+    let itemsize = std::mem::size_of::<T>();
+    ScalarColumn {
+        kind,
+        itemsize,
+        byteorder,
+        length: values.len(),
+        values: BufferData::new(values.as_ptr().cast(), values.len(), itemsize),
+        validity: column.validity.as_ref(),
     }
+}
+
+fn scalar_column(column: &Column) -> Option<ScalarColumn<'_>> {
+    let host = NATIVE_BYTEORDER;
     Some(match column {
-        Column::Int8(c) => numeric!(c, "int8", i8),
-        Column::Int16(c) => numeric!(c, "int16", i16),
-        Column::Int32(c) => numeric!(c, "int32", i32),
-        Column::Int64(c) => numeric!(c, "int64", i64),
-        Column::UInt8(c) => numeric!(c, "uint8", u8),
-        Column::UInt16(c) => numeric!(c, "uint16", u16),
-        Column::UInt32(c) => numeric!(c, "uint32", u32),
-        Column::UInt64(c) => numeric!(c, "uint64", u64),
-        Column::Float32(c) => numeric!(c, "float32", f32),
-        Column::Float64(c) => numeric!(c, "float64", f64),
+        Column::Int8(c) => primitive(c, "int8", host),
+        Column::Int16(c) => primitive(c, "int16", host),
+        Column::Int32(c) | Column::Date32(c) | Column::Time(c) => primitive(c, "int32", host),
+        Column::Int64(c) | Column::DateTime64(c) | Column::Time64(c) | Column::Interval(c) => {
+            primitive(c, "int64", host)
+        }
+        Column::UInt8(c) => primitive(c, "uint8", host),
+        Column::UInt16(c) | Column::Date(c) => primitive(c, "uint16", host),
+        Column::UInt32(c) | Column::DateTime(c) => primitive(c, "uint32", host),
+        Column::UInt64(c) => primitive(c, "uint64", host),
+        Column::Float32(c) => primitive(c, "float32", host),
+        Column::Float64(c) => primitive(c, "float64", host),
+        Column::BFloat16(c) => primitive(c, "bfloat16", "little"),
+        Column::Bool(c) => ScalarColumn {
+            kind: "bool_bitmap",
+            itemsize: 0,
+            byteorder: "not-applicable",
+            length: c.len,
+            values: bitmap_buffer(&c.bitmap, c.len),
+            validity: c.validity.as_ref(),
+        },
         _ => return None,
     })
 }
 
-fn numeric_kind(ch_type: &ChType) -> Option<&'static str> {
+fn scalar_kind(ch_type: &ChType) -> Option<&'static str> {
     Some(match ch_type {
         ChType::Int8 => "int8",
         ChType::Int16 => "int16",
-        ChType::Int32 => "int32",
-        ChType::Int64 => "int64",
+        ChType::Int32 | ChType::Date32 | ChType::Time => "int32",
+        ChType::Int64 | ChType::DateTime64 { .. } | ChType::Time64 { .. } | ChType::Interval(_) => {
+            "int64"
+        }
         ChType::UInt8 => "uint8",
-        ChType::UInt16 => "uint16",
-        ChType::UInt32 => "uint32",
+        ChType::UInt16 | ChType::Date => "uint16",
+        ChType::UInt32 | ChType::DateTime { .. } => "uint32",
         ChType::UInt64 => "uint64",
         ChType::Float32 => "float32",
         ChType::Float64 => "float64",
+        ChType::BFloat16 => "bfloat16",
+        ChType::Bool => "bool_bitmap",
         ChType::Nullable(inner) | ChType::SimpleAggregateFunction { inner, .. } => {
-            return numeric_kind(inner);
+            return scalar_kind(inner);
         }
         _ => return None,
     })
 }
 
-fn validate_numeric(
-    column: &NumericColumn<'_>,
-    kind: &str,
-    rows: usize,
-) -> Result<(), &'static str> {
+fn validate_scalar(column: &ScalarColumn<'_>, kind: &str, rows: usize) -> Result<(), &'static str> {
     if column.kind != kind {
-        return Err("Numeric buffer storage differs from the schema");
+        return Err("Scalar buffer storage differs from the schema");
     }
     if column.length != rows {
-        return Err("Numeric buffer length differs from the chunk row count");
+        return Err("Scalar buffer length differs from the chunk row count");
     }
     column.values.as_ref().map_err(|err| *err)?;
     if let Some(bitmap) = column.validity {
@@ -197,7 +224,7 @@ pub(crate) fn column_buffers(
             batch.num_columns()
         ))
     })?;
-    let Some(kind) = numeric_kind(&field.ch_type) else {
+    let Some(kind) = scalar_kind(&field.ch_type) else {
         return Ok(None);
     };
     let mut descriptors = Vec::with_capacity(batch.chunks.len());
@@ -207,10 +234,10 @@ pub(crate) fn column_buffers(
                 "Chunk column count differs from the schema",
             ));
         }
-        let numeric = numeric_column(&chunk.columns[index]).ok_or_else(|| {
-            PyValueError::new_err("Numeric buffer storage differs from the schema")
+        let scalar = scalar_column(&chunk.columns[index]).ok_or_else(|| {
+            PyValueError::new_err("Scalar buffer storage differs from the schema")
         })?;
-        validate_numeric(&numeric, kind, chunk.num_rows).map_err(PyValueError::new_err)?;
+        validate_scalar(&scalar, kind, chunk.num_rows).map_err(PyValueError::new_err)?;
         let owner = |selection| {
             Py::new(
                 py,
@@ -223,16 +250,12 @@ pub(crate) fn column_buffers(
         };
         descriptors.push(ColumnBuffers {
             kind,
-            itemsize: numeric.itemsize,
-            byteorder: if cfg!(target_endian = "little") {
-                "little"
-            } else {
-                "big"
-            },
-            length: numeric.length,
-            null_count: numeric.validity.map_or(0, Bitmap::null_count),
+            itemsize: scalar.itemsize,
+            byteorder: scalar.byteorder,
+            length: scalar.length,
+            null_count: scalar.validity.map_or(0, Bitmap::null_count),
             values: owner(Selection::Values)?,
-            validity: numeric
+            validity: scalar
                 .validity
                 .map(|_| owner(Selection::Validity))
                 .transpose()?,
@@ -244,7 +267,7 @@ pub(crate) fn column_buffers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ch_core_rs::column::PrimitiveColumn;
+    use ch_core_rs::column::BoolColumn;
     use ch_core_rs::schema::{Field, Schema};
     use pyo3::types::{PyMemoryView, PySlice};
 
@@ -263,18 +286,87 @@ mod tests {
     #[test]
     fn validates_numeric_metadata_and_lengths() {
         let column = Column::Int64(PrimitiveColumn::new(vec![13, 79]));
-        let numeric = numeric_column(&column).unwrap();
-        assert!(validate_numeric(&numeric, "int64", 2).is_ok());
-        assert!(validate_numeric(&numeric, "uint64", 2).is_err());
-        assert!(validate_numeric(&numeric, "int64", 3).is_err());
+        let numeric = scalar_column(&column).unwrap();
+        assert!(validate_scalar(&numeric, "int64", 2).is_ok());
+        assert!(validate_scalar(&numeric, "uint64", 2).is_err());
+        assert!(validate_scalar(&numeric, "int64", 3).is_err());
         let short_bitmap = Column::Int64(PrimitiveColumn::new_nullable(
             vec![13, 79],
             Bitmap::all_valid(1),
         ));
-        assert!(validate_numeric(&numeric_column(&short_bitmap).unwrap(), "int64", 2).is_err());
+        assert!(validate_scalar(&scalar_column(&short_bitmap).unwrap(), "int64", 2).is_err());
         let ptr = std::ptr::NonNull::<u8>::dangling().as_ptr().cast();
         assert!(BufferData::new(ptr, usize::MAX, 8).is_err());
         assert!(BufferData::new(ptr, isize::MAX as usize + 1, 1).is_err());
+    }
+
+    #[test]
+    fn validates_boolean_bitmap_storage_and_length() {
+        for rows in [0_usize, 1, 7, 8, 9, 64, 65] {
+            for nullable in [false, true] {
+                let byte_length = rows.div_ceil(8);
+                let column = BoolColumn {
+                    bitmap: vec![0xa5; byte_length + 13],
+                    len: rows,
+                    validity: nullable.then(|| Bitmap::all_valid(rows)),
+                };
+                let wrapped = Column::Bool(column.clone());
+                let scalar = scalar_column(&wrapped).unwrap();
+                assert!(validate_scalar(&scalar, "bool_bitmap", rows).is_ok());
+                assert!(validate_scalar(&scalar, "uint8", rows).is_err());
+                assert!(validate_scalar(&scalar, "bool_bitmap", rows + 1).is_err());
+                let mut malformed = column.clone();
+                malformed.validity = Some(Bitmap::all_valid(rows + 1));
+                assert!(validate_scalar(
+                    &scalar_column(&Column::Bool(malformed.clone())).unwrap(),
+                    "bool_bitmap",
+                    rows
+                )
+                .is_err());
+                if rows > 0 {
+                    malformed.validity = None;
+                    malformed.bitmap.truncate(byte_length - 1);
+                    assert!(validate_scalar(
+                        &scalar_column(&Column::Bool(malformed)).unwrap(),
+                        "bool_bitmap",
+                        rows
+                    )
+                    .is_err());
+                }
+                let expected_ptr = column.bitmap.as_ptr().cast();
+                let buffer = Buffer {
+                    chunk: Arc::new(ColBatch::new(
+                        Schema::new(vec![Field {
+                            name: "v".into(),
+                            ch_type: ChType::Bool,
+                        }]),
+                        vec![Column::Bool(column)],
+                        rows,
+                    )),
+                    index: 0,
+                    selection: Selection::Values,
+                };
+                let data = buffer.data().unwrap();
+                assert_eq!(data.len as usize, byte_length);
+                assert_eq!(data.ptr, expected_ptr);
+            }
+        }
+    }
+
+    #[test]
+    fn bfloat16_exports_exact_words_without_copying() {
+        let values = vec![[0x00, 0x80], [0xc1, 0x7f], [0x01, 0x00]];
+        let expected_ptr = values.as_ptr().cast();
+        let column = Column::BFloat16(PrimitiveColumn::new(values));
+        let scalar = scalar_column(&column).unwrap();
+        assert_eq!(scalar.itemsize, 2);
+        assert_eq!(scalar.byteorder, "little");
+        assert!(validate_scalar(&scalar, "bfloat16", 3).is_ok());
+        assert!(validate_scalar(&scalar, "uint16", 3).is_err());
+        assert!(validate_scalar(&scalar, "bfloat16", 2).is_err());
+        let data = scalar.values.unwrap();
+        assert_eq!(data.ptr, expected_ptr);
+        assert_eq!(data.len, 6);
     }
 
     #[test]
@@ -284,7 +376,7 @@ mod tests {
             let bitmap = Bitmap::from_raw(vec![0xff; byte_length + 13], rows);
             let expected_ptr = bitmap.as_bytes().as_ptr().cast();
             let column = Column::Int64(PrimitiveColumn::new_nullable(vec![13; rows], bitmap));
-            assert!(validate_numeric(&numeric_column(&column).unwrap(), "int64", rows).is_ok());
+            assert!(validate_scalar(&scalar_column(&column).unwrap(), "int64", rows).is_ok());
             let buffer = Buffer {
                 chunk: Arc::new(ColBatch::new(
                     Schema::new(vec![Field {
@@ -315,7 +407,7 @@ mod tests {
             vec![13, 79],
             Bitmap::from_raw(vec![], 2),
         ));
-        assert!(validate_numeric(&numeric_column(&column).unwrap(), "int64", 2).is_err());
+        assert!(validate_scalar(&scalar_column(&column).unwrap(), "int64", 2).is_err());
     }
 
     #[test]

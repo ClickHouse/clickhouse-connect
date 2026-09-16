@@ -22,7 +22,7 @@ inspects wire bytes.
                         ColBatch
           Arc-shared, immutable, chunked columnar memory
             /                     |                      \
-      [Arrow exit]       [Numeric buffer exit]     [Python object exit]
+      [Arrow exit]       [Scalar buffer exit]      [Python object exit]
    __arrow_c_stream__      column_buffers          to_python_rows / columns
    pointer handoff         read-only buffers       one PyObject per cell
             |                     |                      |
@@ -41,7 +41,7 @@ Three ideas carry the design:
    raw buffer pointers and costs near zero at any row count. The Python
    object exit allocates one object per cell and dominates decode itself.
    The driver currently uses the Arrow exit for numeric NumPy/Pandas
-   conversion. A private numeric buffer exit also exposes the same memory
+   conversion. A private scalar buffer exit also exposes the same memory
    without an Arrow Python package, ready for later driver integration.
    Use these exits for buffer-compatible dataframe columns. Never round-trip
    those columns through Python objects to reach a dataframe.
@@ -92,18 +92,38 @@ when every chunk is empty.
 
 ## Exits
 
-### Private numeric buffers
+### Private scalar buffers
 
 `COLUMN_BUFFER_API_VERSION = 1` identifies an additive capability alongside
 the unchanged binding API 3. `ColBatch.column_buffers(index)` returns a list
-of read-only descriptors, one per decoded chunk. This initial slice supports
-Int8/16/32/64, UInt8/16/32/64, Float32/64, their nullable forms, and
-SimpleAggregateFunction aliases. Other types return `None`. Invalid indices
-and malformed supported storage raise instead of selecting an object fallback.
+of read-only descriptors, one per decoded chunk. Supported types are
+Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,
+DateTime, DateTime64, Time, Time64, and all Interval types, including their
+nullable forms and SimpleAggregateFunction aliases. Other types, including
+arrays and dictionaries, return `None`. Invalid indices and malformed
+supported storage raise instead of selecting an object fallback.
 
-Each descriptor contains `kind` such as `int64`, `itemsize` in bytes,
-`byteorder` as `little` or `big`, `length` in rows, `null_count`, `values`,
-and optional `validity`. Logical ClickHouse types stay in the batch schema.
+Each descriptor contains `kind`, `itemsize`, `byteorder`, `length` in rows,
+`null_count`, `values`, and optional `validity`. Logical ClickHouse types
+stay in the batch schema. The physical layouts are:
+
+| ClickHouse type | `kind` | `itemsize` in bytes | `byteorder` |
+|---|---|---|---|
+| Int8/16/32/64, UInt8/16/32/64, Float32/64 | Lowercase type name | Primitive width | Host order, `little` or `big` |
+| Date | `uint16` | 2 | Host order |
+| Date32, Time | `int32` | 4 | Host order |
+| DateTime | `uint32` | 4 | Host order |
+| DateTime64, Time64, Interval types | `int64` | 8 | Host order |
+| BFloat16 | `bfloat16` | 2 | Always `little` |
+| Bool | `bool_bitmap` | 0, one bit per row | `not-applicable` |
+
+Temporal and interval buffers contain raw counts. Their units, precision,
+and timezone come from the schema. BFloat16 exposes raw two-byte words, not
+NumPy float16 values. Bool values contain exactly `ceil(length / 8)` bytes,
+least significant bit first, where 1 means true. Consumers must unpack
+those bits before constructing a NumPy Boolean array. Unused tail bits have
+no meaning.
+
 The buffers expose contiguous read-only bytes through Python's buffer
 protocol, so `memoryview(descriptor.values)` and `np.frombuffer` need no
 Arrow package. Validity contains exactly `ceil(length / 8)` bytes, with one
