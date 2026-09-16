@@ -101,10 +101,11 @@ Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,
 DateTime, DateTime64, Time, Time64, and all Interval types, including their
 nullable forms and SimpleAggregateFunction aliases. Array chains ending in
 Time or Time64 are also supported, with optional nullable leaves and
-SimpleAggregateFunction aliases at any level. Other types, including other
-array layouts and all dictionaries, return `None`. Consumers must treat an
-unrecognized `kind` as unsupported. Invalid indices and malformed supported
-storage raise instead of selecting an object fallback.
+SimpleAggregateFunction aliases at any level. LowCardinality(Time) supports
+an optional nullable inner type and SimpleAggregateFunction aliases around
+the column, inner type, or nullable leaf. Other types return `None`.
+Consumers must treat an unrecognized `kind` as unsupported. Invalid indices
+and malformed supported storage raise instead of selecting an object fallback.
 
 Each descriptor contains `kind`, `itemsize`, `byteorder`, `length` in rows,
 `null_count`, the optional buffers `values`, `validity`, and `offsets`, and
@@ -151,11 +152,27 @@ leaf. Nullable array nodes and other nested types aren't supported.
 Each chunk has its own offsets starting at zero. Consumers must rebuild
 each chunk's rows before concatenating results.
 
+Dictionary descriptors report `kind="dictionary"`, `itemsize=4`, and host
+byte order. Their `values` buffer contains signed Int32 indices, their
+`validity` describes rows, and their `child` is an Int32 descriptor of raw
+Time dictionary values. `offsets` is `None`. The dictionary child has no
+validity, offsets, or further child. Indices and dictionary values keep
+their original chunk-local order. Consumers must gather values separately
+for each chunk before concatenating results.
+
+For a nullable dictionary, index zero denotes null and the corresponding
+row-validity bit is zero. The sentinel dictionary entry remains in the
+child, and its stored value doesn't determine nullness. A valid zero-valued
+Time has its own nonzero index. For a nonnullable dictionary, index zero is
+an ordinary valid index. A preserved empty chunk has empty indices and an
+empty typed dictionary, with an empty validity bitmap if nullable.
+
 Each buffer holds an `Arc` to its source chunk. Views and derived slices
 remain valid after the batch or decoder is dropped. A retained view pins
 the whole source chunk, including other columns, but doesn't pin other
-chunks or transport resources. Array offset and child buffers each retain
-the same source chunk independently, without retaining parent descriptors.
+chunks or transport resources. Array offset and child buffers, and dictionary
+index, validity, and value buffers each retain the same source chunk
+independently, without retaining parent descriptors.
 The final view releases that ownership.
 Chunks are never concatenated here. A supported schema with no chunks
 returns `[]`. A preserved empty chunk gets a zero-length descriptor.
@@ -165,6 +182,14 @@ final child extent, and buffer byte lengths. It also validates each child.
 Each buffer stores a root column index, array depth, and buffer selection.
 Exports re-resolve that selection through immutable storage. They don't
 repeat the offset scan, and scalar exports don't scan array offsets.
+
+Dictionary construction validates index and bitmap counts, initialized
+storage, dictionary value type, and null-slot consistency. Every index must
+be nonnegative and less than the dictionary length, including null rows.
+This scans rows once per descriptor construction. Buffer exports re-resolve
+the index, validity, or dictionary value selection without repeating the
+scan. Adapters should call `column_buffers` once per column per batch and
+reuse the descriptors for both array and dictionary conversion.
 
 This capability doesn't change the driver converters, dependency requirements,
 or public output writeability. Later adapters must copy where the public

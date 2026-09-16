@@ -19,7 +19,7 @@ from clickhouse_connect.driver.exceptions import (
     StreamFailureError,
 )
 from clickhouse_connect.driver.insert import InsertContext
-from tests.integration_tests.conftest import supports_multi_point, type_available
+from tests.integration_tests.conftest import nullable_tuple_settings, supports_multi_point, type_available
 
 pytest.importorskip("_ch_core")
 
@@ -315,12 +315,7 @@ def test_rust_codec_nullable_empty_tuple(client_factory, call, client_mode, test
     if test_config.cloud:
         pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
     client = client_factory(native_codec="rust_strict")
-    setting = call(
-        client.query,
-        "SELECT name FROM system.settings WHERE name = 'allow_experimental_nullable_tuple_type'",
-    ).first_row
-    if setting is None:
-        pytest.skip("Server does not support Nullable(Tuple(...))")
+    settings = nullable_tuple_settings(client)
 
     table = f"rc_nullable_empty_tuple_{client_mode}"
     try:
@@ -328,7 +323,7 @@ def test_rust_codec_nullable_empty_tuple(client_factory, call, client_mode, test
         call(
             client.command,
             f"CREATE TABLE {table} (value Nullable(Tuple()), sentinel UInt8) ENGINE Memory",
-            settings={"allow_experimental_nullable_tuple_type": 1},
+            settings=settings,
         )
         call(client.insert, table, [[None, 13], [(), 79], [None, 80]])
         assert call(client.query, f"SELECT * FROM {table} ORDER BY sentinel").result_rows == [
@@ -1201,7 +1196,7 @@ def test_rust_codec_nullable_tuple_decode(client_factory, call):
     # reference here rather than a parity target.
     client = client_factory(native_codec="rust_strict")
     query = "SELECT if(number % 2 = 0, CAST((number, 'x'), 'Nullable(Tuple(UInt64, String))'), NULL) AS t FROM numbers(4)"
-    result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
+    result = call(client.query, query, settings=nullable_tuple_settings(client))
     assert result.result_rows == [((0, "x"),), (None,), ((2, "x"),), (None,)]
 
 
@@ -1210,7 +1205,7 @@ def test_rust_codec_nullable_tuple_aggregate_function_decode(client_factory, cal
     # so boundary recovery must stay correct across the masked rows.
     client = client_factory(native_codec="rust_strict")
     query = "SELECT if(number % 2 = 0, tuple(initializeAggregation('countState', number)), NULL) AS t FROM numbers(4)"
-    result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
+    result = call(client.query, query, settings=nullable_tuple_settings(client))
     assert result.result_rows == [((b"\x01",),), (None,), ((b"\x01",),), (None,)]
 
 
@@ -1916,13 +1911,14 @@ def test_rust_codec_nullable_tuple_insert(client_factory, call, client_mode):
     # the reference. Requires the true type name to reach the encoder because
     # Tuple.insert_name drops the Nullable wrapper.
     client = client_factory(native_codec="rust_strict")
+    settings = nullable_tuple_settings(client)
     table = f"rc_ins_ntup_{client_mode}"
     call(client.command, f"DROP TABLE IF EXISTS {table}")
     try:
         call(
             client.command,
             f"CREATE TABLE {table} (id UInt32, t Nullable(Tuple(a Int64, b String))) ENGINE Memory",
-            settings={"enable_nullable_tuple_type": 1},
+            settings=settings,
         )
         call(client.insert, table, [[0, (1, "x")], [1, None], [2, (3, "z")]], column_names=["id", "t"])
         result = call(client.query, f"SELECT * FROM {table} ORDER BY id")

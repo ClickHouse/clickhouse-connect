@@ -323,7 +323,6 @@ def test_numeric_aliases(type_name, values, validity):
         ("Array(Tuple(Time64(9)))", [[(13,)]]),
         ("Tuple(Time)", [(13,)]),
         ("Array(Tuple(Time))", [[(13,)]]),
-        ("LowCardinality(Time)", [13]),
         ("LowCardinality(String)", ["user_1"]),
         ("LowCardinality(Int32)", [13]),
         ("Nullable(String)", [None]),

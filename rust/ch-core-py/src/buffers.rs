@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch};
 use ch_core_rs::bitmap::Bitmap;
-use ch_core_rs::column::{ArrayColumn, Column, PrimitiveColumn};
+use ch_core_rs::column::{ArrayColumn, Column, DictionaryColumn, PrimitiveColumn};
+use ch_core_rs::native::decode::low_cardinality_dict_value_type;
 use ch_core_rs::schema::ChType;
 use pyo3::exceptions::{PyBufferError, PyValueError};
 use pyo3::ffi;
@@ -31,6 +32,9 @@ enum Selection {
     Values,
     Validity,
     Offsets,
+    DictionaryIndices,
+    DictionaryValidity,
+    DictionaryValues,
 }
 
 /// No pointers or Python references are stored here. An exported view pins
@@ -102,6 +106,22 @@ impl Buffer {
                 let scalar = scalar_column(column).ok_or("Unsupported buffer storage")?;
                 let bitmap = scalar.validity.ok_or("Missing validity buffer")?;
                 validity_buffer(bitmap)
+            }
+            Selection::DictionaryIndices => dictionary_indices(dictionary_column(column)?),
+            Selection::DictionaryValidity => {
+                let dictionary = dictionary_column(column)?;
+                validity_buffer(
+                    dictionary
+                        .validity
+                        .as_ref()
+                        .ok_or("Missing dictionary validity buffer")?,
+                )
+            }
+            Selection::DictionaryValues => {
+                let Column::Time(values) = dictionary_column(column)?.values.as_ref() else {
+                    return Err("Missing Time dictionary values");
+                };
+                primitive(values, "int32", NATIVE_BYTEORDER).values
             }
         }
     }
@@ -233,14 +253,19 @@ fn validate_scalar(column: &ScalarColumn<'_>, kind: &str, rows: usize) -> Result
     Ok(())
 }
 
-struct BufferLayout {
-    array_depth: usize,
-    leaf_kind: &'static str,
+enum BufferLayout {
+    ScalarOrArray {
+        array_depth: usize,
+        leaf_kind: &'static str,
+    },
+    DictionaryTime {
+        nullable: bool,
+    },
 }
 
 fn buffer_layout(mut ch_type: &ChType) -> Option<BufferLayout> {
     if let Some(leaf_kind) = scalar_kind(ch_type) {
-        return Some(BufferLayout {
+        return Some(BufferLayout::ScalarOrArray {
             array_depth: 0,
             leaf_kind,
         });
@@ -250,6 +275,11 @@ fn buffer_layout(mut ch_type: &ChType) -> Option<BufferLayout> {
     loop {
         match ch_type {
             ChType::SimpleAggregateFunction { inner, .. } => ch_type = inner,
+            ChType::LowCardinality(inner) if array_depth == 0 => {
+                let (nullable, value_type) = low_cardinality_dict_value_type(inner);
+                return matches!(value_type, ChType::Time)
+                    .then_some(BufferLayout::DictionaryTime { nullable });
+            }
             ChType::Array(inner) if !nullable_leaf => {
                 array_depth = array_depth.checked_add(1)?;
                 ch_type = inner;
@@ -259,13 +289,13 @@ fn buffer_layout(mut ch_type: &ChType) -> Option<BufferLayout> {
                 ch_type = inner;
             }
             ChType::Time if array_depth > 0 => {
-                return Some(BufferLayout {
+                return Some(BufferLayout::ScalarOrArray {
                     array_depth,
                     leaf_kind: "int32",
                 });
             }
             ChType::Time64 { .. } if array_depth > 0 => {
-                return Some(BufferLayout {
+                return Some(BufferLayout::ScalarOrArray {
                     array_depth,
                     leaf_kind: "int64",
                 });
@@ -312,6 +342,130 @@ fn validate_offsets(
     Ok(())
 }
 
+fn dictionary_column(column: &Column) -> Result<&DictionaryColumn, &'static str> {
+    let Column::Dictionary(dictionary) = column else {
+        return Err("Missing dictionary buffer storage");
+    };
+    Ok(dictionary)
+}
+
+fn dictionary_indices(dictionary: &DictionaryColumn) -> Result<BufferData, &'static str> {
+    BufferData::new(
+        dictionary.indices.as_ptr().cast(),
+        dictionary.indices.len(),
+        std::mem::size_of::<i32>(),
+    )
+}
+
+fn validate_dictionary(
+    dictionary: &DictionaryColumn,
+    rows: usize,
+    nullable: bool,
+) -> Result<ScalarColumn<'_>, &'static str> {
+    if dictionary.indices.len() != rows {
+        return Err("Dictionary index count differs from the chunk row count");
+    }
+    dictionary_indices(dictionary)?;
+    if dictionary.validity.is_some() != nullable {
+        return Err("Dictionary validity differs from the schema nullability");
+    }
+    if let Some(bitmap) = &dictionary.validity {
+        if bitmap.len() != rows {
+            return Err("Dictionary validity length differs from the index count");
+        }
+        validity_buffer(bitmap)?;
+    }
+    let Column::Time(values) = dictionary.values.as_ref() else {
+        return Err("Dictionary values differ from the Time schema");
+    };
+    if values.validity.is_some() {
+        return Err("Dictionary values must not carry validity");
+    }
+    let scalar = primitive(values, "int32", NATIVE_BYTEORDER);
+    scalar.values.as_ref().map_err(|err| *err)?;
+    let (min, max) = dictionary
+        .indices
+        .iter()
+        .fold((0i32, -1i32), |(min, max), &index| {
+            (min.min(index), max.max(index))
+        });
+    if min < 0 {
+        return Err("Dictionary index is negative");
+    }
+    if usize::try_from(max).is_ok_and(|max| max >= scalar.length) {
+        return Err("Dictionary index is outside the dictionary values");
+    }
+    if let Some(bitmap) = &dictionary.validity {
+        // Null rows carry index 0 and a clear validity bit, checked one byte at a time.
+        for (indices, &valid) in dictionary.indices.chunks(8).zip(bitmap.as_bytes()) {
+            let nulls = indices
+                .iter()
+                .enumerate()
+                .fold(0u8, |nulls, (bit, &index)| {
+                    nulls | (u8::from(index == 0) << bit)
+                });
+            let mask = 0xFFu8 >> (8 - indices.len());
+            if (nulls ^ !valid) & mask != 0 {
+                return Err("Dictionary null indices differ from the validity bitmap");
+            }
+        }
+    }
+    Ok(scalar)
+}
+
+fn dictionary_descriptor(
+    py: Python<'_>,
+    chunk: &Arc<ColBatch>,
+    index: usize,
+    column: &Column,
+    nullable: bool,
+) -> PyResult<ColumnBuffers> {
+    let Column::Dictionary(dictionary) = column else {
+        return Err(PyValueError::new_err(
+            "Dictionary buffer storage differs from the schema",
+        ));
+    };
+    let scalar =
+        validate_dictionary(dictionary, chunk.num_rows, nullable).map_err(PyValueError::new_err)?;
+    let owner = |selection| {
+        Py::new(
+            py,
+            Buffer {
+                chunk: Arc::clone(chunk),
+                index,
+                array_depth: 0,
+                selection,
+            },
+        )
+    };
+    let child = ColumnBuffers {
+        kind: "int32",
+        itemsize: scalar.itemsize,
+        byteorder: scalar.byteorder,
+        length: scalar.length,
+        null_count: 0,
+        values: Some(owner(Selection::DictionaryValues)?),
+        validity: None,
+        offsets: None,
+        child: None,
+    };
+    Ok(ColumnBuffers {
+        kind: "dictionary",
+        itemsize: std::mem::size_of::<i32>(),
+        byteorder: NATIVE_BYTEORDER,
+        length: dictionary.indices.len(),
+        null_count: dictionary.validity.as_ref().map_or(0, Bitmap::null_count),
+        values: Some(owner(Selection::DictionaryIndices)?),
+        validity: dictionary
+            .validity
+            .as_ref()
+            .map(|_| owner(Selection::DictionaryValidity))
+            .transpose()?,
+        offsets: None,
+        child: Some(Py::new(py, child)?),
+    })
+}
+
 fn column_descriptor(
     py: Python<'_>,
     chunk: &Arc<ColBatch>,
@@ -320,6 +474,15 @@ fn column_descriptor(
     array_depth: usize,
     layout: &BufferLayout,
 ) -> PyResult<ColumnBuffers> {
+    let (depth, leaf_kind) = match layout {
+        BufferLayout::ScalarOrArray {
+            array_depth,
+            leaf_kind,
+        } => (*array_depth, *leaf_kind),
+        BufferLayout::DictionaryTime { nullable } => {
+            return dictionary_descriptor(py, chunk, index, column, *nullable);
+        }
+    };
     let owner = |selection| {
         Py::new(
             py,
@@ -331,7 +494,7 @@ fn column_descriptor(
             },
         )
     };
-    if array_depth < layout.array_depth {
+    if array_depth < depth {
         let Column::Array(array) = column else {
             return Err(PyValueError::new_err(
                 "Array buffer storage differs from the schema",
@@ -367,9 +530,9 @@ fn column_descriptor(
     } else {
         scalar.length
     };
-    validate_scalar(&scalar, layout.leaf_kind, rows).map_err(PyValueError::new_err)?;
+    validate_scalar(&scalar, leaf_kind, rows).map_err(PyValueError::new_err)?;
     Ok(ColumnBuffers {
-        kind: layout.leaf_kind,
+        kind: leaf_kind,
         itemsize: scalar.itemsize,
         byteorder: scalar.byteorder,
         length: scalar.length,
@@ -421,6 +584,7 @@ pub(crate) fn column_buffers(
 mod tests {
     use super::*;
     use ch_core_rs::column::BoolColumn;
+    use ch_core_rs::native::decode::parse_ch_type;
     use ch_core_rs::schema::{Field, Schema};
     use pyo3::types::{PyMemoryView, PySlice};
 
@@ -456,6 +620,304 @@ mod tests {
             ))],
             num_rows: 2,
         })
+    }
+
+    fn temporal_dictionary() -> DictionaryColumn {
+        DictionaryColumn::new_nullable(
+            vec![0, 2, 1],
+            Column::Time(PrimitiveColumn::new(vec![-79, 0, 13])),
+            Bitmap::from_ch_null_map(&[1, 0, 0]),
+        )
+    }
+
+    fn dictionary_chunk(dictionary: DictionaryColumn) -> Arc<ColBatch> {
+        Arc::new(ColBatch {
+            schema: Schema::new(vec![Field {
+                name: "v".into(),
+                ch_type: ChType::LowCardinality(Box::new(ChType::Nullable(Box::new(ChType::Time)))),
+            }]),
+            num_rows: dictionary.indices.len(),
+            columns: vec![Column::Dictionary(dictionary)],
+        })
+    }
+
+    #[test]
+    fn validates_dictionary_metadata_and_null_slots() {
+        let valid = temporal_dictionary();
+        assert!(validate_dictionary(&valid, 3, true).is_ok());
+        assert!(validate_dictionary(&valid, 2, true).is_err());
+        assert!(validate_dictionary(&valid, 3, false).is_err());
+        for nullable in [false, true] {
+            let mut empty =
+                DictionaryColumn::new(vec![], Column::Time(PrimitiveColumn::new(vec![])));
+            empty.validity = nullable.then(|| Bitmap::all_valid(0));
+            assert!(validate_dictionary(&empty, 0, nullable).is_ok());
+        }
+        let mut plain = valid.clone();
+        plain.validity = None;
+        assert!(validate_dictionary(&plain, 3, false).is_ok());
+        assert!(validate_dictionary(&plain, 3, true).is_err());
+        for invalid in [-1, 3, i32::MAX] {
+            for row in [0, 1] {
+                let mut broken = valid.clone();
+                broken.indices[row] = invalid;
+                assert!(validate_dictionary(&broken, 3, true).is_err());
+            }
+        }
+        for bitmap in [
+            Bitmap::all_valid(2),
+            Bitmap::all_valid(3),
+            Bitmap::from_ch_null_map(&[1, 1, 0]),
+        ] {
+            let mut broken = valid.clone();
+            broken.validity = Some(bitmap);
+            assert!(validate_dictionary(&broken, 3, true).is_err());
+        }
+        for values in [
+            Column::Time(PrimitiveColumn::new(vec![])),
+            Column::Int32(PrimitiveColumn::new(vec![0, 13, 79])),
+            Column::Time64(PrimitiveColumn::new(vec![0, 13, 79])),
+            Column::Time(PrimitiveColumn::new_nullable(
+                vec![0, 13, 79],
+                Bitmap::all_valid(3),
+            )),
+        ] {
+            let mut broken = valid.clone();
+            *broken.values = values;
+            assert!(validate_dictionary(&broken, 3, true).is_err());
+        }
+        let mut all_null = valid;
+        all_null.indices = vec![0; 3];
+        all_null.validity = Some(Bitmap::from_ch_null_map(&[1; 3]));
+        *all_null.values = Column::Time(PrimitiveColumn::new(vec![-79]));
+        assert!(validate_dictionary(&all_null, 3, true).is_ok());
+        *all_null.values = Column::Time(PrimitiveColumn::new(vec![]));
+        assert!(validate_dictionary(&all_null, 3, true).is_err());
+    }
+
+    #[test]
+    fn dictionary_layouts_require_top_level_time() {
+        let layout = |name: &str| buffer_layout(&parse_ch_type(name).unwrap());
+        assert!(matches!(
+            layout("LowCardinality(Time)"),
+            Some(BufferLayout::DictionaryTime { nullable: false })
+        ));
+        assert!(matches!(
+            layout("SimpleAggregateFunction(anyLast, LowCardinality(SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, Time)))))"),
+            Some(BufferLayout::DictionaryTime { nullable: true })
+        ));
+        for name in [
+            "LowCardinality(Time64(3))",
+            "LowCardinality(Nullable(Time64(3)))",
+            "Array(LowCardinality(Time))",
+            "LowCardinality(Int32)",
+            "LowCardinality(Nullable(Date))",
+        ] {
+            assert!(layout(name).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn dictionary_validity_checks_logical_bits_across_byte_boundaries() {
+        for rows in [0_usize, 1, 7, 8, 9, 64, 65] {
+            let indices: Vec<i32> = (0..rows).map(|row| i32::from(row % 3 != 0)).collect();
+            for padding in [0, 0xff] {
+                let mut bytes = vec![padding; rows.div_ceil(8) + 13];
+                for (row, &index) in indices.iter().enumerate() {
+                    let bit = 1 << (row % 8);
+                    if index == 0 {
+                        bytes[row / 8] &= !bit;
+                    } else {
+                        bytes[row / 8] |= bit;
+                    }
+                }
+                let dictionary = DictionaryColumn::new_nullable(
+                    indices.clone(),
+                    Column::Time(PrimitiveColumn::new(vec![0, 13])),
+                    Bitmap::from_raw(bytes.clone(), rows),
+                );
+                assert!(validate_dictionary(&dictionary, rows, true).is_ok());
+                for row in 0..rows {
+                    let mut broken = dictionary.clone();
+                    let mut invalid = bytes.clone();
+                    invalid[row / 8] ^= 1 << (row % 8);
+                    broken.validity = Some(Bitmap::from_raw(invalid, rows));
+                    assert_eq!(
+                        validate_dictionary(&broken, rows, true).err(),
+                        Some("Dictionary null indices differ from the validity bitmap"),
+                        "rows={rows}, row={row}, padding={padding}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dictionary_descriptor_checks_chunk_rows_and_storage() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut chunk = dictionary_chunk(temporal_dictionary());
+            Arc::get_mut(&mut chunk).unwrap().num_rows = 2;
+            let batch = ChunkedBatch {
+                schema: chunk.schema.clone(),
+                chunks: vec![chunk],
+            };
+            let Err(error) = column_buffers(py, &batch, 0) else {
+                panic!("expected a descriptor error")
+            };
+            let error = error.value(py).to_string();
+            assert!(
+                error.contains("index count differs from the chunk row count"),
+                "{error}"
+            );
+            let mut chunk = dictionary_chunk(temporal_dictionary());
+            Arc::get_mut(&mut chunk).unwrap().columns[0] =
+                Column::Time(PrimitiveColumn::new(vec![0; 3]));
+            let batch = ChunkedBatch {
+                schema: chunk.schema.clone(),
+                chunks: vec![chunk],
+            };
+            let Err(error) = column_buffers(py, &batch, 0) else {
+                panic!("expected a descriptor error")
+            };
+            let error = error.value(py).to_string();
+            assert!(
+                error.contains("Dictionary buffer storage differs from the schema"),
+                "{error}"
+            );
+        });
+    }
+
+    #[test]
+    fn plain_dictionary_descriptor_exports_storage_without_validity() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut plain = temporal_dictionary();
+            plain.validity = None;
+            let chunk = Arc::new(ColBatch {
+                schema: Schema::new(vec![Field {
+                    name: "v".into(),
+                    ch_type: ChType::LowCardinality(Box::new(ChType::Time)),
+                }]),
+                num_rows: 3,
+                columns: vec![Column::Dictionary(plain)],
+            });
+            let Column::Dictionary(source) = &chunk.columns[0] else {
+                unreachable!()
+            };
+            let Column::Time(values) = source.values.as_ref() else {
+                unreachable!()
+            };
+            let indices_ptr: *const c_void = source.indices.as_ptr().cast();
+            let values_ptr: *const c_void = values.values.as_ptr().cast();
+            let batch = ChunkedBatch {
+                schema: chunk.schema.clone(),
+                chunks: vec![chunk],
+            };
+            let descriptors = column_buffers(py, &batch, 0).unwrap().unwrap();
+            let descriptor = &descriptors[0];
+            assert_eq!(
+                (descriptor.kind, descriptor.length, descriptor.null_count),
+                ("dictionary", 3, 0)
+            );
+            assert!(descriptor.validity.is_none() && descriptor.offsets.is_none());
+            let owner = descriptor.values.as_ref().unwrap().bind(py).get();
+            assert_eq!(owner.data().unwrap().ptr, indices_ptr);
+            let child = descriptor.child.as_ref().unwrap().bind(py).get();
+            assert_eq!(
+                (child.kind, child.length, child.null_count),
+                ("int32", 3, 0)
+            );
+            assert!(child.validity.is_none() && child.offsets.is_none() && child.child.is_none());
+            let owner = child.values.as_ref().unwrap().bind(py).get();
+            assert_eq!(owner.data().unwrap().ptr, values_ptr);
+        });
+    }
+
+    #[test]
+    fn every_dictionary_selection_pins_only_source_chunk_until_final_release() {
+        Python::initialize();
+        Python::attach(|py| {
+            for selection in [
+                Selection::DictionaryIndices,
+                Selection::DictionaryValidity,
+                Selection::DictionaryValues,
+            ] {
+                let first = dictionary_chunk(temporal_dictionary());
+                let other = dictionary_chunk(temporal_dictionary());
+                let first_weak = Arc::downgrade(&first);
+                let other_weak = Arc::downgrade(&other);
+                let Column::Dictionary(source) = &first.columns[0] else {
+                    unreachable!()
+                };
+                let expected_ptr = match selection {
+                    Selection::DictionaryIndices => source.indices.as_ptr().cast(),
+                    Selection::DictionaryValidity => {
+                        source.validity.as_ref().unwrap().as_bytes().as_ptr().cast()
+                    }
+                    Selection::DictionaryValues => {
+                        let Column::Time(values) = source.values.as_ref() else {
+                            unreachable!()
+                        };
+                        values.values.as_ptr().cast()
+                    }
+                    _ => unreachable!(),
+                };
+                let batch = ChunkedBatch {
+                    schema: first.schema.clone(),
+                    chunks: vec![first, other],
+                };
+                let descriptors = column_buffers(py, &batch, 0).unwrap().unwrap();
+                let descriptor = &descriptors[0];
+                let owner = match selection {
+                    Selection::DictionaryIndices => &descriptor.values,
+                    Selection::DictionaryValidity => &descriptor.validity,
+                    Selection::DictionaryValues => {
+                        &descriptor.child.as_ref().unwrap().bind(py).get().values
+                    }
+                    _ => unreachable!(),
+                }
+                .as_ref()
+                .unwrap()
+                .bind(py);
+                assert_eq!(owner.get().data().unwrap().ptr, expected_ptr);
+                let view = PyMemoryView::from(owner).unwrap();
+                let expected: Vec<u8> = view.call_method0("tobytes").unwrap().extract().unwrap();
+                let slice = view.get_item(PySlice::new(py, 0, 1, 1)).unwrap();
+                drop(view);
+                drop(descriptors);
+                drop(batch);
+                assert!(first_weak.upgrade().is_some());
+                assert!(other_weak.upgrade().is_none());
+                let actual: Vec<u8> = slice.call_method0("tobytes").unwrap().extract().unwrap();
+                assert_eq!(actual, expected[..1]);
+                drop(slice);
+                assert!(first_weak.upgrade().is_none());
+            }
+        });
+    }
+
+    #[test]
+    fn malformed_dictionary_releases_previously_allocated_descriptors() {
+        Python::initialize();
+        Python::attach(|py| {
+            let first = dictionary_chunk(temporal_dictionary());
+            let mut malformed = temporal_dictionary();
+            malformed.indices[0] = -1;
+            let broken = dictionary_chunk(malformed);
+            let first_weak = Arc::downgrade(&first);
+            let broken_weak = Arc::downgrade(&broken);
+            let batch = ChunkedBatch {
+                schema: first.schema.clone(),
+                chunks: vec![first, broken],
+            };
+            assert!(column_buffers(py, &batch, 0).is_err());
+            assert_eq!(Arc::strong_count(&batch.chunks[0]), 1);
+            assert_eq!(Arc::strong_count(&batch.chunks[1]), 1);
+            drop(batch);
+            assert!(first_weak.upgrade().is_none());
+            assert!(broken_weak.upgrade().is_none());
+        });
     }
 
     #[test]
@@ -535,6 +997,7 @@ mod tests {
                     Selection::Offsets => &descriptor.offsets,
                     Selection::Values => &descriptor.values,
                     Selection::Validity => &descriptor.validity,
+                    _ => unreachable!(),
                 }
                 .as_ref()
                 .unwrap()
@@ -733,6 +1196,9 @@ mod tests {
             Bitmap::from_raw(vec![], 2),
         ));
         assert!(validate_scalar(&scalar_column(&column).unwrap(), "int64", 2).is_err());
+        let mut dictionary = temporal_dictionary();
+        dictionary.validity = Some(Bitmap::from_raw(vec![], 3));
+        assert!(validate_dictionary(&dictionary, 3, true).is_err());
     }
 
     #[test]

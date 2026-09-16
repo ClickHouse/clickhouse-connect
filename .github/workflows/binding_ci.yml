@@ -8,6 +8,7 @@ on:
       - 'rust/**'
       - 'clickhouse_connect/driver/rustcodec.py'
       - 'clickhouse_connect/driver/rustnumpy.py'
+      - 'tests/integration_tests/conftest.py'
       - 'tests/integration_tests/test_rust_codec.py'
       - '.github/workflows/binding_ci.yml'
   push:
@@ -17,6 +18,7 @@ on:
       - 'rust/**'
       - 'clickhouse_connect/driver/rustcodec.py'
       - 'clickhouse_connect/driver/rustnumpy.py'
+      - 'tests/integration_tests/conftest.py'
       - 'tests/integration_tests/test_rust_codec.py'
       - '.github/workflows/binding_ci.yml'
   workflow_dispatch:
@@ -47,18 +49,13 @@ jobs:
         working-directory: rust
         run: cargo test --release --locked
 
-  binding-tests:
+  binding-build:
     runs-on: ubuntu-latest
-    name: Build binding and run codec tests
+    name: Build binding and run unit tests
     needs: rust-checks
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Start ClickHouse (latest) in Docker
-        env:
-          CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
-          COMPOSE_PROJECT_NAME: clickhouse-connect-binding-ci
-        run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -86,6 +83,52 @@ jobs:
         run: pytest rust/ch-core-py/tests -n 4
       - name: Run unit tests
         run: pytest tests/unit_tests -n 4
+      - name: Upload the core wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-wheelhouse
+          path: core-wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 7
+
+  binding-tests:
+    runs-on: ubuntu-latest
+    name: Rust codec integration tests CH=${{ matrix.clickhouse-version }}
+    needs: binding-build
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep the server matrix aligned with on_push.yml.
+        clickhouse-version: ['26.3', '26.6', '26.7', '26.8']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Start ClickHouse (${{ matrix.clickhouse-version }}) in Docker
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ matrix.clickhouse-version }}
+          COMPOSE_PROJECT_NAME: clickhouse-connect-binding-ci
+        run: docker compose -f docker-compose.yml up -d --wait clickhouse
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/test_requirements.txt
+      - name: Build cython extensions
+        run: python setup.py build_ext --inplace
+      - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
+        run: python setup.py develop
+      - name: Download the core wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: core-wheelhouse
+          path: core-wheelhouse
+      - name: Install the clickhouse-connect-core wheel
+        run: pip install core-wheelhouse/*.whl
+      - name: Extension smoke check
+        run: python -c "import _ch_core; print(_ch_core.__version__, _ch_core.BINDING_API_VERSION)"
       - name: Run rust codec integration tests
         env:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
