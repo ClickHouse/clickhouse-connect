@@ -45,6 +45,7 @@ class _PresentCore:
 
     __version__ = "0.1.0"
     BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
+    COLUMN_BUFFER_API_VERSION = rustcodec.REQUIRED_COLUMN_BUFFER_API_VERSION
 
 
 def eligible_ctx(**kwargs) -> QueryContext:
@@ -169,19 +170,39 @@ def test_resolve_rust_raises_when_binding_api_too_old(monkeypatch, codec, core):
     assert "pip install --upgrade clickhouse-connect-core" in message
 
 
+@pytest.mark.parametrize("buffer_api_version", [1, 2], ids=["required_buffer_api", "newer_buffer_api"])
 @pytest.mark.parametrize(
     "api_version",
     [rustcodec.REQUIRED_BINDING_API_VERSION, rustcodec.REQUIRED_BINDING_API_VERSION + 1],
     ids=["required", "newer"],
 )
-def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_log, api_version):
+def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_log, api_version, buffer_api_version):
     class _Core:
         __version__ = "0.1.0"
         BINDING_API_VERSION = api_version
+        COLUMN_BUFFER_API_VERSION = buffer_api_version
 
     monkeypatch.setitem(sys.modules, "_ch_core", _Core)
     assert resolve_native_codec("rust") == "rust"
     assert resolve_native_codec("rust_strict") == "rust_strict"
+
+
+@pytest.mark.parametrize("buffer_api_version", [None, 0], ids=["missing", "stale"])
+@pytest.mark.parametrize("codec", ["rust", "rust_strict"])
+def test_resolve_rust_requires_column_buffer_api(monkeypatch, buffer_api_version, codec):
+    class _Core:
+        __version__ = "0.2.0"
+        BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
+
+    if buffer_api_version is not None:
+        _Core.COLUMN_BUFFER_API_VERSION = buffer_api_version
+    monkeypatch.setitem(sys.modules, "_ch_core", _Core)
+
+    with pytest.raises(NotSupportedError, match="requires column buffer API 1 or newer") as excinfo:
+        _make_native_transform(codec)
+    assert "clickhouse-connect-core version 0.2.0" in str(excinfo.value)
+    assert "pip install --upgrade clickhouse-connect-core" in str(excinfo.value)
+    assert resolve_native_codec("python") == "python"
 
 
 def test_built_binding_matches_required_api_version():
@@ -190,6 +211,7 @@ def test_built_binding_matches_required_api_version():
     extension is built; skipped on pure-Python environments."""
     core = pytest.importorskip("_ch_core")
     assert core.BINDING_API_VERSION == rustcodec.REQUIRED_BINDING_API_VERSION
+    assert core.COLUMN_BUFFER_API_VERSION == rustcodec.REQUIRED_COLUMN_BUFFER_API_VERSION
 
 
 def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log):
@@ -203,6 +225,7 @@ def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log)
     assert "native_codec=rust" in message
     assert _PresentCore.__version__ in message
     assert f"binding API {_PresentCore.BINDING_API_VERSION}" in message
+    assert f"column buffer API {_PresentCore.COLUMN_BUFFER_API_VERSION}" in message
     assert common.version() in message
 
 

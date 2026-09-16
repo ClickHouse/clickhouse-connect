@@ -39,6 +39,7 @@ NativeCodec = Literal["python", "rust", "rust_strict"]
 _VALID_CODECS = ("python", "rust", "rust_strict")
 
 REQUIRED_BINDING_API_VERSION = 3
+REQUIRED_COLUMN_BUFFER_API_VERSION = 1
 
 _versions_logged = False
 
@@ -58,10 +59,11 @@ def _log_versions_once(resolved: str, core: Any) -> None:
         return
     _versions_logged = True
     logger.info(
-        "native_codec=%s using clickhouse-connect-core %s (binding API %s), clickhouse-connect %s",
+        "native_codec=%s using clickhouse-connect-core %s (binding API %s, column buffer API %s), clickhouse-connect %s",
         resolved,
         getattr(core, "__version__", "unknown"),
         getattr(core, "BINDING_API_VERSION", 0),
+        getattr(core, "COLUMN_BUFFER_API_VERSION", 0),
         common.version(),
     )
 
@@ -89,6 +91,13 @@ def resolve_native_codec(native_codec: str | None) -> str:
             f"The installed clickhouse-connect-core version {getattr(core, '__version__', 'unknown')} provides "
             f"binding API {api_version}, but this version of clickhouse-connect requires binding API "
             f"{REQUIRED_BINDING_API_VERSION} or newer. Upgrade it with pip install --upgrade clickhouse-connect-core."
+        )
+    buffer_api_version = getattr(core, "COLUMN_BUFFER_API_VERSION", 0)
+    if buffer_api_version < REQUIRED_COLUMN_BUFFER_API_VERSION:
+        raise NotSupportedError(
+            f"The installed clickhouse-connect-core version {getattr(core, '__version__', 'unknown')} provides "
+            f"column buffer API {buffer_api_version}, but this version of clickhouse-connect requires column buffer API "
+            f"{REQUIRED_COLUMN_BUFFER_API_VERSION} or newer. Upgrade it with pip install --upgrade clickhouse-connect-core."
         )
     _log_versions_once(resolved, core)
     return resolved

@@ -19,7 +19,7 @@ The compiled codec ships as a separate wheel named `clickhouse-connect-core`, wh
 pip install "clickhouse-connect[rust,arrow]"
 ```
 
-In 1.8, every Rust path that produces NumPy or Pandas output requires PyArrow. This includes `query_np`, `query_df`, their streaming variants, and `query(..., use_numpy=True)`. Without PyArrow, `native_codec="rust"` logs a warning and runs those queries with the Python codec. `native_codec="rust_strict"` raises `NotSupportedError` instead.
+Every Rust path that produces NumPy or Pandas output currently requires PyArrow. This includes `query_np`, `query_df`, their streaming variants, and `query(..., use_numpy=True)`. Without PyArrow, `native_codec="rust"` logs a warning and runs those queries with the Python codec. `native_codec="rust_strict"` raises `NotSupportedError` instead.
 
 The `rust` extra alone stays lean for applications that use standard Python row results, row or column block streams, and inserts without requesting NumPy or Pandas output. Those paths do not require PyArrow:
 
@@ -27,7 +27,7 @@ The `rust` extra alone stays lean for applications that use standard Python row 
 pip install "clickhouse-connect[rust]"
 ```
 
-The codec, its packaging, and its dependency set are experimental. A smaller Arrow interoperability dependency is being evaluated for a future release.
+The codec, its packaging, and its dependency set are experimental. Direct buffer conversion now handles non-nullable 8-64-bit integers, Float32/64, and Boolean columns. Other conversions still use PyArrow, so this change doesn't remove the PyArrow requirement for NumPy or Pandas queries.
 
 If a Rust codec is selected and the compiled module is not installed, client creation raises a `NotSupportedError` naming this install command.
 
@@ -75,7 +75,7 @@ Malformed Native payloads detected by the Rust codec raise `DataError`.
 
 ## Versioning {#versioning}
 
-`clickhouse-connect-core` versions independently of `clickhouse-connect`. The driver declares a compatible range through the `rust` extra, and the module exports a binding API version that the driver checks when a Rust codec is selected. If the installed wheel is too old for the driver, client creation raises a `NotSupportedError` naming the upgrade command:
+`clickhouse-connect-core` versions independently of `clickhouse-connect`. The `rust` extra requires `clickhouse-connect-core>=0.2.1,<0.3`. The driver checks both the binding API version and the column-buffer capability when a Rust codec is selected. The published core 0.2.0 wheel lacks the column-buffer capability. If the installed wheel is incompatible, client creation raises a `NotSupportedError` for both `rust` and `rust_strict`, with this upgrade command:
 
 ```bash
 pip install --upgrade clickhouse-connect-core

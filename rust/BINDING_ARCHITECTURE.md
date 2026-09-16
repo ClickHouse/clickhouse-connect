@@ -95,7 +95,12 @@ when every chunk is empty.
 ### Private column buffers
 
 `COLUMN_BUFFER_API_VERSION = 1` identifies an additive capability alongside
-the unchanged binding API 3. `ColBatch.column_buffers(index)` returns a list
+the unchanged binding API 3, first packaged in core 0.2.1. The driver checks
+both versions before it selects either Rust codec mode. Non-nullable
+8-64-bit integer, Float32/64, and Boolean converters consume these buffers directly.
+Other converters keep their Arrow or Python-object exits, and the driver
+still requires PyArrow for NumPy/Pandas queries during this migration.
+`ColBatch.column_buffers(index)` returns a list
 of read-only descriptors, one per decoded chunk. Supported types are
 Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,
 DateTime, DateTime64, Time, Time64, and all Interval types, including their

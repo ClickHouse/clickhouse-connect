@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- The Rust codec now converts non-nullable 8-64-bit integers, Float32/64, and Boolean columns to NumPy/Pandas directly from its decoded buffers. Output values and dtypes are unchanged. Other column converters still require PyArrow, so the existing PyArrow requirement for Rust NumPy/Pandas queries remains.
 - Native Map reads now support the opt-in `pairs` format, which returns a list of key/value tuples and preserves duplicate keys and the sequence returned by the server. The default remains a dictionary. The format also applies to nested Maps and NumPy/Pandas results. Native Map inserts still require dictionaries and raise `DataError` for pair lists. Closes [#949](https://github.com/ClickHouse/clickhouse-connect/issues/949).
 - SQLAlchemy multi-row `Insert.values()` statements now compile and execute. Rows can be dictionaries, tuples in table column order, or rows containing SQL expressions, with client-side or server-side bind parameters. This also enables Pandas `to_sql(method="multi")`. See the SQLAlchemy documentation for column selection rules and the bind parameter ceiling that applies to server-side parameters on ClickHouse 26.4 and newer. Closes [#1024](https://github.com/ClickHouse/clickhouse-connect/issues/1024).
 - The Rust codec no longer starts a read-ahead thread for responses that fit in a single chunk. The first chunk is delivered immediately, and the thread starts only after the consumer requests and receives a second chunk. This removes a per-query cost that made many small concurrent queries slower than the Python codec.
@@ -27,6 +28,7 @@
 
 ### Compatibility
 
+- The Rust extra now requires `clickhouse-connect-core>=0.2.1,<0.3`. Rust codec setup checks the column buffer API separately from the binding API and reports upgrade guidance for older core wheels.
 - The package now declares its license with the PEP 639 `license_expression` field, and the deprecated `License :: OSI Approved :: Apache Software License` classifier has been removed. Built metadata carries `License-Expression: Apache-2.0` and `License-File: LICENSE`. Building from source now requires `setuptools>=77.0.3`. Closes [#996](https://github.com/ClickHouse/clickhouse-connect/issues/996).
 
 ## 1.8.0, 2026-09-02

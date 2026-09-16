@@ -1,6 +1,6 @@
 [package]
 name = "ch-core-py"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "PyO3 binding crate for the clickhouse-connect-core wheel"
 license = "Apache-2.0"

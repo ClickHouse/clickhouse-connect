@@ -1550,6 +1550,46 @@ def test_rust_codec_empty_df_parity(client_factory, call):
     pd.testing.assert_frame_equal(call(rust_client.query_df, query), call(python_client.query_df, query))
 
 
+@pytest.mark.parametrize("mixed", [False, True], ids=["homogeneous", "mixed"])
+def test_rust_codec_buffer_numeric_results(client_factory, call, consume_stream, mixed):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    extra = ", CAST(number % 3 AS Bool) AS b, toDate(number) AS d, toString(number) AS s" if mixed else ", toInt32(number) AS n"
+    query = f"SELECT toInt32(toInt64(number) - 13) AS i{extra} FROM numbers(79)"
+    settings = {"max_block_size": 7}
+
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    assert rust_np.flags.writeable
+    if mixed:
+        rust_np["i"][0] = 79
+    else:
+        rust_np[0, 0] = 79
+    for extended in (False, True):
+        rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        pd.testing.assert_frame_equal(rust_df, python_df)
+        assert [getattr(dtype, "byteorder", None) for dtype in rust_df.dtypes] == [
+            getattr(dtype, "byteorder", None) for dtype in python_df.dtypes
+        ]
+        rust_df.iloc[0, 0] = 79
+
+    numpy_blocks = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), numpy_blocks.append)
+    assert len(numpy_blocks) > 1
+    np.testing.assert_array_equal(np.concatenate(numpy_blocks), python_np)
+    assert all(block.flags.writeable for block in numpy_blocks)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=True), frames.append)
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    for frame in frames:
+        frame.iloc[0, 0] = 79
+
+
 def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):
     pytest.importorskip("pandas")
     rust_client = client_factory(native_codec="rust_strict")

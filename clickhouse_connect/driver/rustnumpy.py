@@ -3,13 +3,14 @@
 The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds with the timezone dropped,
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
-the Python codec by construction. Non-nullable numeric and temporal columns take the Arrow exit. Time and
-Time64 keep their declared duration units through NumPy and extended pandas output. Extended pandas output
-builds String columns from the Arrow buffers. Other strings, enums, and remaining nullable columns take the rust
-python-object exit and are finalized through the driver's own _finalize_column.
+the Python codec by construction. Non-nullable 8-64-bit integers, Float32/64, and Booleans use typed buffers.
+Temporal columns take the Arrow exit. Time and Time64 keep their declared duration units through NumPy and
+extended pandas output. Extended pandas output builds String columns from the Arrow buffers. Other strings,
+enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
 """
 
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from typing import Any, cast
 
@@ -30,6 +31,8 @@ logger: logging.Logger = logging.getLogger(__name__)
 BlockConverter = Callable[[Any, Any, int], Any]
 
 _TIME64_UNITS = {0: "s", 3: "ms", 6: "us", 9: "ns"}
+_NUMERIC_BUFFER_TYPES = frozenset({"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64"})
+_NUMERIC_BUFFER_KINDS = frozenset(name.lower() for name in _NUMERIC_BUFFER_TYPES)
 _COMPOUND_JSON_BINARY_TYPE_INDEXES = frozenset({0x1E, 0x1F, 0x20, 0x23, 0x26, 0x27, 0x2B, 0x30})
 
 
@@ -145,6 +148,36 @@ def _arrow_column(arrow_table: Any, index: int) -> Any:
 
 def _numeric_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
     return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
+
+
+def _buffer_values(column: Any) -> Any:
+    """View a primitive descriptor, or unpack its Boolean bits."""
+    if column.kind == "bool_bitmap":
+        packed = options.np.frombuffer(column.values, dtype="uint8")
+        return options.np.unpackbits(packed, count=column.length, bitorder="little").view(options.np.bool_)
+    if column.kind not in _NUMERIC_BUFFER_KINDS:
+        raise NotImplementedError(f"Unsupported column buffer kind {column.kind!r}")
+    dtype = options.np.dtype(column.kind)
+    if column.byteorder != sys.byteorder:
+        dtype = dtype.newbyteorder()
+    return options.np.frombuffer(column.values, dtype=dtype, count=column.length)
+
+
+def _make_numeric_buffer_convert(ch_type: ClickHouseType) -> BlockConverter:
+    dtype = options.np.dtype(ch_type.np_type)
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        chunks = [_buffer_values(column) for column in columns]
+        if not chunks:
+            return options.np.empty(0, dtype=dtype)
+        if len(chunks) == 1:
+            return chunks[0]
+        return options.np.concatenate(chunks)
+
+    return convert
 
 
 def _make_bfloat16_convert(as_extended_pandas: bool) -> BlockConverter:
@@ -682,6 +715,7 @@ def _np_kind(ch_type: ClickHouseType) -> str | None:
 
 
 def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Converter:
+    declared_nullable = ch_type.nullable
     # SimpleAggregateFunction is a name-decoration alias: convert as the element type, matching both the
     # rust core's physical_delegate expansion and the Python codec's delegated read.
     if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
@@ -724,6 +758,8 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
             return _Converter(True, _make_datetime_convert(context.as_pandas, context.active_tz(ch_type.tzinfo)))
         if isinstance(ch_type, Date):  # Date32 subclasses Date
             return _Converter(True, _make_date_convert(context.as_pandas))
+        if not declared_nullable and (ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean")):
+            return _Converter(False, _make_numeric_buffer_convert(ch_type))
         if _np_kind(ch_type) in ("i", "u", "f", "b"):
             return _Converter(True, _numeric_convert)
     elif ch_type.nullable and not ch_type.low_card and context.as_pandas and context.use_extended_dtypes:
