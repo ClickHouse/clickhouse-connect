@@ -135,7 +135,7 @@ impl ColBatch {
             .collect()
     }
 
-    /// Private scalar buffer descriptors, one per decoded chunk, or None
+    /// Private column buffer descriptors, one per decoded chunk, or None
     /// for unsupported storage. Buffers retain only their source chunk.
     fn column_buffers(&self, py: Python<'_>, index: usize) -> PyResult<Option<Vec<ColumnBuffers>>> {
         column_buffers(py, &self.inner, index)

@@ -56,6 +56,7 @@ def test_scalar_buffers(type_name, kind, format_code, source, wrapper):
     assert column.kind == kind
     assert column.length == len(values)
     assert column.null_count == values.count(None)
+    assert column.offsets is None and column.child is None
     assert view.readonly and view.format == "B" and view.itemsize == 1
     expected = [0 if value is None else value for value in values]
     if kind == "bool_bitmap":
@@ -318,9 +319,11 @@ def test_numeric_aliases(type_name, values, validity):
         ("Array(Int32)", [[13]]),
         ("Tuple(Int32)", [(13,)]),
         ("Array(Tuple(Int32))", [[(13,)]]),
-        ("Array(Time64(9))", [[13]]),
         ("Tuple(Time64(9))", [(13,)]),
         ("Array(Tuple(Time64(9)))", [[(13,)]]),
+        ("Tuple(Time)", [(13,)]),
+        ("Array(Tuple(Time))", [[(13,)]]),
+        ("LowCardinality(Time)", [13]),
         ("LowCardinality(String)", ["user_1"]),
         ("LowCardinality(Int32)", [13]),
         ("Nullable(String)", [None]),
@@ -332,7 +335,7 @@ def test_unsupported_storage_is_distinct_from_empty(type_name, values, empty):
     assert batch.column_buffers(0) is None
 
 
-@pytest.mark.parametrize("type_name,value", [("Bool", True), ("BFloat16", 1.25), ("Date", 13), ("Time", 13), ("IntervalSecond", 13)])
+@pytest.mark.parametrize("type_name,value", [("Bool", True), ("BFloat16", 1.25), ("Date", 13), ("DateTime", 13), ("IntervalSecond", 13)])
 @pytest.mark.parametrize("wrapper", ["Array({})", "Tuple({})", "Array(Tuple({}))", "LowCardinality({})"])
 @pytest.mark.parametrize("empty", [False, True])
 def test_nested_scalar_storage_is_unsupported(type_name, value, wrapper, empty):

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use ch_core_rs::batch::{ChunkedBatch, ColBatch};
 use ch_core_rs::bitmap::Bitmap;
-use ch_core_rs::column::{Column, PrimitiveColumn};
+use ch_core_rs::column::{ArrayColumn, Column, PrimitiveColumn};
 use ch_core_rs::schema::ChType;
 use pyo3::exceptions::{PyBufferError, PyValueError};
 use pyo3::ffi;
@@ -15,19 +15,22 @@ use pyo3::prelude::*;
 #[pyclass(name = "_ColumnBuffers", frozen, get_all)]
 pub(crate) struct ColumnBuffers {
     kind: &'static str,
-    // Bool packs one bit per row and reports itemsize 0.
+    // Bool and Array report 0.
     itemsize: usize,
     byteorder: &'static str,
     length: usize,
     null_count: usize,
-    values: Py<Buffer>,
+    values: Option<Py<Buffer>>,
     validity: Option<Py<Buffer>>,
+    offsets: Option<Py<Buffer>>,
+    child: Option<Py<ColumnBuffers>>,
 }
 
 #[derive(Clone, Copy)]
 enum Selection {
     Values,
     Validity,
+    Offsets,
 }
 
 /// No pointers or Python references are stored here. An exported view pins
@@ -36,6 +39,7 @@ enum Selection {
 struct Buffer {
     chunk: Arc<ColBatch>,
     index: usize,
+    array_depth: usize,
     selection: Selection,
 }
 
@@ -71,15 +75,31 @@ impl Buffer {
 
 impl Buffer {
     fn data(&self) -> Result<BufferData, &'static str> {
-        let column = self
+        let mut column = self
             .chunk
             .columns
             .get(self.index)
             .ok_or("Missing buffer column")?;
-        let scalar = scalar_column(column).ok_or("Unsupported buffer storage")?;
+        for _ in 0..self.array_depth {
+            let Column::Array(array) = column else {
+                return Err("Missing array buffer child");
+            };
+            column = &array.values;
+        }
         match self.selection {
-            Selection::Values => scalar.values,
+            Selection::Offsets => {
+                let Column::Array(array) = column else {
+                    return Err("Missing array offsets");
+                };
+                offset_buffer(array)
+            }
+            Selection::Values => {
+                scalar_column(column)
+                    .ok_or("Unsupported buffer storage")?
+                    .values
+            }
             Selection::Validity => {
+                let scalar = scalar_column(column).ok_or("Unsupported buffer storage")?;
                 let bitmap = scalar.validity.ok_or("Missing validity buffer")?;
                 validity_buffer(bitmap)
             }
@@ -213,6 +233,157 @@ fn validate_scalar(column: &ScalarColumn<'_>, kind: &str, rows: usize) -> Result
     Ok(())
 }
 
+struct BufferLayout {
+    array_depth: usize,
+    leaf_kind: &'static str,
+}
+
+fn buffer_layout(mut ch_type: &ChType) -> Option<BufferLayout> {
+    if let Some(leaf_kind) = scalar_kind(ch_type) {
+        return Some(BufferLayout {
+            array_depth: 0,
+            leaf_kind,
+        });
+    }
+    let mut array_depth = 0_usize;
+    let mut nullable_leaf = false;
+    loop {
+        match ch_type {
+            ChType::SimpleAggregateFunction { inner, .. } => ch_type = inner,
+            ChType::Array(inner) if !nullable_leaf => {
+                array_depth = array_depth.checked_add(1)?;
+                ch_type = inner;
+            }
+            ChType::Nullable(inner) if array_depth > 0 && !nullable_leaf => {
+                nullable_leaf = true;
+                ch_type = inner;
+            }
+            ChType::Time if array_depth > 0 => {
+                return Some(BufferLayout {
+                    array_depth,
+                    leaf_kind: "int32",
+                });
+            }
+            ChType::Time64 { .. } if array_depth > 0 => {
+                return Some(BufferLayout {
+                    array_depth,
+                    leaf_kind: "int64",
+                });
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn offset_buffer(array: &ArrayColumn) -> Result<BufferData, &'static str> {
+    BufferData::new(
+        array.offsets.as_ptr().cast(),
+        array.offsets.len(),
+        std::mem::size_of::<i64>(),
+    )
+}
+
+fn validate_offsets(
+    array: &ArrayColumn,
+    rows: usize,
+    child_length: usize,
+) -> Result<(), &'static str> {
+    let count = rows
+        .checked_add(1)
+        .ok_or("Array offset count overflows usize")?;
+    if array.offsets.len() != count {
+        return Err("Array offset count differs from the row count plus one");
+    }
+    if array.offsets.first() != Some(&0) {
+        return Err("Array offsets must start at zero");
+    }
+    let mut previous = 0;
+    for &offset in &array.offsets {
+        let offset = usize::try_from(offset).map_err(|_| "Array offset is outside usize bounds")?;
+        if offset < previous || offset > child_length {
+            return Err("Array offsets must be ordered and within the child length");
+        }
+        previous = offset;
+    }
+    if previous != child_length {
+        return Err("Final array offset differs from the child length");
+    }
+    offset_buffer(array)?;
+    Ok(())
+}
+
+fn column_descriptor(
+    py: Python<'_>,
+    chunk: &Arc<ColBatch>,
+    index: usize,
+    column: &Column,
+    array_depth: usize,
+    layout: &BufferLayout,
+) -> PyResult<ColumnBuffers> {
+    let owner = |selection| {
+        Py::new(
+            py,
+            Buffer {
+                chunk: Arc::clone(chunk),
+                index,
+                array_depth,
+                selection,
+            },
+        )
+    };
+    if array_depth < layout.array_depth {
+        let Column::Array(array) = column else {
+            return Err(PyValueError::new_err(
+                "Array buffer storage differs from the schema",
+            ));
+        };
+        let length = if array_depth == 0 {
+            chunk.num_rows
+        } else {
+            array
+                .offsets
+                .len()
+                .checked_sub(1)
+                .ok_or_else(|| PyValueError::new_err("Missing array offsets"))?
+        };
+        let child = column_descriptor(py, chunk, index, &array.values, array_depth + 1, layout)?;
+        validate_offsets(array, length, child.length).map_err(PyValueError::new_err)?;
+        return Ok(ColumnBuffers {
+            kind: "array",
+            itemsize: 0,
+            byteorder: "not-applicable",
+            length,
+            null_count: 0,
+            values: None,
+            validity: None,
+            offsets: Some(owner(Selection::Offsets)?),
+            child: Some(Py::new(py, child)?),
+        });
+    }
+    let scalar = scalar_column(column)
+        .ok_or_else(|| PyValueError::new_err("Scalar buffer storage differs from the schema"))?;
+    let rows = if array_depth == 0 {
+        chunk.num_rows
+    } else {
+        scalar.length
+    };
+    validate_scalar(&scalar, layout.leaf_kind, rows).map_err(PyValueError::new_err)?;
+    Ok(ColumnBuffers {
+        kind: layout.leaf_kind,
+        itemsize: scalar.itemsize,
+        byteorder: scalar.byteorder,
+        length: scalar.length,
+        null_count: scalar.validity.map_or(0, Bitmap::null_count),
+        values: Some(owner(Selection::Values)?),
+        validity: scalar
+            .validity
+            .map(|_| owner(Selection::Validity))
+            .transpose()?,
+        offsets: None,
+        child: None,
+    })
+}
+
 pub(crate) fn column_buffers(
     py: Python<'_>,
     batch: &ChunkedBatch,
@@ -224,7 +395,7 @@ pub(crate) fn column_buffers(
             batch.num_columns()
         ))
     })?;
-    let Some(kind) = scalar_kind(&field.ch_type) else {
+    let Some(layout) = buffer_layout(&field.ch_type) else {
         return Ok(None);
     };
     let mut descriptors = Vec::with_capacity(batch.chunks.len());
@@ -234,32 +405,14 @@ pub(crate) fn column_buffers(
                 "Chunk column count differs from the schema",
             ));
         }
-        let scalar = scalar_column(&chunk.columns[index]).ok_or_else(|| {
-            PyValueError::new_err("Scalar buffer storage differs from the schema")
-        })?;
-        validate_scalar(&scalar, kind, chunk.num_rows).map_err(PyValueError::new_err)?;
-        let owner = |selection| {
-            Py::new(
-                py,
-                Buffer {
-                    chunk: Arc::clone(chunk),
-                    index,
-                    selection,
-                },
-            )
-        };
-        descriptors.push(ColumnBuffers {
-            kind,
-            itemsize: scalar.itemsize,
-            byteorder: scalar.byteorder,
-            length: scalar.length,
-            null_count: scalar.validity.map_or(0, Bitmap::null_count),
-            values: owner(Selection::Values)?,
-            validity: scalar
-                .validity
-                .map(|_| owner(Selection::Validity))
-                .transpose()?,
-        });
+        descriptors.push(column_descriptor(
+            py,
+            chunk,
+            index,
+            &chunk.columns[index],
+            0,
+            &layout,
+        )?);
     }
     Ok(Some(descriptors))
 }
@@ -281,6 +434,176 @@ mod tests {
             vec![Column::Int64(PrimitiveColumn::new(values))],
             rows,
         ))
+    }
+
+    fn temporal_array_chunk(outer_offsets: Vec<i64>, inner_offsets: Vec<i64>) -> Arc<ColBatch> {
+        Arc::new(ColBatch {
+            schema: Schema::new(vec![Field {
+                name: "v".into(),
+                ch_type: ChType::Array(Box::new(ChType::Array(Box::new(ChType::Nullable(
+                    Box::new(ChType::Time64 { precision: 9 }),
+                ))))),
+            }]),
+            columns: vec![Column::Array(ArrayColumn::new(
+                outer_offsets,
+                Column::Array(ArrayColumn::new(
+                    inner_offsets,
+                    Column::Time64(PrimitiveColumn::new_nullable(
+                        vec![13, 0, 79],
+                        Bitmap::from_ch_null_map(&[0, 1, 0]),
+                    )),
+                )),
+            ))],
+            num_rows: 2,
+        })
+    }
+
+    #[test]
+    fn validates_array_offsets_before_export() {
+        for (offsets, rows, child_length, message) in [
+            (vec![], 0, 0, "count differs"),
+            (vec![0, 1], 0, 1, "count differs"),
+            (vec![1, 1], 1, 1, "start at zero"),
+            (vec![0, -1], 1, 0, "outside usize"),
+            (vec![0, 2, 1], 2, 2, "ordered and within"),
+            (vec![0, 1], 1, 2, "Final array offset"),
+            (vec![0, 3], 1, 2, "ordered and within"),
+            (vec![0], usize::MAX, 0, "overflows usize"),
+        ] {
+            let column = ArrayColumn::new(offsets, Column::Time(PrimitiveColumn::new(vec![])));
+            let error = validate_offsets(&column, rows, child_length).unwrap_err();
+            assert!(error.contains(message), "{error}");
+        }
+        for (offsets, rows, child_length) in [(vec![0], 0, 0), (vec![0, 0, 2, 2], 3, 2)] {
+            let column = ArrayColumn::new(offsets, Column::Time(PrimitiveColumn::new(vec![])));
+            assert!(validate_offsets(&column, rows, child_length).is_ok());
+        }
+        let time = ChType::Time;
+        assert!(
+            buffer_layout(&ChType::Nullable(Box::new(ChType::Array(Box::new(
+                time.clone()
+            )))))
+            .is_none()
+        );
+        assert!(
+            buffer_layout(&ChType::Array(Box::new(ChType::Nullable(Box::new(
+                ChType::Array(Box::new(time))
+            )))))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn every_array_selection_pins_only_source_chunk_until_final_release() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (array_depth, selection) in [
+                (0, Selection::Offsets),
+                (1, Selection::Offsets),
+                (2, Selection::Values),
+                (2, Selection::Validity),
+            ] {
+                let first = temporal_array_chunk(vec![0, 1, 2], vec![0, 2, 3]);
+                let other = temporal_array_chunk(vec![0, 0, 2], vec![0, 1, 3]);
+                let first_weak = Arc::downgrade(&first);
+                let other_weak = Arc::downgrade(&other);
+                let mut source = &first.columns[0];
+                for _ in 0..array_depth {
+                    let Column::Array(array) = source else {
+                        unreachable!()
+                    };
+                    source = &array.values;
+                }
+                let expected_ptr = match (source, selection) {
+                    (Column::Array(array), Selection::Offsets) => array.offsets.as_ptr().cast(),
+                    (Column::Time64(column), Selection::Values) => column.values.as_ptr().cast(),
+                    (Column::Time64(column), Selection::Validity) => {
+                        column.validity.as_ref().unwrap().as_bytes().as_ptr().cast()
+                    }
+                    _ => unreachable!(),
+                };
+                let batch = ChunkedBatch {
+                    schema: first.schema.clone(),
+                    chunks: vec![first, other],
+                };
+                let descriptors = column_buffers(py, &batch, 0).unwrap().unwrap();
+                let mut descriptor = &descriptors[0];
+                for _ in 0..array_depth {
+                    descriptor = descriptor.child.as_ref().unwrap().bind(py).get();
+                }
+                let owner = match selection {
+                    Selection::Offsets => &descriptor.offsets,
+                    Selection::Values => &descriptor.values,
+                    Selection::Validity => &descriptor.validity,
+                }
+                .as_ref()
+                .unwrap()
+                .bind(py);
+                assert_eq!(owner.get().data().unwrap().ptr, expected_ptr);
+                let view = PyMemoryView::from(owner).unwrap();
+                let expected: Vec<u8> = view.call_method0("tobytes").unwrap().extract().unwrap();
+                let slice = view.get_item(PySlice::new(py, 0, 1, 1)).unwrap();
+                drop(view);
+                drop(descriptors);
+                drop(batch);
+                assert!(first_weak.upgrade().is_some());
+                assert!(other_weak.upgrade().is_none());
+                let actual: Vec<u8> = slice.call_method0("tobytes").unwrap().extract().unwrap();
+                assert_eq!(actual, expected[..1]);
+                drop(slice);
+                assert!(first_weak.upgrade().is_none());
+            }
+        });
+    }
+
+    #[test]
+    fn malformed_array_releases_previously_allocated_descriptors() {
+        Python::initialize();
+        Python::attach(|py| {
+            // Every layout except the empty inner offsets fails after leaf owners exist.
+            let mut malformed: Vec<_> = [
+                (vec![0, 1, 1], vec![0, 2, 3]),
+                (vec![0, 0, 0], vec![]),
+                (vec![0, 0, 0], vec![0]),
+                (vec![0, 1, 2], vec![0, 1, 2]),
+            ]
+            .into_iter()
+            .map(|(outer, inner)| temporal_array_chunk(outer, inner))
+            .collect();
+            for leaf in [
+                Column::Time(PrimitiveColumn::new(vec![13, 0, 79])),
+                Column::Time64(PrimitiveColumn::new_nullable(
+                    vec![13, 0, 79],
+                    Bitmap::all_valid(2),
+                )),
+            ] {
+                let mut broken = temporal_array_chunk(vec![0, 1, 2], vec![0, 2, 3]);
+                let mut column = &mut Arc::get_mut(&mut broken).unwrap().columns[0];
+                for _ in 0..2 {
+                    let Column::Array(array) = column else {
+                        unreachable!()
+                    };
+                    column = &mut array.values;
+                }
+                *column = leaf;
+                malformed.push(broken);
+            }
+            for broken in malformed {
+                let first = temporal_array_chunk(vec![0, 1, 2], vec![0, 2, 3]);
+                let first_weak = Arc::downgrade(&first);
+                let broken_weak = Arc::downgrade(&broken);
+                let batch = ChunkedBatch {
+                    schema: first.schema.clone(),
+                    chunks: vec![first, broken],
+                };
+                assert!(column_buffers(py, &batch, 0).is_err());
+                assert_eq!(Arc::strong_count(&batch.chunks[0]), 1);
+                assert_eq!(Arc::strong_count(&batch.chunks[1]), 1);
+                drop(batch);
+                assert!(first_weak.upgrade().is_none());
+                assert!(broken_weak.upgrade().is_none());
+            }
+        });
     }
 
     #[test]
@@ -344,6 +667,7 @@ mod tests {
                         rows,
                     )),
                     index: 0,
+                    array_depth: 0,
                     selection: Selection::Values,
                 };
                 let data = buffer.data().unwrap();
@@ -387,6 +711,7 @@ mod tests {
                     rows,
                 )),
                 index: 0,
+                array_depth: 0,
                 selection: Selection::Validity,
             };
             let data = buffer.data().unwrap();
@@ -419,6 +744,7 @@ mod tests {
                 Buffer {
                     chunk: chunk(vec![13]),
                     index: 0,
+                    array_depth: 0,
                     selection: Selection::Values,
                 },
             )
@@ -463,7 +789,7 @@ mod tests {
                 chunks: vec![first, second],
             };
             let descriptors = column_buffers(py, &batch, 0).unwrap().unwrap();
-            let owner = descriptors[0].values.bind(py);
+            let owner = descriptors[0].values.as_ref().unwrap().bind(py);
             assert_eq!(owner.get().data().unwrap().ptr, expected_ptr);
             let view = PyMemoryView::from(owner).unwrap();
             let slice = view.get_item(PySlice::new(py, 8, 16, 1)).unwrap();

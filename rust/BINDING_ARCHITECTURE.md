@@ -22,7 +22,7 @@ inspects wire bytes.
                         ColBatch
           Arc-shared, immutable, chunked columnar memory
             /                     |                      \
-      [Arrow exit]       [Scalar buffer exit]      [Python object exit]
+      [Arrow exit]       [Column buffer exit]      [Python object exit]
    __arrow_c_stream__      column_buffers          to_python_rows / columns
    pointer handoff         read-only buffers       one PyObject per cell
             |                     |                      |
@@ -41,7 +41,7 @@ Three ideas carry the design:
    raw buffer pointers and costs near zero at any row count. The Python
    object exit allocates one object per cell and dominates decode itself.
    The driver currently uses the Arrow exit for numeric NumPy/Pandas
-   conversion. A private scalar buffer exit also exposes the same memory
+   conversion. A private column buffer exit also exposes the same memory
    without an Arrow Python package, ready for later driver integration.
    Use these exits for buffer-compatible dataframe columns. Never round-trip
    those columns through Python objects to reach a dataframe.
@@ -92,20 +92,25 @@ when every chunk is empty.
 
 ## Exits
 
-### Private scalar buffers
+### Private column buffers
 
 `COLUMN_BUFFER_API_VERSION = 1` identifies an additive capability alongside
 the unchanged binding API 3. `ColBatch.column_buffers(index)` returns a list
 of read-only descriptors, one per decoded chunk. Supported types are
 Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,
 DateTime, DateTime64, Time, Time64, and all Interval types, including their
-nullable forms and SimpleAggregateFunction aliases. Other types, including
-arrays and dictionaries, return `None`. Invalid indices and malformed
-supported storage raise instead of selecting an object fallback.
+nullable forms and SimpleAggregateFunction aliases. Array chains ending in
+Time or Time64 are also supported, with optional nullable leaves and
+SimpleAggregateFunction aliases at any level. Other types, including other
+array layouts and all dictionaries, return `None`. Consumers must treat an
+unrecognized `kind` as unsupported. Invalid indices and malformed supported
+storage raise instead of selecting an object fallback.
 
 Each descriptor contains `kind`, `itemsize`, `byteorder`, `length` in rows,
-`null_count`, `values`, and optional `validity`. Logical ClickHouse types
-stay in the batch schema. The physical layouts are:
+`null_count`, the optional buffers `values`, `validity`, and `offsets`, and
+an optional `child` descriptor. Scalar descriptors always carry `values` and
+report `None` for offsets and child. Logical ClickHouse types stay in the batch
+schema. Scalar layouts are:
 
 | ClickHouse type | `kind` | `itemsize` in bytes | `byteorder` |
 |---|---|---|---|
@@ -131,12 +136,35 @@ bit per row, least significant bit first, where 1 means valid. Unused tail
 bits have no meaning. Ignore values in null rows. Descriptors have no Python
 constructor or writable properties.
 
+Array descriptors report `kind="array"`, `itemsize=0`, and
+`byteorder="not-applicable"`. Their length is the number of arrays, their
+null count is zero, and values and validity are `None`. The offsets buffer
+contains exactly `length + 1` native-endian signed Int64 values. Offsets
+start at zero, never decrease, and count elements in the child descriptor.
+The last offset equals `child.length`. Empty rows repeat an offset. A
+preserved empty chunk has the single offset `[0]` and a typed empty child.
+
+The child describes flattened elements and may itself be an array. For
+example, `Array(Array(Nullable(Time64(9))))` has two offset levels and an
+Int64 leaf with its own validity bitmap. Nullability applies only to the
+leaf. Nullable array nodes and other nested types aren't supported.
+Each chunk has its own offsets starting at zero. Consumers must rebuild
+each chunk's rows before concatenating results.
+
 Each buffer holds an `Arc` to its source chunk. Views and derived slices
 remain valid after the batch or decoder is dropped. A retained view pins
 the whole source chunk, including other columns, but doesn't pin other
-chunks or transport resources. The final view releases that ownership.
+chunks or transport resources. Array offset and child buffers each retain
+the same source chunk independently, without retaining parent descriptors.
+The final view releases that ownership.
 Chunks are never concatenated here. A supported schema with no chunks
 returns `[]`. A preserved empty chunk gets a zero-length descriptor.
+
+Array descriptor construction checks offset count, start, ordering, bounds,
+final child extent, and buffer byte lengths. It also validates each child.
+Each buffer stores a root column index, array depth, and buffer selection.
+Exports re-resolve that selection through immutable storage. They don't
+repeat the offset scan, and scalar exports don't scan array offsets.
 
 This capability doesn't change the driver converters, dependency requirements,
 or public output writeability. Later adapters must copy where the public
