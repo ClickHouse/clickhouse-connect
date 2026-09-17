@@ -299,6 +299,71 @@ def _make_datetime_convert(ch_type: DateTimeBase, as_pandas: bool, active_tz: An
     return convert
 
 
+def _make_nullable_datetime_pandas_convert(
+    ch_type: DateTimeBase, extended: bool, active_tz: Any, object_convert: BlockConverter
+) -> BlockConverter:
+    """Keep nanosecond ticks without changing all-null column inference."""
+    dtype = options.np.dtype(ch_type.np_type)
+    safe_min = options.np.datetime64(-(2**63) + 1, "ns") + options.np.timedelta64(1, "D")
+    safe_max = options.np.datetime64(2**63 - 1, "ns") - options.np.timedelta64(1, "D")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        values, null_count = _temporal_buffer_values(col_batch, index, dtype)
+        if null_count == len(values):
+            return values if extended else [None] * len(values)
+        if active_tz is not None:
+            result = options.pd.DatetimeIndex(values, tz="UTC").tz_convert(active_tz)
+            edges = options.np.flatnonzero((values < safe_min) | (values > safe_max))
+            if len(edges) and not _boxes_in_range(result, edges):
+                # Timezone-local scalar values can exceed the nanosecond range.
+                return object_convert(_arrow_table, col_batch, index)
+            return result
+        return values
+
+    return convert
+
+
+def _boxes_in_range(index: Any, positions: Any) -> bool:
+    try:
+        for position in positions.tolist():
+            _ = index[position]
+    except options.pd.errors.OutOfBoundsDatetime:
+        return False
+    return True
+
+
+def _make_nullable_datetime_numpy_convert(ch_type: DateTimeBase) -> BlockConverter:
+    dtype = options.np.dtype(ch_type.np_type)
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        # List output keeps the codec's object dtype metadata and two-dimensional result layout.
+        result: list[Any] = []
+        for column in columns:
+            if column.null_count == column.length:
+                result.extend([None] * column.length)
+                continue
+            values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+            if not column.null_count:
+                result.extend(values)
+            elif column.null_count * 3 > column.length:
+                # Above one third NULL, scatter scalars only at valid positions.
+                objects = options.np.empty(column.length, dtype=object)
+                valid = options.np.logical_not(_buffer_null_mask(column))
+                objects[valid] = list(values[valid])
+                result.extend(objects.tolist())
+            else:
+                chunk = list(values)
+                for null_index in options.np.flatnonzero(_buffer_null_mask(column)).tolist():
+                    chunk[null_index] = None
+                result.extend(chunk)
+        return result
+
+    return convert
+
+
 def _pandas_infers_ns_timedeltas() -> bool:
     """pandas < 3 infers timedelta64[ns] for the object arrays the Python codec's nullable
     temporal path hands to the DataFrame constructor. pandas >= 3 keeps the scalar unit."""
@@ -786,6 +851,14 @@ def _numeric_buffer_type(ch_type: ClickHouseType) -> ClickHouseType | None:
     return None
 
 
+def _datetime_buffer_type(ch_type: ClickHouseType) -> tuple[DateTimeBase, bool] | None:
+    nullable = ch_type.nullable
+    while isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
+        ch_type = ch_type.element_type
+        nullable = nullable or ch_type.nullable
+    return (ch_type, nullable) if isinstance(ch_type, DateTimeBase) and not ch_type.low_card else None
+
+
 def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Converter:
     declared_nullable = ch_type.nullable
     # SimpleAggregateFunction is a name-decoration alias: convert as the element type, matching both the
@@ -793,6 +866,20 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
     _validate_time64_units(ch_type)
+    datetime_buffer_type = _datetime_buffer_type(ch_type)
+    if datetime_buffer_type is not None:
+        datetime_type, nullable = datetime_buffer_type
+        np_type = datetime_type.np_type
+        if nullable and np_type == "datetime64[ns]":
+            if not context.as_pandas:
+                return _Converter(False, _make_nullable_datetime_numpy_convert(datetime_type))
+            extended = context.use_extended_dtypes and isinstance(ch_type, DateTimeBase)
+            return _Converter(
+                False,
+                _make_nullable_datetime_pandas_convert(
+                    datetime_type, extended, context.active_tz(datetime_type.tzinfo), _make_object_convert(ch_type, context)
+                ),
+            )
     if isinstance(ch_type, BFloat16) and not ch_type.low_card:
         extended = ch_type.nullable and context.as_pandas and context.use_extended_dtypes
         return _Converter(False, _make_bfloat16_convert(extended))

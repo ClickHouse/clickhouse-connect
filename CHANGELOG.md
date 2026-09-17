@@ -12,6 +12,7 @@
 
 ### Bug Fixes
 
+- Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
 - Arrow `insert_arrow` / `insert_df_arrow` now quote table and database identifiers the same way `insert()` does, so hyphenated and other names that need backquotes work on both the sync and async clients. Closes [#1014](https://github.com/ClickHouse/clickhouse-connect/issues/1014).
 - Queries whose text only appears to end in `LIMIT 0` because of `//` comments, quoted identifiers, or escaped string contents no longer take the columns-only metadata path and discard returned rows. Metadata probes now confirm a real trailing `LIMIT 0` against the bound SQL, including chDB, while binary-bound queries use the normal Native path. If a probe still returns rows, as with some `UNION`, `EXCEPT`, or `EXPLAIN` queries, the client raises `InternalError` after one execution without replaying the query. Use `raw_query()` to retrieve results for those queries. This addresses the false metadata-probe cases in [#925](https://github.com/ClickHouse/clickhouse-connect/issues/925).
@@ -29,6 +30,7 @@
 
 ### Compatibility
 
+- Rust NumPy object columns for nullable scalar `DateTime64(9)` now contain `numpy.datetime64` cells at UTC nanosecond resolution instead of Python `datetime` cells. SQL NULL stays `None`. Use `query_df` to retain named timezone metadata. Pandas datetime output now uses nanoseconds instead of Pandas 3's microseconds, while existing object dtypes from all-null blocks remain.
 - The Rust extra now requires `clickhouse-connect-core>=0.2.1,<0.3`. Rust codec setup checks the column buffer API separately from the binding API and reports upgrade guidance for older core wheels.
 - The package now declares its license with the PEP 639 `license_expression` field, and the deprecated `License :: OSI Approved :: Apache Software License` classifier has been removed. Built metadata carries `License-Expression: Apache-2.0` and `License-File: LICENSE`. Building from source now requires `setuptools>=77.0.3`. Closes [#996](https://github.com/ClickHouse/clickhouse-connect/issues/996).
 

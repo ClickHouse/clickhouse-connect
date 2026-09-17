@@ -111,8 +111,17 @@ DateTime64, Time, and Time64 adapters widen physical integers or view Int64
 buffers with the units from driver metadata. They preserve timezone decisions,
 precision validation, and nullable duration output. Outer nullable
 SimpleAggregateFunction aliases of Time64 use this temporal path, so values keep
-their integer ticks and NULLs become NaT. Nullable dates and timestamps
-keep their Python-object conversion paths. Other converters keep their Arrow or
+their integer ticks and NULLs become NaT. Conversion of nullable scalar
+DateTime64(9), including SimpleAggregateFunction aliases, reads the buffers to
+preserve nanoseconds. NumPy object fields contain numpy.datetime64 scalars in
+UTC without timezone metadata, with None only at SQL NULL positions. This also
+preserves valid NaT scalars separately from SQL NULL. Pandas retains the existing
+all-null and timezone policies.
+Timezone-local values outside the nanosecond range keep the original object
+conversion, including its Pandas-version-dependent range errors.
+Other nullable dates and timestamps keep their Python-object conversion paths.
+Scalar DateTime64 precision validation also covers nullable and alias forms.
+Other converters keep their Arrow or
 Python-object exits, and the driver still requires PyArrow for NumPy/Pandas
 queries during this migration.
 

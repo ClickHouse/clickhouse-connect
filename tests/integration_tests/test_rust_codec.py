@@ -6,6 +6,7 @@ import time
 import weakref
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1828,6 +1829,162 @@ def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):
         call(rust_client.query_df, query)
     with pytest.raises(ProgrammingError):
         call(python_client.query_df, query)
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [1, 79])
+def test_rust_codec_nullable_datetime64_nanoseconds(client_factory, call, consume_stream, extended, block_size):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    expressions = []
+    expected = {}
+    ticks = [None if number % 3 == 0 else (number - 7) * 1000000000 + 123456789 for number in range(13)]
+    wrappers = [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ]
+    for timezone_name in ["UTC", "America/New_York"]:
+        values = pd.DatetimeIndex(np.array(ticks, dtype="datetime64[ns]"))
+        if timezone_name != "UTC":
+            values = values.tz_localize("UTC").tz_convert(ZoneInfo(timezone_name))
+        for wrapper in wrappers:
+            name = f"c{len(expressions)}"
+            declared = wrapper.format(f"DateTime64(9, '{timezone_name}')")
+            expressions.append(
+                f"CAST(if(number % 3 = 0, NULL, fromUnixTimestamp64Nano((toInt64(number) - 7) * 1000000000 + 123456789, "
+                f"'{timezone_name}')) AS {declared}) AS {name}"
+            )
+            expected[name] = values
+    query = f"SELECT {', '.join(expressions)} FROM numbers(13)"
+    kwargs = {"settings": {"max_block_size": block_size}, "use_extended_dtypes": extended}
+    expected_frame = pd.DataFrame(expected)
+    frame = call(rust_client.query_df, query, **kwargs)
+    python_frame = call(python_client.query_df, query, **kwargs)
+    for index, name in enumerate(frame):
+        object_blocks = block_size == 1 and (not extended or index % len(wrappers) >= 2 or index >= len(wrappers))
+        assert frame[name].dtype == (np.dtype(object) if object_blocks else expected_frame[name].dtype)
+        pd.testing.assert_index_equal(pd.DatetimeIndex(frame[name]), pd.DatetimeIndex(expected_frame[name]))
+        pd.testing.assert_index_equal(pd.DatetimeIndex(python_frame[name]), pd.DatetimeIndex(expected_frame[name]))
+        if object_blocks:
+            for tick, value in zip(ticks, frame[name]):
+                if tick is not None:
+                    assert isinstance(value, pd.Timestamp)
+                    assert value.value == tick
+                    assert value.tzinfo == (None if index < len(wrappers) else ZoneInfo("America/New_York"))
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, **kwargs), frames.append)
+    assert len(frames) > 1 if block_size == 1 else len(frames) == 1
+    if block_size == 1:
+        # pandas 2 concat ignores the dtype of all-NA pieces, so compare each piece with its buffered rows.
+        offset = 0
+        for piece in frames:
+            rows = frame.iloc[offset : offset + len(piece)]
+            for name in frame:
+                pd.testing.assert_index_equal(
+                    pd.DatetimeIndex(piece[name]).as_unit("ns"), pd.DatetimeIndex(rows[name]).as_unit("ns"), check_names=False
+                )
+            offset += len(piece)
+        assert offset == len(frame)
+    else:
+        pd.testing.assert_frame_equal(frames[0], frame)
+    for output in [frame, *frames]:
+        for index in range(len(output.columns)):
+            value = expected_frame.iloc[1, index]
+            if output.iloc[:, index].dtype == np.dtype("datetime64[ns]") and value.tzinfo is not None:
+                value = value.tz_convert("UTC").tz_localize(None)
+            output.iloc[0, index] = value
+
+
+@pytest.mark.parametrize("scale", [1, 8])
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ],
+)
+def test_rust_codec_nullable_datetime64_unsupported_precision(client_factory, call, scale, wrapper):
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    declared = wrapper.format(f"DateTime64({scale})")
+    query = f"SELECT CAST(if(number = 1, NULL, toDateTime64(number, {scale})) AS {declared}) AS c FROM numbers(3)"
+    for codec in ["python", "rust_strict"]:
+        client = client_factory(native_codec=codec)
+        for method in [client.query_np, client.query_df]:
+            with pytest.raises(ProgrammingError, match="Cannot use .* as a numpy or Pandas datatype"):
+                call(method, query)
+
+
+def test_rust_codec_nullable_datetime64_timezone_range(client_factory, call, consume_stream):
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    query = """
+        SELECT CAST(if(number = 1, NULL, fromUnixTimestamp64Nano(9223360000000000000, 'Asia/Kathmandu'))
+                    AS Nullable(DateTime64(9, 'Asia/Kathmandu'))) AS c0
+        FROM numbers(2)
+    """
+    expected_value = datetime(2262, 4, 12, 2, 11, 40, tzinfo=ZoneInfo("Asia/Kathmandu"))
+    expected = pd.DataFrame({"c0": [expected_value, None]})
+    frame = call(rust_client.query_df, query, use_extended_dtypes=False)
+    pd.testing.assert_frame_equal(frame, expected)
+    assert frame.c0.iloc[0] == expected_value
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, use_extended_dtypes=False), frames.append)
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), expected)
+    for output in [frame, *frames]:
+        output.iloc[0, 0] = expected_value
+
+
+@pytest.mark.parametrize("block_size", [1, 79])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_rust_codec_nullable_datetime64_numpy_nanoseconds(client_factory, call, consume_stream, block_size, nulls):
+    np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    wrappers = [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ]
+    expressions = []
+    for timezone_name in ["UTC", "America/New_York"]:
+        for wrapper in wrappers:
+            declared = wrapper.format(f"DateTime64(9, '{timezone_name}')")
+            value = f"fromUnixTimestamp64Nano((toInt64(number) - 7) * 1000000000 + 123456789, '{timezone_name}')"
+            if nulls == "all":
+                value = "NULL"
+            elif nulls == "some":
+                value = f"if(number % 3 = 0, NULL, {value})"
+            expressions.append(f"CAST({value} AS {declared}) AS c{len(expressions)}")
+    query = f"SELECT {', '.join(expressions)} FROM numbers(13)"
+    kwargs = {"settings": {"max_block_size": block_size}}
+    output = call(rust_client.query_np, query, **kwargs)
+    python_output = call(python_client.query_np, query, **kwargs)
+    assert output.shape == (13, len(expressions))
+    assert output.dtype == np.dtype(object)
+    np.testing.assert_array_equal(output, python_output)
+    for number, row in enumerate(output):
+        for value in row:
+            if nulls == "all" or nulls == "some" and number % 3 == 0:
+                assert value is None
+            else:
+                assert type(value) is np.datetime64
+                assert value.dtype == np.dtype("datetime64[ns]")
+                assert value.astype("int64") == (number - 7) * 1000000000 + 123456789
+    pieces = []
+    consume_stream(call(rust_client.query_np_stream, query, **kwargs), pieces.append)
+    assert len(pieces) > 1 if block_size == 1 else len(pieces) == 1
+    np.testing.assert_array_equal(np.concatenate(pieces), output)
+    for block in [output, *pieces]:
+        assert block.flags.writeable
+        block[0, 0] = np.datetime64(13, "ns")
 
 
 def test_rust_codec_uuid_df_parity(client_factory, call):

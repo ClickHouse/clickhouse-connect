@@ -567,6 +567,25 @@ def test_scalar_temporal_buffers_reject_unsupported_precision(type_name, scale, 
         rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
 
 
+@pytest.mark.parametrize("scale", [1, 2, 4, 5, 7, 8])
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, {}))",
+    ],
+)
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_nullable_and_alias_datetime64_reject_unsupported_precision(scale, wrapper, as_pandas, extended):
+    ch_type = get_from_name(wrapper.format(f"DateTime64({scale})"))
+    context = QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    with pytest.raises(ProgrammingError, match="Cannot use .* as a numpy or Pandas datatype"):
+        rustnumpy._build_converter(ch_type, context)
+
+
 @pytest.mark.parametrize(
     "type_name,needs_arrow",
     [
@@ -585,13 +604,15 @@ def test_scalar_temporal_dispatch_boundaries(type_name, needs_arrow):
     assert converter.needs_arrow is needs_arrow
 
 
-@pytest.mark.parametrize("type_name", ["Date", "Date32", "DateTime", "DateTime64(9)"])
+@pytest.mark.parametrize("type_name", ["Date", "Date32", "DateTime", "DateTime64(0)", "DateTime64(3)", "DateTime64(6)"])
 @pytest.mark.parametrize("wrapper", ["Nullable({})", "SimpleAggregateFunction(anyLast, Nullable({}))"])
-def test_nullable_date_and_timestamp_keep_object_exit(monkeypatch, type_name, wrapper):
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_nullable_date_and_timestamp_keep_object_exit(monkeypatch, type_name, wrapper, as_pandas, extended):
     ch_type = get_from_name(wrapper.format(type_name))
     marker = object()
     monkeypatch.setattr(rustnumpy, "_make_object_convert", lambda _type, _context: lambda *_args: marker)
-    converter = rustnumpy._build_converter(ch_type, QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+    context = QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    converter = rustnumpy._build_converter(ch_type, context)
     assert not converter.needs_arrow
     assert converter(None, None, 0) is marker
 
@@ -646,3 +667,16 @@ def test_nullable_temporal_nat_keeps_declared_unit(declared, kind):
         expected = expected.astype("datetime64[s]")
     assert result.dtype == expected.dtype
     np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("byteorder,prefix", [("little", "<"), ("big", ">")])
+def test_nullable_datetime64_numpy_buffer_byteorder(monkeypatch, byteorder, prefix):
+    np = pytest.importorskip("numpy")
+    values = np.array([-123456789, 0, 1714979289123456789], dtype=f"{prefix}i8")
+    batch = _scalar_buffer_batch("int64", values.tobytes(), 3, b"\x05", 1, byteorder=byteorder)
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    converter = rustnumpy._build_converter(get_from_name("Nullable(DateTime64(9))"), QueryContext(use_numpy=True))
+    result = converter(None, batch, 0)
+    assert result == [np.datetime64(-123456789, "ns"), None, np.datetime64(1714979289123456789, "ns")]
+    assert result[0].dtype.byteorder == "="

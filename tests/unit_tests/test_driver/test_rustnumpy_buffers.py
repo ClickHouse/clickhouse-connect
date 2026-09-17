@@ -4,6 +4,7 @@ import gc
 import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -883,3 +884,202 @@ def test_temporal_result_boundary(core, monkeypatch, block_count, streaming, as_
             assert piece.flags.writeable
             for name in names:
                 piece[name][0] = 13
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ],
+)
+@pytest.mark.parametrize("timezone", [None, "America/New_York"])
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_nullable_datetime64_nanosecond_pandas_buffers(core, monkeypatch, wrapper, timezone, extended, nulls):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    type_name = "DateTime64(9)" if timezone is None else f"DateTime64(9, '{timezone}')"
+    declared = wrapper.format(type_name)
+    ticks = [-123456789, 13, 1714979289123456789]
+    values = [None if nulls == "all" or nulls == "some" and index == 1 else tick for index, tick in enumerate(ticks)]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [values[:1]]), _batch(core, [declared], [values[1:]])])
+    context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=extended, query_tz="UTC")
+    converter = rustnumpy._build_converter(get_from_name(declared), context)
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    frame = pd.DataFrame({"c0": result})
+    if nulls == "all" and (not extended or wrapper.count("SimpleAggregateFunction") > 1):
+        assert frame.c0.dtype == np.dtype(object)
+        assert frame.c0.tolist() == [None] * len(ticks)
+    else:
+        expected = pd.DatetimeIndex(np.array(values, dtype="datetime64[ns]"))
+        if timezone is not None and nulls != "all":
+            expected = expected.tz_localize("UTC").tz_convert(ZoneInfo(timezone))
+        pd.testing.assert_series_equal(frame.c0, pd.Series(expected, name="c0"))
+    del batch, result
+    gc.collect()
+    frame.iloc[0, 0] = frame.iloc[-1, 0]
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_nullable_datetime64_nanosecond_empty_chunks(core, monkeypatch, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    declared = "Nullable(DateTime64(9))"
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=extended, query_tz="UTC")
+    )
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    decoder = core.StreamDecoder()
+    batches = []
+    for chunk in ([], [-1], [], [None, 13], []):
+        batches.extend(decoder.feed(core.encode_native_block(["c0"], [declared], [chunk], len(chunk), None)))
+    for batch in [_batch(core, [declared], [[]]), batches[0], batches[2], batches[4]]:
+        result = converter(None, batch, 0)
+        assert len(result) == 0
+        assert pd.DataFrame({"c0": result}).c0.dtype == np.dtype("datetime64[ns]" if extended else "float64")
+    result = converter(None, core.ColBatch.from_batches(batches), 0)
+    np.testing.assert_array_equal(result, np.array([-1, None, 13], dtype="datetime64[ns]"))
+
+
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("timezone", [None, "America/New_York"])
+def test_nullable_datetime64_nanosecond_valid_nat(core, missing, timezone):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    declared = "Nullable(DateTime64(9))" if timezone is None else f"Nullable(DateTime64(9, '{timezone}'))"
+    values = [0, None if missing else 0, 13]
+    wire = core.encode_native_block(["c0"], [declared], [values], len(values), None)
+    wire = wire[:-24] + np.array([-(2**63), 0, 13], dtype="<i8").tobytes()
+    batch = core.ColBatch.decode_native(wire)
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True, query_tz="UTC")
+    )
+    frame = pd.DataFrame({"c0": converter(None, batch, 0)})
+    expected = pd.DatetimeIndex(np.array([-(2**63), None if missing else 0, 13], dtype="datetime64[ns]"))
+    if timezone is not None:
+        expected = expected.tz_localize("UTC").tz_convert(ZoneInfo(timezone))
+    pd.testing.assert_series_equal(frame.c0, pd.Series(expected, name="c0"))
+
+
+@pytest.mark.parametrize(
+    "wrapper,extended",
+    [
+        ("Nullable({})", False),
+        ("SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))", False),
+        ("SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))", True),
+    ],
+)
+@pytest.mark.parametrize("timezone,tick", [("Asia/Kathmandu", 9223360000000000000), ("America/New_York", -9223360000000000000)])
+def test_nullable_datetime64_timezone_range_keeps_object_fallback(core, wrapper, extended, timezone, tick):
+    pd = pytest.importorskip("pandas")
+    declared = wrapper.format(f"DateTime64(9, '{timezone}')")
+    batch = _batch(core, [declared], [[tick, None]])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=extended, query_tz="UTC")
+    )
+    result = pd.DataFrame({"c0": converter(None, batch, 0)})
+    value = pd.Timestamp(tick // 1000, unit="us", tz="UTC").tz_convert(ZoneInfo(timezone)).to_pydatetime()
+    expected = pd.DataFrame({"c0": [value, None]})
+    pd.testing.assert_frame_equal(result, expected)
+    assert result.c0.iloc[0] == value
+
+
+@pytest.mark.parametrize("timezone,tick", [("Asia/Kathmandu", -(2**63) + 1), ("America/New_York", 2**63 - 1)])
+def test_nullable_datetime64_timezone_range_keeps_representable_nanoseconds(core, timezone, tick):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    declared = f"Nullable(DateTime64(9, '{timezone}'))"
+    batch = _batch(core, [declared], [[tick, None]])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=False, query_tz="UTC")
+    )
+    result = pd.DataFrame({"c0": converter(None, batch, 0)})
+    expected = pd.DatetimeIndex(np.array([tick, None], dtype="datetime64[ns]"), tz="UTC").tz_convert(ZoneInfo(timezone))
+    pd.testing.assert_series_equal(result.c0, pd.Series(expected, name="c0"))
+    assert result.c0.iloc[0].value == tick
+
+
+@pytest.mark.parametrize("timezone,tick", [("Asia/Kathmandu", 9223360000000000000), ("America/New_York", -9223360000000000000)])
+def test_nullable_datetime64_timezone_extended_range_error_timing(core, timezone, tick):
+    pd = pytest.importorskip("pandas")
+    declared = f"Nullable(DateTime64(9, '{timezone}'))"
+    batch = _batch(core, [declared], [[tick, None]])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True, query_tz="UTC")
+    )
+    if int(pd.__version__.split(".", 1)[0]) < 3:
+        with pytest.raises(pd.errors.OutOfBoundsDatetime):
+            converter(None, batch, 0)
+    else:
+        result = pd.DataFrame({"c0": converter(None, batch, 0)})
+        with pytest.raises(pd.errors.OutOfBoundsDatetime):
+            _ = result.c0.iloc[0]
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ],
+)
+@pytest.mark.parametrize("timezone", [None, "America/New_York"])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_nullable_datetime64_nanosecond_numpy_buffers(core, monkeypatch, wrapper, timezone, nulls):
+    np = pytest.importorskip("numpy")
+    type_name = "DateTime64(9)" if timezone is None else f"DateTime64(9, '{timezone}')"
+    declared = wrapper.format(type_name)
+    ticks = [-(2**63) + 1, -123456789, 13, 1714979289123456789, 2**63 - 1]
+    values = [None if nulls == "all" or nulls == "some" and index == 1 else tick for index, tick in enumerate(ticks)]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [values[:1]]), _batch(core, [declared], [values[1:]])])
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    assert not converter.needs_arrow
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    del batch
+    gc.collect()
+    assert isinstance(result, list)
+    assert len(result) == len(values)
+    for value, tick in zip(result, values):
+        if tick is None:
+            assert value is None
+        else:
+            assert type(value) is np.datetime64 and value.dtype == np.dtype("datetime64[ns]")
+            assert value.astype("int64") == tick
+
+
+@pytest.mark.parametrize("timezone", [None, "America/New_York"])
+def test_nullable_datetime64_nanosecond_numpy_valid_nat(core, monkeypatch, timezone):
+    np = pytest.importorskip("numpy")
+    declared = "Nullable(DateTime64(9))" if timezone is None else f"Nullable(DateTime64(9, '{timezone}'))"
+    batch = _batch(core, [declared], [[-(2**63), None, 13]])
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    result = converter(None, batch, 0)
+    assert type(result[0]) is np.datetime64 and np.isnat(result[0])
+    assert result[1] is None
+    assert result[2] == np.datetime64(13, "ns")
+
+
+def test_nullable_datetime64_nanosecond_numpy_empty_chunks(core, monkeypatch):
+    np = pytest.importorskip("numpy")
+    declared = "Nullable(DateTime64(9))"
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    decoder = core.StreamDecoder()
+    batches = []
+    for chunk in ([], [-1], [], [None, 13], []):
+        batches.extend(decoder.feed(core.encode_native_block(["c0"], [declared], [chunk], len(chunk), None)))
+    for batch in [_batch(core, [declared], [[]]), batches[0], batches[2], batches[4]]:
+        assert converter(None, batch, 0) == []
+    result = converter(None, core.ColBatch.from_batches(batches), 0)
+    assert result == [np.datetime64(-1, "ns"), None, np.datetime64(13, "ns")]
