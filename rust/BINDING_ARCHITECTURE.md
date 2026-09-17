@@ -106,7 +106,13 @@ Nullable extended Pandas BFloat16 output uses the public `FloatingArray`
 values/mask constructor and preserves the active Pandas NaN policy.
 Interval converters view signed Int64 counts and reuse the
 nullable integer adapter for extended Pandas output. Existing nested alias
-representations and errors are preserved. Other converters keep their Arrow or
+representations and errors are preserved. Scalar Date, Date32, DateTime,
+DateTime64, Time, and Time64 adapters widen physical integers or view Int64
+buffers with the units from driver metadata. They preserve timezone decisions,
+precision validation, and nullable duration output. Outer nullable
+SimpleAggregateFunction aliases of Time64 use this temporal path, so values keep
+their integer ticks and NULLs become NaT. Nullable dates and timestamps
+keep their Python-object conversion paths. Other converters keep their Arrow or
 Python-object exits, and the driver still requires PyArrow for NumPy/Pandas
 queries during this migration.
 

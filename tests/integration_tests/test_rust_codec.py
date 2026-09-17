@@ -1698,6 +1698,70 @@ def test_rust_codec_buffer_bfloat16_interval_results(client_factory, call, consu
         frame.iloc[0, 1] = 79
 
 
+@pytest.mark.parametrize("family", ["calendar", "duration"])
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [7, 79])
+def test_rust_codec_buffer_temporal_results(client_factory, call, consume_stream, test_config, family, extended, block_size):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    python_client = client_factory(native_codec="python")
+    settings = {"max_block_size": block_size}
+    if family == "duration":
+        if test_config.cloud:
+            pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+        if not python_client.min_version("25.6"):
+            pytest.skip("Time and Time64 require ClickHouse 25.6+")
+        settings["enable_time_time64_type"] = 1
+        expressions = ["CAST(toInt32(number) * 3000 - 90000 AS Time)"]
+        expressions.extend(
+            f"CAST(concat(if(number % 2 = 0, '-', ''), '000:00:13.', leftPad(toString(number * 1234567 + 13), 9, '0')) AS Time64({scale}))"
+            for scale in (0, 3, 6, 9)
+        )
+        projection = ", ".join(
+            f"{expression} AS v{index}, if(number % 3 = 0, NULL, {expression}) AS n{index}" for index, expression in enumerate(expressions)
+        )
+    else:
+        projection = ", ".join(
+            ["toDate(number) AS d", "toDate32('1969-12-31') + toIntervalDay(number) AS d32", "toDateTime(number) AS dt"]
+            + [f"toDateTime64(toInt64(number) - 39, {scale}, 'UTC') AS dt{scale}" for scale in (0, 3, 6, 9)]
+            + ["fromUnixTimestamp64Nano(toInt64(number) - 39, 'America/New_York') AS tz"]
+        )
+    rust_client = client_factory(native_codec="rust_strict")
+    query = f"SELECT {projection} FROM numbers(79)"
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    arrays = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), arrays.append)
+    assert len(arrays) > 1 if block_size == 7 else len(arrays) == 1
+    np.testing.assert_array_equal(np.concatenate(arrays), python_np)
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1 if block_size == 7 else len(frames) == 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    for output in [rust_np, *arrays]:
+        assert output.flags.writeable
+        if output.dtype.names:
+            output[output.dtype.names[0]][0] = output[output.dtype.names[0]][-1]
+        else:
+            output[0, 0] = output[-1, 0]
+    for frame in [rust_df, *frames]:
+        for index in range(len(frame.columns)):
+            frame.iloc[0, index] = frame.iloc[-1, index]
+    empty_query = f"SELECT {projection} FROM numbers(0)"
+    np.testing.assert_array_equal(
+        call(rust_client.query_np, empty_query, settings=settings), call(python_client.query_np, empty_query, settings=settings)
+    )
+    pd.testing.assert_frame_equal(
+        call(rust_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+        call(python_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+    )
+
+
 def test_rust_codec_buffer_nullable_alias_results(client_factory, call):
     np = pytest.importorskip("numpy")
     pytest.importorskip("pandas")
@@ -1723,6 +1787,36 @@ def test_rust_codec_buffer_nullable_alias_results(client_factory, call):
     assert list(frame["b"]) == expected_b
     np.testing.assert_array_equal(frame["f"].to_numpy(), expected_f)
     frame.iloc[0, 0] = 79
+
+
+def test_rust_codec_buffer_nullable_time_alias_results(client_factory, call, test_config):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+    python_client = client_factory(native_codec="python")
+    if not python_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+    settings = {"enable_time_time64_type": 1}
+    rust_client = client_factory(native_codec="rust_strict")
+    query = """
+        SELECT
+            CAST(if(number % 3 = 0, NULL, toInt64(number) - 39) AS Nullable(SimpleAggregateFunction(anyLast, Time64(9)))) AS t9,
+            CAST(if(number % 3 = 0, NULL, toInt32(number) - 13) AS Nullable(SimpleAggregateFunction(anyLast, Time))) AS t
+        FROM numbers(20)
+    """
+    expected_t9 = np.array([None if n % 3 == 0 else n - 39 for n in range(20)], dtype="timedelta64[s]").astype("timedelta64[ns]")
+    expected_t = np.array([None if n % 3 == 0 else n - 13 for n in range(20)], dtype="timedelta64[s]")
+    result = call(rust_client.query_np, query, settings=settings)
+    assert result.dtype == np.dtype([("t9", "timedelta64[ns]"), ("t", "timedelta64[s]")])
+    np.testing.assert_array_equal(result["t9"], expected_t9)
+    np.testing.assert_array_equal(result["t"], expected_t)
+    for extended in (False, True):
+        frame = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        python_frame = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        pd.testing.assert_series_equal(frame["t9"], python_frame["t9"])
+        np.testing.assert_array_equal(frame["t"].to_numpy(), expected_t)
+        frame.iloc[0, 0] = pd.Timedelta(13, "ns")
 
 
 def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):

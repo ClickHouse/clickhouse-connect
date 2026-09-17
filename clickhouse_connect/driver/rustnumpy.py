@@ -5,7 +5,7 @@ Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These conve
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
 the Python codec by construction. Primitive numerics and Booleans use typed buffers, including nullable
 integer and float columns in extended pandas output. BFloat16 widens its buffer words to float32, and
-Intervals expose signed counts through buffers. Temporal columns take the Arrow exit. Time and Time64 keep
+Intervals expose signed counts through buffers. Scalar temporal columns also use typed buffers. Time and Time64 keep
 their declared duration units through NumPy and extended pandas output. Extended pandas output builds String
 columns from the Arrow buffers. Other strings,
 enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
@@ -22,7 +22,7 @@ from clickhouse_connect.datatypes.container import Array, Map, Nested, Tuple
 from clickhouse_connect.datatypes.numeric import BFloat16, Interval
 from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.datatypes.string import String
-from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
+from clickhouse_connect.datatypes.temporal import Date, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.exceptions import NotSupportedError
@@ -255,48 +255,46 @@ def _make_bfloat16_alias_convert(as_float: bool = False) -> BlockConverter:
 def _make_interval_alias_convert(unit: str) -> BlockConverter:
     """Preserve duration output for nested aliases of sub-minute Intervals."""
     dtype = options.np.dtype(f"timedelta64[{unit}]")
-    nat = options.np.timedelta64("NaT", unit)
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
-        columns = col_batch.column_buffers(index)
-        if columns is None:
-            raise NotImplementedError("Unsupported column buffers for Interval")
-        chunks = []
-        for column in columns:
-            values = _buffer_values(column).astype("int64", copy=False).view(dtype)
-            if column.null_count:
-                values = options.np.where(_buffer_null_mask(column), nat, values)
-            chunks.append(values)
-        return _join_chunks(chunks, dtype)
+        return _temporal_buffer_values(col_batch, index, dtype)[0]
 
     return convert
 
 
+def _temporal_buffer_values(col_batch: Any, index: int, dtype: Any) -> tuple[Any, int]:
+    columns = col_batch.column_buffers(index)
+    if columns is None:
+        raise NotImplementedError(f"Unsupported column buffers for {dtype}")
+    chunks = []
+    null_count = 0
+    for column in columns:
+        values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+        if column.null_count:
+            values = options.np.where(_buffer_null_mask(column), dtype.type("NaT", options.np.datetime_data(dtype)[0]), values)
+            null_count += column.null_count
+        chunks.append(values)
+    return _join_chunks(chunks, dtype), null_count
+
+
 def _make_date_convert(as_pandas: bool) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        days = _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("datetime64[D]")
+    dtype = options.np.dtype("datetime64[D]")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        days, _ = _temporal_buffer_values(col_batch, index, dtype)
         return days.astype("datetime64[s]") if as_pandas else days
 
     return convert
 
 
-def _make_datetime_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        naive = _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("datetime64[s]")
+def _make_datetime_convert(ch_type: DateTimeBase, as_pandas: bool, active_tz: Any) -> BlockConverter:
+    dtype = options.np.dtype(ch_type.np_type)
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        values, _ = _temporal_buffer_values(col_batch, index, dtype)
         if as_pandas and active_tz is not None:
-            return options.pd.DatetimeIndex(naive, tz="UTC").tz_convert(active_tz)
-        return naive
-
-    return convert
-
-
-def _make_datetime64_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        # Arrow timestamp[unit] -> datetime64[unit], tz metadata dropped to UTC instants.
-        column = _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
-        if as_pandas and active_tz is not None:
-            return options.pd.DatetimeIndex(column, tz="UTC").tz_convert(active_tz)
-        return column
+            return options.pd.DatetimeIndex(values, tz="UTC").tz_convert(active_tz)
+        return values
 
     return convert
 
@@ -312,38 +310,21 @@ def _make_time_convert(
     as_pandas: bool = False,
     use_extended_dtypes: bool = False,
 ) -> BlockConverter:
-    unit = "s" if isinstance(ch_type, Time) else _time64_unit(ch_type)
+    dtype = options.np.dtype(ch_type.np_type)
     nullable_pandas_ns = as_pandas and not use_extended_dtypes and _pandas_infers_ns_timedeltas()
 
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index)
-        if ch_type.nullable:
-            null_count = column.null_count
-            if isinstance(ch_type, Time):
-                column = column.cast(options.arrow.int64())
-            values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
-            if as_pandas:
-                return values.astype("timedelta64[ns]") if nullable_pandas_ns else values
-            # The Python codec's query_np contract for nullable temporal columns
-            # is an object array of numpy.timedelta64 scalars and None. Assign a
-            # list here because direct ndarray assignment coerces the scalars to
-            # datetime.timedelta at microsecond precision.
-            result = list(values)
-            if null_count:
-                for null_index in options.np.flatnonzero(options.np.isnat(values)):
-                    result[null_index] = None
-            return result
-        values = column.to_numpy(zero_copy_only=False)
-        if isinstance(ch_type, Time64):
-            # The core exports Time64 as its raw signed Int64 tick buffer because
-            # Arrow time types cannot represent negative or >=24-hour values.
-            # NumPy timedelta64 has the same 64-bit layout, so only reinterpret
-            # the dtype here. No values or validity data are copied.
-            return values.view(ch_type.np_type)
-        # Time is Int32 on the wire while NumPy timedelta64 uses Int64. Widening
-        # requires one allocation, but still avoids one Python timedelta object
-        # per cell and lets NumPy perform the conversion in bulk.
-        return values.astype(ch_type.np_type, copy=False)
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        values, null_count = _temporal_buffer_values(col_batch, index, dtype)
+        if not ch_type.nullable:
+            return values
+        if as_pandas:
+            return values.astype("timedelta64[ns]", copy=False) if nullable_pandas_ns else values
+        # list() preserves NumPy scalars and nanoseconds in nullable object output.
+        result = list(values)
+        if null_count:
+            for null_index in options.np.flatnonzero(options.np.isnat(values)):
+                result[null_index] = None
+        return result
 
     return convert
 
@@ -819,7 +800,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.
     if isinstance(ch_type, (Time, Time64)) and not ch_type.low_card:
-        return _Converter(True, _make_time_convert(ch_type, context.as_pandas, context.use_extended_dtypes))
+        return _Converter(False, _make_time_convert(ch_type, context.as_pandas, context.use_extended_dtypes))
     if isinstance(ch_type, Time) and ch_type.low_card:
         return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
     if isinstance(ch_type, Interval) and not ch_type.low_card:
@@ -843,13 +824,11 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     ):
         return _Converter(True, _make_string_convert(ch_type, context))
     if not ch_type.nullable and not ch_type.low_card:
-        if isinstance(ch_type, DateTime64):
-            _ = ch_type.np_type  # ProgrammingError for precisions outside {0,3,6,9}, matching the Python codec
-            return _Converter(True, _make_datetime64_convert(context.as_pandas, context.active_tz(ch_type.tzinfo)))
-        if isinstance(ch_type, DateTime):
-            return _Converter(True, _make_datetime_convert(context.as_pandas, context.active_tz(ch_type.tzinfo)))
+        if isinstance(ch_type, DateTimeBase):
+            # np_type raises ProgrammingError for DateTime64 precisions outside {0,3,6,9}, matching the Python codec
+            return _Converter(False, _make_datetime_convert(ch_type, context.as_pandas, context.active_tz(ch_type.tzinfo)))
         if isinstance(ch_type, Date):  # Date32 subclasses Date
-            return _Converter(True, _make_date_convert(context.as_pandas))
+            return _Converter(False, _make_date_convert(context.as_pandas))
         if not declared_nullable and (ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean")):
             return _Converter(False, _make_numeric_buffer_convert(ch_type))
         if _np_kind(ch_type) in ("i", "u", "f", "b"):

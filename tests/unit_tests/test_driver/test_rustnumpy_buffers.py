@@ -152,7 +152,7 @@ def test_mixed_buffer_arrow_and_object_converters(core, as_pandas):
     types = [get_from_name(name) for name in type_names]
     context = QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=as_pandas)
     converters = rustnumpy._build_converters(types, context)
-    assert [converter.needs_arrow for converter in converters] == [False, False, True, as_pandas, False, False, False]
+    assert [converter.needs_arrow for converter in converters] == [False, False, False, as_pandas, False, False, False]
     result = rustnumpy._convert_block(batch, converters)
     np.testing.assert_array_equal(result[0], np.array([13, 79], dtype="uint64"))
     np.testing.assert_array_equal(result[1], [False, True])
@@ -687,3 +687,199 @@ def test_bfloat16_interval_result_boundary(core, monkeypatch, block_count, strea
         for block in [output, *pieces]:
             assert block.flags.writeable
             block["iv"][0] = 79
+
+
+_TEMPORAL_CASES = [
+    ("Date", "datetime64[D]", [0, 13, 65535]),
+    ("Date32", "datetime64[D]", [-25567, 0, 120529]),
+    ("DateTime", "datetime64[s]", [0, 13, 2**32 - 1]),
+    *[(f"DateTime64({scale})", f"datetime64[{unit}]", [-79, 0, 13]) for scale, unit in [(0, "s"), (3, "ms"), (6, "us"), (9, "ns")]],
+    ("Time", "timedelta64[s]", [-90000, 0, 90000]),
+    *[(f"Time64({scale})", f"timedelta64[{unit}]", [-79, 0, 13]) for scale, unit in [(0, "s"), (3, "ms"), (6, "us"), (9, "ns")]],
+]
+
+
+@pytest.mark.parametrize("type_name,dtype,ticks", _TEMPORAL_CASES)
+@pytest.mark.parametrize("wrapper", ["{}", "SimpleAggregateFunction(anyLast, {})"])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_temporal_buffers_without_arrow(core, monkeypatch, type_name, dtype, ticks, wrapper, as_pandas, extended):
+    np = pytest.importorskip("numpy")
+    if as_pandas:
+        pytest.importorskip("pandas")
+    declared = wrapper.format(type_name)
+    batch = _batch(core, [declared], [ticks])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    )
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    expected = np.array(ticks, dtype=dtype)
+    if as_pandas and type_name in ("Date", "Date32"):
+        expected = expected.astype("datetime64[s]")
+    assert result.dtype == expected.dtype and result.dtype.byteorder == "="
+    np.testing.assert_array_equal(result, expected)
+    (descriptor,) = batch.column_buffers(0)
+    if "64(" in type_name:
+        assert np.shares_memory(result, np.frombuffer(descriptor.values, dtype="int64"))
+        assert not result.flags.writeable
+    del batch, descriptor
+    gc.collect()
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("type_name,dtype,ticks", _TEMPORAL_CASES[7:])
+@pytest.mark.parametrize("wrapper", ["Nullable({})", "SimpleAggregateFunction(anyLast, Nullable({}))"])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_nullable_time_buffers(core, monkeypatch, type_name, dtype, ticks, wrapper, as_pandas, extended, nulls):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas") if as_pandas else None
+    declared = wrapper.format(type_name)
+    values = [None if nulls == "all" or nulls == "some" and index == 1 else tick for index, tick in enumerate(ticks)]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [values[:1]]), _batch(core, [declared], [values[1:]])])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    )
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    if as_pandas:
+        expected = np.array(values, dtype=dtype)
+        if not extended and int(pd.__version__.split(".", 1)[0]) < 3:
+            expected = expected.astype("timedelta64[ns]")
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype == expected.dtype and result.dtype.byteorder == "="
+    else:
+        assert isinstance(result, list)
+        assert result == [None if tick is None else np.array(tick, dtype=dtype)[()] for tick in values]
+        assert all(value is None or isinstance(value, np.timedelta64) and value.dtype == np.dtype(dtype) for value in result)
+
+
+@pytest.mark.parametrize("type_name,dtype,ticks", _TEMPORAL_CASES)
+@pytest.mark.parametrize("multiple", [False, True])
+def test_outer_nullable_temporal_alias_buffers(core, monkeypatch, type_name, dtype, ticks, multiple):
+    np = pytest.importorskip("numpy")
+    declared = f"Nullable(SimpleAggregateFunction(anyLast, {type_name}))"
+    values = [ticks[0], None, ticks[-1]]
+    chunks = [values[:1], values[1:]] if multiple else [values]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [chunk]) for chunk in chunks])
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    expected = np.array(values, dtype=dtype)
+    assert result.dtype == expected.dtype and result.dtype.byteorder == "="
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("type_name,dtype,ticks", _TEMPORAL_CASES + [("Nullable(Time64(9))", "timedelta64[ns]", [-1, None, 1])])
+@pytest.mark.parametrize("as_pandas", [False, True])
+def test_temporal_buffers_empty_and_chunks(core, monkeypatch, type_name, dtype, ticks, as_pandas):
+    np = pytest.importorskip("numpy")
+    if as_pandas:
+        pytest.importorskip("pandas")
+    converter = rustnumpy._build_converter(
+        get_from_name(type_name), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=True)
+    )
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    decoder = core.StreamDecoder()
+    batches = []
+    for chunk in ([], ticks[:1], [], ticks[1:], []):
+        batches.extend(decoder.feed(core.encode_native_block(["c0"], [type_name], [chunk], len(chunk), None)))
+    expected = np.array(ticks, dtype=dtype)
+    if as_pandas and type_name in ("Date", "Date32"):
+        expected = expected.astype("datetime64[s]")
+    for batch in [_batch(core, [type_name], [[]]), batches[0], batches[2], batches[4]]:
+        result = converter(None, batch, 0)
+        assert len(result) == 0
+        if isinstance(result, np.ndarray):
+            assert result.dtype == expected.dtype
+        else:
+            assert result == []
+    result = converter(None, core.ColBatch.from_batches(batches), 0)
+    if type_name.startswith("Nullable") and not as_pandas:
+        assert result == [np.timedelta64(-1, "ns"), None, np.timedelta64(1, "ns")]
+    else:
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype == expected.dtype
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_nullable_time_valid_nat_preserves_null_policy(core, missing):
+    np = pytest.importorskip("numpy")
+    declared = "Nullable(Time64(9))"
+    values = [0, None if missing else 0, 13]
+    wire = core.encode_native_block(["c0"], [declared], [values], len(values), None)
+    wire = wire[:-24] + np.array([-(2**63), 0, 13], dtype="<i8").tobytes()
+    batch = core.ColBatch.decode_native(wire)
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    result = converter(None, batch, 0)
+    if missing:
+        assert result[:2] == [None, None]
+    else:
+        assert isinstance(result[0], np.timedelta64) and np.isnat(result[0])
+        assert result[1] == np.timedelta64(0, "ns")
+    assert result[-1] == np.timedelta64(13, "ns")
+
+
+@pytest.mark.parametrize("type_name", ["DateTime('America/New_York')", "DateTime64(9, 'America/New_York')"])
+@pytest.mark.parametrize("as_pandas", [False, True])
+def test_timestamp_buffer_timezone(core, monkeypatch, type_name, as_pandas):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    ch_type = get_from_name(type_name)
+    ticks = [0, 13, 79]
+    batch = _batch(core, [type_name], [ticks])
+    context = QueryContext(use_numpy=True, as_pandas=as_pandas)
+    converter = rustnumpy._build_converter(ch_type, context)
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    expected = np.array(ticks, dtype=ch_type.np_type)
+    if as_pandas:
+        pd.testing.assert_index_equal(result, pd.DatetimeIndex(expected, tz="UTC").tz_convert(ch_type.tzinfo))
+    else:
+        np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("block_count", [1, 2])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_temporal_result_boundary(core, monkeypatch, block_count, streaming, as_pandas, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    names = ["Date", "Date32", "DateTime", "DateTime64(9)", "Time", "Time64(9)"]
+    dtypes = ["datetime64[D]", "datetime64[D]", "datetime64[s]", "datetime64[ns]", "timedelta64[s]", "timedelta64[ns]"]
+    columns = [[0, 13, 79], [-79, 0, 13], [0, 13, 79], [-1, 0, 1], [-90000, 0, 90000], [-1, 0, 1]]
+    types = [get_from_name(name) for name in names]
+    converters = rustnumpy._build_converters(types, QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended))
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+
+    def blocks():
+        for rows in [slice(None)] if block_count == 1 else [slice(0, 1), slice(1, None)]:
+            yield rustnumpy._convert_block(_batch(core, names, [column[rows] for column in columns]), converters)
+
+    result = NumpyResult(blocks(), tuple(names), tuple(types), dtypes)
+    pieces = []
+    if streaming:
+        with result.df_stream if as_pandas else result.np_stream as stream:
+            pieces = list(stream)
+        output = pd.concat(pieces, ignore_index=True) if as_pandas else np.concatenate(pieces)
+    else:
+        output = result.df_result if as_pandas else result.np_result
+    for name, dtype, ticks in zip(names, dtypes, columns):
+        expected = np.array(ticks, dtype=dtype)
+        if as_pandas:
+            if dtype == "datetime64[D]":
+                expected = expected.astype("datetime64[s]")
+            pd.testing.assert_series_equal(output[name], pd.Series(expected, name=name))
+        else:
+            assert output[name].dtype == np.dtype(dtype)
+            np.testing.assert_array_equal(output[name], expected)
+    for piece in [output, *pieces]:
+        if as_pandas:
+            for index, dtype in enumerate(dtypes):
+                piece.iloc[0, index] = pd.Timestamp("1970-01-14") if dtype.startswith("datetime") else pd.Timedelta(13, "s")
+        else:
+            assert piece.flags.writeable
+            for name in names:
+                piece[name][0] = 13
